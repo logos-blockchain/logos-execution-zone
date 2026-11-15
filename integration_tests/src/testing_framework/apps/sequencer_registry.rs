@@ -184,63 +184,66 @@ impl LezSequencerRegistryClient {
 
     /// Starts the registered sequencer identified by `alias`.
     pub async fn start(&self, alias: &str) -> Result<(), DynError> {
-        let registration = self
-            .0
-            .registered
-            .lock()
-            .map_err(|error| anyhow!("sequencer registry lock poisoned: {error}"))?
-            .get(alias)
-            .copied()
-            .ok_or_else(|| anyhow!("sequencer alias '{alias}' is not registered"))?;
-        if self
-            .0
-            .started
-            .lock()
-            .map_err(|error| anyhow!("sequencer registry lock poisoned: {error}"))?
-            .contains_key(alias)
-        {
-            return Ok(());
-        }
-
-        let state_dir = self
-            .0
-            .scenario_base_dir
-            .as_ref()
-            .map(|dir| dir.join("lez").join(format!("sequencer-{alias}")));
-        let genesis = self.genesis()?;
-        let sequencer = deploy_registered_sequencer(
-            registration.config,
-            self.0.bedrock_addr,
-            registration.signing_key,
-            genesis,
-            state_dir,
-        )
-        .await?;
-
-        let mut sequencer = Some(sequencer);
-        let duplicate = {
-            let mut started = self
+        Box::pin(async move {
+            let registration = self
+                .0
+                .registered
+                .lock()
+                .map_err(|error| anyhow!("sequencer registry lock poisoned: {error}"))?
+                .get(alias)
+                .copied()
+                .ok_or_else(|| anyhow!("sequencer alias '{alias}' is not registered"))?;
+            if self
                 .0
                 .started
                 .lock()
-                .map_err(|error| anyhow!("sequencer registry lock poisoned: {error}"))?;
-            if started.contains_key(alias) {
-                true
-            } else {
-                started.insert(
-                    alias.to_owned(),
-                    sequencer.take().expect("sequencer is present"),
-                );
-                false
+                .map_err(|error| anyhow!("sequencer registry lock poisoned: {error}"))?
+                .contains_key(alias)
+            {
+                return Ok(());
             }
-        };
-        if duplicate {
-            return sequencer
-                .expect("duplicate sequencer remains available")
-                .shutdown()
-                .await;
-        }
-        Ok(())
+
+            let state_dir = self
+                .0
+                .scenario_base_dir
+                .as_ref()
+                .map(|dir| dir.join("lez").join(format!("sequencer-{alias}")));
+            let genesis = self.genesis()?;
+            let sequencer = deploy_registered_sequencer(
+                registration.config,
+                self.0.bedrock_addr,
+                registration.signing_key,
+                genesis,
+                state_dir,
+            )
+            .await?;
+
+            let mut sequencer = Some(sequencer);
+            let duplicate = {
+                let mut started = self
+                    .0
+                    .started
+                    .lock()
+                    .map_err(|error| anyhow!("sequencer registry lock poisoned: {error}"))?;
+                if started.contains_key(alias) {
+                    true
+                } else {
+                    started.insert(
+                        alias.to_owned(),
+                        sequencer.take().expect("sequencer is present"),
+                    );
+                    false
+                }
+            };
+            if duplicate {
+                return sequencer
+                    .expect("duplicate sequencer remains available")
+                    .shutdown()
+                    .await;
+            }
+            Ok(())
+        })
+        .await
     }
 
     /// Returns a started sequencer identified by `alias`.

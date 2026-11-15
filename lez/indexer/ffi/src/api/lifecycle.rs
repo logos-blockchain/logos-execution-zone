@@ -70,12 +70,12 @@ unsafe fn setup_indexer(
         unsafe { std::ffi::CStr::from_ptr(config_path) }
             .to_str()
             .map_err(|e| {
-                log::error!("Could not convert the config path to string: {e}");
+                tracing::error!(error = %e, "Could not convert the config path to string");
                 OperationStatus::InitializationError
             })?,
     );
     let config = IndexerConfig::from_path(&user_config_path).map_err(|e| {
-        log::error!("Failed to read config: {e}");
+        tracing::error!(error = %e, "Failed to read config");
         OperationStatus::InitializationError
     })?;
 
@@ -88,7 +88,7 @@ unsafe fn setup_indexer(
         let storage_dir = unsafe { std::ffi::CStr::from_ptr(storage_dir) }
             .to_str()
             .map_err(|e| {
-                log::error!("Could not convert the storage dir to string: {e}");
+                tracing::error!(error = %e, "Could not convert the storage dir to string");
                 OperationStatus::InitializationError
             })?;
         if storage_dir.is_empty() {
@@ -103,7 +103,7 @@ unsafe fn setup_indexer(
     // when we own it; a borrowed one is left to its external owner.
     let runtime = if runtime.is_null() {
         Runtime::new().map_err(|e| {
-            log::error!("Could not create tokio runtime: {e}");
+            tracing::error!(error = %e, "Could not create tokio runtime");
             OperationStatus::InitializationError
         })?
     } else {
@@ -115,7 +115,7 @@ unsafe fn setup_indexer(
     let core = runtime
         .block_on(IndexerCore::new(config, &storage_dir))
         .map_err(|e| {
-            log::error!("Could not initialize indexer core: {e}");
+            tracing::error!(error = %e, "Could not initialize indexer core");
             OperationStatus::InitializationError
         })?;
 
@@ -127,10 +127,10 @@ unsafe fn setup_indexer(
         let mut block_stream = std::pin::pin!(ingest_core.subscribe_parse_block_stream());
         while let Some(result) = block_stream.next().await {
             if let Err(e) = result {
-                log::error!("Indexer ingestion error: {e:#}");
+                tracing::error!(error = format_args!("{e:#}"), "Indexer ingestion error");
             }
         }
-        log::warn!("Indexer block stream ended");
+        tracing::warn!("Indexer block stream ended");
     });
 
     Ok(IndexerServiceFFI::new(core, ingest_handle, runtime))
@@ -155,7 +155,7 @@ unsafe fn setup_indexer(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn stop_indexer(indexer: *mut IndexerServiceFFI) -> OperationStatus {
     if indexer.is_null() {
-        log::error!("Attempted to stop a null indexer pointer. This is a bug. Aborting.");
+        tracing::error!("Attempted to stop a null indexer pointer. This is a bug. Aborting.");
         return OperationStatus::NullPointer;
     }
 

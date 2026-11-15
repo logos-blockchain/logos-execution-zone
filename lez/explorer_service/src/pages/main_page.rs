@@ -36,7 +36,7 @@ pub fn MainPage() -> impl IntoView {
         match api::search(query).await {
             Ok(result) => Some(result),
             Err(e) => {
-                log::error!("Search error: {e}");
+                tracing::error!(error = %e, "Search failed");
                 None
             }
         }
@@ -90,7 +90,7 @@ pub fn MainPage() -> impl IntoView {
                         .set(blocks_count == RECENT_BLOCKS_LIMIT && new_oldest_id.unwrap_or(0) > 1);
                 }
                 Err(e) => {
-                    log::error!("Failed to load more blocks: {e}");
+                    tracing::error!(error = %e, "Failed to load more blocks");
                 }
             }
             set_is_loading_blocks.set(false);

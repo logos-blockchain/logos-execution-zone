@@ -1,20 +1,12 @@
-use kameo::error::Infallible;
-use sequencer_actors_common::{EraseMessage as _, ErasedMessage};
+use kameo::error::{Infallible, SendError};
+use sequencer_actors_common::{ErasedMessage, SendErrorExt as _};
 
-use crate::protocol::{ChannelSeq, Slot};
+use crate::protocol::{ChannelSeq, MsgId, Slot};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("Storage request failed")]
-    StorageRequestFailed(
-        #[source] kameo::error::SendError<ErasedMessage, sequencer_storage_actor::error::Error>,
-    ),
-
     #[error("Broker publish failed")]
     BrokerPublishFailed(#[source] kameo::error::SendError<ErasedMessage, Infallible>),
-
-    #[error("Checkpoint (de-)serialization failed")]
-    CheckpointSerializationFailed(#[from] logos_blockchain_binary_codec::bincode::Error),
 
     #[error(
         "Stored checkpoint has channel activity but the channel does not exist on the \
@@ -23,11 +15,34 @@ pub enum Error {
     )]
     CheckpointChannelMissing,
 
+    #[error("Checkpoint (de-)serialization failed")]
+    CheckpointSerializationFailed(#[from] logos_blockchain_binary_codec::bincode::Error),
+
     #[error("Zone-sdk readiness channel closed before becoming ready")]
     ReadinessChannelClosed,
 
+    #[error("Storage request failed")]
+    StorageRequestFailed(
+        #[source] kameo::error::SendError<ErasedMessage, sequencer_storage_actor::error::Error>,
+    ),
+
     #[error("Node request failed")]
     NodeRequestFailed(#[source] anyhow::Error),
+
+    #[error("The node holds no final block at slot {0}")]
+    FinalBlockMissing(u64),
+
+    #[error("The node holds no block {0}")]
+    BlockMissing(logos_blockchain_zone_sdk::node_types::HeaderId),
+
+    #[error("Slot {0} is not final on the node yet")]
+    SlotNotFinal(u64),
+
+    #[error("No final block at or under slot {descendant_slot} holds inscription {msg:?}")]
+    FinalInscriptionMissing { msg: MsgId, descendant_slot: u64 },
+
+    #[error("Reading L1 for a stake release verdict ran out of time")]
+    VerdictTimedOut,
 
     #[error("Failed to fetch zone messages from blocks {from:?}..={to:?}")]
     ChannelReadFailed {
@@ -37,10 +52,8 @@ pub enum Error {
         cause: anyhow::Error,
     },
 
-    #[error("Transaction assemble failed")]
-    TransactionAssembleFailed(
-        #[from] logos_blockchain_core::mantle::transactions::tx_list::signed_ops::Error,
-    ),
+    #[error("Channel publisher is not initialized, send `InitializeChannelPublisher` first")]
+    ChannelPublisherIsNotInitialized,
 
     #[error("Creating the channel requires our own key first; creation gives the turn to index 0")]
     ChannelCreationRequiresOurKey,
@@ -48,17 +61,22 @@ pub enum Error {
     #[error("Block encoding failed")]
     BlockEncodingFailed(#[source] std::io::Error),
 
-    #[error("Block exceeds maximum allowed size")]
-    BlockTooLarge,
-
     #[error("Inscription exceeds maximum allowed size")]
     InscriptionTooLarge,
+
+    #[error("Invalid channel config")]
+    InvalidChannelConfig(#[source] anyhow::Error),
 
     #[error("Invalid channel key list")]
     InvalidChannelKeyList(#[source] anyhow::Error),
 
     #[error("Failed to assemble channel multi-sig proof")]
     ChannelMultiSigProofAssemblyFailed(#[source] anyhow::Error),
+
+    #[error("Transaction assemble failed")]
+    TransactionAssembleFailed(
+        #[from] logos_blockchain_core::mantle::transactions::tx_list::signed_ops::Error,
+    ),
 
     #[error("Too many operation proofs")]
     TooManyOperationProofs(#[source] anyhow::Error),
@@ -73,6 +91,12 @@ pub enum Error {
     #[error("Cannot publish block on parent with withdrawals")]
     CannotPublishBlockOnParentWithWithdrawals,
 
+    #[error("Deposited note {0:?} is not a channel note on the current branch")]
+    DepositNoteNotOnBranch(logos_blockchain_core::mantle::NoteId),
+
+    #[error("Failed to assemble the deposit pin transfer")]
+    DepositPinAssemblyFailed(#[source] anyhow::Error),
+
     #[error(
         "Tried to publish block which was built on channel sequence {provided} but the channel is at {current}"
     )]
@@ -85,8 +109,8 @@ pub enum Error {
     ZoneSdkError(#[from] logos_blockchain_zone_sdk::sequencer::Error),
 }
 
-impl<M> From<kameo::error::SendError<M, sequencer_storage_actor::error::Error>> for Error {
-    fn from(err: kameo::error::SendError<M, sequencer_storage_actor::error::Error>) -> Self {
+impl<M> From<SendError<M, sequencer_storage_actor::error::Error>> for Error {
+    fn from(err: SendError<M, sequencer_storage_actor::error::Error>) -> Self {
         Self::StorageRequestFailed(err.erase_message())
     }
 }

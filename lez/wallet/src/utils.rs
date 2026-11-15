@@ -58,7 +58,7 @@ fn warn_if_unencrypted(password: &str) {
     clippy::print_stderr,
     reason = "A warning must not mix into the output of the command"
 )]
-fn warn(message: &str) {
+pub fn warn(message: &str) {
     eprintln!("{message}");
 }
 

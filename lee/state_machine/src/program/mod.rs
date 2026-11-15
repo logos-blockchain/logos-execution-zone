@@ -4,9 +4,10 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{AccountId, ActorState, Cycles},
     from_frame,
-    program::{MessageData, ProgramId, ReceiveInput, Transition, get_program_via},
+    program::{MessageData, ProgramId, ReceiveInput, Transition},
     to_frame,
 };
+use program_loader_core::get_program_via;
 #[cfg(not(feature = "prove"))]
 use risc0_zkvm::default_executor;
 use risc0_zkvm::{ExecutorEnv, ExecutorEnvBuilder, ExitCode};
@@ -51,6 +52,8 @@ impl Program {
         Ok(Self { id, elf })
     }
 
+    /// Trusts `id` to be `elf`'s image id; callers verify it: genesis for built-ins, the loader
+    /// for deployed headers.
     #[must_use]
     pub const fn new_unchecked(id: ProgramId, elf: Cow<'static, [u8]>) -> Self {
         Self { id, elf }

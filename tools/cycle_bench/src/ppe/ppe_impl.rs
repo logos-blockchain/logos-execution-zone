@@ -18,7 +18,7 @@ use lee::{
 use lee_core::{
     AuthorizationSecretKey, DUMMY_COMMITMENT_HASH, DummyInput, DummyOutput, EncryptedNote,
     MessageWitness, NullifierPublicKey, NullifierSecretKey, NullifierWitness,
-    PrivacyPreservingCircuitOutput, PrivateWitness, RecipientEncryption, RegularKey, RootCall,
+    PrivacyPreservingCircuitOutput, PrivateWitness, PublicationMode, RegularKey, RootCall,
     SharedSecretKey, WitnessKind,
     account::{Account, AccountId, Actor},
     encryption::{Ciphertext, MlKem768EncapsulationKey, ViewingPublicKey},
@@ -95,7 +95,9 @@ fn proving_input(
     private_witnesses: Vec<PrivateWitness>,
 ) -> ProvingInput {
     ProvingInput {
+        claims: Vec::new(),
         root,
+        fee: None,
         public_context: PublicExecutionContext::new(public_actors, signers),
         private_witnesses,
         dummy_inputs: Vec::new(),
@@ -105,11 +107,16 @@ fn proving_input(
     }
 }
 
-fn no_seal(body: &MessageBody) -> Result<RecipientEncryption, LeeError> {
-    Err(LeeError::InvalidInput(format!(
-        "No seal for the durable async message to {:?}",
-        body.to
-    )))
+fn no_seal(bodies: &[MessageBody]) -> Result<Vec<PublicationMode>, LeeError> {
+    bodies.first().map_or_else(
+        || Ok(Vec::new()),
+        |body| {
+            Err(LeeError::InvalidInput(format!(
+                "No seal for the durable async message to {:?}",
+                body.to
+            )))
+        },
+    )
 }
 
 pub fn prove_native_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)> {

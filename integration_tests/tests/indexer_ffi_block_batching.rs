@@ -19,10 +19,10 @@ fn indexer_ffi_block_batching() -> Result<()> {
     // WAIT: poll until the indexer has finalized at least two blocks (so the
     // chain-consistency check below verifies at least one block link), returning
     // early instead of sleeping for the full timeout.
-    log::info!("Waiting for indexer to parse blocks");
+    tracing::info!("Waiting for indexer to parse blocks");
     let last_block_indexer = indexer_ffi_helpers::wait_for_indexer_ffi_block(&indexer_ffi, 2)?;
 
-    log::info!("Last block on indexer FFI now is {last_block_indexer}");
+    tracing::info!(last_block_indexer, "Indexer FFI last block");
 
     assert!(last_block_indexer > 0);
 
@@ -43,7 +43,7 @@ fn indexer_ffi_block_batching() -> Result<()> {
 
         assert_eq!(last_block_prev_hash, block.header.hash.data);
 
-        log::info!("Block {} chain-consistent", block.header.block_id);
+        tracing::info!(block_id = block.header.block_id, "Block chain-consistent");
 
         last_block_prev_hash = block.header.prev_block_hash.data;
     }

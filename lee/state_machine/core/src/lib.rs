@@ -4,10 +4,11 @@
 )]
 
 pub use circuit_io::{
-    DummyInput, DummyOutput, InvalidMessageEvidence, MessageWitness, NullifierWitness,
-    PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput, PrivateAction, PrivateWitness,
-    ProgramImageClaim, ProgramImageWitness, ProvenExecution, ProvingInput, RegularKey, RootCall,
-    SenderPresentation, ShadowProgramWitness, WitnessKind,
+    DummyInput, DummyOutput, FeeFallback, FeeTransfer, InvalidMessageEvidence, MessageWitness,
+    NullifierWitness, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput, PrivateAction,
+    PrivateWitness, ProgramImageClaim, ProgramImageWitness, ProvenExecution, ProvenFee,
+    ProvingInput, PublicationMode, RegularKey, RootCall, SenderPresentation, ShadowProgramWitness,
+    WitnessKind,
 };
 pub use commitment::{
     Commitment, CommitmentPosition, CommitmentSetDigest, DUMMY_COMMITMENT, DUMMY_COMMITMENT_HASH,
@@ -21,7 +22,7 @@ pub use frame::{from_frame, to_borsh_frame, to_frame};
 pub use nullifier::{AuthorizationSecretKey, Nullifier, NullifierPublicKey, NullifierSecretKey};
 pub use program::PrivateAccountKind;
 pub use recovery::{Recipient, RecipientEncryption, RecoveryBinding};
-pub use sealing::{InvalidMessageSeal, SealedMessage, seal_messages};
+pub use sealing::{InvalidPublicationMode, SealedMessage, publish_messages};
 
 pub mod account;
 mod circuit_io;

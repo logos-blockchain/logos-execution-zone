@@ -25,7 +25,7 @@ k256.workspace = true
 risc0-binfmt.workspace = true
 risc0-zkos-v1compat.workspace = true
 semver = { version = "1", optional = true }
-log.workspace = true
+tracing.workspace = true
 zeroize = { workspace = true, features = ["derive"] }
 
 [build-dependencies]

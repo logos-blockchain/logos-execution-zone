@@ -6,16 +6,15 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, InvalidMembershipProof,
     MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey,
-    account::{Account, AccountId, Actor, Nonce},
+    account::{Account, AccountId, Actor, Balance, Nonce},
     compute_digest_for_path,
     encryption::{EncryptedNote, ViewingPublicKey},
     execution_state::{Boundary, PredictedCrossMessages, PublicExecutionContext, TransactionEntry},
     program::{
-        MessageBody, MessageData, PdaSeed, PrivateAccountKind, ProgramHeader, ProgramId, Response,
-        ValidityWindows, immutable_mirror_commitment,
+        MessageBody, MessageData, PdaSeed, PrivateAccountKind, ProgramHeader, ProgramId,
+        Publication, Response, ValidityWindows, immutable_mirror_commitment,
     },
     recovery::{RecipientEncryption, RecoveryBinding},
-    sealing::SealedMessage,
 };
 
 /// `circuit_io` is shared by host and guest, so this can't live in the host-only `error` module.
@@ -139,11 +138,53 @@ pub enum InvalidMessageEvidence {
     UnwitnessedDestination,
 }
 
+/// A native transfer run as a second entry once the root's subtree completes.
+///
+/// It debits `payer` in favour of `recipient`. The protocol attaches no meaning to it; a zone
+/// uses it to charge fees, reading the amount off the credit crossing into `recipient`.
+#[derive(Clone, Copy, BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
+pub struct FeeTransfer {
+    pub payer: AccountId,
+    pub recipient: AccountId,
+    pub amount: Balance,
+    /// A public account the zone returns any unspent part of the transfer to; `None` returns it
+    /// to `payer` as presented.
+    pub refund_to: Option<AccountId>,
+}
+
+/// What a proof commits about its fee transfer, see [`FeeTransfer`].
+#[derive(BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, Clone, PartialEq, Eq))]
+pub struct ProvenFee {
+    pub refund_to: Option<AccountId>,
+    /// What settlement applies instead of the private actions when the public part fails, if the
+    /// payer's pre-state covers the transfer on its own.
+    pub fallback: Option<FeeFallback>,
+}
+
+/// The payer's transition after the fee transfer alone: its post-state is its pre-state less the
+/// amount, and the boundary carries only the transfer's crossing.
+///
+/// Its action spends the payer's nullifier, so it tells the payer's action from the others of
+/// the same transaction; it links nothing across transactions.
+#[derive(BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Debug, Clone, PartialEq, Eq))]
+pub struct FeeFallback {
+    pub action: PrivateAction,
+    pub boundary: Boundary,
+}
+
 /// Inputs for proving a transaction's private part.
 #[derive(BorshSerialize, BorshDeserialize)]
+#[cfg_attr(feature = "host", derive(Clone))]
 pub struct ProvingInput {
     /// Top level initial message starting a transaction.
     pub root: TransactionEntry<MessageWitness>,
+    /// Received messages spent and delivered as entries before the root, in order.
+    pub claims: Vec<MessageWitness>,
+    /// A native transfer run after the root, see [`FeeTransfer`].
+    pub fee: Option<FeeTransfer>,
     /// Assumptions on the public environment context for the proof.
     pub public_context: PublicExecutionContext,
     /// One witness for each private account used by the transaction.
@@ -220,7 +261,7 @@ pub struct PrivacyPreservingCircuitInput {
     /// Specifying whether a private sender is represented in plaintext or blinded.
     pub sender_presentations: Vec<SenderPresentation>,
     /// One per durable async message of private execution, in the order it publishes them.
-    pub message_seals: Vec<RecipientEncryption>,
+    pub publication_modes: Vec<PublicationMode>,
     /// Predicted messages sent between public and private actors.
     pub predicted_cross_messages: PredictedCrossMessages,
 }
@@ -244,6 +285,12 @@ pub enum SenderPresentation {
     Blinded([u8; 32]),
 }
 
+#[derive(BorshSerialize, BorshDeserialize)]
+pub enum PublicationMode {
+    Clear,
+    Sealed(RecipientEncryption),
+}
+
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
 pub enum WitnessKind {
     /// Standalone private account. The `account_id` is derived as
@@ -262,6 +309,9 @@ pub enum WitnessKind {
 pub enum RegularKey {
     Authorized(AuthorizationSecretKey),
     Nullifying(NullifierSecretKey),
+    /// Holds the authorization key, but authorizes only the transaction's fee entry: a fee payer
+    /// the transaction does not otherwise authorize.
+    FeeOnly(AuthorizationSecretKey),
 }
 
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
@@ -281,6 +331,7 @@ pub enum NullifierWitness {
 /// A struct containing necessary data for dummy nullifier and
 /// commitment generation.
 #[derive(BorshSerialize, BorshDeserialize)]
+#[cfg_attr(any(feature = "host", test), derive(Clone))]
 pub struct DummyInput {
     /// The seed used for generating the dummy nullifier.
     pub nullifier_seed: [u8; 32],
@@ -337,7 +388,7 @@ impl PrivateWitness {
     /// The state this witness's transition starts from: the fixed empty account when it
     /// initializes.
     #[must_use]
-    pub(crate) fn predecessor(&self) -> Cow<'_, Account> {
+    pub fn predecessor(&self) -> Cow<'_, Account> {
         match &self.nullifier {
             NullifierWitness::Init { .. } => Cow::Owned(Account::default()),
             NullifierWitness::Update { account, .. } => Cow::Borrowed(account),
@@ -384,6 +435,15 @@ impl WitnessKind {
         matches!(self, Self::Regular(RegularKey::Authorized(_)))
     }
 
+    /// Whether the witness holds its account's authorization key, as a fee payer must.
+    #[must_use]
+    pub const fn holds_authorization_key(&self) -> bool {
+        matches!(
+            self,
+            Self::Regular(RegularKey::Authorized(_) | RegularKey::FeeOnly(_))
+        )
+    }
+
     #[must_use]
     pub const fn account_kind(&self) -> PrivateAccountKind {
         match *self {
@@ -401,7 +461,7 @@ impl RegularKey {
     #[must_use]
     pub fn nsk(&self) -> NullifierSecretKey {
         match self {
-            Self::Authorized(ask) => NullifierSecretKey::from(ask),
+            Self::Authorized(ask) | Self::FeeOnly(ask) => NullifierSecretKey::from(ask),
             Self::Nullifying(nsk) => *nsk,
         }
     }
@@ -443,8 +503,8 @@ pub struct PrivacyPreservingCircuitOutput {
 pub struct ProvenExecution {
     /// A vector designating messages passing private-public boundary in either direction.
     pub boundary: Boundary,
-    /// The sealed asynchronous messages between private actors.
-    pub async_messages: Vec<SealedMessage>,
+    /// The asynchronous messages between private actors, each clear or sealed.
+    pub async_messages: Vec<Publication>,
     /// Bindings tying an address to the private account behind it.
     pub recovery_bindings: Vec<RecoveryBinding>,
     /// How the transaction starts, as far as the proof reveals it: a public call, or `None` for a
@@ -455,6 +515,8 @@ pub struct ProvenExecution {
     /// Claims derived from [`PrivacyPreservingCircuitInput::program_image_witnesses`] — what the
     /// receipt actually commits to, so the sequencer can check it against real chain state.
     pub program_image_claims: Vec<ProgramImageClaim>,
+    /// The fee transfer's refund target and fallback, when the proof runs one.
+    pub proven_fee: Option<ProvenFee>,
 }
 
 #[cfg(any(feature = "host", test))]
@@ -496,7 +558,7 @@ mod tests {
         account::{Account, AccountId, Actor},
         encryption::{Ciphertext, EphemeralPublicKey},
         execution_state::{BoundaryStep, Delivery},
-        program::{MessageBody, MessageEnvelope},
+        program::{MessageBody, MessageEnvelope, Publication},
     };
 
     const NSK: NullifierSecretKey = [0; 32];
@@ -542,12 +604,14 @@ mod tests {
     ) -> ProvingInput {
         ProvingInput {
             root,
+            claims: Vec::new(),
             public_context,
             private_witnesses: vec![receiver()],
             dummy_inputs: Vec::new(),
             ciphertext_padding: None,
             recoveries: Vec::new(),
             private_promotions: BTreeSet::new(),
+            fee: None,
         }
     }
 
@@ -586,13 +650,20 @@ mod tests {
                     BoundaryStep::EndPrivateSubtree,
                     BoundaryStep::EndPublicSubtree,
                 ],
-                async_messages: vec![SealedMessage {
-                    commitment: Commitment::from_byte_array([10; 32]),
-                    note: EncryptedNote {
-                        ciphertext: Ciphertext(vec![11; 3]),
-                        epk: EphemeralPublicKey(vec![12; 2]),
-                    },
-                }],
+                async_messages: vec![
+                    Publication::Clear(MessageEnvelope {
+                        from: private,
+                        to: Actor::new(AccountId::new([27; 32]), AccountId::new([28; 32])),
+                        message: vec![29],
+                    }),
+                    Publication::Sealed(SealedMessage {
+                        commitment: Commitment::from_byte_array([10; 32]),
+                        note: EncryptedNote {
+                            ciphertext: Ciphertext(vec![11; 3]),
+                            epk: EphemeralPublicKey(vec![12; 2]),
+                        },
+                    }),
+                ],
                 recovery_bindings: vec![RecoveryBinding {
                     address: AccountId::new([13; 32]),
                     note: EncryptedNote {
@@ -624,11 +695,12 @@ mod tests {
                     },
                     ProgramImageClaim::Undisclosed { root: [26; 32] },
                 ],
+                proven_fee: None,
             },
         };
 
         let expected: Vec<u8> = [
-            &[108, 3, 0, 0][..], // frame length: the 876 bytes below
+            &[244, 3, 0, 0][..], // frame length: the 1012 bytes below
             &[1, 0, 0, 0],       // public_context.actors: one actor
             &[0; 32],
             &[1; 32],
@@ -661,7 +733,15 @@ mod tests {
             &[0, 0, 0, 0], // pda_seeds: none
             &[2],          // BoundaryStep::EndPrivateSubtree
             &[3],          // BoundaryStep::EndPublicSubtree
-            &[1, 0, 0, 0], // async_messages: one sealed message
+            &[2, 0, 0, 0], // async_messages: two publications
+            &[0],          // Publication::Clear
+            &[2; 32],      // from
+            &[3; 32],
+            &[27; 32], // to
+            &[28; 32],
+            &[1, 0, 0, 0], // message
+            &[29],
+            &[1],          // Publication::Sealed
             &[10; 32],     // commitment
             &[3, 0, 0, 0], // note.ciphertext
             &[11; 3],
@@ -698,6 +778,7 @@ mod tests {
             &[25, 0, 0, 0].repeat(8), // image_id: eight little-endian words
             &[1],                     // ProgramImageClaim::Undisclosed
             &[26; 32],                // root
+            &[0],                     // proven_fee: None
         ]
         .concat();
 

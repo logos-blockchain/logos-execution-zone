@@ -1,14 +1,11 @@
-use std::ffi::{CString, c_char};
-
 use sequencer_executor_actor::protocol::{
-    BoundedRangeInclusive, GetAccount, GetAccountTransactions, GetBlock, GetBlockByHash,
-    GetBlockRange, GetLastBlockId, GetTransaction, MAX_BLOCK_RANGE_LEN, Transaction,
-    TransactionOrigin,
+    ExecutorStatus, GetAccountTransactions, GetBlockByHash, GetStatus, MAX_BLOCK_RANGE_LEN, Slot,
 };
 use sequencer_storage_actor::{
     actor::event_filter::{EventRecord, MAX_EVENT_QUERY_RESPONSE_BYTES, Selector, record_charge},
     protocol::{GetBlockEvents, GetEventFilter, GetTxHashToBlockIdMapItem},
 };
+use wallet::WalletSequencerClient as _;
 
 use crate::{
     error::FfiOperationError,
@@ -23,6 +20,7 @@ use crate::{
         },
     },
     sequencer::SequencerServiceFFI,
+    sequencer_ffi_client::SequencerServiceFFIWrapper,
 };
 
 /// Result of [`query_last_block`], returned **inline** (no heap allocation, so
@@ -64,6 +62,94 @@ impl LastBlockIdResult {
     }
 }
 
+/// The state the executor is in.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FfiExecutorState {
+    /// Replaying the channel's finalized history up to the last slot the Bedrock node has
+    /// finalized. State queries fail until it is done.
+    Bootstrapping = 0x0,
+    /// Following the channel and producing blocks on its turns.
+    Online,
+}
+
+/// Result of [`sequencer_ffi_query_executor_status`], returned **inline** (no
+/// heap allocation, so there is no corresponding `free_*` to call).
+///
+/// The other fields are only meaningful when `error` is `Ok`.
+#[repr(C)]
+pub struct ExecutorStatusResult {
+    pub state: FfiExecutorState,
+    /// Height of the chain so far. Only meaningful when `has_height` is `true`,
+    /// which it always is when `Online`.
+    pub height: FfiBlockId,
+    pub has_height: bool,
+    /// `Bootstrapping` only: the Bedrock slot bootstrapping completes at, the last one the
+    /// node had finalized as of the latest batch. Only meaningful when `has_target_slot` is
+    /// `true`.
+    pub target_slot: u64,
+    pub has_target_slot: bool,
+    /// `Bootstrapping` only: the Bedrock slot the finalized history is replayed
+    /// up to. Only meaningful when `has_replayed_up_to_slot` is `true`.
+    pub replayed_up_to_slot: u64,
+    pub has_replayed_up_to_slot: bool,
+    /// `Online` only: whether it is this sequencer's turn to produce blocks.
+    pub is_our_turn: bool,
+    pub error: FfiOperationError,
+}
+
+impl ExecutorStatusResult {
+    const fn error(error: FfiOperationError) -> Self {
+        Self {
+            state: FfiExecutorState::Bootstrapping,
+            height: 0,
+            has_height: false,
+            target_slot: 0,
+            has_target_slot: false,
+            replayed_up_to_slot: 0,
+            has_replayed_up_to_slot: false,
+            is_our_turn: false,
+            error,
+        }
+    }
+}
+
+impl From<ExecutorStatus> for ExecutorStatusResult {
+    fn from(status: ExecutorStatus) -> Self {
+        match status {
+            ExecutorStatus::Bootstrapping {
+                target,
+                replayed_up_to,
+                height,
+            } => Self {
+                state: FfiExecutorState::Bootstrapping,
+                height: height.unwrap_or_default(),
+                has_height: height.is_some(),
+                target_slot: target.map(Slot::into_inner).unwrap_or_default(),
+                has_target_slot: target.is_some(),
+                replayed_up_to_slot: replayed_up_to.map(Slot::into_inner).unwrap_or_default(),
+                has_replayed_up_to_slot: replayed_up_to.is_some(),
+                is_our_turn: false,
+                error: FfiOperationError::Success,
+            },
+            ExecutorStatus::Online {
+                height,
+                is_our_turn,
+            } => Self {
+                state: FfiExecutorState::Online,
+                height,
+                has_height: true,
+                target_slot: 0,
+                has_target_slot: false,
+                replayed_up_to_slot: 0,
+                has_replayed_up_to_slot: false,
+                is_our_turn,
+                error: FfiOperationError::Success,
+            },
+        }
+    }
+}
+
 /// Query the last block id from sequencer.
 ///
 /// # Arguments
@@ -84,19 +170,23 @@ pub unsafe extern "C" fn sequencer_ffi_query_last_block(
     sequencer: *const SequencerServiceFFI,
 ) -> LastBlockIdResult {
     if sequencer.is_null() {
-        log::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
+        tracing::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
         return LastBlockIdResult::error(FfiOperationError::NullPointer);
     }
 
     let sequencer = unsafe { &*sequencer };
+    let sequencer_wrap = SequencerServiceFFIWrapper::wrap(sequencer);
 
     let last_block_id_resp = sequencer
         .runtime()
-        .block_on(sequencer.executor_ref().ask(GetLastBlockId).send());
+        .block_on(sequencer_wrap.get_last_block_id());
 
     last_block_id_resp.map_or_else(
         |e| {
-            log::error!("Failed to query last block id: {e:#}");
+            tracing::error!(
+                error = format_args!("{e:#}"),
+                "Failed to query last block id"
+            );
             LastBlockIdResult::error(FfiOperationError::QueryError)
         },
         |val| {
@@ -109,19 +199,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_last_block(
     )
 }
 
-/// Query the sequencer's current sync status as a JSON C-string.
-///
-/// The JSON schema is owned by `sequencer_core` (`SequencerStatus`): an object with
-/// `state` (`Starting`/`Syncing`/`CaughtUp`/`Error`/`Stalled`/`Halted`),
-/// `indexed_block_id`, `last_error`, `stall_reason`, `cross_zone_halt`, and
-/// `cross_zone_peers`. Each peer entry's `health` is one of
-/// `Live`/`Lagging`/`Holed`/`Suspended`/`Halted`; treat a string you do not
-/// know as not known healthy. Lets a client distinguish "still catching up"
-/// from "something went wrong".
-///
-/// Not supporded yet.
-///
-/// TODO: Add support. Needs database modifications.
+/// Query the state the executor is in: bootstrapping from the channel or online.
 ///
 /// # Arguments
 ///
@@ -129,40 +207,37 @@ pub unsafe extern "C" fn sequencer_ffi_query_last_block(
 ///
 /// # Returns
 ///
-/// A heap-allocated, null-terminated JSON string that the caller MUST free with
-/// `free_cstring`. Returns null on error (null `sequencer` pointer or a
-/// serialization failure).
+/// An [`ExecutorStatusResult`] indicating success or failure. It is returned
+/// inline; nothing needs to be freed.
 ///
 /// # Safety
 ///
 /// The caller must ensure that:
 /// - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sequencer_ffi_query_status(
+pub unsafe extern "C" fn sequencer_ffi_query_executor_status(
     sequencer: *const SequencerServiceFFI,
-) -> *mut c_char {
+) -> ExecutorStatusResult {
     if sequencer.is_null() {
-        log::error!(
-            "Attempted to query status on a null sequencer pointer. This is a bug. Aborting."
-        );
-        return std::ptr::null_mut();
+        tracing::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
+        return ExecutorStatusResult::error(FfiOperationError::NullPointer);
     }
 
-    let json = match serde_json::to_string("Not yet supported") {
-        Ok(json) => json,
-        Err(e) => {
-            log::error!("Failed to serialize sequencer status: {e}");
-            return std::ptr::null_mut();
-        }
-    };
+    let sequencer = unsafe { &*sequencer };
 
-    CString::new(json).map_or_else(
-        |e| {
-            log::error!("Sequencer status JSON contained an interior nul byte: {e}");
-            std::ptr::null_mut()
-        },
-        CString::into_raw,
-    )
+    sequencer
+        .runtime()
+        .block_on(sequencer.executor_ref().ask(GetStatus).send())
+        .map_or_else(
+            |e| {
+                tracing::error!(
+                    error = format_args!("{e:#}"),
+                    "Failed to query executor status"
+                );
+                ExecutorStatusResult::error(FfiOperationError::QueryError)
+            },
+            ExecutorStatusResult::from,
+        )
 }
 
 /// Query the block by id from sequencer.
@@ -186,19 +261,20 @@ pub unsafe extern "C" fn sequencer_ffi_query_block(
     block_id: FfiBlockId,
 ) -> PointerResult<FfiBlockOpt, FfiOperationError> {
     if sequencer.is_null() {
-        log::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
+        tracing::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
         return PointerResult::from_error(FfiOperationError::NullPointer);
     }
 
     let sequencer = unsafe { &*sequencer };
+    let sequencer_wrap = SequencerServiceFFIWrapper::wrap(sequencer);
 
     let block_resp = sequencer
         .runtime()
-        .block_on(sequencer.executor_ref().ask(GetBlock { block_id }).send());
+        .block_on(sequencer_wrap.get_block(block_id));
 
     block_resp.map_or_else(
         |e| {
-            log::error!("Failed to query block by id: {e:#}");
+            tracing::error!(error = format_args!("{e:#}"), "Failed to query block by id");
             PointerResult::from_error(FfiOperationError::QueryError)
         },
         |block_opt| {
@@ -232,7 +308,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_block_by_hash(
     hash: FfiHashType,
 ) -> PointerResult<FfiBlockOpt, FfiOperationError> {
     if sequencer.is_null() {
-        log::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
+        tracing::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
         return PointerResult::from_error(FfiOperationError::NullPointer);
     }
 
@@ -249,7 +325,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_block_by_hash(
                 .send(),
         )
         .inspect_err(|e| {
-            log::error!("Failed to query block by id: {e:#}");
+            tracing::error!(error = format_args!("{e:#}"), "Failed to query block by id");
         });
 
     let block_id = if let Ok(map_opt) = map_resp {
@@ -286,27 +362,26 @@ pub unsafe extern "C" fn sequencer_ffi_query_account(
     account_id: FfiAccountId,
 ) -> PointerResult<FfiOption<FfiAccount>, FfiOperationError> {
     if sequencer.is_null() {
-        log::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
+        tracing::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
         return PointerResult::from_error(FfiOperationError::NullPointer);
     }
 
     let sequencer = unsafe { &*sequencer };
+    let sequencer_wrap = SequencerServiceFFIWrapper::wrap(sequencer);
 
-    let acc_resp = sequencer.runtime().block_on(
-        sequencer
-            .executor_ref()
-            .ask(GetAccount {
-                account_id: account_id.into(),
-            })
-            .send(),
-    );
+    let acc_resp = sequencer
+        .runtime()
+        .block_on(sequencer_wrap.get_account(account_id.into()));
 
     acc_resp.map_or_else(
         |e| {
-            log::error!("Failed to query account: {e:#}");
+            tracing::error!(error = format_args!("{e:#}"), "Failed to query account");
             PointerResult::from_error(FfiOperationError::QueryError)
         },
-        |account| PointerResult::from_value(account.account.map(FfiAccount::from).into()),
+        |account| {
+            let opt_ffi_acc: Option<FfiAccount> = account.map(Into::into);
+            PointerResult::from_value(opt_ffi_acc.into())
+        },
     )
 }
 
@@ -333,13 +408,14 @@ pub unsafe extern "C" fn sequencer_ffi_query_account(
 pub unsafe extern "C" fn sequencer_ffi_send_transaction(
     sequencer: *const SequencerServiceFFI,
     transaction: FfiTransaction,
-) -> PointerResult<u8, FfiOperationError> {
+) -> PointerResult<FfiHashType, FfiOperationError> {
     if sequencer.is_null() {
-        log::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
+        tracing::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
         return PointerResult::from_error(FfiOperationError::NullPointer);
     }
 
     let sequencer = unsafe { &*sequencer };
+    let sequencer_wrap = SequencerServiceFFIWrapper::wrap(sequencer);
 
     let lee_tx_res = transaction.try_into().map_err(Into::into);
     if lee_tx_res.is_err() {
@@ -347,29 +423,16 @@ pub unsafe extern "C" fn sequencer_ffi_send_transaction(
     }
     let lee_tx = lee_tx_res.unwrap();
 
-    let tx_resp = sequencer.runtime().block_on(
-        sequencer
-            .executor_ref()
-            .ask(Transaction {
-                transaction: lee_tx,
-                origin: TransactionOrigin::User,
-            })
-            .send(),
-    );
+    let tx_resp = sequencer
+        .runtime()
+        .block_on(sequencer_wrap.send_transaction(lee_tx));
 
     tx_resp.map_or_else(
         |e| {
-            log::error!("Failed to query transaction: {e:#}");
+            tracing::error!(error = format_args!("{e:#}"), "Failed to query transaction");
             PointerResult::from_error(FfiOperationError::QueryError)
         },
-        // Not really the most intuitive example of an FFI.
-        // Written this way to satisfy `PointerResult` semantics,
-        // it is assumed, that `PointerResult::from_value` must produce a valid pointer to
-        // somewhere. The issue is that there is no natural representation for ZSTs(in this
-        // case `()`) in C. Any FFI type will take as much place as u8, so there is no
-        // point in hiding anything here. ToDo: Update, if `Transaction` message for
-        // `ExecutorActor` will get non-`()` response.
-        |()| PointerResult::from_value(0_u8),
+        |tx_hash| PointerResult::from_value(tx_hash.into()),
     )
 }
 
@@ -394,24 +457,20 @@ pub unsafe extern "C" fn sequencer_ffi_query_transaction(
     hash: FfiHashType,
 ) -> PointerResult<FfiOption<FfiTransaction>, FfiOperationError> {
     if sequencer.is_null() {
-        log::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
+        tracing::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
         return PointerResult::from_error(FfiOperationError::NullPointer);
     }
 
     let sequencer = unsafe { &*sequencer };
+    let sequencer_wrap = SequencerServiceFFIWrapper::wrap(sequencer);
 
-    let tx_resp = sequencer.runtime().block_on(
-        sequencer
-            .executor_ref()
-            .ask(GetTransaction {
-                tx_hash: hash.into(),
-            })
-            .send(),
-    );
+    let tx_resp = sequencer
+        .runtime()
+        .block_on(sequencer_wrap.get_transaction(hash.into()));
 
     tx_resp.map_or_else(
         |e| {
-            log::error!("Failed to query transaction: {e:#}");
+            tracing::error!(error = format_args!("{e:#}"), "Failed to query transaction");
             PointerResult::from_error(FfiOperationError::QueryError)
         },
         |tx_opt| {
@@ -447,11 +506,12 @@ pub unsafe extern "C" fn sequencer_ffi_query_block_vec(
     limit: u64,
 ) -> PointerResult<FfiVec<FfiBlock>, FfiOperationError> {
     if sequencer.is_null() {
-        log::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
+        tracing::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
         return PointerResult::from_error(FfiOperationError::NullPointer);
     }
 
     let sequencer = unsafe { &*sequencer };
+    let sequencer_wrap = SequencerServiceFFIWrapper::wrap(sequencer);
 
     let before_opt = before.is_some.then(|| unsafe { before.value.read() });
 
@@ -462,13 +522,13 @@ pub unsafe extern "C" fn sequencer_ffi_query_block_vec(
         if last_block_res.error.is_ok() && last_block_res.is_some {
             last_block_res.block_id
         } else {
-            log::error!("Failed to get last block in block_vec query. Aborting");
+            tracing::error!("Failed to get last block in block_vec query. Aborting");
             return PointerResult::from_error(FfiOperationError::QueryError);
         }
     };
 
     if limit > u64::try_from(MAX_BLOCK_RANGE_LEN).expect("1024 must fit into u64") {
-        log::error!("Limit is too big in block_vec query. Aborting");
+        tracing::error!("Limit is too big in block_vec query. Aborting");
         return PointerResult::from_error(FfiOperationError::QueryError);
     }
 
@@ -478,19 +538,13 @@ pub unsafe extern "C" fn sequencer_ffi_query_block_vec(
         1
     };
 
-    let block_range_resp = sequencer.runtime().block_on(
-        sequencer
-            .executor_ref()
-            .ask(GetBlockRange {
-                range: BoundedRangeInclusive::try_from(left_bound..=before_limit)
-                    .expect("Previous checks ensure that range fits the limit"),
-            })
-            .send(),
-    );
+    let block_range_resp = sequencer
+        .runtime()
+        .block_on(sequencer_wrap.get_block_range(left_bound, before_limit));
 
     block_range_resp.map_or_else(
         |e| {
-            log::error!("Failed to query block batch: {e:#}");
+            tracing::error!(error = format_args!("{e:#}"), "Failed to query block batch");
             PointerResult::from_error(FfiOperationError::QueryError)
         },
         |block_vec| {
@@ -530,7 +584,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_transactions_by_account(
     limit: u64,
 ) -> PointerResult<FfiVec<FfiTransaction>, FfiOperationError> {
     if sequencer.is_null() {
-        log::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
+        tracing::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
         return PointerResult::from_error(FfiOperationError::NullPointer);
     }
 
@@ -550,7 +604,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_transactions_by_account(
     match tx_range_resp {
         Ok(tx_range_opt) => tx_range_opt.map_or_else(
             || {
-                log::error!("Account not found for account to block id map");
+                tracing::error!("Account not found for account to block id map");
                 PointerResult::from_error(FfiOperationError::QueryError)
             },
             |tx_range| {
@@ -564,7 +618,10 @@ pub unsafe extern "C" fn sequencer_ffi_query_transactions_by_account(
             },
         ),
         Err(err) => {
-            log::error!("Failed to query account to block map: {err:#}");
+            tracing::error!(
+                error = format_args!("{err:#}"),
+                "Failed to query account to block map"
+            );
             PointerResult::from_error(FfiOperationError::QueryError)
         }
     }
@@ -591,7 +648,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_block_by_tx_hash(
     tx_hash: FfiHashType,
 ) -> PointerResult<u64, FfiOperationError> {
     if sequencer.is_null() {
-        log::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
+        tracing::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
         return PointerResult::from_error(FfiOperationError::NullPointer);
     }
 
@@ -608,18 +665,20 @@ pub unsafe extern "C" fn sequencer_ffi_query_block_by_tx_hash(
                 .send(),
         )
         .inspect_err(|e| {
-            log::error!("Failed to query block by id: {e:#}");
+            tracing::error!(error = format_args!("{e:#}"), "Failed to query block by id");
         });
 
     map_resp.map_or_else(
         |_| {
-            log::error!("query_block_by_tx_hash: db failure");
+            tracing::error!("query_block_by_tx_hash: db failure");
             PointerResult::from_error(FfiOperationError::QueryError)
         },
         |map_opt| {
             map_opt.map_or_else(
                 || {
-                    log::error!("query_block_by_tx_hash: block for this block id does not exist");
+                    tracing::error!(
+                        "query_block_by_tx_hash: block for this block id does not exist"
+                    );
                     PointerResult::from_error(FfiOperationError::InvalidArgument)
                 },
                 PointerResult::from_value,
@@ -646,7 +705,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_block_by_tx_hash(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sequencer_ffi_free_query_block_id_by_transaction(val: *mut u64) {
     if val.is_null() {
-        log::error!("Attempted to free a null pointer. This is a bug. Aborting.");
+        tracing::error!("Attempted to free a null pointer. This is a bug. Aborting.");
         return;
     }
 
@@ -695,7 +754,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_events(
     selector: *const FfiSelector,
 ) -> PointerResult<FfiVec<FfiEventRecord>, FfiOperationError> {
     if sequencer.is_null() {
-        log::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
+        tracing::error!("Attempted to query a null sequencer pointer. This is a bug. Aborting.");
         return PointerResult::from_error(FfiOperationError::NullPointer);
     }
 
@@ -707,11 +766,11 @@ pub unsafe extern "C" fn sequencer_ffi_query_events(
         .runtime()
         .block_on(sequencer.storage_ref().ask(GetEventFilter).send())
         .inspect_err(|e| {
-            log::error!("Failed to query block by id: {e:#}");
+            tracing::error!(error = format_args!("{e:#}"), "Failed to query block by id");
         });
 
     let Ok(event_filter) = event_filter_res else {
-        log::error!("GetEventFilter: query failed");
+        tracing::error!("GetEventFilter: query failed");
         return PointerResult::from_error(FfiOperationError::QueryError);
     };
 
@@ -721,7 +780,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_events(
         // would serve an empty result for exactly the dropped domains.
         let block_id_res = unsafe { sequencer_ffi_query_block_by_tx_hash(sequencer, *tx_hash) };
         if block_id_res.error.is_error() {
-            log::error!("query_events: no indexed transaction has the requested hash");
+            tracing::error!("query_events: no indexed transaction has the requested hash");
             return PointerResult::from_error(FfiOperationError::QueryError);
         }
         let block_id = unsafe { block_id_res.value.read() };
@@ -733,9 +792,10 @@ pub unsafe extern "C" fn sequencer_ffi_query_events(
             program_account_id.map(lee::AccountId::new),
             selector.map(|s| s.0),
         ) {
-            log::error!(
-                "query_events: the requested events over blocks {block_id} are outside this \
-                 sequencer's event-filter history"
+            tracing::error!(
+                block_id,
+                "query_events: the requested events are outside this sequencer's event-filter \
+                 history"
             );
             return PointerResult::from_error(FfiOperationError::InvalidArgument);
         }
@@ -749,7 +809,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_events(
                     .send(),
             )
             .inspect_err(|e| {
-                log::error!("Failed to query block by id: {e:#}");
+                tracing::error!(error = format_args!("{e:#}"), "Failed to query block by id");
             })
             .map(|row| {
                 row.and_then(|groups| {
@@ -771,12 +831,14 @@ pub unsafe extern "C" fn sequencer_ffi_query_events(
         let tip = if tip_res.is_some && tip_res.error.is_ok() {
             tip_res.block_id
         } else {
-            log::error!("Failed to read the indexed tip for query_events");
+            tracing::error!("Failed to read the indexed tip for query_events");
             return PointerResult::from_error(FfiOperationError::QueryError);
         };
 
         if to_block.is_some && to_block.value.is_null() {
-            log::error!("query_events to_block is flagged present but its value pointer is null");
+            tracing::error!(
+                "query_events to_block is flagged present but its value pointer is null"
+            );
             return PointerResult::from_error(FfiOperationError::InvalidArgument);
         }
         let to_block = to_block.is_some.then(|| unsafe { *to_block.value });
@@ -786,7 +848,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_events(
             ) {
                 Ok(range) => range,
                 Err(err) => {
-                    log::error!("query_events: {err:?}");
+                    tracing::error!(error = ?err, "query_events");
                     return PointerResult::from_error(FfiOperationError::InvalidArgument);
                 }
             };
@@ -800,9 +862,11 @@ pub unsafe extern "C" fn sequencer_ffi_query_events(
             program_account_id.map(lee::AccountId::new),
             selector.map(|s| s.0),
         ) {
-            log::error!(
-                "query_events: the requested events over blocks {from_block}..={to_block} are \
-                 outside this sequencer's event-filter history"
+            tracing::error!(
+                from_block,
+                to_block,
+                "query_events: the requested events are outside this sequencer's event-filter \
+                 history"
             );
             return PointerResult::from_error(FfiOperationError::InvalidArgument);
         }
@@ -820,7 +884,10 @@ pub unsafe extern "C" fn sequencer_ffi_query_events(
                         .send(),
                 )
                 .inspect_err(|e| {
-                    log::error!("Failed to query events by block id: {e:#}");
+                    tracing::error!(
+                        error = format_args!("{e:#}"),
+                        "Failed to query events by block id"
+                    );
                 })
                 .map(|row| {
                     row.unwrap_or_default()

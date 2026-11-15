@@ -10,8 +10,15 @@ scrape_configs:
       # the host so a natively run sequencer (`just run-sequencer`, :9000) is seen the same way.
       #
       # These ports follow the default `LEZ_COMPOSE_SEQ_*_METRICS_PORT`s; update them if you change those.
-      - targets:
-          - host.docker.internal:9000
-          - host.docker.internal:9001
-          - host.docker.internal:9002
-          - host.docker.internal:9003
+      #
+      # A sequencer labels its series `sequencer=<public key>`, which is what the dashboards'
+      # Sequencer dropdown lists. Here each node is named instead: a target label wins over a
+      # scraped one, and the key moves to `exported_sequencer`.
+      - targets: [host.docker.internal:9000]
+        labels: { sequencer: sequencer_0 }
+      - targets: [host.docker.internal:9001]
+        labels: { sequencer: sequencer_1 }
+      - targets: [host.docker.internal:9002]
+        labels: { sequencer: sequencer_2 }
+      - targets: [host.docker.internal:9003]
+        labels: { sequencer: sequencer_3 }

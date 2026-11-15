@@ -18,10 +18,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result};
 use lee::{PrivateKey, PublicKey};
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-use sequencer_core::{
-    config::{ChannelParams, GenesisAction, GossipConfig, SequencerConfig},
-    sign_genesis_stake,
-};
+use sequencer_core::config::{ChannelParams, GenesisAction, GossipConfig, SequencerConfig};
+use sequencer_genesis::sign_genesis_stake;
 use sequencer_stake_core::SequencerKey;
 
 /// Committee size the devnet compose file runs.
@@ -67,7 +65,11 @@ fn main() -> Result<()> {
             .expect("hardcoded gossip listen multiaddr is valid"),
         bootstrap_peers: vec![],
     });
-    let signing_keys: Vec<[u8; 32]> = std::iter::repeat_with(random_key).take(NODES).collect();
+    // A node keeps its key, so a regeneration forced by a stake layout change moves only the
+    // stakes; delete a key file to roll it.
+    let signing_keys: Vec<[u8; 32]> = (0..NODES)
+        .map(|index| existing_key(&devnet_dir, index).unwrap_or_else(random_key))
+        .collect();
     let stakes = genesis_sequencer_stakes(&signing_keys, genesis.channel_params)
         .context("Failed to build the founding sequencer stakes")?;
     // Ahead of the template's supplies: the stakes are funded by their own
@@ -88,6 +90,18 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// The channel signing key node `index` already has, if any.
+fn existing_key(devnet_dir: &Path, index: usize) -> Option<[u8; 32]> {
+    std::fs::read(
+        devnet_dir
+            .join(format!("seq-{index}"))
+            .join(sequencer_core::CHANNEL_SIGNING_KEY_FILE),
+    )
+    .ok()?
+    .try_into()
+    .ok()
 }
 
 /// Fresh 32 bytes for one identity.
@@ -160,7 +174,7 @@ fn repo_root() -> PathBuf {
 #[cfg(test)]
 mod tests {
     use lee::AccountId;
-    use sequencer_core::genesis_stake_message;
+    use sequencer_genesis::genesis_stake_message;
 
     use super::*;
 

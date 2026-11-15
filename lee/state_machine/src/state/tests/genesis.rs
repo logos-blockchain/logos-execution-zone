@@ -43,13 +43,35 @@ fn new_includes_nullifiers_for_private_accounts() {
 }
 
 #[test]
-fn insert_program() {
+fn the_genesis_fingerprint_changes_when_a_nullifier_is_added() {
+    let keys = test_private_account_keys_1();
+    let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk());
+    let mut state = V03State::new();
+    state
+        .private_state
+        .0
+        .extend(&[Commitment::new(&account_id, &Account::funded(100))]);
+    let fingerprint = state.genesis_fingerprint();
+
+    state
+        .private_state
+        .1
+        .extend(&[Nullifier::for_account_initialization(
+            &account_id,
+            &keys.nsk(),
+        )]);
+
+    assert_ne!(state.genesis_fingerprint(), fingerprint);
+}
+
+#[test]
+fn a_seeded_program_reconstructs_from_its_segment_chain() {
     let mut state = V03State::new();
     let program_to_insert = crate::test_methods::scripted();
     let account_id = AccountId::from_builtin_program(program_to_insert.id());
     assert!(!state.public_state.contains_key(&account_id));
 
-    state.insert_program(&program_to_insert, true);
+    state = state.with_programs([program_to_insert.clone()]);
 
     // Walks the full segment chain regardless of how many chunks the elf split into,
     // exercising the same reconstruction a real caller uses.
@@ -65,7 +87,7 @@ fn genesis_immutable_program_lands_immutable_mirror_commitment() {
     let state = V03State::new().with_programs([crate::test_methods::scripted()]);
     let header_account_id =
         lee_core::account::AccountId::from_builtin_program(crate::test_methods::scripted().id());
-    let program_header = lee_core::program::ProgramHeader::from_bytes(
+    let program_header = lee_core::program::ProgramHeader::from_loader_actor_state(
         state.public_state[&header_account_id]
             .data
             .actor_state(PROGRAM_LOADER_ACCOUNT_ID),
@@ -80,11 +102,14 @@ fn genesis_immutable_program_lands_immutable_mirror_commitment() {
 
 #[test]
 fn genesis_mutable_program_lands_no_immutable_mirror_commitment() {
-    let state =
-        V03State::new().with_genesis_programs([(crate::test_methods::forges_echo(), false)]);
     let header_account_id =
         lee_core::account::AccountId::from_builtin_program(crate::test_methods::forges_echo().id());
-    let program_header = lee_core::program::ProgramHeader::from_bytes(
+    let state = V03State::new().with_programs_at([(
+        header_account_id,
+        crate::test_methods::forges_echo(),
+        false,
+    )]);
+    let program_header = lee_core::program::ProgramHeader::from_loader_actor_state(
         state.public_state[&header_account_id]
             .data
             .actor_state(PROGRAM_LOADER_ACCOUNT_ID),
@@ -140,4 +165,30 @@ fn state_serialization_roundtrip() {
     let bytes = borsh::to_vec(&state).unwrap();
     let state_from_bytes: V03State = borsh::from_slice(&bytes).unwrap();
     assert_eq!(state, state_from_bytes);
+}
+
+/// Only the user ELF is deployed, and it runs under the default kernel, so a builtin declared under
+/// another kernel's image id is refused.
+#[test]
+#[should_panic(expected = "builtin program's image id does not match its bytecode")]
+fn genesis_rejects_a_builtin_with_a_non_default_kernel() {
+    let scripted = crate::test_methods::scripted();
+    let user_elf = risc0_binfmt::ProgramBinary::decode(scripted.elf())
+        .unwrap()
+        .user_elf;
+    let binary = risc0_binfmt::ProgramBinary::new(user_elf, user_elf);
+    let image_id = binary
+        .compute_image_id()
+        .expect("any ELF can stand in as a kernel")
+        .into();
+    let program = Program::new_unchecked(image_id, binary.encode().into());
+    let _state = V03State::new().with_programs([program]);
+}
+
+#[test]
+#[should_panic(expected = "builtin program's image id does not match its bytecode")]
+fn genesis_rejects_a_builtin_whose_id_does_not_match_its_bytecode() {
+    let elf = crate::test_methods::scripted().elf().to_vec();
+    let program = Program::new_unchecked([1; 8], elf.into());
+    let _state = V03State::new().with_programs([program]);
 }

@@ -122,6 +122,34 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_accounts() {
     .unwrap();
 
     assert!(proof.is_valid_for(&output.public_context, &output.execution));
+    // The same receipt with its claim unpruned verifies, but is not the one encoding accepted.
+    let journal = lee_core::to_borsh_frame(&(&output.public_context, &output.execution));
+    let claim = MaybePruned::Value(risc0_zkvm::ReceiptClaim::ok(
+        PRIVACY_PRESERVING_CIRCUIT_ID,
+        journal.clone(),
+    ));
+    let unpruned = match borsh::from_slice::<InnerReceipt>(&proof.0).unwrap() {
+        InnerReceipt::Succinct(mut receipt) => {
+            receipt.claim = claim;
+            InnerReceipt::Succinct(receipt)
+        }
+        InnerReceipt::Fake(mut receipt) => {
+            receipt.claim = claim;
+            InnerReceipt::Fake(receipt)
+        }
+        InnerReceipt::Composite(_) | InnerReceipt::Groth16(_) | _ => {
+            unreachable!("the prover emits a succinct or fake receipt")
+        }
+    };
+    assert!(
+        Receipt::new(unpruned.clone(), journal)
+            .verify(PRIVACY_PRESERVING_CIRCUIT_ID)
+            .is_ok()
+    );
+    assert!(
+        !Proof::from_inner(borsh::to_vec(&unpruned).unwrap())
+            .is_valid_for(&output.public_context, &output.execution)
+    );
     // A native transfer runs no guest, so it claims no program image.
     assert!(output.execution.program_image_claims.is_empty());
 
@@ -654,6 +682,7 @@ fn direct_input(
     let keys = test_private_account_keys_1();
     PrivacyPreservingCircuitInput {
         input: ProvingInput {
+            claims: Vec::new(),
             root: root(Actor::new(keys.account_id(), program_account_id), script),
             public_context: PublicExecutionContext::default(),
             private_witnesses: vec![init_witness(&keys)],
@@ -661,12 +690,13 @@ fn direct_input(
             ciphertext_padding: None,
             recoveries: Vec::new(),
             private_promotions: BTreeSet::new(),
+            fee: None,
         },
         program_image_witnesses: claims_for(claims),
         shadow_program_witnesses: Vec::new(),
         responses,
         sender_presentations: Vec::new(),
-        message_seals: Vec::new(),
+        publication_modes: Vec::new(),
         predicted_cross_messages: Vec::new(),
     }
 }
@@ -748,6 +778,26 @@ fn a_private_call_into_the_program_loader_is_refused() {
     let result = prove_circuit_directly(&input, Vec::new());
 
     assert_circuit_rejects(&result, "runs only in a wholly public execution");
+}
+
+#[test]
+fn two_program_image_witnesses_for_one_account_are_refused() {
+    let mut input = direct_input(scripted_id(), &Script::default(), &[], Vec::new());
+    let account_id = AccountId::new([5; 32]);
+    input.program_image_witnesses = vec![
+        ProgramImageWitness::Disclosed {
+            account_id,
+            image_id: [1; 8],
+        },
+        ProgramImageWitness::Disclosed {
+            account_id,
+            image_id: [2; 8],
+        },
+    ];
+
+    let result = prove_circuit_directly(&input, Vec::new());
+
+    assert_circuit_rejects(&result, "claimed by more than one program-image witness");
 }
 
 #[test]
@@ -888,6 +938,8 @@ fn preparation_meters_a_public_self_call_chain_as_settlement_does() {
         WholeExecution::new(
             tx.message.public_context.clone(),
             TransactionEntry::Sync(tx.message.execution.root.clone()),
+            Vec::new(),
+            None,
             &[],
         )?
         .execute(&mut simulator)?;

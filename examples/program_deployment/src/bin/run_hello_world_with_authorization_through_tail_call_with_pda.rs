@@ -11,7 +11,7 @@ use lee::{
     public_transaction::{Message, WitnessSet},
 };
 use lee_core::program::PdaSeed;
-use program_deployment::deploy_program;
+use program_deployment::{deploy_program, fee_paid_by};
 use sequencer_service_rpc::RpcClient as _;
 use wallet::WalletCore;
 
@@ -75,14 +75,16 @@ async fn main() {
     // to the callee's actor on the same account, so both are declared.
     let caller = Actor::new(pda, caller_account_id);
     let public_actors = vec![caller, Actor::new(pda, callee_account_id)];
-    let nonces = BTreeMap::new();
-    let signing_keys = [];
+    // The fee is charged to `payer`, so the payer's nonce is listed and its key signs the message.
+    let (fee, payer_nonce, payer_key) = fee_paid_by(&wallet_core, payer).await.unwrap();
+    let nonces = BTreeMap::from([(payer, payer_nonce)]);
+    let signing_keys = [&payer_key];
     let message = Message {
         admission_evidence: vec![PublicAccountEvidence::Pda {
             program: caller_account_id,
             seed: PDA_SEED,
         }],
-        ..Message::try_new(caller, public_actors, nonces, callee_account_id).unwrap()
+        ..Message::try_new_with_fees(caller, public_actors, nonces, callee_account_id, fee).unwrap()
     };
     let witness_set = WitnessSet::for_message(&message, &signing_keys);
     let tx = PublicTransaction::new(message, witness_set);

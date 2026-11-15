@@ -172,7 +172,8 @@ _wallet() {
                     COMPREPLY=($(compgen -W "-l --long" -- "$cur"))
                     ;;
                 sync-private)
-                    ;; # no options
+                    COMPREPLY=($(compgen -W "--rescan -y --yes" -- "$cur"))
+                    ;;
                 new)
                     # `account new` is itself a subcommand: public | private-accounts-key
                     local new_subcmd=""
@@ -285,7 +286,7 @@ _wallet() {
                 -d | --depth)
                     ;; # no specific completion for depth value
                 *)
-                    COMPREPLY=($(compgen -W "-d --depth" -- "$cur"))
+                    COMPREPLY=($(compgen -W "-d --depth -y --yes" -- "$cur"))
                     ;;
             esac
             ;;

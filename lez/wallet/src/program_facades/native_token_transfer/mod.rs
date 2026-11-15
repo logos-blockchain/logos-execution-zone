@@ -1,18 +1,22 @@
 use common::HashType;
-use lee::{privacy_preserving_transaction::circuit::ProgramCatalog, program::Program};
+use lee::{
+    AccountId, Actor, MessageBody, privacy_preserving_transaction::circuit::ProgramCatalog,
+    program::Program,
+};
 use lee_core::{
     SharedSecretKey,
     native_token::{Message, NATIVE_TOKEN_PROGRAM_ID, decode_balance},
 };
 
 use crate::{
-    AccountIdentity, ExecutionFailureKind, SelectedActorState, WalletCore,
+    AccountIdentity, AccountMention, AsyncDelivery, ExecutionFailureKind, Promotions,
+    SelectedActorState, WalletCore, WalletSequencerClient,
     program_facades::{CreditDelivery, credit_destination},
 };
 
-pub struct NativeTokenTransfer<'wallet>(pub &'wallet WalletCore);
+pub struct NativeTokenTransfer<'wallet, C: WalletSequencerClient>(pub &'wallet WalletCore<C>);
 
-impl NativeTokenTransfer<'_> {
+impl<C: WalletSequencerClient> NativeTokenTransfer<'_, C> {
     // The sender's native actor is the root and must hold `amount`; its credit to `recipient` is an
     // async message.
     pub async fn transfer(
@@ -30,6 +34,49 @@ impl NativeTokenTransfer<'_> {
             NATIVE_TOKEN_PROGRAM_ID,
             delivery,
         )?;
+        self.send_transfer(sender, declared, to, amount, async_delivery)
+            .await
+    }
+
+    // A transfer to an address with a recovery binding on chain, its credit published clear: a
+    // private sender requests so, a public sender's credit is published clear as it is.
+    pub async fn transfer_clear(
+        &self,
+        sender: AccountIdentity,
+        to: AccountId,
+        amount: u128,
+    ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
+        let credited = Actor::native_balance(to);
+        let async_delivery = if sender.is_private() {
+            AsyncDelivery {
+                clear_messages: vec![MessageBody {
+                    from: Actor::native_balance(sender.account_id()),
+                    to: credited,
+                    message: Program::serialize_message(Message::Credit(amount))
+                        .expect("Message should serialize"),
+                }],
+                promotions: Promotions {
+                    listed_only: true,
+                    ..Promotions::default()
+                },
+                ..AsyncDelivery::default()
+            }
+        } else {
+            self.0.require_binding(credited).await?;
+            AsyncDelivery::default()
+        };
+        self.send_transfer(sender, None, to, amount, async_delivery)
+            .await
+    }
+
+    async fn send_transfer(
+        &self,
+        sender: AccountIdentity,
+        declared: Option<AccountMention>,
+        to: AccountId,
+        amount: u128,
+        async_delivery: AsyncDelivery,
+    ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let mut accounts = vec![sender.balance()];
         accounts.extend(declared);
         // TODO: handle large Err-variant properly
@@ -54,6 +101,7 @@ impl NativeTokenTransfer<'_> {
                 &ProgramCatalog::default(),
                 None,
                 async_delivery,
+                None,
                 tx_pre_check,
             )
             .await

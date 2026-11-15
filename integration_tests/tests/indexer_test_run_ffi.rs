@@ -18,7 +18,7 @@ fn indexer_test_run_ffi() -> Result<()> {
     // returning early instead of sleeping for the full timeout.
     let last_block_indexer_ffi = indexer_ffi_helpers::wait_for_indexer_ffi_block(&indexer_ffi, 1)?;
 
-    log::info!("Last block on indexer FFI now is {last_block_indexer_ffi}");
+    tracing::info!(last_block_indexer_ffi, "Indexer FFI last block");
 
     assert!(last_block_indexer_ffi > 0);
 

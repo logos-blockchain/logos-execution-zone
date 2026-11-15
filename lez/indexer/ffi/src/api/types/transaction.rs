@@ -1,10 +1,10 @@
-use ffi_types::empty_root_call;
 pub use ffi_types::{
     FfiActor, FfiBoundaryStep, FfiBoundaryStepKind, FfiDelivery, FfiEncryptedAccountData,
-    FfiFeeDeclaration, FfiPrivateAction, FfiPublicAccountEvidence, FfiPublicAccountEvidenceKind,
-    FfiPublicExecutionContext, FfiRecoveryBinding, FfiRootCall, FfiSealedMessage,
-    FfiSignaturePubKeyEntry,
+    FfiFeeDeclaration, FfiPrivateAction, FfiProvenFee, FfiPublicAccountEvidence,
+    FfiPublicAccountEvidenceKind, FfiPublicExecutionContext, FfiPublication, FfiRecoveryBinding,
+    FfiRootCall, FfiSignaturePubKeyEntry,
 };
+use ffi_types::{empty_root_call, proven_fee_from_ffi};
 use indexer_service_protocol::{
     HashType, PdaSeed, PrivacyPreservingMessage, PrivacyPreservingTransaction, Proof,
     PublicAccountEvidence, PublicKey, PublicMessage, PublicTransaction, Signature, Transaction,
@@ -15,7 +15,7 @@ use crate::api::types::{
     FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiPublicKey, FfiVec,
     vectors::{
         FfiBoundaryStepList, FfiNonceList, FfiPrivateActionList, FfiProof,
-        FfiPublicAccountEvidenceList, FfiRecoveryBindingList, FfiSealedMessageList,
+        FfiPublicAccountEvidenceList, FfiPublicationList, FfiRecoveryBindingList,
         FfiSignaturePubKeyList,
     },
 };
@@ -182,10 +182,10 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                         .collect()
                 },
                 async_messages: {
-                    let std_vec: Vec<FfiSealedMessage> = value.message.async_messages.into();
+                    let std_vec: Vec<FfiPublication> = value.message.async_messages.into();
                     std_vec
                         .into_iter()
-                        .map(|sealed| lee::SealedMessage::from(sealed).into())
+                        .map(|publication| lee::Publication::from(publication).into())
                         .collect()
                 },
                 recovery_bindings: {
@@ -220,6 +220,15 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                         .map(public_account_evidence_from_ffi)
                         .collect()
                 },
+                proven_fee: proven_fee_from_ffi(
+                    value.message.has_proven_fee,
+                    value.message.proven_fee,
+                )
+                .map(Into::into),
+                fee: value
+                    .message
+                    .has_fee
+                    .then(|| lee::FeeDeclaration::from(value.message.fee).into()),
             },
             witness_set: WitnessSet {
                 signatures_and_public_keys: {
@@ -244,7 +253,7 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
 pub struct FfiPrivacyPreservingMessage {
     pub public_context: FfiPublicExecutionContext,
     pub boundary: FfiBoundaryStepList,
-    pub async_messages: FfiSealedMessageList,
+    pub async_messages: FfiPublicationList,
     pub recovery_bindings: FfiRecoveryBindingList,
     pub has_public_root: bool,
     pub public_root: FfiRootCall,
@@ -253,6 +262,11 @@ pub struct FfiPrivacyPreservingMessage {
     pub block_validity_window: [u64; 2],
     pub timestamp_validity_window: [u64; 2],
     pub admission_evidence: FfiPublicAccountEvidenceList,
+    pub has_proven_fee: bool,
+    pub proven_fee: FfiProvenFee,
+    /// The fee declaration, paid by a public signer instead of inside the proof.
+    pub has_fee: bool,
+    pub fee: FfiFeeDeclaration,
 }
 
 impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
@@ -268,9 +282,17 @@ impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
             block_validity_window,
             timestamp_validity_window,
             admission_evidence,
+            proven_fee,
+            fee,
         } = value;
 
         Self {
+            has_proven_fee: proven_fee.is_some(),
+            proven_fee: proven_fee.map(lee_core::ProvenFee::from).into(),
+            has_fee: fee.is_some(),
+            fee: fee
+                .map(|fee| lee::FeeDeclaration::from(fee).into())
+                .unwrap_or_default(),
             public_context: lee::PublicExecutionContext::from(public_context).into(),
             boundary: boundary
                 .into_iter()
@@ -279,7 +301,7 @@ impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
                 .into(),
             async_messages: async_messages
                 .into_iter()
-                .map(|sealed| FfiSealedMessage::from(lee::SealedMessage::from(sealed)))
+                .map(|publication| FfiPublication::from(lee::Publication::from(publication)))
                 .collect::<Vec<_>>()
                 .into(),
             recovery_bindings: recovery_bindings
@@ -402,7 +424,7 @@ pub unsafe extern "C" fn free_ffi_transaction(val: FfiTransaction) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_ffi_transaction_opt(val: *mut FfiOption<FfiTransaction>) {
     if val.is_null() {
-        log::error!("Trying to free a null pointer. Exiting");
+        tracing::error!("Trying to free a null pointer. Exiting");
         return;
     }
     // Reclaim the outer box, then the inner transaction box (if any).
@@ -452,7 +474,7 @@ pub(crate) fn free_transaction_vec_value(val: FfiVec<FfiTransaction>) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_ffi_transaction_vec(val: *mut FfiVec<FfiTransaction>) {
     if val.is_null() {
-        log::error!("Trying to free a null pointer. Exiting");
+        tracing::error!("Trying to free a null pointer. Exiting");
         return;
     }
     // Reclaim the outer box, then the backing buffer and each transaction.
@@ -522,9 +544,9 @@ const fn cast_ffi_validity_window(ffi_window: [u64; 2]) -> ValidityWindow {
 #[cfg(test)]
 mod tests {
     use indexer_service_protocol::{
-        AccountId, Actor, BoundaryStep, Ciphertext, Commitment, Delivery, EncryptedNote,
-        EphemeralPublicKey, FeeDeclaration, MessageEnvelope, PublicExecutionContext, RootCall,
-        SealedMessage,
+        AccountId, Actor, BoundaryStep, Ciphertext, Commitment, CommitmentSetDigest, Delivery,
+        EncryptedNote, EphemeralPublicKey, FeeDeclaration, FeeFallback, MessageEnvelope, Nullifier,
+        PrivateAction, ProvenFee, PublicExecutionContext, Publication, RootCall, SealedMessage,
     };
 
     use super::*;
@@ -607,6 +629,11 @@ mod tests {
         // A repeated send to one actor, and not a palindrome: a set would collapse the
         // sequence and a reversal would show, and execution replays them in emission order.
         let repeated = delivery(actor(3, 53), actor(5, 6), 7);
+        let clear = Publication::Clear(MessageEnvelope {
+            from: actor(44, 94),
+            to: actor(45, 46),
+            message: vec![47],
+        });
         PrivacyPreservingTransaction {
             hash: HashType([4; 32]),
             message: PrivacyPreservingMessage {
@@ -622,7 +649,7 @@ mod tests {
                         ..delivery(actor(12, 62), actor(9, 10), 11)
                     }),
                     BoundaryStep::PrivateToPublic(delivery(actor(40, 90), actor(41, 42), 43)),
-                    BoundaryStep::PrivateToPublic(repeated),
+                    BoundaryStep::PrivateToPublic(repeated.clone()),
                     BoundaryStep::PublicToPrivate(Delivery {
                         inherits_entry_authorizations: false,
                         ..delivery(actor(17, 18), actor(19, 20), 21)
@@ -631,14 +658,15 @@ mod tests {
                     BoundaryStep::EndPublicSubtree,
                 ],
                 async_messages: vec![
-                    SealedMessage {
+                    Publication::Sealed(SealedMessage {
                         commitment: Commitment([23; 32]),
                         note: EncryptedNote {
                             epk: EphemeralPublicKey(vec![24; 2]),
                             ciphertext: Ciphertext(vec![25; 3]),
                         },
-                    };
-                    2
+                    }),
+                    clear.clone(),
+                    clear,
                 ],
                 recovery_bindings: vec![],
                 public_root: Some(RootCall {
@@ -650,6 +678,30 @@ mod tests {
                 block_validity_window: ValidityWindow((None, None)),
                 timestamp_validity_window: ValidityWindow((None, None)),
                 admission_evidence: admission_evidence(),
+                proven_fee: Some(ProvenFee {
+                    refund_to: Some(account_id(70)),
+                    fallback: Some(FeeFallback {
+                        action: PrivateAction {
+                            nullifier: Nullifier([71; 32]),
+                            root: CommitmentSetDigest([72; 32]),
+                            commitment: Commitment([73; 32]),
+                            encrypted_post_state: EncryptedNote {
+                                ciphertext: Ciphertext(vec![74; 3]),
+                                epk: EphemeralPublicKey(vec![75; 2]),
+                            },
+                        },
+                        boundary: vec![
+                            BoundaryStep::PrivateToPublic(repeated),
+                            BoundaryStep::EndPublicSubtree,
+                        ],
+                    }),
+                }),
+                fee: Some(FeeDeclaration {
+                    payer: account_id(76),
+                    gas_limit: 500_000,
+                    tip: 3,
+                    max_fee: 9_000_000,
+                }),
             },
             witness_set: WitnessSet {
                 signatures_and_public_keys: vec![],

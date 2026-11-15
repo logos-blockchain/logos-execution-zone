@@ -10,6 +10,12 @@ from pathlib import Path
 from typing import Any
 
 
+# Scheduled one test per shard: each is far slower sharing a runner. The
+# system-upgrade tests in `program_deployment` each hold a two-node zone, and
+# sharing starved a funding request until it timed out.
+SPLIT_PER_TEST = frozenset({"program_deployment", "scoped_reads", "slashing"})
+
+
 class DiscoveryError(ValueError):
     """Raised when nextest output cannot be used for target discovery."""
 
@@ -27,7 +33,7 @@ def _is_runnable_test(testcase: Any) -> bool:
 
 
 def discover_targets(summary: dict[str, Any]) -> list[str]:
-    """Return test binary names containing at least one runnable test."""
+    """Return shard targets: a binary name, or `binary::test` when split."""
     suites = summary.get("rust-suites")
     if not isinstance(suites, dict):
         raise DiscoveryError(
@@ -44,9 +50,18 @@ def discover_targets(summary: dict[str, Any]) -> list[str]:
         if not isinstance(binary_name, str) or not isinstance(testcases, dict):
             raise DiscoveryError(f"invalid test suite metadata for {suite_id!r}")
 
-        if binary_name != "tps" and any(
-            _is_runnable_test(testcase) for testcase in testcases.values()
-        ):
+        if binary_name == "tps":
+            continue
+
+        runnable = [
+            name for name, testcase in testcases.items() if _is_runnable_test(testcase)
+        ]
+        if not runnable:
+            continue
+
+        if binary_name in SPLIT_PER_TEST:
+            targets.update(f"{binary_name}::{name}" for name in runnable)
+        else:
             targets.add(binary_name)
 
     return sorted(targets)

@@ -129,10 +129,22 @@ typedef struct FfiPublicTransactionBody {
   FfiSignaturePubKeyList witness_set;
 } FfiPublicTransactionBody;
 
+/**
+ * What a proof commits about its in-proof fee. The `has_*` flags mark which parts are present;
+ * an absent part holds an empty value.
+ */
+typedef struct FfiProvenFee {
+  bool has_refund_to;
+  FfiAccountId refund_to;
+  bool has_fallback;
+  FfiPrivateAction fallback_action;
+  FfiBoundaryStepList fallback_boundary;
+} FfiProvenFee;
+
 typedef struct FfiPrivacyPreservingMessage {
   FfiPublicExecutionContext public_context;
   FfiBoundaryStepList boundary;
-  FfiSealedMessageList async_messages;
+  FfiPublicationList async_messages;
   FfiRecoveryBindingList recovery_bindings;
   bool has_public_root;
   FfiRootCall public_root;
@@ -141,6 +153,13 @@ typedef struct FfiPrivacyPreservingMessage {
   uint64_t block_validity_window[2];
   uint64_t timestamp_validity_window[2];
   FfiPublicAccountEvidenceList admission_evidence;
+  bool has_proven_fee;
+  struct FfiProvenFee proven_fee;
+  /**
+   * The fee declaration, paid by a public signer instead of inside the proof.
+   */
+  bool has_fee;
+  FfiFeeDeclaration fee;
 } FfiPrivacyPreservingMessage;
 
 typedef FfiVecU8 FfiProof;
@@ -170,9 +189,39 @@ typedef struct FfiVec_FfiTransaction {
 
 typedef struct FfiVec_FfiTransaction FfiBlockBody;
 
+/**
+ * The fee one transaction paid; all zeros for a fee-exempt one.
+ */
+typedef struct FfiFeeReceipt {
+  uint64_t gas_exec;
+  uint64_t gas_stor;
+  FfiU128 fee_base;
+  FfiU128 tip;
+  FfiU128 refund;
+} FfiFeeReceipt;
+
+typedef struct FfiTransactionReceipt {
+  /**
+   * `true`: applied; `false`: the action reverted, and its fee was still charged.
+   */
+  bool success;
+  struct FfiFeeReceipt fee;
+} FfiTransactionReceipt;
+
+typedef struct FfiVec_FfiTransactionReceipt {
+  struct FfiTransactionReceipt *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiTransactionReceipt;
+
 typedef struct FfiBlock {
   struct FfiBlockHeader header;
   FfiBlockBody body;
+  /**
+   * One per user transaction, parallel to `body`; the trailing fee and clock transactions
+   * have none.
+   */
+  struct FfiVec_FfiTransactionReceipt receipts;
   enum FfiBedrockStatus bedrock_status;
 } FfiBlock;
 
@@ -266,6 +315,22 @@ typedef struct PointerResult_FfiOption_FfiTransaction_____OperationStatus {
   enum OperationStatus error;
 } PointerResult_FfiOption_FfiTransaction_____OperationStatus;
 
+typedef struct FfiOption_FfiTransactionReceipt {
+  struct FfiTransactionReceipt *value;
+  bool is_some;
+} FfiOption_FfiTransactionReceipt;
+
+/**
+ * Simple wrapper around a pointer to a value or an error.
+ *
+ * Pointer is not guaranteed. You should check the error field before
+ * dereferencing the pointer.
+ */
+typedef struct PointerResult_FfiOption_FfiTransactionReceipt_____OperationStatus {
+  struct FfiOption_FfiTransactionReceipt *value;
+  enum OperationStatus error;
+} PointerResult_FfiOption_FfiTransactionReceipt_____OperationStatus;
+
 typedef struct FfiVec_FfiBlock {
   struct FfiBlock *entries;
   uintptr_t len;
@@ -334,6 +399,8 @@ typedef struct PointerResult_FfiVec_FfiEventRecord_____OperationStatus {
   enum OperationStatus error;
 } PointerResult_FfiVec_FfiEventRecord_____OperationStatus;
 
+typedef struct FfiOption_FfiTransactionReceipt FfiTransactionReceiptOpt;
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -392,7 +459,7 @@ enum OperationStatus stop_indexer(struct IndexerServiceFFI *indexer);
  * - `level` is a null-terminated string (`off`/`error`/`warn`/`info`/`debug`/ `trace`,
  *   case-insensitive); null or unparseable falls back to `info`.
  *
- * Only the `indexer_ffi` and `indexer_core` targets are enabled!
+ * `RUST_LOG`, when set, overrides `level` (e.g. `info,indexer_core=debug`).
  *
  * # Safety
  * - `level` must be a valid null-terminated C string, or null.
@@ -536,6 +603,28 @@ struct PointerResult_FfiOption_FfiTransaction_____OperationStatus query_transact
                                                                                     FfiHashType hash);
 
 /**
+ * Query a transaction's receipt by its hash from indexer.
+ *
+ * # Arguments
+ *
+ * - `indexer`: A pointer to the [`IndexerServiceFFI`] instance to be queried.
+ * - `hash`: `FfiHashType` - hash of transaction
+ *
+ * # Returns
+ *
+ * A `PointerResult<FfiOption<FfiTransactionReceipt>, OperationStatus>` indicating success or
+ * failure. The option is empty for an unknown transaction, and for a block's trailing fee and
+ * clock transactions. Free it with `free_ffi_transaction_receipt_opt`.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `indexer` is a valid pointer to a [`IndexerServiceFFI`] instance.
+ */
+struct PointerResult_FfiOption_FfiTransactionReceipt_____OperationStatus query_transaction_receipt(const struct IndexerServiceFFI *indexer,
+                                                                                                   FfiHashType hash);
+
+/**
  * Query the blocks by block range from indexer.
  *
  * # Arguments
@@ -635,8 +724,8 @@ void free_ffi_account_opt(struct FfiOption_FfiAccount *val);
 /**
  * Frees the resources owned by an `FfiBlock` value.
  *
- * This frees the block's transaction bodies (the only heap-owning field); the
- * header/status fields are `Copy`. It operates on the struct by value because
+ * This frees the block's transaction bodies and receipts (the only heap-owning
+ * fields); the header/status fields are `Copy`. It operates on the struct by value because
  * it is an element-level helper, used both for the vector path
  * ([`free_ffi_block_vec`]) and the optional path ([`free_ffi_block_opt`]) — in
  * neither case is an `FfiBlock` itself wrapped in its own outer box.
@@ -699,6 +788,15 @@ void free_ffi_block_opt(FfiBlockOpt *val);
  * - `val` is a pointer to an `FfiVec<FfiBlock>` produced by this library and not yet freed.
  */
 void free_ffi_block_vec(struct FfiVec_FfiBlock *val);
+
+/**
+ * Frees the option a `query_transaction_receipt` call returned, and its receipt if present.
+ *
+ * # Safety
+ *
+ * `val` must be null or an unfreed `PointerResult.value` from `query_transaction_receipt`.
+ */
+void free_ffi_transaction_receipt_opt(FfiTransactionReceiptOpt *val);
 
 /**
  * Frees the resources associated with the given vector of ffi event records.

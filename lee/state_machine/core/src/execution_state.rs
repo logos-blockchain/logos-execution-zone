@@ -4,8 +4,9 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    PrivateWitness, RootCall, SenderPresentation,
+    FeeTransfer, PrivateWitness, RootCall, SenderPresentation,
     account::{AccountData, AccountId, Actor, ActorState},
+    native_token,
     program::{
         AsyncMessage, InvalidWindow, MessageBody, MessageData, MessageEnvelope,
         PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent, ReceiveInput, SyncMessage, Transition,
@@ -268,6 +269,11 @@ pub enum ExecutionError {
         "Predicted cross messages were supplied for public segments the execution never entered"
     )]
     UnusedPredictedCrossMessages,
+    #[error("fee payer {account_id} is not a witnessed private account")]
+    UnwitnessedFeePayer { account_id: AccountId },
+
+    #[error("fee payer {account_id}'s witness does not hold its authorization key")]
+    FeePayerWithoutAuthorization { account_id: AccountId },
 
     #[error("Predicted cross message sender {actor:?} is not a declared public actor")]
     UndeclaredCrossMessageSender { actor: Actor },
@@ -457,6 +463,14 @@ trait Mode: Sized {
         executor: &mut Executor<'_, Self>,
     ) -> Result<(), ExecutionError>;
 
+    /// Queues what runs once the transaction root's subtree completes.
+    fn start_with_transaction_root(
+        &mut self,
+        _executor: &mut Executor<'_, Self>,
+    ) -> Result<(), ExecutionError> {
+        Ok(())
+    }
+
     fn deliver_to_public<E: ExecutionEnvironment>(
         &mut self,
         executor: &mut Executor<'_, Self>,
@@ -531,10 +545,19 @@ impl<'witnesses> WholeExecution<'witnesses> {
     pub fn new(
         public_context: PublicExecutionContext,
         root: TransactionEntry<MessageBody>,
+        claims: Vec<MessageBody>,
+        fee: Option<FeeTransfer>,
         witnesses: &'witnesses [PrivateWitness],
     ) -> Result<Self, ExecutionError> {
         let mut mode = WholeMode::default();
-        let executor = Executor::start(public_context, witnesses, Some(root), &mut mode)?;
+        let executor = Executor::start(
+            public_context,
+            witnesses,
+            Some(root),
+            claims,
+            fee,
+            &mut mode,
+        )?;
         Ok(Self { executor, mode })
     }
 
@@ -550,6 +573,8 @@ impl<'witnesses> PrivatePart<'witnesses> {
     pub fn new(
         public_context: PublicExecutionContext,
         root: TransactionEntry<MessageBody>,
+        claims: Vec<MessageBody>,
+        fee: Option<FeeTransfer>,
         witnesses: &'witnesses [PrivateWitness],
         predicted_cross_messages: PredictedCrossMessages,
     ) -> Result<Self, ExecutionError> {
@@ -558,7 +583,14 @@ impl<'witnesses> PrivatePart<'witnesses> {
             next_public_segment: 0,
             boundary: Boundary::new(),
         };
-        let executor = Executor::start(public_context, witnesses, Some(root), &mut mode)?;
+        let executor = Executor::start(
+            public_context,
+            witnesses,
+            Some(root),
+            claims,
+            fee,
+            &mut mode,
+        )?;
         Ok(Self { executor, mode })
     }
 
@@ -584,6 +616,8 @@ impl PublicPart {
             public_context,
             &[],
             root.map(TransactionEntry::Sync),
+            Vec::new(),
+            None,
             &mut mode,
         )?;
         Ok(Self { executor, mode })
@@ -696,6 +730,9 @@ impl PrivateMode {
             if !executor.public_context.runs_publicly(sender) {
                 return Err(ExecutionError::UndeclaredCrossMessageSender { actor: sender });
             }
+            // A prediction is a public call into the private part. Aimed at a public actor it
+            // would be recorded as a proven call and replayed publicly unchecked.
+            executor.require_private(cross_message.envelope.to)?;
             let mut delivery = executor.disclose(cross_message, Sender::Call(sender));
             if delivery.inherits_entry_authorizations {
                 delivery.inherited_authorizations.extend(withheld);
@@ -824,15 +861,12 @@ impl PublicMode {
                     .push(WorkItem::Deliver(Box::new(delivery)));
                 Ok(())
             }
-            (None, true) | (Some(BoundaryStep::EndPrivateSubtree), false) => Ok(()),
+            // At the top level the replay ends at anything but a proven call; `finish` rejects
+            // whatever the public part then leaves unconsumed.
+            (_, true) | (Some(BoundaryStep::EndPrivateSubtree), false) => Ok(()),
             (
-                None
-                | Some(
-                    BoundaryStep::PublicToPrivate(_)
-                    | BoundaryStep::EndPrivateSubtree
-                    | BoundaryStep::EndPublicSubtree,
-                ),
-                _,
+                None | Some(BoundaryStep::PublicToPrivate(_) | BoundaryStep::EndPublicSubtree),
+                false,
             ) => Err(ExecutionError::BoundaryMismatch { index: self.cursor }),
         }
     }
@@ -863,6 +897,14 @@ impl Mode for PublicMode {
                 at_root: true,
             }));
         Ok(())
+    }
+
+    // The proven calls of a fee transfer follow a public root's subtree.
+    fn start_with_transaction_root(
+        &mut self,
+        executor: &mut Executor<'_, Self>,
+    ) -> Result<(), ExecutionError> {
+        self.start_without_transaction_root(executor)
     }
 
     fn deliver_to_public<E: ExecutionEnvironment>(
@@ -940,6 +982,8 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         public_context: PublicExecutionContext,
         witnesses: &'witnesses [PrivateWitness],
         root: Option<TransactionEntry<MessageBody>>,
+        claims: Vec<MessageBody>,
+        fee: Option<FeeTransfer>,
         mode: &mut M,
     ) -> Result<Self, ExecutionError> {
         let mut witness_index = HashMap::with_capacity(witnesses.len());
@@ -1019,27 +1063,84 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         for (alias, account_id) in openings {
             executor.register_alias(alias, account_id)?;
         }
-        match root {
-            Some(root) => {
-                let (from, to, message) = match root {
-                    TransactionEntry::Sync(RootCall { to, message }) => (None, to, message),
-                    TransactionEntry::Async(MessageBody { from, to, message }) => {
-                        (Some(from), to, message)
-                    }
-                };
-                executor
-                    .work_stack
-                    .push(WorkItem::Deliver(Box::new(Delivery::entry(
-                        MessageEnvelope {
-                            from: Sender::Root { from },
-                            to,
-                            message,
-                        },
-                    ))));
+        // Entry order in the modes executing private roots: claims -> root -> fee transfer.
+        // The fee transfer waits for the root's subtree and, for a public root, its cross messages.
+        let fee = fee.filter(|_| M::executes_transaction_root(false));
+        if let Some(fee) = fee {
+            if !executor.is_private(&fee.payer) {
+                return Err(ExecutionError::UnwitnessedFeePayer {
+                    account_id: fee.payer,
+                });
             }
-            None => mode.start_without_transaction_root(&mut executor)?,
+            if !executor.holds_authorization_key(&fee.payer) {
+                return Err(ExecutionError::FeePayerWithoutAuthorization {
+                    account_id: fee.payer,
+                });
+            }
+        }
+        let claims = claims
+            .into_iter()
+            .filter(|_| M::executes_transaction_root(false));
+        if let Some(root) = root {
+            mode.start_with_transaction_root(&mut executor)?;
+            // push fee work (before root)
+            executor.queue_fee(fee);
+            let (from, to, message) = match root {
+                TransactionEntry::Sync(RootCall { to, message }) => (None, to, message),
+                TransactionEntry::Async(MessageBody { from, to, message }) => {
+                    (Some(from), to, message)
+                }
+            };
+            executor.queue_entry(from, to, message);
+        } else {
+            // push fee transfer & start without root
+            executor.queue_fee(fee);
+            mode.start_without_transaction_root(&mut executor)?;
+        }
+
+        // push all claims (in reverse), they will be popped first
+        // so that the balance becomes `current + claimed`
+        for MessageBody { from, to, message } in claims.rev() {
+            executor.queue_entry(Some(from), to, message);
         }
         Ok(executor)
+    }
+
+    fn queue_entry(&mut self, from: Option<Actor>, to: Actor, message: MessageData) {
+        self.work_stack
+            .push(WorkItem::Deliver(Box::new(Delivery::entry(
+                MessageEnvelope {
+                    from: Sender::Root { from },
+                    to,
+                    message,
+                },
+            ))));
+    }
+
+    fn queue_fee(&mut self, fee: Option<FeeTransfer>) {
+        let Some(FeeTransfer {
+            payer,
+            recipient,
+            amount,
+            refund_to: _,
+        }) = fee
+        else {
+            return;
+        };
+        let message = borsh::to_vec(&native_token::Message::Transfer {
+            to: recipient,
+            amount,
+        })
+        .expect("a native message serializes");
+        // The fee entry carries the payer's authorization itself, so a payer the transaction does
+        // not otherwise authorize is debited by it alone.
+        let mut delivery = Delivery::entry(MessageEnvelope {
+            from: Sender::Root { from: None },
+            to: Actor::native_balance(payer),
+            message,
+        });
+        delivery.inherited_authorizations.insert(payer);
+        self.work_stack.push(WorkItem::Deliver(Box::new(delivery)));
     }
 
     fn run<E: ExecutionEnvironment>(
@@ -1120,6 +1221,15 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         self.accounts
             .get(account_id)
             .is_some_and(AccountEntry::is_private)
+    }
+
+    fn holds_authorization_key(&self, account_id: &AccountId) -> bool {
+        match self.accounts.get(account_id) {
+            Some(AccountEntry::Private { witness_index, .. }) => self.witnesses[*witness_index]
+                .kind
+                .holds_authorization_key(),
+            Some(AccountEntry::Public { .. }) | None => false,
+        }
     }
 
     fn resolve(&self, actor: Actor) -> Actor {

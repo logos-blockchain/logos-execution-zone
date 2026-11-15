@@ -4,7 +4,7 @@ use chain_state::{
 };
 use common::transaction::LeeTransaction;
 use fee_core::{
-    assess::fee_reserve,
+    assess::{FeeTxView, fee_reserve},
     market,
     validity::{FeeError, validate_static_tx},
 };
@@ -54,15 +54,16 @@ pub fn screen(tx: &LeeTransaction, state: &lee::V03State) -> Result<()> {
     let FeeClass::Charged(view) = class else {
         return Ok(());
     };
-    let LeeTransaction::Public(public_tx) = tx else {
-        unreachable!("only public transactions classify as charged");
-    };
     let fee_state = opening_fee_state(state);
 
     validate_static_tx(&view, &fee_state)?;
 
-    let payer = view.payer();
-    if !lee::is_fee_authorized(public_tx.message(), public_tx.witness_set()) {
+    let payer = match view {
+        // A fee paid inside the proof leaves nothing to check against the payer.
+        FeeTxView::Private { .. } => return Ok(()),
+        FeeTxView::Public { payer, .. } => payer,
+    };
+    if !tx.is_fee_authorized() {
         return Err(Error::UnauthorizedPayer { payer });
     }
 
@@ -310,22 +311,101 @@ mod tests {
         assert!(settle_verdict(&tx, &state).is_err());
     }
 
-    /// Private transactions are fee-exempt under the interim policy, so
-    /// admission has nothing to check against one.
+    /// A private transaction is screened on its in-proof reserve alone: the
+    /// flat part of the fee at the head. The proof covers the debit.
     #[test]
-    fn a_private_transaction_is_admitted_unscreened() {
+    fn a_private_transaction_is_screened_on_its_in_proof_reserve() {
+        use std::collections::BTreeSet;
+
+        use lee::privacy_preserving_transaction::{
+            Message as PrivateMessage, PrivacyPreservingTransaction,
+            WitnessSet as PrivateWitnessSet, circuit::Proof,
+        };
+        use lee_core::{
+            account::Actor,
+            execution_state::{BoundaryStep, Delivery},
+            native_token,
+            program::MessageEnvelope,
+        };
+
+        let state = initial_state(true);
+        let private_tx = |reserve: Option<u128>| {
+            let mut message = PrivateMessage::default();
+            message.execution.boundary = reserve
+                .map(|reserve| {
+                    BoundaryStep::PrivateToPublic(Delivery {
+                        envelope: MessageEnvelope {
+                            from: Actor::native_balance(recipient()),
+                            to: Actor::native_balance(system_accounts::fee_inbox_account_id()),
+                            message: borsh::to_vec(&native_token::Message::Credit(reserve))
+                                .expect("serializes"),
+                        },
+                        inherited_authorizations: BTreeSet::new(),
+                        inherits_entry_authorizations: true,
+                        pda_seeds: BTreeSet::new(),
+                    })
+                })
+                .into_iter()
+                .collect();
+            LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
+                message,
+                PrivateWitnessSet::from_raw_parts(vec![], Proof::from_inner(vec![])),
+            ))
+        };
+
+        // The reserve's value leaves the size alone.
+        let size = private_tx(Some(0)).charged_bytes().unwrap();
+        let flat = fee_core::assess::private_fee_required(0, size, 8, 8);
+        screen(&private_tx(Some(flat)), &state).expect("a well-priced reserve is admitted");
+        assert!(matches!(
+            screen(&private_tx(None), &state),
+            Err(Error::Classification(ClassifyError::MissingPrivateFee))
+        ));
+        assert!(matches!(
+            screen(&private_tx(Some(flat - 1)), &state),
+            Err(Error::FeeCore(FeeError::PrivateFeeBelowRequired { .. }))
+        ));
+    }
+
+    /// A private transaction whose fee a public signer declares is screened as a public one: the
+    /// payer must sign and hold the reserve.
+    #[test]
+    fn a_private_transaction_declaring_its_fee_is_screened_on_its_signer() {
         use lee::privacy_preserving_transaction::{
             Message as PrivateMessage, PrivacyPreservingTransaction,
             WitnessSet as PrivateWitnessSet, circuit::Proof,
         };
 
         let state = initial_state(true);
-        let tx = LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
-            PrivateMessage::default(),
-            PrivateWitnessSet::from_raw_parts(vec![], Proof::from_inner(vec![])),
-        ));
+        let funded = initial_pub_accounts_private_keys()[0].pub_sign_key.clone();
+        let unfunded = PrivateKey::try_new([7; 32]).unwrap();
+        let account_id = |key| AccountId::from(&PublicKey::new_from_private_key(key));
+        let declared = |payer, signer: &PrivateKey| {
+            let message = PrivateMessage {
+                fee: Some(FeeDeclaration::new(
+                    payer,
+                    market::PRIVATE_VERIFY_GAS,
+                    0,
+                    u128::MAX >> 1,
+                )),
+                ..PrivateMessage::default()
+            };
+            LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
+                message.clone(),
+                PrivateWitnessSet::for_message(&message, Proof::from_inner(vec![]), &[signer]),
+            ))
+        };
 
-        screen(&tx, &state).expect("private transactions are uncharged and unscreened");
+        screen(&declared(account_id(&funded), &funded), &state)
+            .expect("a funded signer pays its declared fee");
+        assert!(matches!(
+            screen(&declared(account_id(&unfunded), &funded), &state),
+            Err(Error::UnauthorizedPayer { .. })
+        ));
+        assert!(matches!(
+            screen(&declared(account_id(&unfunded), &unfunded), &state),
+            Err(Error::PayerCannotFund { .. })
+        ));
     }
 
     /// SPECS §Overview worked example: at the genesis base fees of 8/8 the

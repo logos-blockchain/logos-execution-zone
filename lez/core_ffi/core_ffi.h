@@ -17,6 +17,11 @@ typedef enum FfiBoundaryStepKind {
   FfiBoundaryStepKind_EndPublicSubtree,
 } FfiBoundaryStepKind;
 
+typedef enum FfiPublicationKind {
+  FfiPublicationKind_Clear = 0,
+  FfiPublicationKind_Sealed,
+} FfiPublicationKind;
+
 typedef enum FfiProgramImageClaimKind {
   FfiProgramImageClaimKind_Disclosed = 0,
   FfiProgramImageClaimKind_Undisclosed,
@@ -142,10 +147,38 @@ typedef enum FfiOperationError {
    */
   FfiOperationError_WrongPassword = 25,
   /**
+   * The transaction reverts when simulated and would still pay its fee, so it was not sent.
+   */
+  FfiOperationError_WouldRevert = 26,
+  /**
    * Internal error (catch-all).
    */
   FfiOperationError_InternalError = 99,
 } FfiOperationError;
+
+/**
+ * The state the executor is in.
+ */
+typedef enum FfiExecutorState {
+  /**
+   * Replaying the channel's finalized history up to the last slot the Bedrock node has
+   * finalized. State queries fail until it is done.
+   */
+  FfiExecutorState_Bootstrapping = 0,
+  /**
+   * Following the channel and producing blocks on its turns.
+   */
+  FfiExecutorState_Online,
+} FfiExecutorState;
+
+/**
+ * Which part of an `FfiDeclaredFee` is set.
+ */
+typedef enum FfiFeeKind {
+  FfiFeeKind_None = 0,
+  FfiFeeKind_Public = 1,
+  FfiFeeKind_Private = 2,
+} FfiFeeKind;
 
 /**
  * Enumeration to represent kinds of `FfiAccountIdentity`.
@@ -435,22 +468,35 @@ typedef struct FfiVec_FfiBoundaryStep {
 
 typedef struct FfiVec_FfiBoundaryStep FfiBoundaryStepList;
 
-/**
- * One async message a proof publishes.
- */
+typedef struct FfiMessageBody {
+  struct FfiActor from;
+  struct FfiActor to;
+  FfiMessageDataList message;
+} FfiMessageBody;
+
 typedef struct FfiSealedMessage {
   struct FfiBytes32 commitment;
   FfiVecU8 epk;
   FfiVecU8 ciphertext;
 } FfiSealedMessage;
 
-typedef struct FfiVec_FfiSealedMessage {
-  struct FfiSealedMessage *entries;
+/**
+ * One async message a proof publishes. Both `body` and `sealed` are read and freed for every
+ * kind, so the part `kind` does not select must be empty, not uninitialized.
+ */
+typedef struct FfiPublication {
+  enum FfiPublicationKind kind;
+  struct FfiMessageBody body;
+  struct FfiSealedMessage sealed;
+} FfiPublication;
+
+typedef struct FfiVec_FfiPublication {
+  struct FfiPublication *entries;
   uintptr_t len;
   uintptr_t capacity;
-} FfiVec_FfiSealedMessage;
+} FfiVec_FfiPublication;
 
-typedef struct FfiVec_FfiSealedMessage FfiSealedMessageList;
+typedef struct FfiVec_FfiPublication FfiPublicationList;
 
 typedef struct FfiRecoveryBinding {
   FfiAccountId address;
@@ -501,10 +547,22 @@ typedef struct FfiVec_FfiProgramImageClaim {
 
 typedef struct FfiVec_FfiProgramImageClaim FfiProgramImageClaims;
 
+/**
+ * What a proof commits about its in-proof fee. The `has_*` flags mark which parts are present;
+ * an absent part holds an empty value.
+ */
+typedef struct FfiProvenFee {
+  bool has_refund_to;
+  FfiAccountId refund_to;
+  bool has_fallback;
+  struct FfiPrivateAction fallback_action;
+  FfiBoundaryStepList fallback_boundary;
+} FfiProvenFee;
+
 typedef struct FfiPrivacyPreservingMessage {
   struct FfiPublicExecutionContext public_context;
   FfiBoundaryStepList boundary;
-  FfiSealedMessageList async_messages;
+  FfiPublicationList async_messages;
   FfiRecoveryBindingList recovery_bindings;
   bool has_public_root;
   struct FfiRootCall public_root;
@@ -514,6 +572,13 @@ typedef struct FfiPrivacyPreservingMessage {
   uint64_t timestamp_validity_window[2];
   FfiProgramImageClaims program_image_claims;
   FfiPublicAccountEvidenceList admission_evidence;
+  bool has_proven_fee;
+  struct FfiProvenFee proven_fee;
+  /**
+   * The fee declaration, paid by a public signer instead of inside the proof.
+   */
+  bool has_fee;
+  struct FfiFeeDeclaration fee;
 } FfiPrivacyPreservingMessage;
 
 typedef FfiVecU8 FfiProof;
@@ -543,9 +608,39 @@ typedef struct FfiVec_FfiTransaction {
 
 typedef struct FfiVec_FfiTransaction FfiBlockBody;
 
+/**
+ * The fee one transaction paid; all zeros for a fee-exempt one.
+ */
+typedef struct FfiFeeReceipt {
+  uint64_t gas_exec;
+  uint64_t gas_stor;
+  struct FfiU128 fee_base;
+  struct FfiU128 tip;
+  struct FfiU128 refund;
+} FfiFeeReceipt;
+
+typedef struct FfiTransactionReceipt {
+  /**
+   * `true`: applied; `false`: the action reverted, and its fee was still charged.
+   */
+  bool success;
+  struct FfiFeeReceipt fee;
+} FfiTransactionReceipt;
+
+typedef struct FfiVec_FfiTransactionReceipt {
+  struct FfiTransactionReceipt *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiTransactionReceipt;
+
 typedef struct FfiBlock {
   struct FfiBlockHeader header;
   FfiBlockBody body;
+  /**
+   * One per user transaction, parallel to `body`; the trailing fee and clock transactions
+   * have none.
+   */
+  struct FfiVec_FfiTransactionReceipt receipts;
   enum FfiBedrockStatus bedrock_status;
 } FfiBlock;
 
@@ -660,6 +755,40 @@ typedef struct LastBlockIdResult {
 } LastBlockIdResult;
 
 /**
+ * Result of [`sequencer_ffi_query_executor_status`], returned **inline** (no
+ * heap allocation, so there is no corresponding `free_*` to call).
+ *
+ * The other fields are only meaningful when `error` is `Ok`.
+ */
+typedef struct ExecutorStatusResult {
+  enum FfiExecutorState state;
+  /**
+   * Height of the chain so far. Only meaningful when `has_height` is `true`,
+   * which it always is when `Online`.
+   */
+  FfiBlockId height;
+  bool has_height;
+  /**
+   * `Bootstrapping` only: the Bedrock slot bootstrapping completes at, the last one the
+   * node had finalized as of the latest batch. Only meaningful when `has_target_slot` is
+   * `true`.
+   */
+  uint64_t target_slot;
+  bool has_target_slot;
+  /**
+   * `Bootstrapping` only: the Bedrock slot the finalized history is replayed
+   * up to. Only meaningful when `has_replayed_up_to_slot` is `true`.
+   */
+  uint64_t replayed_up_to_slot;
+  bool has_replayed_up_to_slot;
+  /**
+   * `Online` only: whether it is this sequencer's turn to produce blocks.
+   */
+  bool is_our_turn;
+  enum FfiOperationError error;
+} ExecutorStatusResult;
+
+/**
  * Simple wrapper around a pointer to a value or an error.
  *
  * Pointer is not guaranteed. You should check the error field before
@@ -687,10 +816,10 @@ typedef struct PointerResult_FfiOption_FfiAccount_____FfiOperationError {
  * Pointer is not guaranteed. You should check the error field before
  * dereferencing the pointer.
  */
-typedef struct PointerResult_u8__FfiOperationError {
-  uint8_t *value;
+typedef struct PointerResult_FfiHashType__FfiOperationError {
+  FfiHashType *value;
   enum FfiOperationError error;
-} PointerResult_u8__FfiOperationError;
+} PointerResult_FfiHashType__FfiOperationError;
 
 /**
  * Simple wrapper around a pointer to a value or an error.
@@ -779,7 +908,99 @@ typedef struct FfiAccountList {
 } FfiAccountList;
 
 /**
+ * The fee market priced off the head state.
+ */
+typedef struct FfiFeeState {
+  /**
+   * The block height the state settled at.
+   */
+  uint64_t height;
+  uint64_t base_fee_exec;
+  uint64_t base_fee_stor;
+  uint64_t next_base_fee_exec_floor;
+  uint64_t next_base_fee_exec_ceiling;
+  uint64_t next_base_fee_stor_floor;
+  uint64_t next_base_fee_stor_ceiling;
+  uint64_t max_gas_exec;
+  uint64_t max_gas_stor;
+} FfiFeeState;
+
+/**
+ * What a dry run simulated a send to cost at `fee_state`. The fields marked public or private
+ * apply to that kind of send only and are zeroed for the other.
+ */
+typedef struct FfiDryRunReport {
+  struct FfiFeeState fee_state;
+  /**
+   * Cycles the transaction (private: its public part) metered.
+   */
+  uint64_t cycles;
+  /**
+   * Public: includes the tip.
+   */
+  struct FfiU128 fee_at_head;
+  /**
+   * Public: what admission holds from the payer, priced at the gas limit: the least
+   * `max_fee` the sequencer accepts.
+   */
+  struct FfiU128 reserve_at_head;
+  /**
+   * The transaction's wire size, priced at the storage base fee.
+   */
+  uint64_t wire_bytes;
+  /**
+   * Public: why the action reverts, or null when it applies. A reverted action still pays its
+   * fee.
+   */
+  char *revert_reason;
+  /**
+   * Private: blocks of steepest base fee climb the reserve covers, and the base fees after
+   * them.
+   */
+  uint64_t headroom_blocks;
+  uint64_t exec_ceiling;
+  uint64_t stor_ceiling;
+  /**
+   * Private: the fee at the ceilings; the reserve is this clamped to the payer's balance.
+   */
+  struct FfiU128 headroom_reserve;
+  /**
+   * Private: pending credits claimed before the root.
+   */
+  uint64_t claims;
+  /**
+   * Private: the part of the claims reaching the payer.
+   */
+  struct FfiU128 swept;
+} FfiDryRunReport;
+
+/**
+ * The in-proof fee of a privacy-preserving transaction.
+ *
+ * Its proof debits `reserve` from `payer`. The surplus over the fee charged is refunded to
+ * `refund_to` when `has_refund_to`, else to the payer's alias.
+ */
+typedef struct FfiPrivateFee {
+  FfiAccountId payer;
+  struct FfiU128 reserve;
+  bool has_refund_to;
+  FfiAccountId refund_to;
+} FfiPrivateFee;
+
+/**
+ * The fee a send declared. Only the part `kind` names is set; the other is zeroed.
+ */
+typedef struct FfiDeclaredFee {
+  enum FfiFeeKind kind;
+  struct FfiFeeDeclaration public_fee;
+  struct FfiPrivateFee private_fee;
+} FfiDeclaredFee;
+
+/**
  * Result of a transfer operation.
+ *
+ * A call overwrites the strings it holds without freeing them: free a filled result with
+ * `wallet_ffi_free_transfer_result` before passing it to another call, or they leak.
  */
 typedef struct FfiTransferResult {
   /**
@@ -790,7 +1011,60 @@ typedef struct FfiTransferResult {
    * Whether the transfer succeeded.
    */
   bool success;
+  /**
+   * Whether the transfer was only simulated, leaving `tx_hash` null; `dry_run` holds its
+   * report.
+   */
+  bool is_dry_run;
+  struct FfiDryRunReport dry_run;
+  /**
+   * The fee the transfer declared or, on a dry run, would declare.
+   */
+  struct FfiDeclaredFee fee;
 } FfiTransferResult;
+
+/**
+ * What every send declares in place of the wallet's defaults. A field whose `has_*` flag is
+ * false keeps the default.
+ */
+typedef struct FfiFeeParams {
+  /**
+   * Public: the execution gas limit, else the cycles a simulation measures plus the configured
+   * margin.
+   */
+  bool has_gas_limit;
+  uint64_t gas_limit;
+  /**
+   * Public: the fee cap, else the reserve at the headroom's base fees. A cap below the dry
+   * run's `reserve_at_head` is rejected by the sequencer.
+   */
+  bool has_max_fee;
+  struct FfiU128 max_fee;
+  /**
+   * Public: the tip, charged on top of the base fees.
+   */
+  uint64_t tip;
+  /**
+   * Blocks of steepest base fee climb a fee is priced to cover (a public cap, a private
+   * reserve), else the configured ones.
+   */
+  bool has_headroom_blocks;
+  uint64_t headroom_blocks;
+  /**
+   * Privacy-preserving: the account paying every fee, else each send picks its payer. An owned
+   * private account pays inside the proof; with `payer_is_public`, a public account the
+   * transaction already signs with declares the fee.
+   */
+  bool has_payer;
+  bool payer_is_public;
+  FfiAccountId payer;
+  /**
+   * Private: the public account the surplus is refunded to, else the payer's alias. Any
+   * account the transaction does not credit publicly is linked to it.
+   */
+  bool has_refund_to;
+  FfiAccountId refund_to;
+} FfiFeeParams;
 
 typedef struct FfiBytes32 FfiPdaSeed;
 
@@ -837,6 +1111,9 @@ typedef struct FfiAccountMention {
 
 /**
  * Result of a generic transaction operation.
+ *
+ * A call overwrites the strings and secrets it holds without freeing them: free a filled result
+ * with `wallet_ffi_free_transaction_result` before passing it to another call, or they leak.
  */
 typedef struct FfiTransactionResult {
   /**
@@ -852,6 +1129,16 @@ typedef struct FfiTransactionResult {
    * Public transactions have 0 secrets.
    */
   uintptr_t secrets_size;
+  /**
+   * Whether the transaction was only simulated, leaving `tx_hash` null; `dry_run` holds its
+   * report.
+   */
+  bool is_dry_run;
+  struct FfiDryRunReport dry_run;
+  /**
+   * The fee the transaction declared or, on a dry run, would declare.
+   */
+  struct FfiDeclaredFee fee;
 } FfiTransactionResult;
 
 /**
@@ -1061,8 +1348,8 @@ void primitves_ffi_free_ffi_account_opt(struct FfiOption_FfiAccount *val);
 /**
  * Frees the resources owned by an `FfiBlock` value.
  *
- * This frees the block's transaction bodies (the only heap-owning field); the
- * header/status fields are `Copy`. It operates on the struct by value because
+ * This frees the block's transaction bodies and receipts (the only heap-owning
+ * fields); the header/status fields are `Copy`. It operates on the struct by value because
  * it is an element-level helper, used both for the vector path
  * ([`free_ffi_block_vec`]) and the optional path ([`free_ffi_block_opt`]) — in
  * neither case is an `FfiBlock` itself wrapped in its own outer box.
@@ -1261,7 +1548,7 @@ enum FfiOperationError sequencer_ffi_stop_sequencer(struct SequencerServiceFFI *
  * - `level` is a null-terminated string (`off`/`error`/`warn`/`info`/`debug`/ `trace`,
  *   case-insensitive); null or unparseable falls back to `info`.
  *
- * Only the `sequencer_ffi` and `sequencer_core` targets are enabled!
+ * `RUST_LOG`, when set, overrides `level` (e.g. `info,sequencer_core=debug`).
  *
  * # Safety
  * - `level` must be a valid null-terminated C string, or null.
@@ -1289,19 +1576,7 @@ void sequencer_ffi_init_logger(const char *level);
 struct LastBlockIdResult sequencer_ffi_query_last_block(const struct SequencerServiceFFI *sequencer);
 
 /**
- * Query the sequencer's current sync status as a JSON C-string.
- *
- * The JSON schema is owned by `sequencer_core` (`SequencerStatus`): an object with
- * `state` (`Starting`/`Syncing`/`CaughtUp`/`Error`/`Stalled`/`Halted`),
- * `indexed_block_id`, `last_error`, `stall_reason`, `cross_zone_halt`, and
- * `cross_zone_peers`. Each peer entry's `health` is one of
- * `Live`/`Lagging`/`Holed`/`Suspended`/`Halted`; treat a string you do not
- * know as not known healthy. Lets a client distinguish "still catching up"
- * from "something went wrong".
- *
- * Not supporded yet.
- *
- * TODO: Add support. Needs database modifications.
+ * Query the state the executor is in: bootstrapping from the channel or online.
  *
  * # Arguments
  *
@@ -1309,16 +1584,15 @@ struct LastBlockIdResult sequencer_ffi_query_last_block(const struct SequencerSe
  *
  * # Returns
  *
- * A heap-allocated, null-terminated JSON string that the caller MUST free with
- * `free_cstring`. Returns null on error (null `sequencer` pointer or a
- * serialization failure).
+ * An [`ExecutorStatusResult`] indicating success or failure. It is returned
+ * inline; nothing needs to be freed.
  *
  * # Safety
  *
  * The caller must ensure that:
  * - `sequencer` is a valid pointer to a [`SequencerServiceFFI`] instance.
  */
-char *sequencer_ffi_query_status(const struct SequencerServiceFFI *sequencer);
+struct ExecutorStatusResult sequencer_ffi_query_executor_status(const struct SequencerServiceFFI *sequencer);
 
 /**
  * Query the block by id from sequencer.
@@ -1401,8 +1675,8 @@ struct PointerResult_FfiOption_FfiAccount_____FfiOperationError sequencer_ffi_qu
  *   `EndPublicSubtree` step, are converted and freed too, so they must be empty, not
  *   uninitialized.
  */
-struct PointerResult_u8__FfiOperationError sequencer_ffi_send_transaction(const struct SequencerServiceFFI *sequencer,
-                                                                          struct FfiTransaction transaction);
+struct PointerResult_FfiHashType__FfiOperationError sequencer_ffi_send_transaction(const struct SequencerServiceFFI *sequencer,
+                                                                                   struct FfiTransaction transaction);
 
 /**
  * Query the transaction by hash from sequencer.
@@ -1810,6 +2084,45 @@ enum FfiOperationError wallet_ffi_bridge_withdraw(struct WalletHandle *handle,
                                                   struct FfiTransferResult *out_result);
 
 /**
+ * Simulate sends and report their cost instead of sending them. A send then succeeds with a
+ * null `tx_hash` and its result's `is_dry_run` set.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ */
+enum FfiOperationError wallet_ffi_set_dry_run(struct WalletHandle *handle, bool dry_run);
+
+/**
+ * Declare every later send's fee with `params` in place of the wallet's defaults, replacing any
+ * set before; null restores the defaults. A dry run shows what a send would then declare.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `params` must be null or a valid pointer to a `FfiFeeParams` struct
+ */
+enum FfiOperationError wallet_ffi_set_fee_params(struct WalletHandle *handle,
+                                                 const struct FfiFeeParams *params);
+
+/**
+ * Send public transactions whose simulation reverts, which pay their fee for nothing, instead of
+ * refusing them with `WouldRevert`.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ */
+enum FfiOperationError wallet_ffi_set_allow_revert(struct WalletHandle *handle, bool allow_revert);
+
+/**
+ * Get the fee market priced off the sequencer's head state.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `out_fee_state` must be a valid pointer to a `FfiFeeState` struct
+ */
+enum FfiOperationError wallet_ffi_get_fee_state(struct WalletHandle *handle,
+                                                struct FfiFeeState *out_fee_state);
+
+/**
  * Send generic public transaction.
  *
  * # Parameters
@@ -1954,6 +2267,34 @@ enum FfiOperationError wallet_ffi_get_public_account_key(struct WalletHandle *ha
 enum FfiOperationError wallet_ffi_get_private_account_keys(struct WalletHandle *handle,
                                                            const struct FfiBytes32 *account_id,
                                                            struct FfiPrivateAccountKeys *out_keys);
+
+/**
+ * Create keys for a private account from pointer.
+ *
+ * Returns the nullifier public key (NPK) and viewing public key (VPK)
+ * for the specified private account. These keys are safe to share publicly.
+ *
+ * # Parameters
+ * - `nullifier_public_key`: Nullifier public key, 32 bytes.
+ * - `viewing_public_key`: pointer into u8 for viewing public key.
+ * - `viewing_public_key_len`: length of `viewing_public_key`.
+ * - `out_keys`: Output pointer for the key data
+ *
+ * # Returns
+ * - `Success` on successful creation
+ * - Error code on other failures
+ *
+ * # Memory
+ * The keys structure must be freed with `wallet_ffi_free_private_account_keys()`.
+ *
+ * # Safety
+ * - `viewing_public_key` must be a valid pointer to u8,
+ * - `out_keys` must be a valid pointer to a `FfiPrivateAccountKeys` struct
+ */
+enum FfiOperationError wallet_ffi_make_private_account_keys_from_raw(struct FfiBytes32 nullifier_public_key,
+                                                                     const uint8_t *viewing_public_key,
+                                                                     uintptr_t viewing_public_key_len,
+                                                                     struct FfiPrivateAccountKeys *out_keys);
 
 /**
  * Convert an account ID to a Base58 string.
@@ -2130,24 +2471,29 @@ enum FfiOperationError wallet_ffi_free_label_list(struct LabelList *label_list);
 /**
  * Create a new wallet with fresh storage.
  *
- * This initializes a new wallet with a fresh mnemonic.
+ * This initializes a new wallet with a fresh mnemonic, its sync cursor at the chain tip.
+ * An unreachable node leaves the cursor at genesis.
  * Use this for first-time wallet creation.
  *
  * # Parameters
  * - `config_path`: Path to the wallet configuration file (JSON)
  * - `storage_path`: Path where wallet data will be stored
  * - `password`: Password the wallet storage is encrypted under, or empty to leave it unencrypted
+ * - `sequencer`: A `SequencerServiceFFI` in this process, or null to use the address in
+ *   `config_path`
  *
  * # Returns
  * - Result, which contains opaque wallet handle and mnemonic words on success
  * - Result with null pointers on error, whose details are printed to stderr
  *
  * # Safety
- * All string parameters must be valid null-terminated UTF-8 strings.
+ * All string parameters must be valid null-terminated UTF-8 strings. A non-null sequencer must
+ * outlive the returned handle.
  */
 struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
                                                    const char *storage_path,
-                                                   const char *password);
+                                                   const char *password,
+                                                   const struct SequencerServiceFFI *sequencer);
 
 /**
  * Open an existing wallet from storage.
@@ -2160,6 +2506,8 @@ struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
  * - `password`: Password the wallet storage is encrypted under, or empty for an unencrypted
  *   storage (see `wallet_ffi_storage_is_encrypted`)
  * - `out_handle`: Output pointer for the opaque wallet handle
+ * - `sequencer`: A `SequencerServiceFFI` in this process, or null to use the address in
+ *   `config_path`
  *
  * # Returns
  * - `Success` with the handle written to `out_handle`
@@ -2168,11 +2516,13 @@ struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
  * - Another error code on any other failure, whose details are printed to stderr
  *
  * # Safety
- * - All string parameters must be valid null-terminated UTF-8 strings.
+ * - All string parameters must be valid null-terminated UTF-8 strings. A non-null sequencer must
+ *   outlive the handle written to `out_handle`.
  * - `out_handle` must be a valid pointer to a `WalletHandle *`.
  */
 enum FfiOperationError wallet_ffi_open(const char *config_path,
                                        const char *storage_path,
+                                       const struct SequencerServiceFFI *sequencer,
                                        const char *password,
                                        struct WalletHandle **out_handle);
 

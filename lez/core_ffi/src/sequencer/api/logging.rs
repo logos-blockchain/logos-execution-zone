@@ -1,13 +1,14 @@
 use std::ffi::{CStr, c_char};
 
-use log::LevelFilter;
+use logging::EnvFilter;
+use tracing::level_filters::LevelFilter;
 
 /// Initializes logging for the sequencer at `level`.
 ///
 /// - `level` is a null-terminated string (`off`/`error`/`warn`/`info`/`debug`/ `trace`,
 ///   case-insensitive); null or unparseable falls back to `info`.
 ///
-/// Only the `sequencer_ffi` and `sequencer_core` targets are enabled!
+/// `RUST_LOG`, when set, overrides `level` (e.g. `info,sequencer_core=debug`).
 ///
 /// # Safety
 /// - `level` must be a valid null-terminated C string, or null.
@@ -15,18 +16,18 @@ use log::LevelFilter;
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sequencer_ffi_init_logger(level: *const c_char) {
     let level = if level.is_null() {
-        LevelFilter::Info
+        LevelFilter::INFO
     } else {
         unsafe { CStr::from_ptr(level) }
             .to_str()
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(LevelFilter::Info)
+            .unwrap_or(LevelFilter::INFO)
     };
 
-    let _dontcare = env_logger::Builder::new()
-        .filter_level(LevelFilter::Off)
-        .filter_module("sequencer_ffi", level)
-        .filter_module("sequencer_core", level)
-        .try_init();
+    let _dontcare = logging::try_init_with_filter(
+        EnvFilter::builder()
+            .with_default_directive(level.into())
+            .from_env_lossy(),
+    );
 }

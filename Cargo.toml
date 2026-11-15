@@ -10,6 +10,7 @@ members = [
   "lee/key_protocol",
   "lee/state_machine",
   "lee/state_machine/core",
+  "lee/program_loader",
   "lee/privacy_preserving_circuit",
   "lee/state_machine/test_methods",
   "lee/state_machine/test_methods/guest",
@@ -19,10 +20,13 @@ members = [
   "lez/chain_state",
   "lez/sequencer/core",
   "lez/sequencer/core/metrics",
+  "lez/sequencer/bridge",
+  "lez/sequencer/genesis",
   "lez/sequencer/service",
+  "lez/sequencer/service/metrics",
   "lez/sequencer/service/protocol",
   "lez/sequencer/service/rpc",
-  "lez/sequencer/actors/channel_config",
+  "lez/sequencer/actors/channel_signing",
   "lez/sequencer/actors/common",
   "lez/sequencer/actors/executor",
   "lez/sequencer/actors/executor/metrics",
@@ -32,6 +36,7 @@ members = [
   "lez/sequencer/actors/slasher",
   "lez/sequencer/actors/storage",
   "lez/sequencer/actors/bedrock",
+  "lez/sequencer/actors/sharding_pool",
   "lez/ffi_types",
   "lez/indexer/core",
   "lez/indexer/service",
@@ -44,12 +49,17 @@ members = [
   "lez/mempool",
   "lez/wallet",
   "lez/common",
+  "lez/logging",
   "lez/programs",
   "lez/programs/bridge",
+  "lez/programs/system_upgrader",
+  "lez/programs/system_upgrader/core",
   "lez/programs/clock",
   "lez/programs/fee",
   "lez/programs/fee/core",
   "lez/programs/cross_zone_marker",
+  "lez/programs/cross_zone_emission_core",
+  "lez/programs/cross_zone_receiver_core",
   "lez/programs/cross_zone_inbox",
   "lez/programs/cross_zone_outbox",
   "lez/programs/bridge_lock",
@@ -57,7 +67,6 @@ members = [
   "lez/programs/ping_sender",
   "lez/programs/ping_receiver",
   "lez/programs/sequencer_stake",
-  "lez/programs/program_loader/core",
   "lez/cross_zone",
   "lez/core_ffi",
 
@@ -84,16 +93,21 @@ members = [
 [workspace.dependencies]
 lee = { path = "lee/state_machine" }
 lee_core = { path = "lee/state_machine/core" }
+program_loader_core = { path = "lee/program_loader" }
 common = { path = "lez/common" }
 chain_state = { path = "lez/chain_state" }
 mempool = { path = "lez/mempool" }
+logging = { path = "lez/logging" }
 storage = { path = "lez/storage" }
 key_protocol = { path = "lee/key_protocol" }
 sequencer_core = { path = "lez/sequencer/core" }
 sequencer_core_metrics = { path = "lez/sequencer/core/metrics" }
+sequencer_service_metrics = { path = "lez/sequencer/service/metrics" }
+sequencer_bridge = { path = "lez/sequencer/bridge" }
+sequencer_genesis = { path = "lez/sequencer/genesis" }
 sequencer_service_protocol = { path = "lez/sequencer/service/protocol" }
 sequencer_service_rpc = { path = "lez/sequencer/service/rpc" }
-sequencer_channel_config_actor = { path = "lez/sequencer/actors/channel_config" }
+sequencer_channel_signing_actor = { path = "lez/sequencer/actors/channel_signing" }
 sequencer_actors_common = { path = "lez/sequencer/actors/common" }
 sequencer_executor_actor = { path = "lez/sequencer/actors/executor" }
 sequencer_executor_actor_metrics = { path = "lez/sequencer/actors/executor/metrics" }
@@ -103,6 +117,7 @@ sequencer_rpc_server_actor_metrics = { path = "lez/sequencer/actors/rpc_server/m
 sequencer_slasher_actor = { path = "lez/sequencer/actors/slasher" }
 sequencer_storage_actor = { path = "lez/sequencer/actors/storage" }
 sequencer_bedrock_actor = { path = "lez/sequencer/actors/bedrock" }
+sharding_pool_actor = { path = "lez/sequencer/actors/sharding_pool" }
 sequencer_service = { path = "lez/sequencer/service" }
 ffi_types = { path = "lez/ffi_types" }
 indexer_core = { path = "lez/indexer/core" }
@@ -118,16 +133,18 @@ programs = { path = "lez/programs", default-features = false, features = [
 ] }
 system_accounts = { path = "lez/system_accounts" }
 clock_core = { path = "lez/programs/clock/core" }
+system_upgrader_core = { path = "lez/programs/system_upgrader/core" }
 cross_zone_marker_core = { path = "lez/programs/cross_zone_marker" }
 fee_core = { path = "lez/programs/fee/core" }
 bridge_core = { path = "lez/programs/bridge/core" }
 cross_zone_inbox_core = { path = "lez/programs/cross_zone_inbox/core" }
 cross_zone_outbox_core = { path = "lez/programs/cross_zone_outbox/core" }
+cross_zone_emission_core = { path = "lez/programs/cross_zone_emission_core" }
+cross_zone_receiver_core = { path = "lez/programs/cross_zone_receiver_core" }
 bridge_lock_core = { path = "lez/programs/bridge_lock/core" }
 wrapped_token_core = { path = "lez/programs/wrapped_token/core" }
 ping_core = { path = "lez/programs/ping_core" }
 sequencer_stake_core = { path = "lez/programs/sequencer_stake/core" }
-program_loader_core = { path = "lez/programs/program_loader/core" }
 cross_zone = { path = "lez/cross_zone" }
 build_utils = { path = "build_utils" }
 test_guest_core = { path = "test_guest_core" }
@@ -146,10 +163,10 @@ tokio = { version = "1.50", features = [
 tokio-util = "0.7.18"
 async-trait = "0.1"
 trait-variant = "0.1.2"
-risc0-zkvm = { version = "3.0.5", default-features = false, features = ['std'] }
-risc0-build = "3.0.5"
-risc0-binfmt = "3.0.2"
-risc0-zkos-v1compat = "=2.2.2"
+risc0-zkvm = { version = "3.1.0", default-features = false, features = ['std'] }
+risc0-build = "3.0.7"
+risc0-binfmt = "3.0.6"
+risc0-zkos-v1compat = "=2.2.3"
 kameo = "0.22.2"
 kameo_actors = "0.8.1"
 anyhow = "1.0.98"
@@ -168,7 +185,6 @@ jsonrpsee = "0.26.0"
 futures = "0.3"
 actix-rt = "*"
 lazy_static = "1.5.0"
-env_logger = "0.11"
 log = "0.4.28"
 metrics = "0.24.6"
 metrics-exporter-prometheus = "0.18.3"
@@ -176,6 +192,16 @@ lru = "0.16.3"
 thiserror = "2.0"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+# Kept on the OpenTelemetry versions `logos-blockchain-tracing` pulls in, so the tree builds one copy.
+tracing-opentelemetry = "0.33.0"
+opentelemetry = "0.32.0"
+opentelemetry_sdk = "0.32.1"
+opentelemetry-otlp = { version = "0.32.0", default-features = false, features = [
+  "http-proto",
+  "reqwest-blocking-client",
+  "trace",
+] }
+json-subscriber = "0.3.1"
 sha2 = "0.10.8"
 ed25519-dalek = { version = "2.2.0", default-features = false }
 hex = "0.4.3"
@@ -184,7 +210,7 @@ bytesize = { version = "2.3.1", features = ["serde"] }
 humantime-serde = "1.1"
 arc-swap = "1.7"
 humantime = "2.1"
-libp2p = { version = "0.56", features = [
+libp2p = { version = "0.57", features = [
   "dns",
   "ed25519",
   "gossipsub",
@@ -214,7 +240,7 @@ chrono = "0.4.41"
 time = "0.3"
 borsh = "1.5.7"
 rpds = "1.2.1"
-zstd = "0.13"
+zstd = "0.14"
 base58 = "0.2.0"
 itertools = "0.14.0"
 num-bigint = "0.4.6"
@@ -225,15 +251,16 @@ async-stream = "0.3.6"
 strum = { version = "0.28.0", features = ["derive"] }
 mockall = "0.15.0"
 
-logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "3926a532b9d96d62747da064161a115a7c0c5a3e" }
-logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "3926a532b9d96d62747da064161a115a7c0c5a3e" }
-logos-blockchain-binary-codec = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "3926a532b9d96d62747da064161a115a7c0c5a3e" }
-logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "3926a532b9d96d62747da064161a115a7c0c5a3e" }
-logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "3926a532b9d96d62747da064161a115a7c0c5a3e" }
-logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "3926a532b9d96d62747da064161a115a7c0c5a3e" }
-logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "3926a532b9d96d62747da064161a115a7c0c5a3e" }
-logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "3926a532b9d96d62747da064161a115a7c0c5a3e" }
-logos-blockchain-testing-framework = { package = "testing-framework", git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "3926a532b9d96d62747da064161a115a7c0c5a3e" }
+logos-blockchain-common-http-client = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30" }
+logos-blockchain-key-management-system-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30" }
+logos-blockchain-binary-codec = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30" }
+logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30" }
+logos-blockchain-chain-broadcast-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30" }
+logos-blockchain-chain-service = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30" }
+logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30" }
+logos-blockchain-http-api-common = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30" }
+logos-blockchain-node = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30" }
+logos-blockchain-testing-framework = { package = "blockchain-test-logos", git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f6d4267fe7d1ff8ab4cb30e9a18154bc66e10c30" }
 testing-framework-app = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
 testing-framework-core = { git = "https://github.com/logos-blockchain/logos-blockchain-testing.git", rev = "a35ec04869ec06bee2e4bf1af1ffebf8e7a815df" }
 
@@ -278,6 +305,8 @@ codegen-units = 1
 # Keccak speedup for in-guest ML KEM
 [patch.crates-io]
 keccak = { git = "https://github.com/logos-blockchain/sponges", rev = "3a56e99771beedf04946eab21a4a62adc2951377" }
+curve25519-dalek = { git = "https://github.com/risc0/curve25519-dalek", rev = "385adda1fa3b66d9aaa8b8fcc99ddc324d33ba32" }
+crypto-bigint = { git = "https://github.com/risc0/RustCrypto-crypto-bigint", rev = "3ab63a6f1048833f7047d5a50532e4a4cc789384" }
 
 # Keep backtraces but drop full DWARF type info to avoid LLD OOM/SIGBUS when
 # linking large integration-test binaries on resource-constrained CI runners.
@@ -416,6 +445,9 @@ clippy.nursery = { level = "deny", priority = -1 }
 clippy.future-not-send = "allow"
 # Reason: this is actually a good lint, but currently it gives a lot of false-positives.
 clippy.significant-drop-tightening = "allow"
+# Reason: it counts the branches `tracing`'s macros expand to, so any function that logs a few
+# structured events goes over the threshold.
+clippy.cognitive-complexity = "allow"
 
 # Correctness
 clippy.correctness = { level = "deny", priority = -1 }

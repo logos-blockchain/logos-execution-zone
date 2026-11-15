@@ -2,8 +2,8 @@
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use log::warn;
 use tokio::task::JoinHandle;
+use tracing::warn;
 
 /// Background tasks owned by one component, stoppable on demand and stopped
 /// anyway when the last handle goes away.
@@ -75,7 +75,7 @@ impl TaskGroup {
             if let Err(err) = handle.await
                 && err.is_panic()
             {
-                warn!("Background task panicked before shutdown: {err}");
+                warn!(error = %err, "Background task panicked before shutdown");
             }
         }
     }

@@ -372,7 +372,7 @@ fn whole(
     entry: TransactionEntry<MessageBody>,
     script: &mut Script,
 ) -> Result<WholeExecutionOutcome, ExecutionError> {
-    WholeExecution::new(public_context, entry, witnesses)?.execute(script)
+    WholeExecution::new(public_context, entry, Vec::new(), None, witnesses)?.execute(script)
 }
 
 fn public_transaction(
@@ -390,7 +390,15 @@ fn private_part(
     predicted_cross_messages: PredictedCrossMessages,
     script: &mut Script,
 ) -> Result<PrivatePartOutcome, ExecutionError> {
-    PrivatePart::new(public_context, entry, witnesses, predicted_cross_messages)?.execute(script)
+    PrivatePart::new(
+        public_context,
+        entry,
+        Vec::new(),
+        None,
+        witnesses,
+        predicted_cross_messages,
+    )?
+    .execute(script)
 }
 
 fn public_part(
@@ -904,10 +912,11 @@ fn predicted_cross_messages_must_match_the_recorded_public_deliveries() {
     let keys = Keys::new(1);
     let vault = actor(2, 9);
     let stranger = actor(5, 9);
+    let bystander = actor(6, 9);
     let run_private = |predicted_cross_messages: PredictedCrossMessages| {
         let mut script = Script::default().on(holder(&keys), sending(vec![send_to(vault)]));
         private_part(
-            public_context(vec![vault]),
+            public_context(vec![vault, bystander]),
             &[keys.regular(false)],
             root(holder(&keys)),
             predicted_cross_messages,
@@ -927,6 +936,11 @@ fn predicted_cross_messages_must_match_the_recorded_public_deliveries() {
     assert!(matches!(
         run_private(vec![vec![reply]]),
         Err(ExecutionError::UndeclaredCrossMessageSender { actor: sender }) if sender == stranger
+    ));
+    // A prediction between two public actors would replay as a proven call.
+    assert!(matches!(
+        run_private(vec![vec![delivery(vault, bystander, &[])]]),
+        Err(ExecutionError::UndeclaredActor { actor }) if actor == bystander
     ));
 }
 
@@ -1014,7 +1028,14 @@ fn initialization_rejects_inconsistent_declarations() {
     let public_actor = actor(2, 9);
     let private_witnesses = [keys.regular(false)];
     let init = |public_actors: Vec<Actor>, witnesses: &[PrivateWitness]| {
-        WholeExecution::new(public_context(public_actors), root(public_actor), witnesses).err()
+        WholeExecution::new(
+            public_context(public_actors),
+            root(public_actor),
+            Vec::new(),
+            None,
+            witnesses,
+        )
+        .err()
     };
 
     assert!(matches!(
@@ -1398,6 +1419,8 @@ fn a_private_pda_family_cannot_declare_its_public_member() {
     let result = PrivatePart::new(
         public_context(vec![public_member]),
         root(custody),
+        Vec::new(),
+        None,
         &witnesses,
         Vec::new(),
     );
@@ -1481,6 +1504,210 @@ fn a_public_transition_requests_a_private_debit_that_the_private_credential_auth
             .downcast_ref::<String>()
             .is_some_and(|message| message.contains("is not authorized"))
     );
+}
+
+// Claims are entries before the root, run by the modes executing private roots; settlement
+// replays nothing of them.
+#[test]
+fn claims_run_before_the_root_and_only_privately() {
+    let keys = Keys::new(1);
+    let claimant = Actor::native_balance(keys.regular_id());
+    let sender = Actor::native_balance(id(5));
+    let native = |input: &ReceiveInput| {
+        native_token::handle_message(input).unwrap_or_else(|error| panic!("{error}"))
+    };
+    let scripted = || {
+        Script::default()
+            .on(ENTRY, |input| echo(input, Response::keep_state()))
+            .on(claimant, native)
+    };
+    let claim = MessageBody {
+        from: sender,
+        to: claimant,
+        message: borsh::to_vec(&native_token::Message::Credit(0)).unwrap(),
+    };
+    let actors = vec![ENTRY];
+    let witnesses = [keys.regular(true)];
+
+    let mut whole_script = scripted();
+    let predicted = WholeExecution::new(
+        public_context(actors.clone()),
+        root(ENTRY),
+        vec![claim.clone()],
+        None,
+        &witnesses,
+    )
+    .unwrap()
+    .execute(&mut whole_script)
+    .unwrap()
+    .predicted_cross_messages;
+    assert_eq!(
+        order(&whole_script),
+        vec![(claimant, Some(sender)), (ENTRY, None)]
+    );
+
+    let mut private_script = scripted();
+    let boundary = PrivatePart::new(
+        public_context(actors.clone()),
+        root(ENTRY),
+        vec![claim],
+        None,
+        &witnesses,
+        predicted,
+    )
+    .unwrap()
+    .execute(&mut private_script)
+    .unwrap()
+    .boundary;
+    assert_eq!(order(&private_script), vec![(claimant, Some(sender))]);
+    assert!(boundary.is_empty());
+
+    let mut public_script = scripted();
+    public_part(
+        public_context(actors),
+        root_call(ENTRY),
+        boundary,
+        &mut public_script,
+    )
+    .unwrap();
+    assert_eq!(order(&public_script), vec![(ENTRY, None)]);
+}
+
+// The fee transfer is a second entry after the root: the payer's native actor debits the reserve
+// and credits the inbox once the public root completes, and settlement replays that credit after
+// the root.
+#[test]
+fn a_fee_transfer_runs_after_the_root_in_every_mode() {
+    let keys = Keys::new(1);
+    let payer = Actor::native_balance(keys.regular_id());
+    let inbox = Actor::native_balance(id(5));
+    let fee = FeeTransfer {
+        payer: keys.regular_id(),
+        recipient: inbox.account_id,
+        amount: 0,
+        refund_to: None,
+    };
+    let native = |input: &ReceiveInput| {
+        native_token::handle_message(input).unwrap_or_else(|error| panic!("{error}"))
+    };
+    let scripted = || {
+        Script::default()
+            .on(ENTRY, |input| echo(input, Response::keep_state()))
+            .on(payer, native)
+            .on(inbox, native)
+    };
+    let credit = delivery(
+        payer,
+        inbox,
+        &borsh::to_vec(&native_token::Message::Credit(0)).unwrap(),
+    );
+    let actors = vec![ENTRY, inbox];
+    let witnesses = [keys.regular(true)];
+
+    // Whole: the root's public segment, then the fee's empty one.
+    let mut whole_script = scripted();
+    let predicted = WholeExecution::new(
+        public_context(actors.clone()),
+        root(ENTRY),
+        Vec::new(),
+        Some(fee),
+        &witnesses,
+    )
+    .unwrap()
+    .execute(&mut whole_script)
+    .unwrap()
+    .predicted_cross_messages;
+    assert_eq!(predicted, vec![Vec::new(), Vec::new()]);
+    assert_eq!(
+        order(&whole_script),
+        vec![(ENTRY, None), (payer, None), (inbox, Some(payer))]
+    );
+
+    // Private: the public root is skipped and the fee's credit crosses after its segment.
+    let mut private_script = scripted();
+    let boundary = PrivatePart::new(
+        public_context(actors.clone()),
+        root(ENTRY),
+        Vec::new(),
+        Some(fee),
+        &witnesses,
+        predicted,
+    )
+    .unwrap()
+    .execute(&mut private_script)
+    .unwrap()
+    .boundary;
+    assert_eq!(boundary, vec![PrivateToPublic(credit), EndPublicSubtree]);
+
+    // Public: the root runs, then the proven credit is replayed.
+    let mut public_script = scripted();
+    public_part(
+        public_context(actors.clone()),
+        root_call(ENTRY),
+        boundary,
+        &mut public_script,
+    )
+    .unwrap();
+    assert_eq!(
+        order(&public_script),
+        vec![(ENTRY, None), (inbox, Some(payer))]
+    );
+
+    // The payer must be a witnessed private account.
+    let unwitnessed = FeeTransfer {
+        payer: id(6),
+        ..fee
+    };
+    assert!(matches!(
+        WholeExecution::new(
+            public_context(actors),
+            root(ENTRY),
+            Vec::new(),
+            Some(unwitnessed),
+            &witnesses
+        ),
+        Err(ExecutionError::UnwitnessedFeePayer { account_id }) if account_id == id(6)
+    ));
+}
+
+#[test]
+fn a_fee_only_payer_authorizes_the_fee_entry_alone() {
+    let keys = Keys::new(1);
+    let payer = Actor::native_balance(keys.regular_id());
+    let inbox = Actor::native_balance(id(5));
+    let fee = FeeTransfer {
+        payer: keys.regular_id(),
+        recipient: inbox.account_id,
+        amount: 0,
+        refund_to: None,
+    };
+    let run = |kind: RegularKey| {
+        let mut script = Script::default().on(payer, |input| echo(input, Response::keep_state()));
+        WholeExecution::new(
+            public_context(vec![inbox]),
+            root(payer),
+            Vec::new(),
+            Some(fee),
+            &[keys.witness(WitnessKind::Regular(kind))],
+        )?
+        .execute(&mut script)?;
+        Ok::<_, ExecutionError>(authorized(&script))
+    };
+
+    // The root reaches the payer unauthorized; only the fee entry is authorized over it.
+    assert_eq!(
+        run(RegularKey::FeeOnly(keys.ask)).unwrap(),
+        vec![(payer, false), (payer, true)]
+    );
+    assert_eq!(
+        run(RegularKey::Authorized(keys.ask)).unwrap(),
+        vec![(payer, true), (payer, true)]
+    );
+    assert!(matches!(
+        run(RegularKey::Nullifying(keys.nsk())),
+        Err(ExecutionError::FeePayerWithoutAuthorization { account_id })
+            if account_id == keys.regular_id()
+    ));
 }
 
 #[test]

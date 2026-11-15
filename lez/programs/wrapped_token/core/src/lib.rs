@@ -4,6 +4,7 @@
 //! config account.
 
 use borsh::{BorshDeserialize, BorshSerialize};
+pub use cross_zone_emission_core::ZoneId;
 use lee_core::{
     account::{AccountId, Balance},
     program::PdaSeed,
@@ -24,10 +25,8 @@ pub const MAX_MINT_AMOUNT: u128 = 0xFFFF_FFFF_FFFF_FFFF;
 const CONFIG_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/WrappedTokenConfig/00/";
 const HOLDING_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/WrappedTokenHold/0000/";
 
-pub const WRAPPED_TOKEN_NAME: [u8; 13] = *b"wrapped_token";
-
-/// Raw 32-byte zone (channel) id, matching the inbox's.
-pub type ZoneId = [u8; 32];
+pub const WRAPPED_TOKEN_NAME: lee_core::program::SystemProgramName =
+    lee_core::program::SystemProgramName::new(b"wrapped_token");
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Message {
@@ -154,7 +153,7 @@ impl WrappedTokenConfig {
 
 #[must_use]
 pub fn wrapped_token_account_id() -> AccountId {
-    AccountId::from_builtin_program_name(&WRAPPED_TOKEN_NAME)
+    AccountId::from_system_program_name(&WRAPPED_TOKEN_NAME)
 }
 
 /// PDA holding the authorized minter program id (the cross-zone inbox), seeded at

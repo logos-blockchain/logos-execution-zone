@@ -1,5 +1,6 @@
 #![expect(
     clippy::print_stdout,
+    clippy::print_stderr,
     reason = "This is a CLI application, printing to stdout and stderr is expected and convenient"
 )]
 #![expect(
@@ -8,8 +9,9 @@
 )]
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     path::PathBuf,
+    sync::{Arc, Mutex},
 };
 
 pub use account_manager::{
@@ -17,30 +19,39 @@ pub use account_manager::{
 };
 use anyhow::{Context as _, Result, ensure};
 use bip39::Mnemonic;
-use common::{HashType, PageLimit, block::Block, transaction::LeeTransaction};
+use common::{
+    HashType, PageLimit,
+    block::{Block, TransactionReceipt},
+    transaction::LeeTransaction,
+};
 use config::WalletConfig;
+pub use fees::{DeclaredFee, DryRunReport, FeeParams, PrivateFee};
 use futures::TryFutureExt as _;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
     Account, AccountId, EncryptedNote, PredictedCrossMessages, PrivacyPreservingTransaction,
-    ProgramId, ProvingInput, PublicExecutionContext, Recipient, RecipientEncryption, Simulation,
+    ProgramId, ProvingInput, PublicExecutionContext, PublicationMode, PublicationsPage, Recipient,
+    RecipientEncryption, SenderPresentation, Simulation,
     privacy_preserving_transaction::{
         circuit::{Dependency, ProgramCatalog, ProgramKind},
         message::Message,
     },
 };
 use lee_core::{
-    BlockId, Commitment, CommitmentPosition, CommitmentSetDigest, EphemeralSecretKey,
-    MembershipProof, MessageWitness, Nullifier, NullifierSecretKey, RootCall, SharedSecretKey,
+    BlockId, Commitment, CommitmentPosition, CommitmentSetDigest, EphemeralSecretKey, FeeTransfer,
+    MembershipProof, MessageWitness, Nullifier, NullifierSecretKey, PrivateAccountKind, RootCall,
+    SharedSecretKey,
     account::{Actor, Nonce},
     execution_state::TransactionEntry,
     native_token::NATIVE_TOKEN_PROGRAM_ID,
-    program::{MessageBody, MessageData, Publication},
+    program::{MessageBody, MessageData, PROGRAM_LOADER_ACCOUNT_ID, Publication},
 };
-use log::warn;
-use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
+/// The fee quote a [`WalletSequencerClient`] returns.
+pub use sequencer_service_rpc::FeeStateQuote;
+use sequencer_service_rpc::{RpcClient, SequencerClient, SequencerClientBuilder};
 use storage::{Storage, StorageKey, spent_nullifiers::SpentNullifiers};
 use tokio::io::AsyncWriteExt as _;
+use tracing::warn;
 use url::Url;
 
 use crate::{
@@ -55,6 +66,7 @@ pub mod account;
 mod account_manager;
 pub mod cli;
 pub mod config;
+mod fees;
 pub mod poller;
 pub mod program_facades;
 pub mod storage;
@@ -81,6 +93,17 @@ const ASSUMED_DATA_BYTES: u128 = 100_000;
 /// Default cap on the fee reservation for wallet-built public transactions.
 pub const DEFAULT_MAX_FEE: u128 = max_fee_for(DEFAULT_GAS_LIMIT);
 
+/// The most pending credits one send claims: with its accounts and a received root, a
+/// transaction stays within the private actions the wallet pads to.
+const MAX_SWEPT_CLAIMS: usize = 4;
+
+/// The most blocks past the sync cursor a send scans for spent receipts before claiming pending
+/// credits.
+const MAX_SWEEP_SCAN_BLOCKS: u64 = 64;
+
+/// How many times a send prices its reserve again after the screen finds it below the head fee.
+const MAX_REPRICES: u32 = 2;
+
 /// Info returned when creating a shared account.
 pub struct SharedAccountInfo {
     pub account_id: AccountId,
@@ -92,6 +115,9 @@ pub struct SharedAccountInfo {
 pub struct AsyncDelivery {
     pub recoveries: Vec<RecipientEncryption>,
     pub seals: Vec<Recipient>,
+    // Each names its sender canonically and must match a durable async message of private
+    // execution, one apiece, which is published clear.
+    pub clear_messages: Vec<MessageBody>,
     pub promotions: Promotions,
 }
 
@@ -111,6 +137,26 @@ pub struct PendingMessage {
     pub publication: Publication,
     pub body: MessageBody,
     pub recipient: Recipient,
+    /// A sealed message's commitment randomness.
+    pub rho: Option<[u8; 32]>,
+    /// The nullifier receiving it.
+    pub receipt: Nullifier,
+}
+
+impl PendingMessage {
+    /// The amount this message credits its recipient's native balance with,
+    /// if it is a native credit.
+    #[must_use]
+    pub fn native_credit(&self) -> Option<u128> {
+        if self.body.to.program_account_id != NATIVE_TOKEN_PROGRAM_ID {
+            return None;
+        }
+        match borsh::from_slice(&self.body.message).ok()? {
+            lee_core::native_token::Message::Credit(amount) => Some(amount),
+            lee_core::native_token::Message::Transfer { .. }
+            | lee_core::native_token::Message::ReadState => None,
+        }
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -122,7 +168,11 @@ pub enum ExecutionFailureKind {
     #[error("Accounts key not found")]
     KeyNotFoundError,
     #[error("Sequencer client error: {0}")]
-    SequencerClientError(#[from] sequencer_service_rpc::ClientError),
+    SequencerClientError(String),
+    /// A privacy-preserving transaction's fee reserve the head fee outgrew: priced again off a
+    /// fresh quote, it may pass.
+    #[error("Sequencer client error: {0}")]
+    PrivateFeeBelowHead(String),
     #[error("Can not pay for operation")]
     InsufficientFundsError,
     #[error("Account {0} data is invalid")]
@@ -133,8 +183,10 @@ pub enum ExecutionFailureKind {
     MissingMembershipProof(AccountId),
     #[error("Account {0} is a foreign private account, which this wallet cannot witness")]
     ForeignPrivateAccount(AccountId),
-    #[error("Program bytecode splits into {expected} segment(s) but {actual} were supplied")]
-    SegmentCountMismatch { expected: usize, actual: usize },
+    #[error("A claimed message reaches {0}, which the transaction does not witness")]
+    UnwitnessedClaim(AccountId),
+    #[error(transparent)]
+    SegmentChain(#[from] program_loader_core::SegmentChainError),
     #[error("Program bytecode is not a valid RISC0 program binary")]
     InvalidProgramBinary(#[source] anyhow::Error),
     #[error(
@@ -146,12 +198,104 @@ pub enum ExecutionFailureKind {
     TransactionBuildError(#[from] lee::error::LeeError),
     #[error("Failed to sign transaction: {0}")]
     SignError(anyhow::Error),
+    #[error("Dry run: the transaction was simulated and not sent")]
+    DryRun(Box<DryRunReport>),
+    #[error(
+        "The transaction reverts when simulated and would still pay its fee, so it was not sent: \
+         {0}"
+    )]
+    SimulatedRevert(String),
     #[error("Sending transaction failed for each client")]
     MultiSequencerTransactionSendError,
     #[error("Failed to store wallet data")]
     StorageError(#[source] anyhow::Error),
     #[error("Failed to join a task: {0}")]
     JoinError(#[from] tokio::task::JoinError),
+}
+
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "It is by design, other variants of no use to wallet"
+)]
+impl From<sequencer_service_rpc::ClientError> for ExecutionFailureKind {
+    fn from(value: sequencer_service_rpc::ClientError) -> Self {
+        match value {
+            sequencer_service_rpc::ClientError::Custom(val) => Self::SequencerClientError(val),
+            sequencer_service_rpc::ClientError::Call(err_obj)
+                if err_obj.code() == sequencer_service_rpc::PRIVATE_FEE_BELOW_HEAD_ERROR_CODE =>
+            {
+                Self::PrivateFeeBelowHead(err_obj.message().to_owned())
+            }
+            sequencer_service_rpc::ClientError::Call(err_obj) => {
+                Self::SequencerClientError(err_obj.message().to_owned())
+            }
+            other => Self::SequencerError(anyhow::Error::from(other)),
+        }
+    }
+}
+
+/// What simulating a public transaction measured, see [`WalletCore::measure_public`].
+struct PublicMeasure {
+    cycles: u64,
+    /// Why the action reverts; a reverted action still pays its fee.
+    revert_reason: Option<String>,
+    /// The size of the signed transaction.
+    wire_bytes: u64,
+    quote: FeeStateQuote,
+    /// What the simulation ran on, to run it again.
+    run: PublicRun,
+}
+
+/// An unsigned public transaction with the states and programs it is simulated against.
+#[derive(Clone)]
+struct PublicRun {
+    tx: lee::PublicTransaction,
+    simulation: Simulation,
+    programs: ProgramCatalog,
+}
+
+impl PublicRun {
+    /// Simulates the transaction within `budget` cycles, with `held` taken from its payer's
+    /// native balance first as settlement holds the fee: its cycles and why it reverts.
+    async fn simulate(
+        &self,
+        budget: u64,
+        held: Option<(AccountId, u128)>,
+    ) -> Result<(u64, Option<String>), ExecutionFailureKind> {
+        let Self {
+            tx,
+            mut simulation,
+            programs,
+        } = self.clone();
+        if let Some((payer, amount)) = held
+            && let Some(state) = simulation
+                .public_actor_states
+                .get_mut(&Actor::native_balance(payer))
+        {
+            let balance = lee_core::native_token::decode_balance(state).unwrap_or_default();
+            *state = lee_core::native_token::encode_balance(balance.saturating_sub(amount));
+        }
+        let (cycles, result) = tokio::task::spawn_blocking(move || {
+            lee::simulate_public_transaction(&tx, &simulation, &programs, budget)
+        })
+        .await?;
+        match result {
+            Ok(()) => Ok((cycles, None)),
+            Err(err) if err.is_chargeable() => {
+                Ok((cycles, Some(format!("{:#}", anyhow::Error::from(err)))))
+            }
+            // Settlement would reject it outright rather than charge it.
+            Err(err) => Err(ExecutionFailureKind::TransactionBuildError(err)),
+        }
+    }
+}
+
+/// The reserve a send prices at a quote, see [`WalletCore::reserve_pricing`].
+struct ReservePricing {
+    fee_at_head: u128,
+    exec_ceiling: u64,
+    stor_ceiling: u64,
+    headroom_reserve: u128,
 }
 
 /// A received message a transaction starts from. Its membership path comes with the proofs of the
@@ -163,7 +307,177 @@ struct Receipt {
     commitment: Commitment,
 }
 
-pub struct WalletCore {
+#[expect(async_fn_in_trait, reason = "For internal usage only")]
+pub trait WalletSequencerClient: Clone {
+    type Error: std::error::Error + Into<ExecutionFailureKind> + Send + Sync + 'static;
+
+    async fn send_transaction(&self, tx: LeeTransaction) -> Result<HashType, Self::Error>;
+
+    async fn get_block(&self, block_id: BlockId) -> Result<Option<Block>, Self::Error>;
+
+    async fn get_block_range(
+        &self,
+        start_block_id: BlockId,
+        end_block_id: BlockId,
+    ) -> Result<Vec<Block>, Self::Error>;
+
+    async fn get_last_block_id(&self) -> Result<BlockId, Self::Error>;
+
+    async fn get_account_balance(&self, account_id: AccountId) -> Result<u128, Self::Error>;
+
+    async fn get_transaction(
+        &self,
+        tx_hash: HashType,
+    ) -> Result<Option<(LeeTransaction, BlockId)>, Self::Error>;
+
+    async fn get_transaction_receipt(
+        &self,
+        tx_hash: HashType,
+    ) -> Result<Option<TransactionReceipt>, Self::Error>;
+
+    async fn get_accounts_nonces(
+        &self,
+        account_ids: Vec<AccountId>,
+    ) -> Result<Vec<Nonce>, Self::Error>;
+
+    async fn get_account_view(
+        &self,
+        actor_state_selector: Actor,
+    ) -> Result<Option<Account>, Self::Error>;
+
+    /// The membership paths of `commitments` and of the message leaves at `message_positions`,
+    /// all under the root returned with them.
+    async fn get_proofs_and_root(
+        &self,
+        commitments: Vec<Commitment>,
+        message_positions: Vec<CommitmentPosition>,
+    ) -> Result<
+        (
+            Vec<Option<MembershipProof>>,
+            Vec<Option<MembershipProof>>,
+            CommitmentSetDigest,
+        ),
+        Self::Error,
+    >;
+
+    /// The head fee market, for pricing a transaction's fee.
+    async fn get_fee_state(&self) -> Result<sequencer_service_rpc::FeeStateQuote, Self::Error>;
+
+    async fn get_account(&self, account_id: AccountId) -> Result<Option<Account>, Self::Error>;
+
+    async fn get_program_ids(&self) -> Result<BTreeMap<String, ProgramId>, Self::Error>;
+
+    async fn get_publications(
+        &self,
+        from_position: CommitmentPosition,
+        limit: PageLimit,
+    ) -> Result<PublicationsPage, Self::Error>;
+
+    async fn get_recovery_binding(
+        &self,
+        address: AccountId,
+    ) -> Result<Option<EncryptedNote>, Self::Error>;
+}
+
+impl WalletSequencerClient for SequencerClient {
+    type Error = sequencer_service_rpc::ClientError;
+
+    async fn send_transaction(&self, tx: LeeTransaction) -> Result<HashType, Self::Error> {
+        RpcClient::send_transaction(self, tx).await
+    }
+
+    async fn get_block(&self, block_id: BlockId) -> Result<Option<Block>, Self::Error> {
+        RpcClient::get_block(self, block_id).await
+    }
+
+    async fn get_block_range(
+        &self,
+        start_block_id: BlockId,
+        end_block_id: BlockId,
+    ) -> Result<Vec<Block>, Self::Error> {
+        RpcClient::get_block_range(self, start_block_id, end_block_id).await
+    }
+
+    async fn get_last_block_id(&self) -> Result<BlockId, Self::Error> {
+        RpcClient::get_last_block_id(self).await
+    }
+
+    async fn get_account_balance(&self, account_id: AccountId) -> Result<u128, Self::Error> {
+        RpcClient::get_account_balance(self, account_id).await
+    }
+
+    async fn get_transaction(
+        &self,
+        tx_hash: HashType,
+    ) -> Result<Option<(LeeTransaction, BlockId)>, Self::Error> {
+        RpcClient::get_transaction(self, tx_hash).await
+    }
+
+    async fn get_transaction_receipt(
+        &self,
+        tx_hash: HashType,
+    ) -> Result<Option<TransactionReceipt>, Self::Error> {
+        RpcClient::get_transaction_receipt(self, tx_hash).await
+    }
+
+    async fn get_accounts_nonces(
+        &self,
+        account_ids: Vec<AccountId>,
+    ) -> Result<Vec<Nonce>, Self::Error> {
+        RpcClient::get_accounts_nonces(self, account_ids).await
+    }
+
+    async fn get_account_view(
+        &self,
+        actor_state_selector: Actor,
+    ) -> Result<Option<Account>, Self::Error> {
+        RpcClient::get_account_view(self, actor_state_selector).await
+    }
+
+    async fn get_proofs_and_root(
+        &self,
+        commitments: Vec<Commitment>,
+        message_positions: Vec<CommitmentPosition>,
+    ) -> Result<
+        (
+            Vec<Option<MembershipProof>>,
+            Vec<Option<MembershipProof>>,
+            CommitmentSetDigest,
+        ),
+        Self::Error,
+    > {
+        RpcClient::get_proofs_and_root(self, commitments, message_positions).await
+    }
+
+    async fn get_fee_state(&self) -> Result<sequencer_service_rpc::FeeStateQuote, Self::Error> {
+        RpcClient::get_fee_state(self).await
+    }
+
+    async fn get_account(&self, account_id: AccountId) -> Result<Option<Account>, Self::Error> {
+        RpcClient::get_account(self, account_id).await
+    }
+
+    async fn get_program_ids(&self) -> Result<BTreeMap<String, ProgramId>, Self::Error> {
+        RpcClient::get_program_ids(self).await
+    }
+
+    async fn get_publications(
+        &self,
+        from_position: CommitmentPosition,
+        limit: PageLimit,
+    ) -> Result<PublicationsPage, Self::Error> {
+        RpcClient::get_publications(self, from_position, limit).await
+    }
+
+    async fn get_recovery_binding(
+        &self,
+        address: AccountId,
+    ) -> Result<Option<EncryptedNote>, Self::Error> {
+        RpcClient::get_recovery_binding(self, address).await
+    }
+}
+
+pub struct WalletCore<C: WalletSequencerClient> {
     config_path: PathBuf,
     config_overrides: Option<WalletConfigOverrides>,
     config: WalletConfig,
@@ -173,67 +487,86 @@ pub struct WalletCore {
     storage_key: Option<StorageKey>,
     spent_nullifiers: SpentNullifiers,
 
-    sequencer_client: SequencerClient,
+    sequencer_client: C,
+
+    /// Simulate transactions and report their cost instead of sending them.
+    dry_run: bool,
+    /// Send a public transaction whose simulation reverts instead of refusing it.
+    allow_revert: bool,
+    /// What every send declares in place of the wallet's defaults.
+    fee_params: FeeParams,
+    /// Receipts of the pending messages each send of this process claimed, by its transaction,
+    /// which a later send leaves alone until the spent-nullifier cache covers them. A
+    /// transaction seen reverted or not included gives its claims back.
+    swept: std::sync::Mutex<HashMap<HashType, Vec<Nullifier>>>,
+    /// The fee the last send of this process declared, see [`Self::take_declared_fee`].
+    declared_fee: std::sync::Mutex<Option<DeclaredFee>>,
 }
 
-impl WalletCore {
-    /// Construct wallet using [`HOME_DIR_ENV_VAR`] env var for paths or user home dir if not set,
-    /// reading the password with [`utils::read_password`].
-    pub fn from_env() -> Result<Self> {
+impl<C: WalletSequencerClient> WalletCore<C> {
+    /// Construct wallet using [`HOME_DIR_ENV_VAR`] env var for paths or user home dir if not set.
+    pub fn from_env_with_client(sequencer_client: C) -> Result<Self> {
         let config_path = utils::fetch_config_path()?;
         let storage_path = utils::fetch_persistent_storage_path()?;
         let password = utils::read_password(&storage_path)?;
 
-        Self::new_update_chain(config_path, storage_path, None, &password)
+        Self::new_update_chain_with_client(
+            config_path,
+            storage_path,
+            None,
+            &password,
+            sequencer_client,
+        )
     }
 
-    /// Opens the wallet whose storage is encrypted under `password`, or unencrypted for an empty
-    /// one.
-    pub fn new_update_chain(
+    pub fn new_update_chain_with_client(
         config_path: PathBuf,
         storage_path: PathBuf,
         config_overrides: Option<WalletConfigOverrides>,
         password: &str,
+        sequencer_client: C,
     ) -> Result<Self> {
         let (storage, storage_key) = Storage::from_path(&storage_path, password)
             .with_context(|| format!("Failed to load storage from {}", storage_path.display()))?;
 
-        Self::new(
+        Self::new_with_client(
             config_path,
             storage_path,
             config_overrides,
             storage,
             storage_key,
+            sequencer_client,
         )
     }
 
-    /// Creates a wallet from a fresh mnemonic, its storage encrypted under `password`, or
-    /// unencrypted for an empty one.
-    pub fn new_init_storage(
+    pub fn new_init_storage_with_client(
         config_path: PathBuf,
         storage_path: PathBuf,
         config_overrides: Option<WalletConfigOverrides>,
         password: &str,
+        sequencer_client: C,
     ) -> Result<(Self, Mnemonic)> {
         let (storage, mnemonic) = Storage::new();
         let storage_key = storage::storage_key_for(password)?;
-        let wallet = Self::new(
+        let wallet = Self::new_with_client(
             config_path,
             storage_path,
             config_overrides,
             storage,
             storage_key,
+            sequencer_client,
         )?;
 
         Ok((wallet, mnemonic))
     }
 
-    fn new(
+    fn new_with_client(
         config_path: PathBuf,
         storage_path: PathBuf,
         config_overrides: Option<WalletConfigOverrides>,
         storage: Storage,
         storage_key: Option<StorageKey>,
+        sequencer_client: C,
     ) -> Result<Self> {
         let mut config =
             WalletConfig::from_path_or_initialize_default(&config_path).with_context(|| {
@@ -248,22 +581,6 @@ impl WalletCore {
 
         let spent_nullifiers = SpentNullifiers::open(storage_path.with_extension("nullifiers"))?;
 
-        let mut builder = SequencerClientBuilder::default();
-        if let Some(basic_auth) = &config.sequencer.basic_auth {
-            builder = builder.set_headers(
-                std::iter::once((
-                    "Authorization".parse().expect("Header name is valid"),
-                    format!("Basic {basic_auth}")
-                        .parse()
-                        .context("Invalid basic auth format")?,
-                ))
-                .collect(),
-            );
-        }
-        let sequencer_client = builder
-            .build(&config.sequencer.sequencer_addr)
-            .context("Failed to create sequencer client")?;
-
         Ok(Self {
             config_path,
             config_overrides,
@@ -273,7 +590,136 @@ impl WalletCore {
             storage_key,
             spent_nullifiers,
             sequencer_client,
+            dry_run: false,
+            allow_revert: false,
+            fee_params: FeeParams::default(),
+            swept: std::sync::Mutex::new(HashMap::new()),
+            declared_fee: std::sync::Mutex::new(None),
         })
+    }
+
+    /// Pays every in-proof fee from `fee_payer`, an owned private account, unless a send names
+    /// its own; `None` lets each send pick its payer.
+    pub fn set_private_fee_payer(&mut self, fee_payer: Option<AccountId>) {
+        self.fee_params.payer = fee_payer.map(AccountIdWithPrivacy::Private);
+    }
+
+    /// Refunds every in-proof fee's surplus to `target`, a public account, instead of the payer's
+    /// alias: for a transaction that already credits `target` publicly (a deshield), which then
+    /// leaves nothing behind. Any other target links the transaction to it.
+    pub const fn set_private_refund_target(&mut self, target: Option<AccountId>) {
+        self.fee_params.refund_to = target;
+    }
+
+    /// Prices every fee at the base fees after `blocks` of the steepest climb past the quote,
+    /// instead of the configured headroom.
+    pub const fn set_fee_headroom_blocks(&mut self, blocks: u64) {
+        self.fee_params.headroom_blocks = Some(blocks);
+    }
+
+    /// Declares every fee with `params` in place of the wallet's defaults, replacing any set
+    /// before.
+    pub const fn set_fee_params(&mut self, params: FeeParams) {
+        self.fee_params = params;
+    }
+
+    /// Blocks of steepest base fee climb a fee is priced to cover.
+    const fn fee_headroom_blocks(&self) -> u64 {
+        match self.fee_params.headroom_blocks {
+            Some(blocks) => blocks,
+            None => self.config.fee_headroom_blocks,
+        }
+    }
+
+    /// The private account to pay `reserve` when no mentioned private account is authorized and
+    /// holds it: an owned regular private account holding it, outside the root call, else the
+    /// first mentioned owned regular private account, which pays out of what the root credits it
+    /// (a shielding into a fresh account).
+    fn auto_fee_payer(&self, mentions: &[AccountMention], reserve: u128) -> Option<AccountId> {
+        let holds = |account: &Account| {
+            account
+                .data
+                .native_balance()
+                .is_ok_and(|balance| balance >= reserve)
+        };
+        let owned_regular = |account_id: AccountId| {
+            self.storage
+                .key_chain()
+                .managed_private_account(account_id)
+                .filter(|managed| *managed.kind == PrivateAccountKind::Regular)
+        };
+        let mentioned_candidate = mentions.iter().any(|mention| {
+            mention.authorizes
+                && match &mention.identity {
+                    AccountIdentity::PrivateOwned(account_id) => {
+                        owned_regular(*account_id).is_some_and(|managed| holds(managed.account))
+                    }
+                    AccountIdentity::PrivateShared { .. } => true,
+                    AccountIdentity::Public(_)
+                    | AccountIdentity::PublicNoSign(_)
+                    | AccountIdentity::PublicForeign(_)
+                    | AccountIdentity::PublicPda { .. }
+                    | AccountIdentity::PublicKeycard { .. }
+                    | AccountIdentity::PrivateForeign { .. }
+                    | AccountIdentity::PrivatePdaShared { .. } => false,
+                }
+        });
+        if mentioned_candidate {
+            return None;
+        }
+        self.storage
+            .key_chain()
+            .private_accounts()
+            .filter(|found| *found.kind == PrivateAccountKind::Regular && holds(found.account))
+            .map(|found| {
+                AccountId::from((
+                    &found.key_chain.nullifier_public_key,
+                    &found.key_chain.viewing_public_key,
+                ))
+            })
+            .next()
+            .or_else(|| {
+                mentions.iter().find_map(|mention| match mention.identity {
+                    AccountIdentity::PrivateOwned(account_id) => {
+                        owned_regular(account_id).map(|_| account_id)
+                    }
+                    AccountIdentity::Public(_)
+                    | AccountIdentity::PublicNoSign(_)
+                    | AccountIdentity::PublicForeign(_)
+                    | AccountIdentity::PublicPda { .. }
+                    | AccountIdentity::PublicKeycard { .. }
+                    | AccountIdentity::PrivateForeign { .. }
+                    | AccountIdentity::PrivateShared { .. }
+                    | AccountIdentity::PrivatePdaShared { .. } => None,
+                })
+            })
+    }
+
+    /// Simulate transactions and report their cost instead of sending them; a send then ends
+    /// with [`ExecutionFailureKind::DryRun`].
+    pub const fn set_dry_run(&mut self, dry_run: bool) {
+        self.dry_run = dry_run;
+    }
+
+    /// Send a public transaction whose simulation reverts, which pays its fee for nothing,
+    /// instead of refusing it with [`ExecutionFailureKind::SimulatedRevert`].
+    pub const fn set_allow_revert(&mut self, allow_revert: bool) {
+        self.allow_revert = allow_revert;
+    }
+
+    /// Takes the fee the last send that reached the sequencer declared, leaving none.
+    pub fn take_declared_fee(&self) -> Option<DeclaredFee> {
+        self.declared_fee
+            .lock()
+            .expect("the declared fee is not poisoned")
+            .take()
+    }
+
+    fn declare_fee(&self, fee: DeclaredFee) {
+        *self
+            .declared_fee
+            .lock()
+            .expect("the declared fee is not poisoned") = Some(fee);
     }
 
     /// Get configuration with applied overrides.
@@ -287,17 +733,17 @@ impl WalletCore {
     }
 
     #[must_use]
-    pub fn poller(&self) -> TxPoller {
+    pub fn poller(&self) -> TxPoller<C> {
         TxPoller::new(self.config(), self.client_owned())
     }
 
     #[must_use]
-    pub const fn client(&self) -> &SequencerClient {
+    pub const fn client(&self) -> &C {
         &self.sequencer_client
     }
 
     #[must_use]
-    pub fn client_owned(&self) -> SequencerClient {
+    pub fn client_owned(&self) -> C {
         self.sequencer_client.clone()
     }
 
@@ -321,6 +767,14 @@ impl WalletCore {
     /// Restore storage from an existing mnemonic phrase.
     pub fn restore_storage(&mut self, mnemonic: &Mnemonic) {
         self.storage.restore(mnemonic);
+    }
+
+    /// Starts this wallet's history at the chain tip, which only a wallet with no older key may do.
+    pub async fn start_at_chain_tip(&mut self) -> Result<BlockId> {
+        let tip = self.get_last_block_id().await?;
+        self.storage.set_synced_from_block(tip);
+        self.storage.set_last_synced_block(tip);
+        Ok(tip)
     }
 
     /// Saves the storage encrypted under `password`, or unencrypted for an empty one, and keeps
@@ -350,9 +804,9 @@ impl WalletCore {
                 )
             })?;
 
-        println!(
-            "Stored persistent accounts at {}",
-            self.storage_path.display()
+        tracing::info!(
+            path = %self.storage_path.display(),
+            "Stored persistent accounts"
         );
 
         Ok(())
@@ -367,7 +821,7 @@ impl WalletCore {
         // Ensure data is flushed to disk before returning to prevent race conditions
         config_file.sync_all().await?;
 
-        log::info!("Stored data at {}", self.config_path.display());
+        tracing::info!(path = %self.config_path.display(), "Stored data");
 
         Ok(())
     }
@@ -396,15 +850,17 @@ impl WalletCore {
             .generate_new_privacy_preserving_transaction_key_chain(chain_index)
     }
 
-    /// Insert a group key holder into storage.
+    /// Insert a group key holder into storage. `created` only for a group this wallet made
+    /// itself, whose accounts cannot predate this wallet's history.
     pub fn insert_group_key_holder(
         &mut self,
         name: Label,
         holder: key_protocol::key_management::group_key_holder::GroupKeyHolder,
+        created: bool,
     ) {
         self.storage
             .key_chain_mut()
-            .insert_group_key_holder(name, holder);
+            .insert_group_key_holder(name, holder, created);
     }
 
     /// Set the wallet's dedicated sealing secret key.
@@ -477,7 +933,7 @@ impl WalletCore {
             .await
             .map_err(ExecutionFailureKind::SequencerError)?
             .max(self.storage.last_synced_block());
-        log::info!("Scanning account {account_id:#?} from genesis to block {tip}");
+        tracing::info!(%account_id, tip, "Scanning account from genesis");
         let poller = self.poller();
         let unrecorded = self.storage.key_chain().clone();
         self.storage
@@ -520,6 +976,10 @@ impl WalletCore {
             &vpk,
         );
 
+        let joined = !self
+            .storage
+            .key_chain()
+            .is_locally_created_group(&group_name);
         let entry = SharedAccountEntry {
             group_label: group_name,
             derivation: SharedAccountDerivation::Pda {
@@ -532,6 +992,9 @@ impl WalletCore {
             },
             account: Account::default(),
         };
+        if joined {
+            self.storage.rewind_skipped_history();
+        }
         self.record_caught_up(
             |key_chain| {
                 key_chain.insert_shared_private_account(account_id, entry);
@@ -567,12 +1030,19 @@ impl WalletCore {
         let vpk = keys.generate_viewing_public_key();
         let account_id = AccountId::from((&npk, &vpk));
 
+        let joined = !self
+            .storage
+            .key_chain()
+            .is_locally_created_group(&group_name);
         let entry = SharedAccountEntry {
             group_label: group_name,
             derivation: SharedAccountDerivation::Regular { derivation_id },
             kind: lee_core::PrivateAccountKind::Regular,
             account: Account::default(),
         };
+        if joined {
+            self.storage.rewind_skipped_history();
+        }
         self.record_caught_up(
             |key_chain| {
                 key_chain.insert_shared_private_account(account_id, entry);
@@ -624,32 +1094,49 @@ impl WalletCore {
         &self,
         from_position: CommitmentPosition,
         limit: PageLimit,
-    ) -> Result<Vec<(CommitmentPosition, Publication)>> {
-        Ok(self
+    ) -> Result<PublicationsPage> {
+        let page = self
             .sequencer_client
             .get_publications(from_position, limit)
-            .await?)
+            .await?;
+        for (position, publication) in &page.publications {
+            if let Publication::Clear(body) = publication {
+                let address = body.to.account_id;
+                ensure!(
+                    page.recovery_bindings.contains_key(&address),
+                    "No recovery binding for {address}, the destination of the publication at \
+                     {position}"
+                );
+            }
+        }
+        Ok(page)
     }
 
     // Messages that one of this wallet's key pairs opens: a private address's recovery note, or a
     // sealed message.
     pub async fn owned_pending_messages(&mut self) -> Result<Vec<PendingMessage>> {
-        const PAGE: PageLimit = 256;
         self.sync_to_latest_block().await?;
+        self.pending_messages().await
+    }
+
+    // The messages one of this wallet's key pairs opens that the spent-nullifier cache, as it
+    // stands, does not see received.
+    async fn pending_messages(&self) -> Result<Vec<PendingMessage>> {
+        const PAGE: PageLimit = 256;
         let mut records = Vec::new();
         let mut from_position = 0;
         loop {
-            let page = self.get_publications(from_position, PAGE).await?;
-            let Some((last, _)) = page.last() else {
+            let PublicationsPage {
+                publications,
+                recovery_bindings,
+            } = self.get_publications(from_position, PAGE).await?;
+            let Some((last, _)) = publications.last() else {
                 return Ok(records);
             };
             from_position = last.saturating_add(1);
-            records.extend(
-                self.unreceived(
-                    page.into_iter()
-                        .filter_map(|(position, publication)| self.read(position, publication)),
-                ),
-            );
+            records.extend(self.unreceived(publications.into_iter().filter_map(
+                |(position, publication)| self.read(position, publication, &recovery_bindings),
+            )));
         }
     }
 
@@ -658,13 +1145,14 @@ impl WalletCore {
     fn private_receipt(
         &self,
         publication: &Publication,
+        recovery: Option<&EncryptedNote>,
     ) -> Option<(MessageBody, Recipient, Option<[u8; 32]>, NullifierSecretKey)> {
         match publication {
-            Publication::Clear { body, recovery } => {
+            Publication::Clear(body) => {
                 let (recipient, nsk) = self
                     .storage
                     .key_chain()
-                    .recover(body.to.account_id, recovery)?;
+                    .recover(body.to.account_id, recovery?)?;
                 Some((body.clone(), recipient, None, nsk))
             }
             Publication::Sealed(sealed) => {
@@ -678,8 +1166,13 @@ impl WalletCore {
         &self,
         position: CommitmentPosition,
         publication: Publication,
+        recovery_bindings: &BTreeMap<AccountId, EncryptedNote>,
     ) -> Option<(PendingMessage, Nullifier)> {
-        let (body, recipient, _, nsk) = self.private_receipt(&publication)?;
+        let recovery = match &publication {
+            Publication::Clear(body) => recovery_bindings.get(&body.to.account_id),
+            Publication::Sealed(_) => None,
+        };
+        let (body, recipient, rho, nsk) = self.private_receipt(&publication, recovery)?;
         let receipt = Nullifier::for_message(&nsk, &publication.commitment(), position);
         Some((
             PendingMessage {
@@ -687,6 +1180,8 @@ impl WalletCore {
                 publication,
                 body,
                 recipient,
+                rho,
+                receipt,
             },
             receipt,
         ))
@@ -697,23 +1192,36 @@ impl WalletCore {
         position: CommitmentPosition,
     ) -> Result<Option<PendingMessage>> {
         self.sync_to_latest_block().await?;
-        let found = self
-            .get_publications(position, 1)
-            .await?
+        let PublicationsPage {
+            publications,
+            recovery_bindings,
+        } = self.get_publications(position, 1).await?;
+        let found = publications
             .into_iter()
             .filter(|(found, _)| *found == position)
-            .filter_map(|(found, publication)| self.read(found, publication));
+            .filter_map(|(found, publication)| self.read(found, publication, &recovery_bindings));
         Ok(self.unreceived(found).last())
     }
 
-    // Drops the records whose receipt this wallet sees spent.
+    // Drops the records whose receipt this wallet sees spent, or claimed by a send of this
+    // process.
     fn unreceived(
         &self,
         records: impl IntoIterator<Item = (PendingMessage, Nullifier)>,
     ) -> impl Iterator<Item = PendingMessage> {
+        let swept: HashSet<Nullifier> = self
+            .swept
+            .lock()
+            .expect("the swept set is not poisoned")
+            .values()
+            .flatten()
+            .copied()
+            .collect();
         records
             .into_iter()
-            .filter(|(_, receipt)| !self.spent_nullifiers.contains(receipt))
+            .filter(move |(_, receipt)| {
+                !self.spent_nullifiers.contains(receipt) && !swept.contains(receipt)
+            })
             .map(|(pending, _)| pending)
     }
 
@@ -798,19 +1306,21 @@ impl WalletCore {
         self.poller().poll_tx(tx_hash).await
     }
 
+    /// The membership paths of `commitments` and of the message leaves at `message_positions`,
+    /// all under the root returned with them.
     pub async fn get_proofs_and_root(
         &self,
         commitments: &[Commitment],
-        message_position: Option<CommitmentPosition>,
+        message_positions: Vec<CommitmentPosition>,
     ) -> Result<(
         Vec<Option<MembershipProof>>,
-        Option<MembershipProof>,
+        Vec<Option<MembershipProof>>,
         CommitmentSetDigest,
     )> {
-        Ok(self
-            .sequencer_client
-            .get_proofs_and_root(commitments.to_vec(), message_position)
-            .await?)
+        self.sequencer_client
+            .get_proofs_and_root(commitments.to_vec(), message_positions)
+            .await
+            .map_err(anyhow::Error::from)
     }
 
     pub(crate) async fn await_inclusion(
@@ -832,11 +1342,31 @@ impl WalletCore {
         &mut self,
         tx_hash: HashType,
     ) -> Result<cli::SubcommandReturnValue> {
-        let (tx, block_id) = self.await_inclusion(tx_hash).await?;
+        let (tx, block_id) = match self.await_inclusion(tx_hash).await {
+            Ok(included) => included,
+            Err(error) => {
+                self.forget_swept(tx_hash);
+                return Err(error);
+            }
+        };
         if let LeeTransaction::PrivacyPreserving(tx) = tx {
+            let reverted = !self
+                .sequencer_client
+                .get_transaction_receipt(tx_hash)
+                .await?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "Transaction {tx_hash} included in block {block_id} has no receipt"
+                    )
+                })?
+                .success;
+            if reverted {
+                println!("Transaction reverted: its fee was charged and nothing else applied");
+                self.forget_swept(tx_hash);
+            }
             let key_chain = self.storage.key_chain_mut();
             let mut index = key_chain.build_latest_nullifier_index();
-            key_chain.sync_updates_via_nullifiers(&tx.message, &mut index);
+            key_chain.follow_transaction(&tx.message, reverted, false, &mut index);
         }
         self.store_persistent_data().with_context(|| {
             format!("Transaction {tx_hash} is included in block {block_id}, but storing the wallet failed")
@@ -856,6 +1386,7 @@ impl WalletCore {
             root,
             message,
             programs,
+            None,
             |_| Ok(()),
         )
         .await
@@ -877,14 +1408,18 @@ impl WalletCore {
             programs,
             cross_messages,
             async_delivery,
+            None,
             |_| Ok(()),
         )
         .await
     }
 
     // Public when every account is, no recovery binding is new and no candidate is selected,
-    // privacy-preserving otherwise. A proof derives its boundary from current public state unless
+    // privacy-preserving otherwise. A public transaction refuses a requested clear message, which
+    // only private execution sends. A proof derives its boundary from current public state unless
     // `cross_messages` gives a conditional promise that settlement checks against live execution.
+    // A proof pays its fee from `fee_payer` if given, see
+    // [`Self::send_privacy_preserving_tx_with_pre_check`].
     #[expect(
         clippy::too_many_arguments,
         reason = "send_tx's arguments and the check of the accounts it reads"
@@ -897,19 +1432,26 @@ impl WalletCore {
         programs: &ProgramCatalog,
         cross_messages: Option<PredictedCrossMessages>,
         async_delivery: AsyncDelivery,
+        fee_payer: Option<AccountId>,
         tx_pre_check: impl FnOnce(&[SelectedActorState]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let to = root_actor(&accounts, root)?;
-        let async_delivery = AsyncDelivery {
-            recoveries: self.unbound(async_delivery.recoveries).await?,
-            ..async_delivery
-        };
+        let async_delivery = self.unbound(async_delivery).await?;
         if async_delivery.recoveries.is_empty()
             && async_delivery.seals.is_empty()
             && async_delivery.promotions.public.is_empty()
             && async_delivery.promotions.private.is_empty()
             && !accounts.iter().any(|mention| mention.identity.is_private())
         {
+            if !async_delivery.clear_messages.is_empty() {
+                return Err(ExecutionFailureKind::TransactionBuildError(
+                    lee::error::LeeError::InvalidInput(
+                        "A public transaction has no private execution to send a requested clear \
+                         message"
+                            .to_owned(),
+                    ),
+                ));
+            }
             self.send_public(accounts, to, message, None, tx_pre_check)
                 .await
                 .map(|tx_hash| (tx_hash, Vec::new()))
@@ -920,19 +1462,21 @@ impl WalletCore {
                 async_delivery,
                 programs,
                 cross_messages,
+                fee_payer,
                 tx_pre_check,
             )
             .await
         }
     }
 
-    // A binding already on chain is reused: settlement attaches it to every publication.
+    // A binding already on chain is reused: it serves every publication to its address. A clear
+    // message's destination must be bound, on chain or by a recovery this delivery introduces.
     async fn unbound(
         &self,
-        recoveries: Vec<RecipientEncryption>,
-    ) -> Result<Vec<RecipientEncryption>, ExecutionFailureKind> {
+        async_delivery: AsyncDelivery,
+    ) -> Result<AsyncDelivery, ExecutionFailureKind> {
         let mut unbound: Vec<RecipientEncryption> = Vec::new();
-        for recovery in recoveries {
+        for recovery in async_delivery.recoveries {
             let address = recovery.recipient.address();
             let bound = self
                 .get_recovery_binding(address)
@@ -946,7 +1490,31 @@ impl WalletCore {
                 unbound.push(recovery);
             }
         }
-        Ok(unbound)
+        for clear in &async_delivery.clear_messages {
+            let to = clear.to.account_id;
+            if !unbound.iter().any(|kept| kept.recipient.address() == to) {
+                self.require_binding(clear.to).await?;
+            }
+        }
+        Ok(AsyncDelivery {
+            recoveries: unbound,
+            ..async_delivery
+        })
+    }
+
+    // A durable async message is published only to a destination bound on chain.
+    pub(crate) async fn require_binding(&self, to: Actor) -> Result<(), ExecutionFailureKind> {
+        if self
+            .get_recovery_binding(to.account_id)
+            .await
+            .map_err(ExecutionFailureKind::SequencerError)?
+            .is_none()
+        {
+            return Err(ExecutionFailureKind::TransactionBuildError(
+                lee::error::LeeError::UnboundAsyncDestination { actor: to },
+            ));
+        }
+        Ok(())
     }
 
     // What settlement needs for an async message to `destination`: a public account to execute it,
@@ -1050,12 +1618,19 @@ impl WalletCore {
         Ok((declared, joined))
     }
 
+    /// Sends a privacy-preserving transaction over `accounts`.
+    ///
+    /// The in-proof fee is reserved from `fee_payer` if given: an owned private account that need
+    /// not be one of `accounts`. Otherwise the first authorized private account in `accounts`
+    /// that can afford the reserve pays, else the first authorized one (see
+    /// [`AccountManager::private_fee_payer_account_id`]).
     pub async fn send_privacy_preserving_tx_with_pre_check(
         &self,
         accounts: Vec<AccountMention>,
         root: usize,
         message: MessageData,
         programs: &ProgramCatalog,
+        fee_payer: Option<AccountId>,
         tx_pre_check: impl FnOnce(&[SelectedActorState]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let root = TransactionEntry::Sync(RootCall {
@@ -1068,11 +1643,17 @@ impl WalletCore {
             AsyncDelivery::default(),
             programs,
             None,
+            fee_payer,
             tx_pre_check,
         )
         .await
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        clippy::cognitive_complexity,
+        reason = "the proven send threads every input of the transaction it builds"
+    )]
     async fn send_proven(
         &self,
         accounts: Vec<AccountMention>,
@@ -1080,11 +1661,13 @@ impl WalletCore {
         async_delivery: AsyncDelivery,
         programs: &ProgramCatalog,
         cross_messages: Option<PredictedCrossMessages>,
+        fee_payer: Option<AccountId>,
         tx_pre_check: impl FnOnce(&[SelectedActorState]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let AsyncDelivery {
             recoveries,
             seals,
+            clear_messages,
             promotions:
                 Promotions {
                     public,
@@ -1096,19 +1679,94 @@ impl WalletCore {
             TransactionEntry::Async(receipt) => Some((receipt.position, receipt.commitment)),
             TransactionEntry::Sync(_) => None,
         };
-        let acc_manager = account_manager::AccountManager::new(self, accounts, message).await?;
+        let mut quote = self
+            .sequencer_client
+            .get_fee_state()
+            .await
+            .map_err(Into::into)?;
+        // A public payer declares the fee in place of the proof.
+        let (named_payer, public_payer) = match fee_payer
+            .map(AccountIdWithPrivacy::Private)
+            .or(self.fee_params.payer)
+        {
+            Some(AccountIdWithPrivacy::Private(payer)) => (Some(payer), None),
+            Some(AccountIdWithPrivacy::Public(payer)) => (None, Some(payer)),
+            None => (None, None),
+        };
+        let fee_payer = match (named_payer, public_payer) {
+            (None, None) => self.auto_fee_payer(
+                &accounts,
+                self.reserve_pricing(&quote, 0, fee_core::market::PROOF_BYTES)
+                    .headroom_reserve,
+            ),
+            (named_payer, _) => named_payer,
+        };
+        // Pending native credits to the transaction's private accounts are claimed before the
+        // root, so they count as balance; they take the action slots its accounts and root leave.
+        let private_states: HashSet<AccountId> = accounts
+            .iter()
+            .filter(|mention| mention.identity.is_private())
+            .map(|mention| mention.identity.account_id())
+            .chain(fee_payer)
+            .collect();
+        let slots = account_manager::AccountManager::PADDED_PRIVATE_ACTIONS
+            .saturating_sub(private_states.len())
+            .saturating_sub(usize::from(message.is_some()));
+        let claims = self
+            .sweepable(
+                &accounts,
+                fee_payer,
+                message.map(|(position, _)| position),
+                slots.min(MAX_SWEPT_CLAIMS),
+            )
+            .await?;
+        if !claims.is_empty() {
+            tracing::info!(
+                count = claims.len(),
+                claims = ?claims
+                    .iter()
+                    .map(|claim| (claim.position, claim.native_credit()))
+                    .collect::<Vec<_>>(),
+                "Claiming pending credits before the root"
+            );
+        }
+        let acc_manager =
+            account_manager::AccountManager::new(self, accounts, message, fee_payer, &claims)
+                .await?;
 
         tx_pre_check(&acc_manager.selected_actor_states())?;
 
+        // Its signature authorizes the declaration.
+        if let Some(payer) = public_payer
+            && !acc_manager.signs_for(payer)
+        {
+            return Err(ExecutionFailureKind::TransactionBuildError(
+                lee::error::LeeError::InvalidInput(format!(
+                    "Fee payer {payer} does not sign this transaction"
+                )),
+            ));
+        }
+        // The signer a fee falls back to when no private account pays it: the best funded one.
+        let public_signer = || {
+            acc_manager
+                .signers()
+                .into_iter()
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .max_by_key(|signer| acc_manager.native_balance(*signer))
+        };
+
         for account_id in acc_manager.accounts_outgrowing_pad() {
             warn!(
-                "Account {account_id} exceeds the {CIPHERTEXT_PAD_SIZE}-byte note pad; its note is \
-                 identifiable by length in this transaction"
+                %account_id,
+                pad_size_bytes = CIPHERTEXT_PAD_SIZE,
+                "Account exceeds the note pad; its note is identifiable by length in this \
+                 transaction"
             );
         }
 
         let shared_secrets = acc_manager.shared_secrets();
-        let input = ProvingInput {
+        let mut input = ProvingInput {
             root: root.map(|Receipt { body, rho, .. }| MessageWitness {
                 body,
                 rho,
@@ -1118,6 +1776,16 @@ impl WalletCore {
                     .clone(),
                 filler: account_manager::dummy_output(),
             }),
+            claims: claims
+                .iter()
+                .zip(acc_manager.claim_paths())
+                .map(|(claim, path)| MessageWitness {
+                    body: claim.body.clone(),
+                    rho: claim.rho,
+                    membership_proof: path.clone(),
+                    filler: account_manager::dummy_output(),
+                })
+                .collect(),
             public_context: PublicExecutionContext {
                 promotions: public,
                 ..PublicExecutionContext::new(acc_manager.public_actors(), acc_manager.signers())
@@ -1127,6 +1795,7 @@ impl WalletCore {
             ciphertext_padding: Some(CIPHERTEXT_PAD_SIZE),
             recoveries,
             private_promotions: private,
+            fee: None,
         };
         let witnessed: HashSet<AccountId> = input
             .private_witnesses
@@ -1143,78 +1812,638 @@ impl WalletCore {
             .collect();
         let select =
             move |_, body: &MessageBody| !listed_only && witnessed.contains(&body.to.account_id);
-        let choose_seal = move |body: &MessageBody| {
-            let to = body.to.account_id;
-            seals
-                .iter()
-                .find(|recipient| recipient.address() == to)
-                .map(|recipient| RecipientEncryption {
-                    recipient: recipient.clone(),
-                    esk: EphemeralSecretKey(account_manager::random_bytes()),
-                })
-                .ok_or_else(|| {
-                    lee::error::LeeError::InvalidInput(format!(
-                        "No recipient material seals an async message to {to}"
-                    ))
-                })
-        };
-
         let programs = programs.clone();
-        let present = acc_manager.presenter();
-        let (output, proof) = match cross_messages {
+
+        // The in-proof fee: the inbox is a declared public actor so the reserve crosses to it,
+        // priced off a simulation of the public part and paid under a fresh alias bound for
+        // the refund.
+        let fee_inbox = system_accounts::fee_inbox_account_id();
+        let inbox_actor = Actor::native_balance(fee_inbox);
+        input.public_context.actors.insert(inbox_actor);
+        let mut simulation = Simulation {
+            public_actor_states: acc_manager.public_actor_states(),
+            admitted_accounts: Some(acc_manager.admitted_accounts()),
+        };
+        simulation.public_actor_states.insert(
+            inbox_actor,
+            self.get_account_view(inbox_actor)
+                .await
+                .map_err(ExecutionFailureKind::SequencerError)?
+                .unwrap_or_default()
+                .data
+                .actor_state(NATIVE_TOKEN_PROGRAM_ID)
+                .clone(),
+        );
+        if let Some(admitted) = &mut simulation.admitted_accounts {
+            admitted.insert(fee_inbox);
+        }
+        let (mut input, simulation, programs, cycles) = match cross_messages {
             None => {
-                let simulation = Simulation {
-                    public_actor_states: acc_manager.public_actor_states(),
-                    admitted_accounts: Some(acc_manager.admitted_accounts()),
-                };
+                let (mut present, mut select) = (acc_manager.presenter(None), select.clone());
                 tokio::task::spawn_blocking(move || {
-                    lee::execute_and_prove(
-                        input,
+                    let cycles = lee::simulate_privacy_preserving_transaction(
+                        &input,
                         &simulation,
                         &programs,
-                        present,
-                        select,
-                        choose_seal,
-                    )
+                        &mut present,
+                        &mut select,
+                    )?;
+                    Ok::<_, lee::error::LeeError>((input, simulation, programs, cycles))
                 })
+                .await??
             }
-            Some(cross_messages) => tokio::task::spawn_blocking(move || {
-                lee::execute_and_prove_with_cross_messages(
+            // Given cross messages stand in for the simulation; the public part is priced free.
+            Some(_) => (input, simulation, programs, 0),
+        };
+        let run_unproven = async |input: ProvingInput, present| {
+            let (present, choose_publications) =
+                present_and_publish(present, seals.clone(), clear_messages.clone());
+            let select = select.clone();
+            let (programs, simulation, cross_messages) =
+                (programs.clone(), simulation.clone(), cross_messages.clone());
+            tokio::task::spawn_blocking(move || match cross_messages {
+                None => lee::execute_unproven(
+                    input,
+                    &simulation,
+                    &programs,
+                    present,
+                    select,
+                    choose_publications,
+                ),
+                Some(cross_messages) => lee::execute_unproven_with_cross_messages(
                     input,
                     cross_messages,
                     &programs,
                     present,
                     select,
-                    choose_seal,
-                )
-            }),
-        }
-        .await??;
-
-        let message = Message {
-            admission_evidence: acc_manager.admission_evidence(),
-            ..Message::from_circuit_output(acc_manager.public_account_nonces(), output)
+                    choose_publications,
+                ),
+            })
+            .await
+        };
+        let run_proven = async |input: ProvingInput, present| {
+            let (present, choose_publications) =
+                present_and_publish(present, seals.clone(), clear_messages.clone());
+            let select = select.clone();
+            let (programs, simulation, cross_messages) =
+                (programs.clone(), simulation.clone(), cross_messages.clone());
+            tokio::task::spawn_blocking(move || match cross_messages {
+                None => lee::execute_and_prove(
+                    input,
+                    &simulation,
+                    &programs,
+                    present,
+                    select,
+                    choose_publications,
+                ),
+                Some(cross_messages) => lee::execute_and_prove_with_cross_messages(
+                    input,
+                    cross_messages,
+                    &programs,
+                    present,
+                    select,
+                    choose_publications,
+                ),
+            })
+            .await
         };
 
-        let message_hash = message.hash();
-        let signatures_public_keys = acc_manager
-            .sign_message(message_hash)
-            .map_err(ExecutionFailureKind::SignError)?;
+        // A public signer's declared fee lies outside the proof, so the transaction is measured
+        // unproven and priced before it is proven and signed.
+        let send_publicly_paid = async |payer: AccountId, mut input: ProvingInput| {
+            // Only the in-proof reserve crosses to the inbox.
+            input.public_context.actors.remove(&inbox_actor);
+            let FeeParams {
+                gas_limit,
+                max_fee,
+                tip,
+                ..
+            } = self.fee_params;
+            let declared = |fee, output| Message {
+                admission_evidence: acc_manager.admission_evidence(),
+                fee: Some(fee),
+                ..Message::from_circuit_output(acc_manager.public_account_nonces(), output)
+            };
+            let output = run_unproven(input.clone(), acc_manager.presenter(None)).await??;
+            let unsigned = PrivacyPreservingTransaction::new(
+                declared(lee::FeeDeclaration::new(payer, 0, tip, 0), output),
+                lee::privacy_preserving_transaction::witness_set::WitnessSet::from_raw_parts(
+                    Vec::new(),
+                    lee::privacy_preserving_transaction::circuit::Proof::from_inner(Vec::new()),
+                ),
+            );
+            let wire_bytes = signed_wire_bytes(
+                &LeeTransaction::PrivacyPreserving(unsigned),
+                acc_manager.signers().len(),
+            )?;
+            let verify_gas = fee_core::market::PRIVATE_VERIFY_GAS;
+            let (exec_ceiling, stor_ceiling) = self.base_fee_ceilings(&quote);
+            // Given cross messages the public part is unmeasured, so it gets what an in-proof
+            // payer's reserve buys at head: the headroom past the verification and storage.
+            let gas_limit = match (gas_limit, &cross_messages) {
+                (Some(gas_limit), _) => gas_limit,
+                (None, Some(_)) => fee_core::assess::private_cycles_affordable(
+                    fee_core::assess::private_fee_required(
+                        0,
+                        wire_bytes,
+                        exec_ceiling,
+                        stor_ceiling,
+                    ),
+                    wire_bytes,
+                    quote.base_fee_exec,
+                    quote.base_fee_stor,
+                ),
+                (None, None) => self.with_gas_margin(cycles),
+            }
+            .saturating_add(verify_gas)
+            .min(fee_core::market::MAX_GAS_EXEC);
+            let max_fee = max_fee.unwrap_or_else(|| {
+                fee_core::assess::fee_for(gas_limit, wire_bytes, tip, exec_ceiling, stor_ceiling)
+            });
+            let at_head = |gas| {
+                fee_core::assess::fee_for(
+                    gas,
+                    wire_bytes,
+                    tip,
+                    quote.base_fee_exec,
+                    quote.base_fee_stor,
+                )
+            };
+            let fee = lee::FeeDeclaration::new(payer, gas_limit, tip, max_fee);
 
-        let witness_set =
-            lee::privacy_preserving_transaction::witness_set::WitnessSet::from_raw_parts(
-                signatures_public_keys,
-                proof,
+            // Settlement holds the reserve from the payer before the transaction runs, so an
+            // action spending the payer's balance runs on what is left of it.
+            let mut revert_reason = None;
+            let reserve = at_head(gas_limit);
+            let payer_actor = Actor::native_balance(payer);
+            if cross_messages.is_none()
+                && let Some(Ok(balance)) = simulation
+                    .public_actor_states
+                    .get(&payer_actor)
+                    .map(|state| lee_core::native_token::decode_balance(state))
+                && balance >= reserve
+            {
+                let mut held = simulation.clone();
+                held.public_actor_states.insert(
+                    payer_actor,
+                    lee_core::native_token::encode_balance(balance.saturating_sub(reserve)),
+                );
+                let (input, programs) = (input.clone(), programs.clone());
+                let (present, select) = (acc_manager.presenter(None), select.clone());
+                if let Err(err) = tokio::task::spawn_blocking(move || {
+                    lee::simulate_privacy_preserving_transaction(
+                        &input, &held, &programs, present, select,
+                    )
+                })
+                .await?
+                {
+                    revert_reason = Some(format!("{:#}", anyhow::Error::from(err)));
+                }
+            }
+            if self.dry_run {
+                return Err(ExecutionFailureKind::DryRun(Box::new(
+                    DryRunReport::Public {
+                        fee,
+                        quote: quote.clone(),
+                        cycles,
+                        wire_bytes,
+                        fee_at_head: at_head(cycles.saturating_add(verify_gas)),
+                        reserve_at_head: reserve,
+                        revert_reason,
+                    },
+                )));
+            }
+            // The sequencer drops a payer short of the reserve; fail before the proof.
+            if acc_manager.native_balance(payer) < reserve {
+                return Err(ExecutionFailureKind::InsufficientFundsError);
+            }
+            self.gate_revert(revert_reason)?;
+
+            let (output, proof) = run_proven(input, acc_manager.presenter(None)).await??;
+            let message = declared(fee, output);
+            let signatures_public_keys = acc_manager
+                .sign_message(message.hash())
+                .map_err(ExecutionFailureKind::SignError)?;
+            let tx = PrivacyPreservingTransaction::new(
+                message,
+                lee::privacy_preserving_transaction::witness_set::WitnessSet::from_raw_parts(
+                    signatures_public_keys,
+                    proof,
+                ),
+            );
+            let tx_hash = self
+                .sequencer_client
+                .send_transaction(LeeTransaction::PrivacyPreserving(tx))
+                .await
+                .map_err(Into::into)?;
+            self.declare_fee(DeclaredFee::Public(fee));
+            self.record_swept(tx_hash, &claims);
+            Ok((tx_hash, shared_secrets.clone()))
+        };
+
+        if let Some(payer) = public_payer {
+            return send_publicly_paid(payer, input).await;
+        }
+        let Some(payer) = acc_manager.private_fee_payer_account_id(
+            // The transaction is measured once its payer is known; its proof bounds it below.
+            //
+            // TODO: An account holding less than the measured reserve can be chosen over a
+            // richer one; measuring before choosing would fix that, as the size does not
+            // depend on which of these accounts pays.
+            self.reserve_pricing(&quote, cycles, fee_core::market::PROOF_BYTES)
+                .headroom_reserve,
+        ) else {
+            let Some(payer) = public_signer() else {
+                return Err(ExecutionFailureKind::TransactionBuildError(
+                    lee::error::LeeError::InvalidInput(
+                        "Privacy-preserving transaction has no account to pay its fee".to_owned(),
+                    ),
+                ));
+            };
+            return send_publicly_paid(payer, input).await;
+        };
+        // What the payer holds before the root: its note plus the credits it claims.
+        let swept: u128 = claims
+            .iter()
+            .filter(|claim| claim.recipient.account_id() == payer)
+            .filter_map(PendingMessage::native_credit)
+            .sum();
+        let balance = acc_manager.native_balance(payer).saturating_add(swept);
+        // A picked payer short of the fee pays out of what the root credits it; when the root
+        // credits it too little, a public signer declares the fee instead.
+        let fee_floor = self
+            .reserve_pricing(&quote, cycles, fee_core::market::PROOF_BYTES)
+            .fee_at_head;
+        if named_payer.is_none()
+            && balance < fee_floor
+            && let Some(signer) = public_signer()
+        {
+            let opening = account_manager::random_bytes();
+            let mut probe = input.clone();
+            probe
+                .recoveries
+                .push(acc_manager.fee_recovery(payer, opening)?);
+            probe.fee = Some(FeeTransfer {
+                payer,
+                recipient: fee_inbox,
+                amount: fee_floor,
+                refund_to: None,
+            });
+            if run_unproven(probe, acc_manager.presenter(Some((payer, opening))))
+                .await?
+                .is_err()
+            {
+                return send_publicly_paid(signer, input).await;
+            }
+        }
+        let refund_to = self.fee_params.refund_to;
+        if let Some(target) = refund_to
+            && !acc_manager
+                .public_actors()
+                .contains(&Actor::native_balance(target))
+        {
+            warn!(
+                %target,
+                "Refund target is not credited publicly by this transaction; the refund links the \
+                 transaction to it"
+            );
+        }
+        let opening = account_manager::random_bytes();
+        input
+            .recoveries
+            .push(acc_manager.fee_recovery(payer, opening)?);
+        let priced = |amount| {
+            let mut priced = input.clone();
+            priced.fee = Some(FeeTransfer {
+                payer,
+                recipient: fee_inbox,
+                amount,
+                refund_to,
+            });
+            priced
+        };
+        let assemble = |output, proof| {
+            let message = Message {
+                admission_evidence: acc_manager.admission_evidence(),
+                ..Message::from_circuit_output(acc_manager.public_account_nonces(), output)
+            };
+            let signatures_public_keys = acc_manager
+                .sign_message(message.hash())
+                .map_err(ExecutionFailureKind::SignError)?;
+            Ok::<_, ExecutionFailureKind>(PrivacyPreservingTransaction::new(
+                message,
+                lee::privacy_preserving_transaction::witness_set::WitnessSet::from_raw_parts(
+                    signatures_public_keys,
+                    proof,
+                ),
+            ))
+        };
+
+        // The fee's amount is fixed-width, so an unproven run paying nothing measures the
+        // transaction, its proof charged at a fixed size. Its payer covers that fee, so it carries
+        // the fee fallback a payer whose note falls short of the reserve goes without.
+        let (wire_bytes, fallback_bytes) = {
+            let output =
+                run_unproven(priced(0), acc_manager.presenter(Some((payer, opening)))).await??;
+            let proof = lee::privacy_preserving_transaction::circuit::Proof::from_inner(Vec::new());
+            let tx = assemble(output, proof)?;
+            let fallback = tx
+                .message()
+                .execution
+                .proven_fee
+                .as_ref()
+                .and_then(|fee| fee.fallback.as_ref())
+                .map_or(0, |fallback| {
+                    borsh::object_length(fallback).expect("a fee fallback serializes")
+                });
+            (
+                LeeTransaction::PrivacyPreserving(tx)
+                    .charged_bytes()
+                    .expect("a transaction serializes"),
+                u64::try_from(fallback).expect("a fee fallback's size fits u64"),
+            )
+        };
+        let note = acc_manager.native_balance(payer);
+
+        // Base fees move between the quote and inclusion; a reserve the screen finds below the
+        // head fee is priced again off a fresh quote and proven again.
+        let mut reprices = 0;
+        loop {
+            // Never reserve more than the payer holds, nor less than the fee at head.
+            let at = |bytes| {
+                let pricing = self.reserve_pricing(&quote, cycles, bytes);
+                let reserve = pricing
+                    .headroom_reserve
+                    .min(balance)
+                    .max(pricing.fee_at_head);
+                (pricing, reserve)
+            };
+            // A note short of the reserve gets no fee fallback, so the transaction is shorter by
+            // it, unless pricing the shorter one lets the note cover it again.
+            //
+            // Between the two prices neither size holds: the full price is kept and the shorter
+            // transaction pays less than it reserves.
+            let full = at(wire_bytes);
+            let (
+                ReservePricing {
+                    fee_at_head,
+                    exec_ceiling,
+                    stor_ceiling,
+                    headroom_reserve,
+                },
+                reserve,
+            ) = if note < full.1 {
+                let shorter = at(wire_bytes.saturating_sub(fallback_bytes));
+                if note < shorter.1 { shorter } else { full }
+            } else {
+                full
+            };
+            let wire_bytes = if note < reserve {
+                wire_bytes.saturating_sub(fallback_bytes)
+            } else {
+                wire_bytes
+            };
+            let fee = PrivateFee {
+                payer,
+                reserve,
+                refund_to,
+            };
+            if self.dry_run {
+                return Err(ExecutionFailureKind::DryRun(Box::new(
+                    DryRunReport::Private {
+                        fee,
+                        quote,
+                        cycles,
+                        wire_bytes,
+                        fee_at_head,
+                        headroom_blocks: self.fee_headroom_blocks(),
+                        exec_ceiling,
+                        stor_ceiling,
+                        headroom_reserve,
+                        claims: claims.len(),
+                        swept,
+                    },
+                )));
+            }
+
+            let priced = priced(reserve);
+            let (output, proof) = run_proven(priced, acc_manager.presenter(Some((payer, opening))))
+                .await?
+                .map_err(|error| {
+                    // The transaction simulated without its fee, so the reserve is what broke it.
+                    if cross_messages.is_none()
+                        && let lee::error::LeeError::InvalidProgramBehavior(cause) = error
+                    {
+                        lee::error::LeeError::InvalidInput(format!(
+                            "Fee reserve of {reserve} from payer {payer} fails, though the \
+                             transaction runs without it: {cause}"
+                        ))
+                    } else {
+                        error
+                    }
+                })?;
+
+            let tx = LeeTransaction::PrivacyPreserving(assemble(output, proof)?);
+            debug_assert!(
+                tx.charged_bytes().is_ok_and(|bytes| bytes == wire_bytes),
+                "the proven transaction differs from its measurement"
             );
 
-        let tx = PrivacyPreservingTransaction::new(message, witness_set);
+            match self
+                .sequencer_client
+                .send_transaction(tx)
+                .await
+                .map_err(Into::into)
+            {
+                Ok(tx_hash) => {
+                    self.declare_fee(DeclaredFee::Private(fee));
+                    self.record_swept(tx_hash, &claims);
+                    return Ok((tx_hash, shared_secrets));
+                }
+                Err(ExecutionFailureKind::PrivateFeeBelowHead(_)) if reprices < MAX_REPRICES => {
+                    reprices = reprices.saturating_add(1);
+                    warn!(
+                        %reserve,
+                        reprices,
+                        max_reprices = MAX_REPRICES,
+                        "The sequencer prices the fee above the reserve; pricing it again off a \
+                         fresh quote"
+                    );
+                    quote = self
+                        .sequencer_client
+                        .get_fee_state()
+                        .await
+                        .map_err(Into::into)?;
+                }
+                Err(rejection) => return Err(rejection),
+            }
+        }
+    }
 
-        let call_res = self
-            .sequencer_client
-            .send_transaction(LeeTransaction::PrivacyPreserving(tx))
-            .await;
+    /// The reserve a privacy-preserving transaction of `cycles` public cycles and `wire_bytes`
+    /// serialized bytes takes at `quote`: the fee at the head and at the
+    /// [`Self::base_fee_ceilings`].
+    fn reserve_pricing(
+        &self,
+        quote: &sequencer_service_rpc::FeeStateQuote,
+        cycles: u64,
+        wire_bytes: u64,
+    ) -> ReservePricing {
+        let (exec_ceiling, stor_ceiling) = self.base_fee_ceilings(quote);
+        ReservePricing {
+            fee_at_head: fee_core::assess::private_fee_required(
+                cycles,
+                wire_bytes,
+                quote.base_fee_exec,
+                quote.base_fee_stor,
+            ),
+            exec_ceiling,
+            stor_ceiling,
+            headroom_reserve: fee_core::assess::private_fee_required(
+                cycles,
+                wire_bytes,
+                exec_ceiling,
+                stor_ceiling,
+            ),
+        }
+    }
 
-        Ok((call_res?, shared_secrets))
+    /// The execution and storage base fees after the headroom blocks of full blocks past
+    /// `quote`, the steepest climb allowed.
+    fn base_fee_ceilings(&self, quote: &sequencer_service_rpc::FeeStateQuote) -> (u64, u64) {
+        let blocks = self.fee_headroom_blocks();
+        let climb = |base, max_gas, target, damping, lo, hi| {
+            (0..blocks).fold(base, |fee, _| {
+                fee_core::market::next_base_fee(fee, max_gas, target, damping, lo, hi)
+            })
+        };
+        let exec_ceiling = climb(
+            quote.base_fee_exec,
+            fee_core::market::MAX_GAS_EXEC,
+            fee_core::market::TARGET_GAS_EXEC,
+            fee_core::market::D_EXEC,
+            fee_core::market::BASE_FEE_EXEC_MIN,
+            fee_core::market::BASE_FEE_EXEC_MAX,
+        );
+        let stor_ceiling = climb(
+            quote.base_fee_stor,
+            fee_core::market::MAX_GAS_STOR,
+            fee_core::market::TARGET_GAS_STOR,
+            fee_core::market::D_STOR,
+            fee_core::market::BASE_FEE_STOR_MIN,
+            fee_core::market::BASE_FEE_STOR_MAX,
+        );
+        (exec_ceiling, stor_ceiling)
+    }
+
+    /// A measured cycle count padded by the configured margin.
+    const fn with_gas_margin(&self, cycles: u64) -> u64 {
+        cycles
+            .saturating_mul(self.config.public_gas_margin_percent.saturating_add(100))
+            .div_ceil(100)
+    }
+
+    /// Refuses a simulated revert unless reverts are allowed; a failed action is charged its whole
+    /// gas limit.
+    fn gate_revert(&self, revert_reason: Option<String>) -> Result<(), ExecutionFailureKind> {
+        if let Some(reason) = revert_reason {
+            if !self.allow_revert {
+                return Err(ExecutionFailureKind::SimulatedRevert(reason));
+            }
+            warn!(%reason, "The transaction reverts when simulated, and still pays its fee");
+        }
+        Ok(())
+    }
+
+    /// Holds the claims `tx_hash` sweeps out of the pending messages until it is seen included.
+    fn record_swept(&self, tx_hash: HashType, claims: &[PendingMessage]) {
+        if !claims.is_empty() {
+            self.swept
+                .lock()
+                .expect("the swept set is not poisoned")
+                .insert(tx_hash, claims.iter().map(|claim| claim.receipt).collect());
+        }
+    }
+
+    /// Gives the claims of `tx_hash` back to the pending messages: it reverted or was not
+    /// included.
+    fn forget_swept(&self, tx_hash: HashType) {
+        self.swept
+            .lock()
+            .expect("the swept set is not poisoned")
+            .remove(&tx_hash);
+    }
+
+    /// The pending native credits a transaction over `mentions`, paid by `fee_payer`, claims
+    /// before its root, the message at `root` if it receives one: those reaching its authorized
+    /// private accounts this wallet manages, largest first, up to `limit`. The blocks past the
+    /// sync cursor are scanned for receipts spent since; none is claimed when they exceed
+    /// [`MAX_SWEEP_SCAN_BLOCKS`].
+    async fn sweepable(
+        &self,
+        mentions: &[AccountMention],
+        fee_payer: Option<AccountId>,
+        root: Option<CommitmentPosition>,
+        limit: usize,
+    ) -> Result<Vec<PendingMessage>, ExecutionFailureKind> {
+        use futures::TryStreamExt as _;
+
+        let claimants: HashSet<AccountId> = mentions
+            .iter()
+            .filter(|mention| mention.authorizes && mention.identity.is_private())
+            .map(|mention| mention.identity.account_id())
+            .chain(fee_payer)
+            .filter(|account_id| {
+                self.storage
+                    .key_chain()
+                    .managed_private_account(*account_id)
+                    .is_some()
+            })
+            .collect();
+        if claimants.is_empty() || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let head = self
+            .get_last_block_id()
+            .await
+            .map_err(ExecutionFailureKind::SequencerError)?;
+        let synced = self.storage.last_synced_block();
+        if head.saturating_sub(synced) > MAX_SWEEP_SCAN_BLOCKS {
+            tracing::info!(
+                synced,
+                head,
+                "Pending credits are not claimed: the wallet is not synced to the head"
+            );
+            return Ok(Vec::new());
+        }
+        let mut spent_since = HashSet::new();
+        if synced < head {
+            let poller = self.poller();
+            let mut blocks =
+                std::pin::pin!(poller.poll_block_range(synced.saturating_add(1)..=head));
+            while let Some(block) = blocks
+                .try_next()
+                .await
+                .map_err(ExecutionFailureKind::SequencerError)?
+            {
+                spent_since.extend(spent_in(&block));
+            }
+        }
+        let mut credits: Vec<PendingMessage> = self
+            .pending_messages()
+            .await
+            .map_err(ExecutionFailureKind::SequencerError)?
+            .into_iter()
+            .filter(|pending| {
+                Some(pending.position) != root
+                    && claimants.contains(&pending.recipient.account_id())
+                    && pending.native_credit().is_some()
+                    && !spent_since.contains(&pending.receipt)
+            })
+            .collect();
+        credits.sort_by_key(|pending| std::cmp::Reverse(pending.native_credit()));
+        credits.truncate(limit);
+        Ok(credits)
     }
 
     pub async fn send_pub_tx(
@@ -1280,7 +2509,8 @@ impl WalletCore {
             ));
         }
 
-        let mut acc_manager = account_manager::AccountManager::new(self, accounts, None).await?;
+        let mut acc_manager =
+            account_manager::AccountManager::new(self, accounts, None, None, &[]).await?;
 
         tx_pre_check(&acc_manager.selected_actor_states())?;
 
@@ -1323,19 +2553,89 @@ impl WalletCore {
             }
         };
 
-        let message = lee::public_transaction::Message::new(
+        let FeeParams {
+            gas_limit,
+            max_fee,
+            tip,
+            ..
+        } = self.fee_params;
+        // Simulated within the limit it declares; a measured limit stays under the configured one.
+        let budget = gas_limit
+            .unwrap_or(self.config.gas_limit)
+            .min(fee_core::market::MAX_GAS_EXEC);
+        // Signed later: the fee is filled in once measured, and its fields are fixed width.
+        let mut message = lee::public_transaction::Message::new(
             to,
             message,
             public_actors,
             nonces,
-            Some(lee::FeeDeclaration::new(
-                payer,
-                self.config.gas_limit,
-                0,
-                max_fee_for(self.config.gas_limit),
-            )),
+            Some(lee::FeeDeclaration::new(payer, budget, tip, 0)),
             acc_manager.admission_evidence(),
         );
+        let signers = acc_manager
+            .signers()
+            .len()
+            .saturating_add(usize::from(co_signer.is_some()));
+        // Measure if dry-run, or if either gas limit or max fee is unset;
+        // pinning both fields skips the simulation and its revert check.
+        let mut measured = if self.dry_run || gas_limit.is_none() || max_fee.is_none() {
+            Some(
+                self.measure_public(&message, signers, budget, &acc_manager)
+                    .await?,
+            )
+        } else {
+            None
+        };
+        let gas_limit = gas_limit.map_or_else(
+            || {
+                let cycles = measured.as_ref().map_or(budget, |measured| measured.cycles);
+                self.with_gas_margin(cycles).min(budget)
+            },
+            // Held to the protocol cap, which admission enforces.
+            |_| budget,
+        );
+        let max_fee = max_fee.unwrap_or_else(|| {
+            let measured = measured
+                .as_ref()
+                .expect("a public send without a cap is measured");
+            let (exec_ceiling, stor_ceiling) = self.base_fee_ceilings(&measured.quote);
+            fee_core::assess::fee_for(
+                gas_limit,
+                measured.wire_bytes,
+                tip,
+                exec_ceiling,
+                stor_ceiling,
+            )
+        });
+        // Settlement holds the reserve from the `payer` before the action runs,
+        // so an action that spends the `payer`'s balance runs on what is left of it.
+        if let Some(measured) = &mut measured
+            && measured
+                .run
+                .simulation
+                .public_actor_states
+                .contains_key(&Actor::native_balance(payer))
+        {
+            let reserve = fee_core::assess::fee_for(
+                gas_limit,
+                measured.wire_bytes,
+                tip,
+                measured.quote.base_fee_exec,
+                measured.quote.base_fee_stor,
+            );
+            // if payer has more balance than the measured reserve, do a second run to see
+            // see if "balance - reserve" passed the simulation as well,
+            //
+            // if not, sequencer will reject (as in "drop", not revert!) during its fee screening
+            if acc_manager.native_balance(payer) >= reserve {
+                (measured.cycles, measured.revert_reason) = measured
+                    .run
+                    .simulate(gas_limit, Some((payer, reserve)))
+                    .await?;
+            }
+        }
+        let fee = lee::FeeDeclaration::new(payer, gas_limit, tip, max_fee);
+        message.fee = Some(fee);
 
         let message_hash = message.hash();
         let mut signatures_public_keys = acc_manager
@@ -1352,11 +2652,127 @@ impl WalletCore {
             lee::public_transaction::WitnessSet::from_raw_parts(signatures_public_keys);
 
         let tx = lee::public_transaction::PublicTransaction::new(message, witness_set);
+        if self.dry_run
+            && let Some(PublicMeasure {
+                cycles,
+                revert_reason,
+                quote,
+                ..
+            }) = measured
+        {
+            let wire_bytes = LeeTransaction::Public(tx)
+                .charged_bytes()
+                .map_err(|err| ExecutionFailureKind::SignError(err.into()))?;
+            // The fee of `gas` execution gas at the head base fees; the reserve prices the limit.
+            let at_head = |gas| {
+                fee_core::assess::fee_for(
+                    gas,
+                    wire_bytes,
+                    tip,
+                    quote.base_fee_exec,
+                    quote.base_fee_stor,
+                )
+            };
+            return Err(ExecutionFailureKind::DryRun(Box::new(
+                DryRunReport::Public {
+                    fee,
+                    cycles,
+                    wire_bytes,
+                    fee_at_head: at_head(cycles),
+                    reserve_at_head: at_head(gas_limit),
+                    revert_reason,
+                    quote,
+                },
+            )));
+        }
 
-        Ok(self
+        self.gate_revert(measured.and_then(|measured| measured.revert_reason))?;
+        let tx_hash = self
             .sequencer_client
             .send_transaction(LeeTransaction::Public(tx))
-            .await?)
+            .await
+            .map_err(Into::into)?;
+        self.declare_fee(DeclaredFee::Public(fee));
+        Ok(tx_hash)
+    }
+
+    /// Simulates `message`, to be signed by `signers`, within `budget` cycles against the
+    /// fetched states of its accounts, at the head fee state.
+    async fn measure_public(
+        &self,
+        message: &lee::public_transaction::Message,
+        signers: usize,
+        budget: u64,
+        acc_manager: &account_manager::AccountManager,
+    ) -> Result<PublicMeasure, ExecutionFailureKind> {
+        // Every program the transaction may call is a declared actor's; the native token and the
+        // loader run as protocol code.
+        let mut programs = ProgramCatalog::default();
+        let declared: BTreeSet<AccountId> = message
+            .public_context
+            .actors
+            .iter()
+            .map(|actor| actor.program_account_id)
+            .collect();
+        for program in declared {
+            if program == NATIVE_TOKEN_PROGRAM_ID || program == PROGRAM_LOADER_ACCOUNT_ID {
+                continue;
+            }
+            let deployed = ProgramLoader(self)
+                .program(program)
+                .await
+                .map_err(ExecutionFailureKind::SequencerError)?
+                .ok_or_else(|| {
+                    ExecutionFailureKind::TransactionBuildError(lee::error::LeeError::InvalidInput(
+                        format!("Program {program} is not deployed"),
+                    ))
+                })?;
+            programs.programs.insert(
+                program,
+                Dependency {
+                    program: deployed,
+                    kind: ProgramKind::Disclosed,
+                },
+            );
+        }
+        let mut simulation = Simulation {
+            public_actor_states: acc_manager.public_actor_states(),
+            admitted_accounts: Some(acc_manager.admitted_accounts()),
+        };
+        // The loader reads segments the transaction does not declare, as settlement does.
+        for (segment, state) in ProgramLoader(self)
+            .undeclared_reads(&message.execution.root)
+            .await
+            .map_err(ExecutionFailureKind::SequencerError)?
+        {
+            simulation
+                .public_actor_states
+                .entry(Actor::new(segment, PROGRAM_LOADER_ACCOUNT_ID))
+                .or_insert(state);
+        }
+        let tx = lee::PublicTransaction::new(
+            message.clone(),
+            lee::public_transaction::WitnessSet::from_raw_parts(Vec::new()),
+        );
+        let wire_bytes = signed_wire_bytes(&LeeTransaction::Public(tx.clone()), signers)?;
+        let run = PublicRun {
+            tx,
+            simulation,
+            programs,
+        };
+        let (cycles, revert_reason) = run.simulate(budget, None).await?;
+        let quote = self
+            .sequencer_client
+            .get_fee_state()
+            .await
+            .map_err(Into::into)?;
+        Ok(PublicMeasure {
+            cycles,
+            revert_reason,
+            wire_bytes,
+            quote,
+            run,
+        })
     }
 
     pub async fn receive_pending_message(
@@ -1389,7 +2805,26 @@ impl WalletCore {
         cross_messages: Option<PredictedCrossMessages>,
         async_delivery: AsyncDelivery,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
-        let Some((body, recipient, rho, nsk)) = self.private_receipt(&publication) else {
+        let recovery = match &publication {
+            Publication::Clear(body) => {
+                let address = body.to.account_id;
+                Some(
+                    self.get_recovery_binding(address)
+                        .await
+                        .map_err(ExecutionFailureKind::SequencerError)?
+                        .ok_or_else(|| {
+                            ExecutionFailureKind::SequencerError(anyhow::anyhow!(
+                                "No recovery binding for {address}, the destination of the \
+                                 publication at {position}"
+                            ))
+                        })?,
+                )
+            }
+            Publication::Sealed(_) => None,
+        };
+        let Some((body, recipient, rho, nsk)) =
+            self.private_receipt(&publication, recovery.as_ref())
+        else {
             return Err(ExecutionFailureKind::TransactionBuildError(
                 lee::error::LeeError::InvalidInput(format!(
                     "No key pair of this wallet opens the message published at {position}"
@@ -1456,10 +2891,7 @@ impl WalletCore {
             }
         }
 
-        let async_delivery = AsyncDelivery {
-            recoveries: self.unbound(async_delivery.recoveries).await?,
-            ..async_delivery
-        };
+        let async_delivery = self.unbound(async_delivery).await?;
         let receipt = Receipt {
             body,
             position,
@@ -1472,6 +2904,7 @@ impl WalletCore {
             async_delivery,
             &programs,
             cross_messages,
+            None,
             |_| Ok(()),
         )
         .await
@@ -1504,7 +2937,7 @@ impl WalletCore {
             .get_last_block_id()
             .await?
             .max(self.storage.last_synced_block());
-        log::info!("Rescanning private accounts from genesis to block {tip}");
+        tracing::info!(tip, "Rescanning private accounts from genesis");
         let poller = self.poller();
         let rescanned = self
             .storage
@@ -1551,7 +2984,7 @@ impl WalletCore {
                     leader_client
                         .get_account(account_id)
                         .map_ok(Option::unwrap_or_default)
-                        .map_err(Into::into)
+                        .map_err(anyhow::Error::from)
                 },
                 &awaited,
             )
@@ -1570,11 +3003,14 @@ impl WalletCore {
     async fn sync(&mut self, block_id: u64, discover: bool) -> Result<()> {
         use futures::TryStreamExt as _;
 
-        // The cursor and the spent-nullifier cache claim the same blocks.
+        // The cursor and the cache claim the same blocks above where this history starts.
         let cursor = self.storage.last_synced_block();
-        self.spent_nullifiers.keep(cursor)?;
-        self.storage
-            .set_last_synced_block(cursor.min(self.spent_nullifiers.covered()));
+        let from = self.storage.synced_from_block().min(cursor);
+        self.storage.set_synced_from_block(from);
+        self.spent_nullifiers.keep(cursor.saturating_sub(from))?;
+        self.storage.set_last_synced_block(
+            cursor.min(from.saturating_add(self.spent_nullifiers.covered())),
+        );
         let last_synced_block = self.storage.last_synced_block();
         if last_synced_block >= block_id {
             return Ok(());
@@ -1602,24 +3038,17 @@ impl WalletCore {
                 "History reaches block {} out of sequence",
                 block.header.block_id
             );
-            let mut spent = Vec::new();
-            for tx in block.body.transactions {
-                let LeeTransaction::PrivacyPreserving(pp_tx) = &tx else {
+            let spent = spent_in(&block);
+            for (position, tx) in block.body.transactions.iter().enumerate() {
+                let LeeTransaction::PrivacyPreserving(pp_tx) = tx else {
                     continue;
                 };
-                spent.extend(
-                    pp_tx
-                        .message
-                        .execution
-                        .private_actions
-                        .iter()
-                        .map(|action| action.nullifier),
+                self.storage.key_chain_mut().follow_transaction(
+                    &pp_tx.message,
+                    block.body.is_reverted(position),
+                    discover,
+                    &mut index,
                 );
-                let key_chain = self.storage.key_chain_mut();
-                let followed = key_chain.sync_updates_via_nullifiers(&pp_tx.message, &mut index);
-                if discover {
-                    key_chain.discover_unfollowed(&pp_tx.message, &followed, &mut index);
-                }
             }
 
             self.spent_nullifiers.append(spent)?;
@@ -1653,6 +3082,115 @@ impl WalletCore {
     }
 }
 
+impl WalletCore<SequencerClient> {
+    pub fn client_from_config(config: &WalletConfig) -> Result<SequencerClient> {
+        let mut builder = SequencerClientBuilder::default();
+        if let Some(basic_auth) = &config.sequencer.basic_auth {
+            builder = builder.set_headers(
+                std::iter::once((
+                    "Authorization".parse().expect("Header name is valid"),
+                    format!("Basic {basic_auth}")
+                        .parse()
+                        .context("Invalid basic auth format")?,
+                ))
+                .collect(),
+            );
+        }
+        builder
+            .build(&config.sequencer.sequencer_addr)
+            .context("Failed to create sequencer client")
+    }
+
+    fn new(
+        config_path: PathBuf,
+        storage_path: PathBuf,
+        config_overrides: Option<WalletConfigOverrides>,
+        storage: Storage,
+        storage_key: Option<StorageKey>,
+    ) -> Result<Self> {
+        let mut config =
+            WalletConfig::from_path_or_initialize_default(&config_path).with_context(|| {
+                format!(
+                    "Failed to deserialize wallet config at {}",
+                    config_path.display()
+                )
+            })?;
+        if let Some(config_overrides) = config_overrides.clone() {
+            config.apply_overrides(config_overrides);
+        }
+
+        let sequencer_client = Self::client_from_config(&config)?;
+        let spent_nullifiers = SpentNullifiers::open(storage_path.with_extension("nullifiers"))?;
+
+        Ok(Self {
+            config_path,
+            config_overrides,
+            config,
+            storage,
+            storage_path,
+            storage_key,
+            spent_nullifiers,
+            sequencer_client,
+            dry_run: false,
+            allow_revert: false,
+            fee_params: FeeParams::default(),
+            swept: std::sync::Mutex::new(HashMap::new()),
+            declared_fee: std::sync::Mutex::new(None),
+        })
+    }
+
+    /// Creates a wallet from a fresh mnemonic, its storage encrypted under `password`, or
+    /// unencrypted for an empty one.
+    pub fn new_init_storage(
+        config_path: PathBuf,
+        storage_path: PathBuf,
+        config_overrides: Option<WalletConfigOverrides>,
+        password: &str,
+    ) -> Result<(Self, Mnemonic)> {
+        let (storage, mnemonic) = Storage::new();
+        let storage_key = storage::storage_key_for(password)?;
+        let wallet = Self::new(
+            config_path,
+            storage_path,
+            config_overrides,
+            storage,
+            storage_key,
+        )?;
+
+        Ok((wallet, mnemonic))
+    }
+
+    /// Opens the wallet whose storage is encrypted under `password`, or unencrypted for an empty
+    /// one.
+    pub fn new_update_chain(
+        config_path: PathBuf,
+        storage_path: PathBuf,
+        config_overrides: Option<WalletConfigOverrides>,
+        password: &str,
+    ) -> Result<Self> {
+        let (storage, storage_key) = Storage::from_path(&storage_path, password)
+            .with_context(|| format!("Failed to load storage from {}", storage_path.display()))?;
+
+        Self::new(
+            config_path,
+            storage_path,
+            config_overrides,
+            storage,
+            storage_key,
+        )
+    }
+
+    /// Construct wallet using [`HOME_DIR_ENV_VAR`] env var for paths or user home dir if not set,
+    /// reading the password with [`utils::read_password`].
+    pub fn from_env() -> Result<Self> {
+        let config_path = utils::fetch_config_path()?;
+        let storage_path = utils::fetch_persistent_storage_path()?;
+        let password = utils::read_password(&storage_path)?;
+
+        Self::new_update_chain(config_path, storage_path, None, &password)
+    }
+}
+
 /// Sizes a fee cap for a given gas limit: a wallet that raises its gas limit
 /// must raise its fee cap in step, or the reservation cannot cover the gas.
 #[must_use]
@@ -1669,18 +3207,163 @@ pub const fn max_fee_for(gas_limit: u64) -> u128 {
     (gas_limit as u128 + ASSUMED_DATA_BYTES) * ASSUMED_BASE_FEE
 }
 
-fn decrypt_note_at(
-    message: &Message,
-    i: usize,
+/// The bytes settlement charges `unsigned` once `signers` sign it.
+fn signed_wire_bytes(
+    unsigned: &LeeTransaction,
+    signers: usize,
+) -> Result<u64, ExecutionFailureKind> {
+    let witness_bytes = size_of::<lee::Signature>().saturating_add(size_of::<lee::PublicKey>());
+    let unsigned = unsigned
+        .charged_bytes()
+        .map_err(|err| ExecutionFailureKind::SignError(err.into()))?;
+    Ok(unsigned.saturating_add(
+        u64::try_from(signers.saturating_mul(witness_bytes))
+            .expect("the signatures' size fits u64"),
+    ))
+}
+
+/// The nullifiers `block` spends: a reverted transaction's fee fallback alone, every private
+/// action of the others.
+fn spent_in(block: &Block) -> Vec<Nullifier> {
+    block
+        .body
+        .transactions
+        .iter()
+        .enumerate()
+        .filter_map(|(position, tx)| match tx {
+            LeeTransaction::PrivacyPreserving(pp_tx) => Some((position, &pp_tx.message.execution)),
+            LeeTransaction::Public(_) => None,
+        })
+        .flat_map(|(position, execution)| {
+            let fallback = execution
+                .proven_fee
+                .as_ref()
+                .and_then(|fee| fee.fallback.as_ref());
+            match (block.body.is_reverted(position), fallback) {
+                (true, Some(fallback)) => vec![fallback.action.nullifier],
+                (true, None) => Vec::new(),
+                (false, _) => execution
+                    .private_actions
+                    .iter()
+                    .map(|action| action.nullifier)
+                    .collect(),
+            }
+        })
+        .collect()
+}
+
+/// Whether the sequencer turned a transaction away for a reserve below the fee at its head.
+fn decrypt_note(
+    action: &lee_core::PrivateAction,
     secret: &SharedSecretKey,
 ) -> Option<(lee_core::PrivateAccountKind, Account)> {
     lee_core::EncryptionScheme::decrypt(
-        &message.execution.private_actions[i]
-            .encrypted_post_state
-            .ciphertext,
+        &action.encrypted_post_state.ciphertext,
         secret,
-        &message.execution.private_actions[i].nullifier,
+        &action.nullifier,
     )
+}
+
+// `presenter` recording each sender as presented, as the interpreter derives it, and the
+// publication choice that maps the presented senders back to their actors.
+#[expect(
+    clippy::type_complexity,
+    reason = "a presenter paired with the publication choice that reads what it records"
+)]
+fn present_and_publish(
+    mut presenter: impl FnMut(Actor) -> SenderPresentation,
+    seals: Vec<Recipient>,
+    clear_messages: Vec<MessageBody>,
+) -> (
+    impl FnMut(Actor) -> SenderPresentation,
+    impl FnMut(&[MessageBody]) -> Result<Vec<PublicationMode>, lee::error::LeeError>,
+) {
+    let senders = Arc::new(Mutex::new(HashMap::new()));
+    let present = {
+        let senders = Arc::clone(&senders);
+        move |sender: Actor| {
+            let presentation = presenter(sender);
+            let presented = match presentation {
+                SenderPresentation::Canonical => sender,
+                SenderPresentation::Blinded(factor) => Actor::new(
+                    sender.account_id.blinded(&factor),
+                    sender.program_account_id,
+                ),
+            };
+            senders
+                .lock()
+                .expect("the sender map's lock is never poisoned")
+                .insert(presented, sender);
+            presentation
+        }
+    };
+    (
+        present,
+        choose_publications_with(seals, clear_messages, senders),
+    )
+}
+
+// How private execution publishes its durable async messages: clear when one of `clear_messages`
+// matches it, with `senders` mapping its presented sender back, each matching once; else sealed to
+// the recipient in `seals` it addresses. A clear message left unmatched refuses them all.
+fn choose_publications_with(
+    seals: Vec<Recipient>,
+    clear_messages: Vec<MessageBody>,
+    senders: Arc<Mutex<HashMap<Actor, Actor>>>,
+) -> impl FnMut(&[MessageBody]) -> Result<Vec<PublicationMode>, lee::error::LeeError> {
+    move |bodies: &[MessageBody]| {
+        let presented = senders
+            .lock()
+            .expect("the sender map's lock is never poisoned");
+        let mut requested: Vec<&MessageBody> = clear_messages.iter().collect();
+        let cleared: Vec<bool> = bodies
+            .iter()
+            .map(|body| {
+                let sender = presented.get(&body.from);
+                let matched = requested.iter().position(|clear| {
+                    Some(&clear.from) == sender
+                        && clear.to == body.to
+                        && clear.message == body.message
+                });
+                if let Some(index) = matched {
+                    requested.swap_remove(index);
+                }
+                matched.is_some()
+            })
+            .collect();
+        if let Some(unmatched) = requested.first() {
+            return Err(lee::error::LeeError::InvalidInput(format!(
+                "No durable async message matches the clear message requested to {} ({} \
+                 unmatched)",
+                unmatched.to.account_id,
+                requested.len()
+            )));
+        }
+        bodies
+            .iter()
+            .zip(cleared)
+            .map(|(body, clear)| {
+                if clear {
+                    return Ok(PublicationMode::Clear);
+                }
+                let to = body.to.account_id;
+                seals
+                    .iter()
+                    .find(|recipient| recipient.address() == to)
+                    .map(|recipient| {
+                        PublicationMode::Sealed(RecipientEncryption {
+                            recipient: recipient.clone(),
+                            esk: EphemeralSecretKey(account_manager::random_bytes()),
+                        })
+                    })
+                    .ok_or_else(|| {
+                        lee::error::LeeError::InvalidInput(format!(
+                            "No recipient material seals an async message to {to}"
+                        ))
+                    })
+            })
+            .collect()
+    }
 }
 
 // The root is one of the transaction's accounts, so it runs with the placement declared for it.
@@ -1698,7 +3381,7 @@ fn root_actor(accounts: &[AccountMention], root: usize) -> Result<Actor, Executi
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::{BTreeSet, HashMap},
+        collections::{BTreeMap, BTreeSet, HashMap},
         ffi::CString,
         str::FromStr as _,
         sync::{Arc, Mutex},
@@ -1714,36 +3397,38 @@ mod tests {
         types::ErrorObjectOwned,
     };
     use lee::{
-        AccountId, BoundaryStep,
+        AccountId, BoundaryStep, PublicationsPage,
         error::{InvalidProgramBehaviorError, LeeError},
         privacy_preserving_transaction::circuit::ProgramCatalog,
         program::Program,
     };
     use lee_core::{
         Commitment, CommitmentPosition, EncryptedNote, EphemeralSecretKey, MembershipProof,
-        Nullifier, PrivateAccountKind, ProgramImageClaim, Recipient, RecipientEncryption,
-        RecoveryBinding,
+        Nullifier, NullifierPublicKey, PrivateAccountKind, ProgramImageClaim, PublicationMode,
+        Recipient, RecipientEncryption, RecoveryBinding,
         account::{Account, Actor, ActorState},
         compute_digest_for_path,
+        encryption::ViewingPublicKey,
         native_token::{self, TransferError},
-        program::{
-            MessageBody, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramHeader, ProgramSegment,
-            Publication,
-        },
+        program::{MessageBody, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramHeader, Publication},
     };
-    use program_loader_core::MAX_SEGMENT_DATA_LEN;
+    use program_loader_core::{LoaderActorState as _, MAX_SEGMENT_DATA_LEN, ProgramSegment};
+    use sequencer_service_rpc::SequencerClient;
     use sequencer_stake_core::{SequencerKey, StakeRecord, ed25519_dalek::SigningKey};
     use test_guest_core::Script;
 
     use super::{
         AccountIdentity, AccountMention, AsyncDelivery, ExecutionFailureKind,
-        NATIVE_TOKEN_PROGRAM_ID, PendingMessage, WalletCore,
+        NATIVE_TOKEN_PROGRAM_ID, PendingMessage, WalletCore, choose_publications_with,
     };
     use crate::{
         account::{AccountIdWithPrivacy, Label},
         cli::SubcommandReturnValue,
         config::{SequencerConnectionData, WalletConfig},
-        program_facades::{CreditDelivery, credit_destination, sequencer_stake::SequencerStake},
+        program_facades::{
+            CreditDelivery, credit_destination, native_token_transfer::NativeTokenTransfer,
+            sequencer_stake::SequencerStake,
+        },
         storage::{
             Storage, WrongPassword,
             key_chain::tests::{block_of, transition_message},
@@ -1754,6 +3439,7 @@ mod tests {
     struct Served {
         blocks: Vec<Block>,
         publications: Vec<(CommitmentPosition, Publication)>,
+        recovery_bindings: BTreeMap<AccountId, EncryptedNote>,
         accounts: HashMap<AccountId, Account>,
         submitted: Vec<LeeTransaction>,
     }
@@ -1777,7 +3463,7 @@ mod tests {
     // A wallet in a fresh home whose one sequencer serves `sequencer`.
     async fn served_wallet<Context: Send + Sync + 'static>(
         sequencer: RpcModule<Context>,
-    ) -> (WalletCore, tempfile::TempDir, ServerHandle) {
+    ) -> (WalletCore<SequencerClient>, tempfile::TempDir, ServerHandle) {
         let server = Server::builder().build("127.0.0.1:0").await.unwrap();
         let address = server.local_addr().unwrap();
         let handle = server.start(sequencer);
@@ -1938,14 +3624,31 @@ mod tests {
 
     #[tokio::test]
     async fn completion_applies_the_included_transaction_without_moving_the_cursor() {
-        let included: Arc<Mutex<Option<LeeTransaction>>> = Arc::default();
+        let included: Arc<Mutex<Option<Block>>> = Arc::default();
         let mut sequencer = RpcModule::new(Arc::clone(&included));
         sequencer
             .register_method("getLastBlockId", |_, _, _| Ok::<_, ErrorObjectOwned>(2_u64))
             .unwrap();
         sequencer
             .register_method("getTransaction", |_, included, _| {
-                Ok::<_, ErrorObjectOwned>(included.lock().unwrap().clone().map(|tx| (tx, 2_u64)))
+                Ok::<_, ErrorObjectOwned>(
+                    included
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .map(|block| (block.body.transactions[0].clone(), 2_u64)),
+                )
+            })
+            .unwrap();
+        sequencer
+            .register_method("getTransactionReceipt", |_, included, _| {
+                Ok::<_, ErrorObjectOwned>(
+                    included
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .and_then(|block| block.body.receipts.first().copied()),
+                )
             })
             .unwrap();
         let (mut wallet, _home, _sequencer) = served_wallet(sequencer).await;
@@ -1961,7 +3664,7 @@ mod tests {
             .unwrap()
             .clone();
         let initialized = Account::funded(1);
-        let tx = block_of(
+        let block = block_of(
             2,
             transition_message(
                 account_id,
@@ -1973,14 +3676,9 @@ mod tests {
                 ),
                 &initialized,
             ),
-        )
-        .body
-        .transactions
-        .into_iter()
-        .next()
-        .unwrap();
-        let tx_hash = tx.hash();
-        *included.lock().unwrap() = Some(tx);
+        );
+        let tx_hash = block.body.transactions[0].hash();
+        *included.lock().unwrap() = Some(block);
 
         assert!(matches!(
             wallet.finish_transaction(tx_hash).await.unwrap(),
@@ -2115,6 +3813,125 @@ mod tests {
         assert_eq!(bound.recoveries[0].recipient, addressed);
     }
 
+    // Sealing material for a regular account under keys filled with `seed`.
+    fn recipient_of(seed: u8) -> Recipient {
+        Recipient {
+            npk: NullifierPublicKey([seed; 32]),
+            vpk: ViewingPublicKey::from_seed(&[seed; 32], &[seed; 32]),
+            kind: PrivateAccountKind::Regular,
+            opening: None,
+        }
+    }
+
+    fn credit_message(from: Actor, to: Actor, amount: u128) -> MessageBody {
+        MessageBody {
+            from,
+            to,
+            message: borsh::to_vec(&native_token::Message::Credit(amount)).unwrap(),
+        }
+    }
+
+    // The refusal of `count` clear messages that no durable async message matches, one of them
+    // requested to `to`.
+    fn unmatched(to: AccountId, count: usize) -> String {
+        format!(
+            "No durable async message matches the clear message requested to {to} ({count} \
+             unmatched)"
+        )
+    }
+
+    #[test]
+    fn each_requested_clear_message_takes_one_matching_async_message_or_refuses_them_all() {
+        let (recipient, elsewhere) = (recipient_of(1), recipient_of(2));
+        let to = Actor::native_balance(recipient.address());
+        let token = AccountId::new([3; 32]);
+        let (requested, other) = (AccountId::new([4; 32]), AccountId::new([5; 32]));
+        let (alias, other_alias) = (AccountId::new([6; 32]), AccountId::new([7; 32]));
+        let senders = HashMap::from([
+            (
+                Actor::native_balance(alias),
+                Actor::native_balance(requested),
+            ),
+            (
+                Actor::native_balance(other_alias),
+                Actor::native_balance(other),
+            ),
+            (Actor::new(alias, token), Actor::new(requested, token)),
+        ]);
+        let request = credit_message(Actor::native_balance(requested), to, 20);
+        let sent = credit_message(Actor::native_balance(alias), to, 20);
+        // Another amount, source account, source program, destination account and destination
+        // program.
+        let mismatched = [
+            credit_message(Actor::native_balance(alias), to, 21),
+            credit_message(Actor::native_balance(other_alias), to, 20),
+            MessageBody {
+                from: Actor::new(alias, token),
+                ..sent.clone()
+            },
+            MessageBody {
+                to: Actor::native_balance(elsewhere.address()),
+                ..sent.clone()
+            },
+            MessageBody {
+                to: Actor::new(to.account_id, token),
+                ..sent.clone()
+            },
+        ];
+        let seals = [recipient, elsewhere];
+        // Which messages are published clear, or why the batch is refused.
+        let choose = |material: &[Recipient], requests: usize, bodies: &[MessageBody]| {
+            choose_publications_with(
+                material.to_vec(),
+                vec![request.clone(); requests],
+                Arc::new(Mutex::new(senders.clone())),
+            )(bodies)
+            .map(|modes| {
+                modes
+                    .iter()
+                    .map(|mode| matches!(mode, PublicationMode::Clear))
+                    .collect::<Vec<_>>()
+            })
+            .map_err(|error| error.to_string())
+        };
+        let refused = |message: String| Err(LeeError::InvalidInput(message).to_string());
+
+        // Each mismatch is sealed where nothing is requested, so only the request it leaves
+        // unmatched refuses it.
+        assert_eq!(choose(&seals, 0, &mismatched), Ok(vec![false; 5]));
+        for mismatch in &mismatched {
+            assert_eq!(
+                choose(&seals, 1, std::slice::from_ref(mismatch)),
+                refused(unmatched(to.account_id, 1))
+            );
+        }
+        for (requests, bodies, expected) in [
+            (1, Vec::new(), refused(unmatched(to.account_id, 1))),
+            (2, vec![sent.clone()], refused(unmatched(to.account_id, 1))),
+            (2, vec![sent.clone(), sent.clone()], Ok(vec![true, true])),
+            (
+                1,
+                vec![mismatched[1].clone(), sent.clone(), sent.clone()],
+                Ok(vec![false, true, false]),
+            ),
+        ] {
+            assert_eq!(choose(&seals, requests, &bodies), expected);
+        }
+        // An unmatched request is reported before a missing seal, which a message no request
+        // takes still needs.
+        assert_eq!(
+            choose(&[], 1, std::slice::from_ref(&mismatched[0])),
+            refused(unmatched(to.account_id, 1))
+        );
+        assert_eq!(
+            choose(&[], 1, &[sent.clone(), sent]),
+            refused(format!(
+                "No recipient material seals an async message to {}",
+                to.account_id
+            ))
+        );
+    }
+
     #[tokio::test]
     async fn an_unstake_request_is_refused_before_submission_only_for_an_unpayable_destination() {
         let owner_key = lee::PrivateKey::try_new([3; 32]).unwrap();
@@ -2155,7 +3972,7 @@ mod tests {
             .register_method("getProofsAndRoot", |_, _, _| {
                 Ok::<_, ErrorObjectOwned>((
                     Vec::<Option<lee_core::MembershipProof>>::new(),
-                    None::<lee_core::MembershipProof>,
+                    Vec::<Option<lee_core::MembershipProof>>::new(),
                     [0_u8; 32],
                 ))
             })
@@ -2173,6 +3990,12 @@ mod tests {
             .storage
             .key_chain_mut()
             .add_imported_public_account(owner_key);
+        // The mock serves no stake program to simulate, so the fee is pinned.
+        wallet.set_fee_params(crate::FeeParams {
+            gas_limit: Some(crate::DEFAULT_GAS_LIMIT),
+            max_fee: Some(crate::DEFAULT_MAX_FEE),
+            ..crate::FeeParams::default()
+        });
 
         for destination in [public, bound] {
             SequencerStake(&wallet)
@@ -2200,8 +4023,239 @@ mod tests {
         assert!(submitted.lock().unwrap().is_empty());
     }
 
+    // A wallet holding the key of a funded public account, whose sequencer binds `bound` alone and
+    // keeps what it is sent.
+    async fn wallet_with_a_public_sender(
+        bound: AccountId,
+    ) -> (
+        WalletCore<SequencerClient>,
+        tempfile::TempDir,
+        ServerHandle,
+        Arc<Mutex<Vec<LeeTransaction>>>,
+        AccountId,
+    ) {
+        let key = lee::PrivateKey::try_new([1; 32]).unwrap();
+        let sender = AccountId::from(&lee::PublicKey::new_from_private_key(&key));
+        let submitted: Arc<Mutex<Vec<LeeTransaction>>> = Arc::default();
+        let mut sequencer = RpcModule::new(Arc::clone(&submitted));
+        sequencer
+            .register_method("getRecoveryBinding", move |params, _, _| {
+                let address = params.one::<AccountId>()?;
+                Ok::<_, ErrorObjectOwned>((address == bound).then(EncryptedNote::default))
+            })
+            .unwrap();
+        sequencer
+            .register_method("getAccountView", move |params, _, _| {
+                let actor = params.one::<Actor>()?;
+                Ok::<_, ErrorObjectOwned>(
+                    (actor.account_id == sender).then(|| Account::funded(100)),
+                )
+            })
+            .unwrap();
+        sequencer
+            .register_method("getProofsAndRoot", |_, _, _| {
+                Ok::<
+                    (
+                        Vec<Option<MembershipProof>>,
+                        Vec<Option<MembershipProof>>,
+                        [u8; 32],
+                    ),
+                    ErrorObjectOwned,
+                >((Vec::new(), Vec::new(), [0; 32]))
+            })
+            .unwrap();
+        sequencer
+            .register_method("sendTransaction", |params, submitted, _| {
+                let tx = params.one::<LeeTransaction>()?;
+                let hash = tx.hash();
+                submitted.lock().unwrap().push(tx);
+                Ok::<_, ErrorObjectOwned>(hash)
+            })
+            .unwrap();
+        let (mut wallet, home, handle) = served_wallet(sequencer).await;
+        wallet
+            .storage
+            .key_chain_mut()
+            .add_imported_public_account(key);
+        // The mock serves no fee quote to measure a public send against, so the fee is pinned.
+        wallet.set_fee_params(crate::FeeParams {
+            gas_limit: Some(crate::DEFAULT_GAS_LIMIT),
+            max_fee: Some(crate::DEFAULT_MAX_FEE),
+            ..crate::FeeParams::default()
+        });
+        (wallet, home, handle, submitted, sender)
+    }
+
+    #[tokio::test]
+    async fn a_clear_transfer_to_an_unbound_address_is_refused_before_it_is_prepared() {
+        let reached: Arc<Mutex<Vec<&'static str>>> = Arc::default();
+        let mut sequencer = RpcModule::new(Arc::clone(&reached));
+        sequencer
+            .register_method("getRecoveryBinding", |_, _, _| {
+                Ok::<_, ErrorObjectOwned>(None::<EncryptedNote>)
+            })
+            .unwrap();
+        // Preparation starts at the fee quote and ends at the submission.
+        for method in ["getFeeState", "sendTransaction"] {
+            sequencer
+                .register_method(method, move |_, reached, _| {
+                    reached.lock().unwrap().push(method);
+                    Ok::<_, ErrorObjectOwned>(())
+                })
+                .unwrap();
+        }
+        let (mut wallet, _home, _sequencer) = served_wallet(sequencer).await;
+        let (payer, _) = wallet
+            .storage
+            .key_chain_mut()
+            .generate_new_privacy_preserving_transaction_key_chain(None);
+        let address = AccountId::new([1; 32]);
+
+        assert!(matches!(
+            NativeTokenTransfer(&wallet)
+                .transfer_clear(AccountIdentity::PrivateOwned(payer), address, 40)
+                .await,
+            Err(ExecutionFailureKind::TransactionBuildError(
+                LeeError::UnboundAsyncDestination { actor }
+            )) if actor == Actor::native_balance(address)
+        ));
+        assert!(reached.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_clear_message_is_prepared_only_to_an_address_its_chain_or_its_delivery_binds() {
+        let bound = AccountId::new([1; 32]);
+        let mut sequencer = RpcModule::new(());
+        sequencer
+            .register_method("getRecoveryBinding", move |params, (), _| {
+                let address = params.one::<AccountId>()?;
+                Ok::<_, ErrorObjectOwned>((address == bound).then(EncryptedNote::default))
+            })
+            .unwrap();
+        let (wallet, _home, _sequencer) = served_wallet(sequencer).await;
+        let (recipient, stranger) = (recipient_of(2), recipient_of(3));
+        let request = |to| {
+            credit_message(
+                Actor::native_balance(AccountId::new([4; 32])),
+                Actor::native_balance(to),
+                40,
+            )
+        };
+        let recovery = |of: &Recipient| RecipientEncryption {
+            recipient: of.clone(),
+            esk: EphemeralSecretKey([5; 32]),
+        };
+
+        let prepared = wallet
+            .unbound(AsyncDelivery {
+                clear_messages: vec![request(bound)],
+                ..AsyncDelivery::default()
+            })
+            .await
+            .unwrap();
+        assert!(prepared.recoveries.is_empty());
+        assert_eq!(prepared.clear_messages, [request(bound)]);
+
+        let prepared = wallet
+            .unbound(AsyncDelivery {
+                recoveries: vec![recovery(&recipient)],
+                clear_messages: vec![request(recipient.address())],
+                ..AsyncDelivery::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(prepared.recoveries.len(), 1);
+        assert_eq!(prepared.recoveries[0].recipient, recipient);
+        assert_eq!(prepared.clear_messages, [request(recipient.address())]);
+
+        // A recovery of another address binds nothing of the destination.
+        assert!(matches!(
+            wallet
+                .unbound(AsyncDelivery {
+                    recoveries: vec![recovery(&stranger)],
+                    clear_messages: vec![request(recipient.address())],
+                    ..AsyncDelivery::default()
+                })
+                .await,
+            Err(ExecutionFailureKind::TransactionBuildError(
+                LeeError::UnboundAsyncDestination { actor }
+            )) if actor == Actor::native_balance(recipient.address())
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_public_transaction_refuses_a_requested_clear_message() {
+        let bound = AccountId::new([2; 32]);
+        let (wallet, _home, _sequencer, submitted, sender) =
+            wallet_with_a_public_sender(bound).await;
+
+        assert!(matches!(
+            wallet
+                .send_tx(
+                    vec![AccountIdentity::Public(sender).balance()],
+                    0,
+                    borsh::to_vec(&native_token::Message::Transfer {
+                        to: bound,
+                        amount: 40,
+                    })
+                    .unwrap(),
+                    &ProgramCatalog::default(),
+                    None,
+                    AsyncDelivery {
+                        clear_messages: vec![credit_message(
+                            Actor::native_balance(sender),
+                            Actor::native_balance(bound),
+                            40,
+                        )],
+                        ..AsyncDelivery::default()
+                    },
+                )
+                .await,
+            Err(ExecutionFailureKind::TransactionBuildError(LeeError::InvalidInput(message)))
+                if message.starts_with("A public transaction has no private execution")
+        ));
+        assert!(submitted.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_public_senders_clear_transfer_is_sent_publicly_only_to_a_bound_address() {
+        let (bound, absent) = (AccountId::new([2; 32]), AccountId::new([3; 32]));
+        let (wallet, _home, _sequencer, submitted, sender) =
+            wallet_with_a_public_sender(bound).await;
+
+        NativeTokenTransfer(&wallet)
+            .transfer_clear(AccountIdentity::Public(sender), bound, 40)
+            .await
+            .unwrap();
+        let Some(LeeTransaction::Public(tx)) = submitted.lock().unwrap().pop() else {
+            panic!("the transfer to a bound address should have been submitted publicly");
+        };
+        assert_eq!(
+            borsh::from_slice::<native_token::Message>(&tx.message.execution.root.message).unwrap(),
+            native_token::Message::Transfer {
+                to: bound,
+                amount: 40,
+            }
+        );
+        // The destination stays undeclared, so its credit is published and not executed at once.
+        assert_eq!(
+            tx.message.public_context.actors,
+            BTreeSet::from([Actor::native_balance(sender)])
+        );
+
+        assert!(matches!(
+            NativeTokenTransfer(&wallet)
+                .transfer_clear(AccountIdentity::Public(sender), absent, 40)
+                .await,
+            Err(ExecutionFailureKind::TransactionBuildError(
+                LeeError::UnboundAsyncDestination { actor }
+            )) if actor == Actor::native_balance(absent)
+        ));
+        assert!(submitted.lock().unwrap().is_empty());
+    }
+
     async fn wallet_with_a_received_message() -> (
-        WalletCore,
+        WalletCore<SequencerClient>,
         tempfile::TempDir,
         ServerHandle,
         Arc<Mutex<Served>>,
@@ -2229,16 +4283,29 @@ mod tests {
         sequencer
             .register_method("getPublications", |params, served, _| {
                 let (from_position, limit) = params.parse::<(CommitmentPosition, PageLimit)>()?;
-                Ok::<_, ErrorObjectOwned>(
-                    served
-                        .lock()
-                        .unwrap()
+                let served = served.lock().unwrap();
+                Ok::<_, ErrorObjectOwned>(PublicationsPage {
+                    publications: served
                         .publications
                         .iter()
                         .filter(|(position, _)| *position >= from_position)
                         .take(usize::try_from(limit).unwrap())
                         .cloned()
-                        .collect::<Vec<_>>(),
+                        .collect(),
+                    recovery_bindings: served.recovery_bindings.clone(),
+                })
+            })
+            .unwrap();
+        sequencer
+            .register_method("getRecoveryBinding", |params, served, _| {
+                let address = params.one::<AccountId>()?;
+                Ok::<_, ErrorObjectOwned>(
+                    served
+                        .lock()
+                        .unwrap()
+                        .recovery_bindings
+                        .get(&address)
+                        .cloned(),
                 )
             })
             .unwrap();
@@ -2256,22 +4323,42 @@ mod tests {
             })
             .unwrap();
         sequencer
+            .register_method("getFeeState", |_, _, _| {
+                Ok::<_, ErrorObjectOwned>(sequencer_service_rpc::FeeStateQuote {
+                    height: 3,
+                    base_fee_exec: 0,
+                    base_fee_stor: 0,
+                    next_base_fee_exec_floor: 0,
+                    next_base_fee_exec_ceiling: 0,
+                    next_base_fee_stor_floor: 0,
+                    next_base_fee_stor_ceiling: 0,
+                    max_gas_exec: u64::MAX,
+                    max_gas_stor: u64::MAX,
+                })
+            })
+            .unwrap();
+        sequencer
             .register_method("getProofsAndRoot", |params, served, _| {
-                let (commitments, position) =
-                    params.parse::<(Vec<Commitment>, Option<CommitmentPosition>)>()?;
-                let path = position.map(|position| (position, vec![[0; 32]]));
-                let root = path.as_ref().map_or([0; 32], |(position, path)| {
+                let (commitments, positions) =
+                    params.parse::<(Vec<Commitment>, Vec<CommitmentPosition>)>()?;
+                // One message path is served, under a root computed from it.
+                let paths: Vec<Option<MembershipProof>> = positions
+                    .iter()
+                    .map(|position| Some((*position, vec![[0; 32]])))
+                    .collect();
+                let root = positions.first().map_or([0; 32], |position| {
                     let served = served.lock().unwrap();
                     let (_, publication) = served
                         .publications
                         .iter()
                         .find(|(published, _)| published == position)
                         .unwrap();
-                    compute_digest_for_path(&publication.commitment(), *position, path).unwrap()
+                    compute_digest_for_path(&publication.commitment(), *position, &[[0; 32]])
+                        .unwrap()
                 });
                 Ok::<_, ErrorObjectOwned>((
                     vec![None::<MembershipProof>; commitments.len()],
-                    path,
+                    paths,
                     root,
                 ))
             })
@@ -2313,13 +4400,7 @@ mod tests {
                     message: borsh::to_vec(&native_token::Message::Credit(u128::from(position)))
                         .unwrap(),
                 };
-                (
-                    position,
-                    Publication::Clear {
-                        body,
-                        recovery: note.clone(),
-                    },
-                )
+                (position, Publication::Clear(body))
             })
             .collect();
         let receipt = Nullifier::for_message(
@@ -2343,6 +4424,7 @@ mod tests {
                 produce_dummy_block(3, None, Vec::new()),
             ],
             publications,
+            recovery_bindings: BTreeMap::from([(address, note)]),
             ..Served::default()
         };
         (wallet, home, handle, served)
@@ -2352,7 +4434,7 @@ mod tests {
     // knows its own account at a newer state than that account's note, and holds a label and an
     // imported key.
     async fn wallet_past_an_undiscovered_pda() -> (
-        WalletCore,
+        WalletCore<SequencerClient>,
         tempfile::TempDir,
         ServerHandle,
         Arc<Mutex<Served>>,
@@ -2451,7 +4533,7 @@ mod tests {
             };
             served
                 .accounts
-                .insert(*segment, loader(segment_state.to_bytes()));
+                .insert(*segment, loader(segment_state.to_loader_actor_state()));
         }
         let header_state = ProgramHeader {
             image_id: program.id(),
@@ -2460,7 +4542,7 @@ mod tests {
         };
         served
             .accounts
-            .insert(header, loader(header_state.to_bytes()));
+            .insert(header, loader(header_state.to_loader_actor_state()));
         header
     }
 
@@ -2472,7 +4554,7 @@ mod tests {
         message: &impl borsh::BorshSerialize,
     ) {
         let mut served = served.lock().unwrap();
-        let Publication::Clear { body, .. } = &mut served.publications[1].1 else {
+        let Publication::Clear(body) = &mut served.publications[1].1 else {
             panic!("the fixture publishes in the clear");
         };
         *body = MessageBody {
@@ -2499,6 +4581,25 @@ mod tests {
         );
         assert!(wallet.find_pending_message(0).await.unwrap().is_none());
         assert!(wallet.find_pending_message(1).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn a_page_without_a_clear_destinations_binding_is_an_error_not_an_absence() {
+        let (mut wallet, _home, _sequencer, served) = wallet_with_a_received_message().await;
+        served.lock().unwrap().recovery_bindings.clear();
+
+        let Err(scanned) = wallet.owned_pending_messages().await else {
+            panic!("a scan over an incomplete page fails");
+        };
+        let Err(found) = wallet.find_pending_message(1).await else {
+            panic!("a lookup in an incomplete page fails");
+        };
+        for error in [scanned, found] {
+            assert!(
+                error.to_string().starts_with("No recovery binding for "),
+                "{error}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -2531,6 +4632,62 @@ mod tests {
             );
             assert_eq!(std::fs::read(&cache_path).unwrap(), synced);
         }
+    }
+
+    #[tokio::test]
+    async fn a_wallet_started_at_the_tip_keeps_its_cursor_and_scans_nothing_earlier() {
+        let (mut wallet, _home, _sequencer, _served) = wallet_with_a_received_message().await;
+
+        assert_eq!(wallet.start_at_chain_tip().await.unwrap(), 3);
+        assert_eq!(wallet.sync_to_latest_block().await.unwrap(), 3);
+        assert_eq!(wallet.storage.last_synced_block(), 3);
+        assert_eq!(wallet.spent_nullifiers.covered(), 0);
+
+        wallet.storage.set_last_synced_block(0);
+        wallet.sync_to_latest_block().await.unwrap();
+        assert_eq!(wallet.storage.synced_from_block(), 0);
+        assert_eq!(wallet.spent_nullifiers.covered(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_tip_start_hands_its_blocks_back_before_an_older_key_reads_them() {
+        let (mut wallet, _home, _sequencer, _served) = wallet_with_a_received_message().await;
+
+        // Position 0's receipt was spent in block 2, which a tip start never read.
+        wallet.start_at_chain_tip().await.unwrap();
+        assert_eq!(
+            positions(wallet.owned_pending_messages().await.unwrap()),
+            [0, 1]
+        );
+
+        wallet.storage.rewind_skipped_history();
+        assert_eq!(
+            positions(wallet.owned_pending_messages().await.unwrap()),
+            [1]
+        );
+    }
+
+    #[tokio::test]
+    async fn only_a_joined_group_hands_the_skipped_blocks_back() {
+        use key_protocol::key_management::group_key_holder::GroupKeyHolder;
+
+        let (mut wallet, _home, _sequencer, _served) = wallet_with_a_received_message().await;
+        let (mine, theirs) = (Label::new("mine"), Label::new("theirs"));
+        wallet.insert_group_key_holder(mine.clone(), GroupKeyHolder::new(), true);
+        wallet.insert_group_key_holder(theirs.clone(), GroupKeyHolder::new(), false);
+        wallet.start_at_chain_tip().await.unwrap();
+
+        wallet
+            .create_shared_regular_account(mine, [1; 32])
+            .await
+            .unwrap();
+        assert_eq!(wallet.storage.synced_from_block(), 3);
+
+        wallet
+            .create_shared_regular_account(theirs, [2; 32])
+            .await
+            .unwrap();
+        assert_eq!(wallet.storage.synced_from_block(), 0);
     }
 
     #[tokio::test]
@@ -2628,6 +4785,125 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn a_receipt_sending_nothing_durable_is_refused_its_requested_clear_message() {
+        let (mut wallet, _home, _sequencer, served) = wallet_with_a_received_message().await;
+        let listener = deploy(&served, &test_programs::listener(), 0x40);
+        publish(
+            &served,
+            Actor::new(AccountId::new([1; 32]), listener),
+            listener,
+            &(),
+        );
+        let pending = wallet.find_pending_message(1).await.unwrap().unwrap();
+        // The pending message's own address is bound, which the scan that found it required.
+        let to = pending.body.to;
+        let request = MessageBody {
+            from: Actor::new(pending.recipient.account_id(), listener),
+            to,
+            message: Vec::new(),
+        };
+
+        assert!(matches!(
+            wallet
+                .receive_pending_message_with(
+                    pending,
+                    Vec::new(),
+                    &ProgramCatalog::default(),
+                    None,
+                    AsyncDelivery {
+                        clear_messages: vec![request],
+                        ..AsyncDelivery::default()
+                    },
+                )
+                .await,
+            Err(ExecutionFailureKind::TransactionBuildError(LeeError::InvalidInput(message)))
+                if message == unmatched(to.account_id, 1)
+        ));
+        assert!(served.lock().unwrap().submitted.is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_async_message_executed_at_once_does_not_fulfil_a_clear_request_for_it() {
+        let (mut wallet, _home, _sequencer, served) = wallet_with_a_received_message().await;
+        let scripted = deploy(&served, &test_programs::scripted(), 0x40);
+        let listener = Actor::new(
+            AccountId::new([9; 32]),
+            deploy(&served, &test_programs::listener(), 0x80),
+        );
+        served
+            .lock()
+            .unwrap()
+            .accounts
+            .insert(listener.account_id, Account::default());
+        served
+            .lock()
+            .unwrap()
+            .recovery_bindings
+            .insert(listener.account_id, EncryptedNote::default());
+        publish(
+            &served,
+            Actor::new(AccountId::new([1; 32]), scripted),
+            scripted,
+            &Script::default().send_async(listener, &7_u8),
+        );
+        let pending = wallet.find_pending_message(1).await.unwrap().unwrap();
+        let request = MessageBody {
+            from: Actor::new(pending.recipient.account_id(), scripted),
+            to: listener,
+            message: borsh::to_vec(&7_u8).unwrap(),
+        };
+
+        // Declared, the listener takes the message at once: nothing durable is left to match.
+        assert!(matches!(
+            wallet
+                .receive_pending_message_with(
+                    pending,
+                    vec![
+                        AccountIdentity::PublicNoSign(listener.account_id)
+                            .select_program_actor_state(listener.program_account_id),
+                    ],
+                    &ProgramCatalog::default(),
+                    None,
+                    AsyncDelivery {
+                        clear_messages: vec![request.clone()],
+                        ..AsyncDelivery::default()
+                    },
+                )
+                .await,
+            Err(ExecutionFailureKind::TransactionBuildError(LeeError::InvalidInput(message)))
+                if message == unmatched(listener.account_id, 1)
+        ));
+        assert!(served.lock().unwrap().submitted.is_empty());
+
+        // Undeclared, the same message stays durable and the same request publishes it clear.
+        let pending = wallet.find_pending_message(1).await.unwrap().unwrap();
+        wallet
+            .receive_pending_message_with(
+                pending,
+                Vec::new(),
+                &ProgramCatalog::default(),
+                None,
+                AsyncDelivery {
+                    clear_messages: vec![request],
+                    ..AsyncDelivery::default()
+                },
+            )
+            .await
+            .unwrap();
+        let Some(LeeTransaction::PrivacyPreserving(receipt)) =
+            served.lock().unwrap().submitted.pop()
+        else {
+            panic!("the receipt should have been submitted privately");
+        };
+        assert!(matches!(
+            receipt.message.execution.async_messages.as_slice(),
+            [Publication::Clear(body)] if body.to == listener && body.message == [7]
+        ));
+    }
+
+    // The recipient pays the receipt's fee, but its key authorizes only the fee entry: the transfer
+    // the message asks of it runs only when the caller mentions it as authorizing.
     #[tokio::test]
     async fn a_receipt_runs_unauthorized_unless_its_caller_authorizes_the_recipient() {
         let (mut wallet, _home, _sequencer, served) = wallet_with_a_received_message().await;

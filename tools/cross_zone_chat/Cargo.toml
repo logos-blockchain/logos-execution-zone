@@ -15,12 +15,15 @@ programs.workspace = true
 ping_core.workspace = true
 cross_zone_outbox_core.workspace = true
 cross_zone_inbox_core.workspace = true
+cross_zone.workspace = true
 lee.workspace = true
 common.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 anyhow.workspace = true
 serde = { workspace = true, features = ["derive"] }
 axum.workspace = true
-log.workspace = true
-env_logger.workspace = true
+tracing.workspace = true
+logging.workspace = true
 rand.workspace = true
+lee_core.workspace = true
+testnet_initial_state.workspace = true

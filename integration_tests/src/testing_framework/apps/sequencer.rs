@@ -131,7 +131,7 @@ impl SequencerApp {
             let private_accounts = config::default_private_accounts_for_wallet();
             let genesis = config::genesis_from_accounts(
                 &public_accounts,
-                config::private_total(&private_accounts),
+                config::private_funding_cost(&private_accounts),
             );
             // If the sequencer moves to a separate process, create a `LocalProcessApp`
             // with its `LaunchSpec` here so TF owns the process lifecycle.

@@ -5,12 +5,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use common::HashType;
 use indexer_service_protocol as protocol;
 use lee::{
-    AccountId, Actor, BoundaryStep, Delivery, EphemeralPublicKey, FeeDeclaration, MessageEnvelope,
-    PublicAccountEvidence, PublicExecutionContext, PublicKey, RootCall, Signature, error::LeeError,
+    AccountId, Actor, BoundaryStep, Delivery, EphemeralPublicKey, FeeDeclaration, MessageBody,
+    MessageEnvelope, PublicAccountEvidence, PublicExecutionContext, PublicKey, Publication,
+    RootCall, Signature, error::LeeError,
 };
 use lee_core::{
-    Commitment, EncryptedNote, Nullifier, PrivateAction, RecoveryBinding, SealedMessage,
-    account::Nonce, encryption::Ciphertext, program::PdaSeed,
+    Commitment, EncryptedNote, FeeFallback, Nullifier, PrivateAction, ProvenFee, RecoveryBinding,
+    SealedMessage, account::Nonce, encryption::Ciphertext, program::PdaSeed,
 };
 
 /// 32-byte array type for `AccountId`, keys, hashes, etc.
@@ -212,7 +213,7 @@ pub type FfiSignaturePubKeyList = FfiVec<FfiSignaturePubKeyEntry>;
 
 pub type FfiBoundaryStepList = FfiVec<FfiBoundaryStep>;
 
-pub type FfiSealedMessageList = FfiVec<FfiSealedMessage>;
+pub type FfiPublicationList = FfiVec<FfiPublication>;
 
 pub type FfiPublicAccountEvidenceList = FfiVec<FfiPublicAccountEvidence>;
 
@@ -502,7 +503,6 @@ impl From<FfiBoundaryStep> for BoundaryStep {
     }
 }
 
-/// One async message a proof publishes.
 #[repr(C)]
 pub struct FfiSealedMessage {
     pub commitment: FfiBytes32,
@@ -533,6 +533,85 @@ impl From<FfiSealedMessage> for SealedMessage {
                 epk: EphemeralPublicKey(value.epk.into()),
                 ciphertext: Ciphertext::from_inner(value.ciphertext.into()),
             },
+        }
+    }
+}
+
+/// cbindgen:prefix-with-name
+#[expect(
+    clippy::doc_paragraphs_missing_punctuation,
+    reason = "a cbindgen annotation takes no punctuation"
+)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub enum FfiPublicationKind {
+    Clear = 0,
+    Sealed,
+}
+
+#[repr(C)]
+pub struct FfiMessageBody {
+    pub from: FfiActor,
+    pub to: FfiActor,
+    pub message: FfiMessageDataList,
+}
+
+impl From<MessageBody> for FfiMessageBody {
+    fn from(value: MessageBody) -> Self {
+        let MessageEnvelope { from, to, message } = value;
+
+        Self {
+            from: from.into(),
+            to: to.into(),
+            message: message.into(),
+        }
+    }
+}
+
+impl From<FfiMessageBody> for MessageBody {
+    fn from(value: FfiMessageBody) -> Self {
+        Self {
+            from: value.from.into(),
+            to: value.to.into(),
+            message: value.message.into(),
+        }
+    }
+}
+
+/// One async message a proof publishes. Both `body` and `sealed` are read and freed for every
+/// kind, so the part `kind` does not select must be empty, not uninitialized.
+#[repr(C)]
+pub struct FfiPublication {
+    pub kind: FfiPublicationKind,
+    pub body: FfiMessageBody,
+    pub sealed: FfiSealedMessage,
+}
+
+impl From<Publication> for FfiPublication {
+    fn from(value: Publication) -> Self {
+        let (kind, body, sealed) = match value {
+            Publication::Clear(body) => (
+                FfiPublicationKind::Clear,
+                body.into(),
+                empty_sealed_message(),
+            ),
+            Publication::Sealed(sealed) => (
+                FfiPublicationKind::Sealed,
+                empty_message_body(),
+                sealed.into(),
+            ),
+        };
+        Self { kind, body, sealed }
+    }
+}
+
+impl From<FfiPublication> for Publication {
+    fn from(value: FfiPublication) -> Self {
+        let body = MessageBody::from(value.body);
+        let sealed = SealedMessage::from(value.sealed);
+        match value.kind {
+            FfiPublicationKind::Clear => Self::Clear(body),
+            FfiPublicationKind::Sealed => Self::Sealed(sealed),
         }
     }
 }
@@ -619,6 +698,39 @@ impl From<FfiPrivateAction> for PrivateAction {
     }
 }
 
+/// What a proof commits about its in-proof fee. The `has_*` flags mark which parts are present;
+/// an absent part holds an empty value.
+#[repr(C)]
+pub struct FfiProvenFee {
+    pub has_refund_to: bool,
+    pub refund_to: FfiAccountId,
+    pub has_fallback: bool,
+    pub fallback_action: FfiPrivateAction,
+    pub fallback_boundary: FfiBoundaryStepList,
+}
+
+impl From<Option<ProvenFee>> for FfiProvenFee {
+    fn from(value: Option<ProvenFee>) -> Self {
+        let (refund_to, fallback) = value.map_or((None, None), |fee| (fee.refund_to, fee.fallback));
+        let has_fallback = fallback.is_some();
+        let FeeFallback { action, boundary } = fallback.unwrap_or_else(|| FeeFallback {
+            action: PrivateAction::default(),
+            boundary: Vec::new(),
+        });
+        Self {
+            has_refund_to: refund_to.is_some(),
+            refund_to: refund_to.unwrap_or_default().into(),
+            has_fallback,
+            fallback_action: action.into(),
+            fallback_boundary: boundary
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into(),
+        }
+    }
+}
+
 #[repr(C)]
 pub struct FfiRecoveryBinding {
     pub address: FfiAccountId,
@@ -685,6 +797,30 @@ impl From<(Signature, PublicKey)> for FfiSignaturePubKeyEntry {
     }
 }
 
+/// The fee `has_fee` and `fee` describe. Every part is taken back, present or not, so that
+/// dropping the result frees it.
+#[must_use]
+pub fn proven_fee_from_ffi(has_fee: bool, fee: FfiProvenFee) -> Option<ProvenFee> {
+    let FfiProvenFee {
+        has_refund_to,
+        refund_to,
+        has_fallback,
+        fallback_action,
+        fallback_boundary,
+    } = fee;
+    let fallback = FeeFallback {
+        action: fallback_action.into(),
+        boundary: Vec::from(fallback_boundary)
+            .into_iter()
+            .map(BoundaryStep::from)
+            .collect(),
+    };
+    has_fee.then(|| ProvenFee {
+        refund_to: has_refund_to.then(|| AccountId::from(refund_to)),
+        fallback: has_fallback.then_some(fallback),
+    })
+}
+
 #[must_use]
 pub fn empty_root_call() -> FfiRootCall {
     FfiRootCall {
@@ -701,6 +837,22 @@ fn empty_delivery() -> FfiDelivery {
         inherited_authorizations: Vec::new().into(),
         inherits_entry_authorizations: false,
         pda_seeds: Vec::new().into(),
+    }
+}
+
+fn empty_message_body() -> FfiMessageBody {
+    FfiMessageBody {
+        from: FfiActor::default(),
+        to: FfiActor::default(),
+        message: Vec::new().into(),
+    }
+}
+
+fn empty_sealed_message() -> FfiSealedMessage {
+    FfiSealedMessage {
+        commitment: FfiBytes32::default(),
+        epk: Vec::new().into(),
+        ciphertext: Vec::new().into(),
     }
 }
 

@@ -162,6 +162,11 @@ _wallet_account() {
                     _arguments \
                         '(-l --long)'{-l,--long}'[Display detailed account information]'
                     ;;
+                sync-private)
+                    _arguments \
+                        '--rescan[Rediscover private accounts from genesis]' \
+                        '(-y --yes)'{-y,--yes}'[Skip the confirmation prompt before the chain scan]'
+                    ;;
                 new)
                     _arguments -C \
                         '1: :->account_type' \
@@ -278,7 +283,8 @@ _wallet_config() {
 # restore-keys subcommand
 _wallet_restore_keys() {
     _arguments \
-        '(-d --depth)'{-d,--depth}'[How deep in tree accounts may be]:depth:'
+        '(-d --depth)'{-d,--depth}'[How deep in tree accounts may be]:depth:' \
+        '(-y --yes)'{-y,--yes}'[Skip the confirmation prompt before the chain scan]'
 }
 
 # deploy-program subcommand

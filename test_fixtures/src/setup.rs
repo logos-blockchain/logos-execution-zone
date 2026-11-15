@@ -10,13 +10,14 @@ use std::{
 use anyhow::{Context as _, Result, bail};
 use indexer_service::{ChannelId, IndexerHandle};
 use lee::{AccountId, PrivateKey, PublicKey};
-use log::{debug, warn};
 use logos_blockchain_key_management_system_service::keys::UnsecuredEd25519Key;
 use sequencer_service::{GenesisAction, SequencerConfig, SequencerHandle};
-use sequencer_service_rpc::{SequencerClient, SequencerClientBuilder};
+use sequencer_service_protocol::SequencerStatus;
+use sequencer_service_rpc::{ClientError, RpcClient as _, SequencerClient, SequencerClientBuilder};
 use sequencer_storage_actor::{StorageActor, protocol::DbDump};
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
+use tracing::{debug, warn};
 use wallet::{
     WalletCore,
     cli::{Command, programs::native_token_transfer::AuthTransferSubcommand},
@@ -121,9 +122,8 @@ impl SequencerSetup {
         let temp_sequencer_dir =
             tempfile::tempdir().context("Failed to create temp dir for sequencer home")?;
 
-        let sequencer_handle = self
-            .setup_owned(temp_sequencer_dir.path().to_owned())
-            .await?;
+        let sequencer_handle =
+            Box::pin(self.setup_owned(temp_sequencer_dir.path().to_owned())).await?;
 
         Ok((sequencer_handle, temp_sequencer_dir))
     }
@@ -133,16 +133,21 @@ impl SequencerSetup {
     /// The caller is responsible for creating and retaining the directory.
     /// Useful for tests that restart the sequencer against the same on-disk store.
     pub async fn setup_at(self, home: &Path) -> Result<SequencerHandle> {
-        self.setup_owned(home.to_owned()).await
+        Box::pin(self.setup_owned(home.to_owned())).await
     }
 
     async fn setup_owned(self, home: PathBuf) -> Result<SequencerHandle> {
-        sequencer_service::run(
+        let handle = sequencer_service::run(
             self.prepare_sequencers_config(home)?,
             SocketAddr::from(([127, 0, 0, 1], 0)),
         )
         .await
-        .context("Failed to run Sequencer Service")
+        .context("Failed to run Sequencer Service")?;
+
+        wait_until_online(&sequencer_client(handle.addr())?)
+            .await
+            .context("Encountered an error while waiting for the sequencer to come online")?;
+        Ok(handle)
     }
 
     /// Prepare just config for sequencer, without running the service.
@@ -160,7 +165,7 @@ impl SequencerSetup {
             joining,
         } = self;
 
-        debug!("Using sequencer home at {}", home.display());
+        debug!(home = %home.display(), "Using sequencer home");
 
         let channel_signing_key = channel_signing_key.or_else(|| {
             genesis_transactions
@@ -220,6 +225,31 @@ impl SequencerSetup {
 
         Ok(config)
     }
+}
+
+/// Waits until the sequencer behind `client` is online, i.e. done bootstrapping from the channel.
+async fn wait_until_online(client: &SequencerClient) -> Result<()> {
+    let mut last_status = None;
+    let wait = async {
+        loop {
+            match client.get_sequencer_status().await {
+                Ok(SequencerStatus::Online { .. }) => return Ok(()),
+                Ok(status @ SequencerStatus::Bootstrapping { .. }) => {
+                    debug!(?status, "Sequencer is not online yet");
+                    last_status = Some(status);
+                }
+                // Going online can keep the sequencer busy past a request's timeout.
+                Err(ClientError::RequestTimeout) => continue,
+                Err(err) => return Err(err.into()),
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(360), wait)
+        .await
+        .with_context(|| {
+            format!("Timed out waiting for the sequencer to come online, last seen {last_status:?}")
+        })?
 }
 
 /// Committed single-file dump of the prebuilt sequencer database (`just regenerate-test-fixture`).
@@ -379,6 +409,12 @@ fn validate_resolved_bedrock_node(resolved_directory: &Path) -> Result<()> {
 }
 
 pub async fn setup_bedrock_node() -> Result<(DockerCompose, SocketAddr)> {
+    setup_bedrock_node_with_settings(None).await
+}
+
+pub async fn setup_bedrock_node_with_settings(
+    settings_file: Option<&str>,
+) -> Result<(DockerCompose, SocketAddr)> {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let bedrock_compose_path = PathBuf::from(manifest_dir).join("../bedrock/docker-compose.yml");
     let resolved_binary =
@@ -395,13 +431,20 @@ pub async fn setup_bedrock_node() -> Result<(DockerCompose, SocketAddr)> {
             .expect("resolved binary has a parent directory"),
     )?;
 
-    let mut compose = DockerCompose::with_auto_client(&[bedrock_compose_path])
-        .await
-        .context("Failed to setup docker compose for Bedrock")?
-        .with_build(true)
-        // Setting port to 0 to avoid conflicts between parallel tests, actual port will be
-        // retrieved after container is up
-        .with_env("LEZ_COMPOSE_BEDROCK_PORT", "0");
+    let deployment_settings = settings_file
+        .map(|settings_file| {
+            let settings_path = PathBuf::from(manifest_dir)
+                .join("../bedrock")
+                .join(settings_file);
+            if !settings_path.is_file() {
+                bail!(
+                    "Bedrock settings override is missing at {}",
+                    settings_path.display()
+                );
+            }
+            Ok(format!("./{settings_file}"))
+        })
+        .transpose()?;
 
     #[expect(
         clippy::items_after_statements,
@@ -437,30 +480,41 @@ pub async fn setup_bedrock_node() -> Result<(DockerCompose, SocketAddr)> {
             })
     }
 
-    let mut port = None;
-    let mut attempt = 0_u32;
     let max_attempts = 5_u32;
-    while port.is_none() && attempt < max_attempts {
-        attempt = attempt
-            .checked_add(1)
-            .expect("We check that attempt < max_attempts, so this won't overflow");
+    for attempt in 1..=max_attempts {
+        // A fresh project per attempt: when the host port Docker picks is taken, the container
+        // still starts, just unpublished, and a repeated `up` leaves it that way.
+        let mut compose = DockerCompose::with_auto_client(&[&bedrock_compose_path])
+            .await
+            .context("Failed to setup docker compose for Bedrock")?
+            .with_build(true)
+            // Setting port to 0 to avoid conflicts between parallel tests, actual port will be
+            // retrieved after container is up
+            .with_env("LEZ_COMPOSE_BEDROCK_PORT", "0");
+        if let Some(deployment_settings) = &deployment_settings {
+            compose = compose.with_env(
+                "LEZ_COMPOSE_BEDROCK_DEPLOYMENT_SETTINGS",
+                deployment_settings.as_str(),
+            );
+        }
+
         match up_and_retrieve_port(&mut compose).await {
-            Ok(p) => {
-                port = Some(p);
-            }
+            Ok(port) => return Ok((compose, SocketAddr::from(([127, 0, 0, 1], port)))),
             Err(err) => {
                 warn!(
-                    "Failed to bring up Bedrock services: {err:?}, attempt {attempt}/{max_attempts}"
+                    error = ?err,
+                    attempt,
+                    max_attempts,
+                    "Failed to bring up Bedrock services"
                 );
+                if let Err(down_err) = compose.down().await {
+                    warn!(error = ?down_err, "Failed to tear down the failed Bedrock services");
+                }
             }
         }
     }
-    let Some(port) = port else {
-        bail!("Failed to bring up Bedrock services after {max_attempts} attempts");
-    };
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
-    Ok((compose, addr))
+    bail!("Failed to bring up Bedrock services after {max_attempts} attempts");
 }
 
 pub async fn setup_indexer(
@@ -491,7 +545,7 @@ pub async fn setup_indexer_at(
 ) -> Result<IndexerHandle> {
     std::fs::create_dir_all(home).context("Failed to create indexer home")?;
 
-    debug!("Using indexer home at {}", home.display());
+    debug!(home = %home.display(), "Using indexer home");
 
     let indexer_config = config::indexer_config(bedrock_addr, channel_id, cross_zone)
         .context("Failed to create Indexer config")?;
@@ -511,7 +565,7 @@ pub fn setup_wallet(
     initial_public_accounts: &[(PrivateKey, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
     config_overrides: WalletConfigOverrides,
-) -> Result<(WalletCore, TempDir, String)> {
+) -> Result<(WalletCore<SequencerClient>, TempDir, String)> {
     let temp_wallet_dir =
         tempfile::tempdir().context("Failed to create temp dir for wallet home")?;
     let (wallet, _state_dir, password) = setup_wallet_at(
@@ -532,7 +586,7 @@ pub fn setup_wallet_at(
     initial_private_accounts: &[InitialPrivateAccountForWallet],
     config_overrides: WalletConfigOverrides,
     home: &Path,
-) -> Result<(WalletCore, PathBuf, String)> {
+) -> Result<(WalletCore<SequencerClient>, PathBuf, String)> {
     let config = config::wallet_config(sequencer_addr).context("Failed to create Wallet config")?;
     let config_serialized =
         serde_json::to_string_pretty(&config).context("Failed to serialize Wallet config")?;
@@ -580,7 +634,7 @@ pub fn setup_wallet_at(
 
 /// Funds each of the wallet's private accounts from one of its public accounts.
 pub async fn fund_private_accounts(
-    wallet: &mut WalletCore,
+    wallet: &mut WalletCore<SequencerClient>,
     initial_public_accounts: &[(PrivateKey, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
 ) -> Result<()> {
@@ -589,7 +643,10 @@ pub async fn fund_private_accounts(
     ));
 
     for private_account in initial_private_accounts {
-        wallet::cli::execute_subcommand(
+        // The recipient pays the shielding's in-proof fee out of what it receives, so it is
+        // shielded the fee on top of its balance.
+        wallet.set_private_fee_payer(Some(private_account.account_id()));
+        let funded = wallet::cli::execute_subcommand(
             wallet,
             Command::AuthTransfer(AuthTransferSubcommand::Send {
                 from: public_mention(funder_id),
@@ -598,16 +655,36 @@ pub async fn fund_private_accounts(
                 to_vpk: None,
                 to_keys: None,
                 to_pk: None,
-                amount: private_account.balance,
+                amount: private_account
+                    .balance
+                    .checked_add(config::shield_fee())
+                    .expect("private funding overflow"),
             }),
         )
-        .await
-        .with_context(|| {
+        .await;
+        wallet.set_private_fee_payer(None);
+        funded.with_context(|| {
             format!(
                 "Failed to fund private account {}",
                 private_account.account_id()
             )
         })?;
+        // With no headroom the reserve is the fee, priced off the bytes the wallet measured.
+        let Some(wallet::DeclaredFee::Private(fee)) = wallet.take_declared_fee() else {
+            bail!("The funding shield declared no private fee");
+        };
+        if fee.reserve != config::shield_fee() {
+            let bytes = fee
+                .reserve
+                .saturating_sub(config::private_fee(0))
+                .checked_div(u128::from(fee_core::market::BASE_FEE_STOR_MIN));
+            bail!(
+                "The funding shield paid {}, not the {} its pinned size prices; re-pin \
+                 `config::SHIELD_BYTES` to {bytes:?}",
+                fee.reserve,
+                config::shield_fee()
+            );
+        }
 
         wallet
             .sync_to_latest_block()
@@ -618,7 +695,7 @@ pub async fn fund_private_accounts(
     Ok(())
 }
 
-pub async fn sync_wallet_from_prebuilt(wallet: &mut WalletCore) -> Result<()> {
+pub async fn sync_wallet_from_prebuilt(wallet: &mut WalletCore<SequencerClient>) -> Result<()> {
     wallet
         .sync_to_latest_block()
         .await
@@ -630,6 +707,23 @@ pub async fn sync_wallet_from_prebuilt(wallet: &mut WalletCore) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{bedrock_platform_for_docker_arch, ensure_node_runs_on_docker_daemon};
+
+    #[test]
+    fn slow_finality_settings_differ_from_the_default_only_in_security_param() {
+        let bedrock = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../bedrock");
+        let default = std::fs::read_to_string(bedrock.join("deployment-settings.yaml")).unwrap();
+        let slow = std::fs::read_to_string(bedrock.join("deployment-settings-slow-finality.yaml"))
+            .unwrap();
+        let patched = default.replacen("security_param: 3", "security_param: 10", 1);
+        assert_ne!(
+            patched, default,
+            "the default settings no longer carry `security_param: 3`; regenerate the slow-finality file"
+        );
+        assert_eq!(
+            slow, patched,
+            "deployment-settings-slow-finality.yaml drifted from deployment-settings.yaml"
+        );
+    }
 
     #[test]
     fn maps_docker_architectures_to_resolved_platforms() {

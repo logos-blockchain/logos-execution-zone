@@ -4,13 +4,17 @@
 //! read-only-`ZoneSequencer` migration the removal asks for. Delete this
 //! module once that migration lands.
 
+use std::num::NonZero;
+
 use futures::{Stream, StreamExt as _, future::Either};
 use logos_blockchain_zone_sdk::{
     ZoneMessage, adapter,
     node_types::{ChannelId, Error as NodeError, Slot},
 };
 
-const BATCH_SIZE: Slot = Slot::new(100);
+/// Slots of finalized history each read covers by default. Bedrock slots follow the wall clock,
+/// so history is mostly empty slots that wide batches cross in few requests.
+pub const DEFAULT_BACKFILL_BATCH_SLOTS: NonZero<u64> = NonZero::new(10_000).expect("nonzero");
 
 /// Indexer errors.
 #[derive(Debug, thiserror::Error)]
@@ -30,6 +34,8 @@ pub enum Error {
 pub struct ZoneIndexer<Node> {
     channel_id: ChannelId,
     node: Node,
+    /// Slots each read covers.
+    batch_slots: NonZero<u64>,
 }
 
 impl<Node> ZoneIndexer<Node>
@@ -37,8 +43,12 @@ where
     Node: adapter::Node + Clone + Sync,
 {
     #[must_use]
-    pub const fn new(channel_id: ChannelId, node: Node) -> Self {
-        Self { channel_id, node }
+    pub const fn new(channel_id: ChannelId, node: Node, batch_slots: NonZero<u64>) -> Self {
+        Self {
+            channel_id,
+            node,
+            batch_slots,
+        }
     }
 
     /// Stream finalized [`ZoneMessage`]s from `last_slot` (exclusive) up to
@@ -69,7 +79,7 @@ where
             let end_slot = (Slot::from(
                 current_slot
                     .into_inner()
-                    .saturating_add(BATCH_SIZE.into_inner())
+                    .saturating_add(self.batch_slots.get())
                     .checked_sub(1)
                     .expect("slot shouldn't overflow"),
             ))
@@ -102,21 +112,27 @@ where
     }
 }
 
-/// Ends the pass at the first read failure, naming `what` failed. For callers that retry
-/// the pass; wrong for one that reads the stream ending as a complete scan.
-pub fn stop_at_read_error<'stream, S>(
+/// Ends the pass at the first read failure, logged within `span`, which names what was read.
+/// For callers that retry the pass; wrong for one that reads the stream ending as a complete scan.
+pub fn stop_at_read_error<'stream, S, E>(
     stream: S,
-    what: String,
+    span: tracing::Span,
 ) -> impl Stream<Item = (ZoneMessage, Slot)> + 'stream
 where
-    S: Stream<Item = Result<(ZoneMessage, Slot), Error>> + 'stream,
+    S: Stream<Item = Result<(ZoneMessage, Slot), E>> + 'stream,
+    E: std::fmt::Display + 'stream,
 {
     stream
         .take_while(move |item| {
             let keep = match item {
                 Ok(_) => true,
                 Err(err) => {
-                    log::warn!("{what}: {err}");
+                    span.in_scope(|| {
+                        tracing::warn!(
+                            error = format_args!("{err:#}"),
+                            "Channel read failed, ending the pass"
+                        );
+                    });
                     false
                 }
             };
@@ -127,16 +143,19 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
+    use std::{
+        num::NonZero,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
     };
 
     use async_trait::async_trait;
     use futures::StreamExt as _;
     use logos_blockchain_core::mantle::ledger::verification_mode::StandardMode;
     use logos_blockchain_zone_sdk::{
-        ZoneBlock,
+        UnverifiedEd25519PublicKey, ZoneBlock,
         node_types::{
             ApiBlock, BlockInfo, ChainServiceInfo, ChannelState, Events, HeaderId, Inscription,
             MsgId, ProcessedBlockEvent, SignedOps, TimeInfo, Unverified, WalletFundRequestBody,
@@ -145,9 +164,10 @@ mod tests {
     };
 
     use super::{
-        BATCH_SIZE, ChannelId, Error, NodeError, Slot, ZoneIndexer, ZoneMessage, adapter,
-        stop_at_read_error,
+        ChannelId, Error, NodeError, Slot, ZoneIndexer, ZoneMessage, adapter, stop_at_read_error,
     };
+
+    const BATCH_SLOTS: NonZero<u64> = NonZero::new(100).expect("nonzero");
 
     /// `lib_slot` far enough ahead that at least one batch is attempted.
     const CONSENSUS_INFO: &str = r#"{
@@ -187,6 +207,15 @@ mod tests {
         async fn consensus_info(&self) -> Result<ChainServiceInfo, NodeError> {
             Ok(serde_json::from_str(CONSENSUS_INFO)
                 .expect("the fixture matches the node's wire shape"))
+        }
+
+        async fn limits(
+            &self,
+        ) -> Result<
+            logos_blockchain_zone_sdk::http_api_common::bodies::mantle::LimitsResponseBody,
+            NodeError,
+        > {
+            unreachable!("the zone indexer never asks for the node's limits")
         }
 
         async fn zone_messages_in_blocks(
@@ -262,13 +291,14 @@ mod tests {
     fn message(tag: u8) -> ZoneMessage {
         ZoneMessage::Block(ZoneBlock {
             id: MsgId::root(),
-            data: Inscription::try_from(vec![tag]).expect("one byte is under the inscription cap"),
+            data: Inscription::new_unchecked(vec![tag]),
+            signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("valid key"),
         })
     }
 
     #[tokio::test]
     async fn a_failed_read_is_one_error_item_naming_the_range_it_could_not_read() {
-        let indexer = ZoneIndexer::new(channel_id(), ScriptedNode::serving(0));
+        let indexer = ZoneIndexer::new(channel_id(), ScriptedNode::serving(0), BATCH_SLOTS);
         let stream = indexer
             .next_messages(None)
             .await
@@ -282,8 +312,8 @@ mod tests {
         assert_eq!(*from, Slot::genesis(), "a cold start reads from genesis");
         assert_eq!(
             *to,
-            Slot::from(BATCH_SIZE.into_inner().saturating_sub(1)),
-            "the first batch spans BATCH_SIZE slots"
+            Slot::from(BATCH_SLOTS.get().saturating_sub(1)),
+            "the first batch spans BATCH_SLOTS slots"
         );
     }
 
@@ -299,7 +329,7 @@ mod tests {
             Ok((message(2), Slot::from(200))),
         ]);
 
-        let delivered: Vec<_> = stop_at_read_error(scripted, "test read".to_owned())
+        let delivered: Vec<_> = stop_at_read_error(scripted, tracing::Span::none())
             .collect()
             .await;
 
@@ -312,7 +342,7 @@ mod tests {
 
     #[tokio::test]
     async fn batches_advance_and_end_at_lib_slot() {
-        let indexer = ZoneIndexer::new(channel_id(), ScriptedNode::always_serving());
+        let indexer = ZoneIndexer::new(channel_id(), ScriptedNode::always_serving(), BATCH_SLOTS);
         let stream = indexer
             .next_messages(None)
             .await
@@ -333,7 +363,7 @@ mod tests {
 
     #[tokio::test]
     async fn messages_served_before_a_failure_are_still_delivered() {
-        let indexer = ZoneIndexer::new(channel_id(), ScriptedNode::serving(1));
+        let indexer = ZoneIndexer::new(channel_id(), ScriptedNode::serving(1), BATCH_SLOTS);
         let stream = indexer
             .next_messages(None)
             .await
