@@ -41,7 +41,7 @@ pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000_000_000, 20_0
 /// The charged bytes of the shield that funds a private account at setup, which genesis must
 /// price before any transaction exists; setup checks it against what the wallet measures.
 ///
-/// It is the fixed `PROOF_BYTES` (223,047) plus the rest of the serialized transaction (13,993),
+/// It is the fixed `PROOF_BYTES` (223,047) plus the rest of the serialized transaction (14,001),
 /// mostly its padded private slots.
 pub const SHIELD_BYTES: u64 = 237_048;
 

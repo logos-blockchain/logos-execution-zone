@@ -517,8 +517,7 @@ fn settle_private_transaction(
         accumulate_exec_gas(summary.gas_used_exec, market::PRIVATE_VERIFY_GAS).map_err(gas_cap)?;
     let gas_used_stor = accumulate_stor_gas(summary.gas_used_stor, *data_bytes).map_err(gas_cap)?;
     // The effects may use what is left of the block's execution gas, up to what the reserve
-    // pays for past the tip, so a public part running out of it is a charged revert and never
-    // costs more than was reserved.
+    // pays for past the tip, so running out of it is a charged revert.
     let proven_tip = u128::from(*proven_tip);
     let cycle_budget = market::MAX_GAS_EXEC
         .checked_sub(gas_used_exec)
@@ -573,9 +572,8 @@ fn settle_private_transaction(
         .apply_state_diff(diff)
         .map_err(|err| fee_validity(format!("private action failed: {err}")))?;
 
-    // A surplus past the proven tip worth a note goes to the public refund target, else back to
-    // the payer if a recovery binding lets it be published there; dust and an unbound payer's
-    // surplus add to the tip.
+    // A surplus worth a note goes to the refund target, else to a bound payer; otherwise it
+    // adds to the tip.
     let refund_to = private_tx
         .message()
         .execution
@@ -2132,6 +2130,23 @@ mod tests {
         assert_eq!(receipt.fee.refund, surplus);
         assert_eq!(published_credit(&settled, alias), Some(surplus));
 
+        // A dust surplus adds to the proven tip.
+        let dust = fee_core::market::MIN_PRIVATE_REFUND;
+        let mut summary = BlockFeeSummary::default();
+        let (_, receipt) = settle_transaction(
+            &build(required + u128::from(TIP) + dust),
+            &mut state.clone(),
+            &FeeState::genesis(),
+            1,
+            100,
+            0,
+            &mut summary,
+        )
+        .expect("settles");
+        assert_eq!(summary.revenue_tip, u128::from(TIP) + dust);
+        assert_eq!(receipt.fee.tip, u128::from(TIP) + dust);
+        assert_eq!(receipt.fee.refund, 0);
+
         // A reserve covering the fee but not the tip is not admissible.
         let short = build(required + u128::from(TIP) - 1);
         assert!(matches!(
@@ -2312,17 +2327,21 @@ mod tests {
         // The block has `budget` execution gas left after the proof's verification: the
         // scripted public root runs out of it, which settlement charges in full.
         let budget = 5_000;
+        let tip = 5;
         let build = |amount| {
             public_root_private_tx(
                 &state,
                 sender,
                 scripted,
-                inbox_fee(amount, sender.0.account_id()),
+                lee_core::FeeTransfer {
+                    tip,
+                    ..inbox_fee(amount, sender.0.account_id())
+                },
             )
         };
         let required = required_for(budget, build);
         let surplus = fee_core::market::MIN_PRIVATE_REFUND + 1;
-        let tx = build(required + surplus);
+        let tx = build(required + u128::from(tip) + surplus);
         let LeeTransaction::PrivacyPreserving(private_tx) = &tx else {
             unreachable!("a privacy-preserving transaction was built");
         };
@@ -2359,7 +2378,7 @@ mod tests {
                     gas_exec: fee_core::market::PRIVATE_VERIFY_GAS + budget,
                     gas_stor: summary.gas_used_stor,
                     fee_base: required,
-                    tip: 0,
+                    tip: u128::from(tip),
                     refund: surplus,
                 },
             }
@@ -2367,11 +2386,11 @@ mod tests {
         assert!(events.is_empty());
         assert_eq!(summary.gas_used_exec, fee_core::market::MAX_GAS_EXEC);
         assert_eq!(summary.revenue_base, required);
-        assert_eq!(summary.revenue_tip, 0);
+        assert_eq!(summary.revenue_tip, u128::from(tip));
         // The reserve reached the inbox and the surplus went back to the alias.
         assert_eq!(
             native_balance(&settled, system_accounts::fee_inbox_account_id()),
-            required
+            required + u128::from(tip)
         );
         assert_eq!(published_credit(&settled, alias), Some(surplus));
         // The payer's note is spent for the fallback's state; none of the other proven

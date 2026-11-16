@@ -22,7 +22,7 @@ pub enum FeeTxView {
     },
     /// The fee is paid inside the proof: `reserve` is the amount the proof
     /// credited to the fee inbox from `payer`, the address a refund of the
-    /// surplus goes back to; `tip` is the part of it the proof pays the producer.
+    /// surplus goes back to; `tip` is the part of `reserve` paid to the producer.
     Private {
         payer: AccountId,
         reserve: Balance,
