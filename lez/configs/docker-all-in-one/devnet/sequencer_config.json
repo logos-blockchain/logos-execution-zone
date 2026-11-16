@@ -57,8 +57,8 @@
             132,
             121
           ],
-          "ownership_public_key": "8c5bc13abf7cc83032a5aabea16b747ea8cc118c8d115301cdfb8af7becc28b8",
-          "stake_signature": "a83e06df5669115d821dae87032530961fdf9ac9031c861db418602de8f3fa075bbda579ea503f704d610939be373eee6b608939362a4bac240251b42745ab06"
+          "ownership_public_key": "76d462a4242a2dfd73535dc608e3258986edd5f0b4e13ed09360c1c1e1d79016",
+          "stake_signature": "d928bf3964f623ce1966eef3f7d4dc6d89c2cbfe4c898ca4315996864d5866b8081166d7ccf65dfad8fd88a026cd58d704638dbd2b164335dcb463c04c075715"
         }
       },
       {
@@ -97,8 +97,8 @@
             42,
             251
           ],
-          "ownership_public_key": "90eab147f6d63c283b84dc988778c1ab7ea7070b3c6c3f8db15c0817a252bd94",
-          "stake_signature": "4aff5dc69847104c6476c507e3628d067a1e1c993ebdb5e642a80b8313179fbc2abe1c64bfb3deb5d498ae01139dbcf9b88115383c2855574f54fd7745a5b3d7"
+          "ownership_public_key": "734c990c6e18e2787c6d302097b6e624f979c035fa27e9d07b2375d64057f6ba",
+          "stake_signature": "7764de1b449a724c8ba6c6e082ec738a62be320ffe95c353a0f8b2ac7d2d8689fb80da73c23213a26555314b29fac66112c028ce48e18e22a240b135290b658d"
         }
       },
       {
@@ -137,8 +137,8 @@
             113,
             209
           ],
-          "ownership_public_key": "526b2c5d66e33c7389c0de359009c0dda793b8a795ae2b198a369c0efbceebc2",
-          "stake_signature": "685ae9bc063614293c8f25216232425d69d01585297d24903ddaca180523ea9ff6a788301b947f920f418b4624082b637865db920a5514fd921281eafccd7e32"
+          "ownership_public_key": "1e88684905306c8867818142d79622cb648f5e0a48f979608adffff6cf2e441f",
+          "stake_signature": "e34acf0055f7207fc757fedfc1f6dab07b8a0863223e38afd99132e9192275cad60d0697db7be9c240ab96416adc456223de9c207245837c58eff2a8e3ecf6c6"
         }
       },
       {
@@ -177,8 +177,8 @@
             17,
             10
           ],
-          "ownership_public_key": "f15e6a4ec4202fd9b8378559b02af333e3b74962b870a19c2efc05e0a8f84a0a",
-          "stake_signature": "fb0c1e758e339856e7b102f4d7361bc1d8575d92385b596d2e08c413681e2621b3a734b64672fe8a68a5abb17a556e7c8a4fd2fd77514d95ac912117582dc986"
+          "ownership_public_key": "44cb48cc1cbbdb3cf2e566d22a54412a821c115c6a3d65f0f2c7e1db82cdbca9",
+          "stake_signature": "279cf5a7818a267113568d85b05d25d5c46bb27a93d0d6d29a523c9f2ddf986e8d6e75c65a0089998312433e92602aa021d3f863c9995753e3b67637b4c41a9d"
         }
       },
       {
