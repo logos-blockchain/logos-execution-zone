@@ -1097,28 +1097,16 @@ mod tests {
     #[test]
     fn an_unsigned_ping_send_is_not_a_system_injection() {
         let sender_id = programs::ping_sender_account_id();
-        let config = lee::Actor::new(AccountId::new([7; 32]), sender_id);
-        let outbox = lee::Actor::new(
-            AccountId::new([8; 32]),
-            programs::cross_zone_outbox_account_id(),
-        );
+        let sender = lee::Actor::new(sender_id, sender_id);
         let send = ping_core::SenderMessage::Send {
-            outbox,
-            emission: ping_core::CrossZoneEmission {
-                target_zone: [2; 32],
-                target_account_id: AccountId::new([9; 32]),
-                target_accounts: vec![],
-                payload: vec![1],
-                ordinal: 0,
-            },
+            target_zone: [2; 32],
+            target: lee::Actor::new(AccountId::new([9; 32]), AccountId::new([9; 32])),
+            accounts: vec![],
+            payload: vec![1],
         };
-        let message = lee::public_transaction::Message::try_new(
-            config,
-            vec![config, outbox],
-            BTreeMap::new(),
-            send,
-        )
-        .expect("build send message");
+        let message =
+            lee::public_transaction::Message::try_new(sender, vec![sender], BTreeMap::new(), send)
+                .expect("build send message");
         let tx = crate::transaction::LeeTransaction::Public(lee::PublicTransaction::new(
             message,
             lee::public_transaction::WitnessSet::from_raw_parts(vec![]),

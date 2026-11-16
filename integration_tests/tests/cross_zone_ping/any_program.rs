@@ -34,7 +34,7 @@ use test_fixtures::{
     MultiZoneTestContextBuilder, TestContext, ZoneTestContextBuilder,
     config::{MultiNodeTestContextConfig, source_only_cross_zone},
 };
-use test_guest_core::chat::{ChatMessage, CrossZoneEmission};
+use test_guest_core::chat::ChatMessage;
 use testnet_initial_state::initial_pub_accounts_private_keys;
 use tokio::test;
 use wallet::{WalletCore, program_facades::program_loader::ProgramLoader};
@@ -110,8 +110,7 @@ async fn deploy_chat(
         .await
 }
 
-/// A top-level `Post` to `ping_receiver` on `target_zone`. Declaring it is the
-/// whole send: the watcher reads the emission off this instruction.
+/// A top-level `Post` sending a remote async to `ping_receiver` off the chat program's own actor.
 fn post_tx(
     emitter: AccountId,
     target_zone: [u8; 32],
@@ -125,10 +124,10 @@ fn post_tx(
         root,
         vec![root],
         BTreeMap::from([(payer.account_id, nonce)]),
-        ChatMessage::post(CrossZoneEmission {
+        ChatMessage::Post {
             target_zone,
-            target_account_id: receiver,
-            target_accounts: vec![
+            target: Actor::new(receiver, receiver),
+            accounts: vec![
                 Actor::new(receiver_config_account_id(receiver), receiver),
                 Actor::new(ping_record_pda(receiver), receiver),
             ],
@@ -136,8 +135,7 @@ fn post_tx(
                 payload: text.to_vec(),
             })
             .expect("a Record payload serializes"),
-            ordinal: 0,
-        }),
+        },
         common::test_utils::test_fee_declaration(payer.account_id),
     )
     .expect("build Post message");

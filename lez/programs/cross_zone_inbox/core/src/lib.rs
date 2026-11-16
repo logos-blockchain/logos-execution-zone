@@ -1,8 +1,8 @@
 use std::collections::BTreeSet;
 
 use borsh::{BorshDeserialize, BorshSerialize};
-pub use cross_zone_emission_core::ZoneId;
 pub use cross_zone_marker_core::Delivery;
+pub use lee_core::account::ZoneId;
 use lee_core::{
     account::{AccountId, Actor},
     program::PdaSeed,

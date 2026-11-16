@@ -1293,7 +1293,6 @@ name = "bridge_lock_core"
 version = "0.1.0"
 dependencies = [
  "borsh",
- "cross_zone_emission_core",
  "lee_core",
  "risc0-zkvm",
 ]
@@ -1304,7 +1303,6 @@ version = "0.1.0"
 dependencies = [
  "borsh",
  "bridge_lock_core",
- "cross_zone_outbox_core",
  "lee_core",
  "risc0-zkvm",
  "wrapped_token_core",
@@ -2183,9 +2181,7 @@ dependencies = [
  "borsh",
  "bridge_lock_core",
  "common",
- "cross_zone_emission_core",
  "cross_zone_inbox_core",
- "cross_zone_outbox_core",
  "hex",
  "lee",
  "lee_core",
@@ -2206,7 +2202,6 @@ dependencies = [
  "common",
  "cross_zone",
  "cross_zone_inbox_core",
- "cross_zone_outbox_core",
  "lee",
  "lee_core",
  "logging",
@@ -2222,19 +2217,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "cross_zone_emission_core"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "lee_core",
-]
-
-[[package]]
 name = "cross_zone_inbox_core"
 version = "0.1.0"
 dependencies = [
  "borsh",
- "cross_zone_emission_core",
  "cross_zone_marker_core",
  "lee_core",
  "risc0-zkvm",
@@ -2255,28 +2241,8 @@ name = "cross_zone_marker_core"
 version = "0.1.0"
 dependencies = [
  "borsh",
- "cross_zone_emission_core",
  "lee_core",
  "risc0-zkvm",
-]
-
-[[package]]
-name = "cross_zone_outbox_core"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "cross_zone_emission_core",
- "lee_core",
- "risc0-zkvm",
-]
-
-[[package]]
-name = "cross_zone_outbox_program"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "cross_zone_outbox_core",
- "lee_core",
 ]
 
 [[package]]
@@ -5098,7 +5064,6 @@ dependencies = [
  "core_ffi",
  "cross_zone",
  "cross_zone_inbox_core",
- "cross_zone_outbox_core",
  "cucumber",
  "fee_core",
  "futures",
@@ -9969,7 +9934,6 @@ name = "ping_core"
 version = "0.1.0"
 dependencies = [
  "borsh",
- "cross_zone_emission_core",
  "cross_zone_receiver_core",
  "lee_core",
  "risc0-zkvm",
@@ -9990,7 +9954,6 @@ name = "ping_sender_program"
 version = "0.1.0"
 dependencies = [
  "borsh",
- "cross_zone_outbox_core",
  "lee_core",
  "ping_core",
 ]
@@ -10322,7 +10285,6 @@ dependencies = [
  "clock_core",
  "cross_zone_inbox_core",
  "cross_zone_marker_core",
- "cross_zone_outbox_core",
  "fee_core",
  "lee",
  "lee_core",
@@ -13409,7 +13371,6 @@ name = "test_guest_core"
 version = "0.1.0"
 dependencies = [
  "borsh",
- "cross_zone_emission_core",
  "cross_zone_receiver_core",
  "lee_core",
  "risc0-zkvm",
@@ -15490,7 +15451,6 @@ name = "wrapped_token_core"
 version = "0.1.0"
 dependencies = [
  "borsh",
- "cross_zone_emission_core",
  "lee_core",
  "risc0-zkvm",
 ]

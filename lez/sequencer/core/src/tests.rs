@@ -391,9 +391,6 @@ fn only_the_cross_zone_inbox_fee_and_system_upgrader_are_sequencer_only() {
         programs::system_upgrader_account_id()
     ));
     assert!(!is_sequencer_only_program(
-        programs::cross_zone_outbox_account_id()
-    ));
-    assert!(!is_sequencer_only_program(
         programs::wrapped_token_account_id()
     ));
     assert!(!is_sequencer_only_program(
@@ -6724,12 +6721,11 @@ fn a_misspelled_mint_cap_key_fails_route_parse() {
 }
 
 /// Gating is atomic: no `cross_zone`, no cross-zone genesis transaction;
-/// empty-peers carries exactly the four `InitConfig`s, in order.
+/// empty-peers carries exactly the three `InitConfig`s and the inbox's, in order.
 #[test]
 fn genesis_cross_zone_transactions_follow_the_declaration() {
-    let cross_zone_ids: [AccountId; 6] = [
+    let cross_zone_ids: [AccountId; 5] = [
         programs::cross_zone_inbox_account_id(),
-        programs::cross_zone_outbox_account_id(),
         programs::ping_sender_account_id(),
         programs::ping_receiver_account_id(),
         programs::bridge_lock_account_id(),
@@ -6786,12 +6782,11 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
         cross_zone_txs,
         vec![
             programs::wrapped_token_account_id(),
-            programs::ping_sender_account_id(),
             programs::ping_receiver_account_id(),
             programs::bridge_lock_account_id(),
             programs::cross_zone_inbox_account_id(),
         ],
-        "the four InitConfigs then the inbox config, in the fixed order"
+        "the three InitConfigs then the inbox config, in the fixed order"
     );
     for account_id in cross_zone_ids {
         assert!(state.get_builtin_program(account_id).is_some());

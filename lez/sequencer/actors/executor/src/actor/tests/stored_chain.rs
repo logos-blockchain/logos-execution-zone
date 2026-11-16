@@ -62,7 +62,6 @@ pub(in crate::actor) fn cross_zone_genesis_store() -> CannedStore {
         testnet_initial_state::initial_state(true).with_public_accounts([producer_seed()]);
     for tx in [
         cross_zone::build_wrapped_token_init_config_tx(&cross_zone),
-        cross_zone::build_ping_sender_init_config_tx(),
         cross_zone::build_ping_receiver_init_config_tx(&cross_zone),
         cross_zone::build_bridge_lock_init_config_tx(&cross_zone),
         cross_zone::build_inbox_init_config_tx([0; 32]),

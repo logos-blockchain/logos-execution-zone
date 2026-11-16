@@ -16,7 +16,6 @@ use cross_zone_inbox_core::{
     CrossZoneMessage, InboxConfig, Message as InboxMessage, SeenShard, inbox_config_account_id,
     inbox_seen_shard_account_id, inbox_seen_shard_seed,
 };
-use cross_zone_outbox_core::{OutboxRecord, outbox_pda, outbox_pda_seed};
 use lee::{
     AccountId, Actor, PrivateKey, PublicAccountEvidence, PublicKey, PublicTransaction, V03State,
     ValidatedStateDiff,
@@ -25,9 +24,7 @@ use lee::{
 };
 use lee_core::{account::Account, native_token::TransferError, program::SyncMessage};
 use ping_core::{
-    CrossZoneEmission, ReceiverMessage, outbox_bytes, ping_record_pda, ping_record_seed,
-    read_outbox, receiver_config_account_id, receiver_config_seed, sender_config_account_id,
-    sender_config_seed,
+    ReceiverMessage, ping_record_pda, receiver_config_account_id, receiver_config_seed,
 };
 use test_guest_core::{
     Script,
@@ -85,11 +82,6 @@ fn base_state() -> V03State {
         (
             programs::cross_zone_inbox_account_id(),
             programs::cross_zone_inbox(),
-            true,
-        ),
-        (
-            programs::cross_zone_outbox_account_id(),
-            programs::cross_zone_outbox(),
             true,
         ),
         (
@@ -218,21 +210,6 @@ fn seed_receiver_config_with_governance(
     )]);
 }
 
-/// Seeds the ping-sender config account pinning the real outbox, matching what
-/// genesis seeds for a real zone.
-fn seed_ping_sender_config(state: &mut V03State) {
-    let sender_id = programs::ping_sender_account_id();
-    *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
-        sender_config_account_id(sender_id),
-        Account::default().with_actor_state(
-            sender_id,
-            outbox_bytes(programs::cross_zone_outbox_account_id())
-                .to_vec()
-                .into(),
-        ),
-    )]);
-}
-
 /// The holding PDA a holder's bridgeable balance lives in.
 fn holding_id_of(holder_id: AccountId) -> AccountId {
     bridge_lock_core::holding_account_id(
@@ -255,7 +232,6 @@ fn seed_bridge_lock_config(state: &mut V03State) {
         Account::default().with_actor_state(
             bridge_lock_id,
             bridge_lock_core::config_bytes(
-                programs::cross_zone_outbox_account_id(),
                 programs::wrapped_token_account_id(),
                 &LOCK_TARGET_ZONES,
             )
@@ -396,39 +372,55 @@ fn chained_via_inbox(
     )
 }
 
-/// A `ping_sender::Send` carrying `payload` to `target_zone`, received at `config` and emitting
-/// into `outbox`, both given rather than the correct ones, so tests can vary them.
-fn send_tx(
-    config: Actor,
-    outbox: Actor,
-    target_zone: [u8; 32],
-    ordinal: u32,
-    admission_evidence: Vec<PublicAccountEvidence>,
-) -> PublicTransaction {
+/// A `ping_sender::Send` carrying `b"ping"` to `ping_receiver` on `target_zone`.
+fn send_tx(target_zone: [u8; 32]) -> PublicTransaction {
     let receiver_id = programs::ping_receiver_account_id();
+    let sender_id = programs::ping_sender_account_id();
     let payload = borsh::to_vec(&ReceiverMessage::Record {
         payload: b"ping".to_vec(),
     })
     .expect("serialize ping message");
+    let sender = Actor::new(sender_id, sender_id);
     let send = ping_core::SenderMessage::Send {
-        outbox,
-        emission: CrossZoneEmission {
-            target_zone,
-            target_account_id: receiver_id,
-            target_accounts: vec![
+        target_zone,
+        target: Actor::new(receiver_id, receiver_id),
+        accounts: vec![
+            Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+            Actor::new(ping_record_pda(receiver_id), receiver_id),
+        ],
+        payload,
+    };
+    let message = Message::try_new(sender, vec![sender], BTreeMap::new(), send)
+        .expect("build ping_sender message");
+    PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
+}
+
+/// The send's whole effect is the outbound message the block declares.
+#[test]
+fn a_top_level_send_surfaces_an_outbound_message() {
+    let receiver_id = programs::ping_receiver_account_id();
+    let sender_id = programs::ping_sender_account_id();
+    let state = base_state();
+
+    let diff = ValidatedStateDiff::from_public_transaction(&send_tx([2; 32]), &state, 1, 0)
+        .expect("the send executes");
+
+    assert_eq!(
+        diff.outbound(),
+        [lee::OutboundMessage {
+            from: Actor::new(sender_id, sender_id),
+            zone: [2; 32],
+            to: Actor::new(receiver_id, receiver_id),
+            message: borsh::to_vec(&ReceiverMessage::Record {
+                payload: b"ping".to_vec(),
+            })
+            .expect("serialize ping message"),
+            accounts: vec![
                 Actor::new(receiver_config_account_id(receiver_id), receiver_id),
                 Actor::new(ping_record_pda(receiver_id), receiver_id),
             ],
-            payload,
-            ordinal,
-        },
-    };
-    let message = Message {
-        admission_evidence,
-        ..Message::try_new(config, vec![config, outbox], BTreeMap::new(), send)
-            .expect("build ping_sender message")
-    };
-    PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
+        }]
+    );
 }
 
 /// The wrapped-token `Mint` the bridge forwards, serialized as the cross-zone
@@ -895,14 +887,12 @@ fn inbox_dispatch_delivers_payload_to_ping_receiver() {
 }
 
 /// Drives `bridge_lock::Lock` and asserts it debits the holder, credits the
-/// escrow, and records the forwarded mint in the outbox PDA.
+/// escrow, and surfaces the mint as the transaction's outbound message.
 #[test]
-fn lock_escrows_balance_and_emits_to_outbox() {
+fn lock_escrows_balance_and_sends_the_mint() {
     let bridge_lock_id = programs::bridge_lock_account_id();
     let wrapped_token_id = programs::wrapped_token_account_id();
-    let outbox_id = programs::cross_zone_outbox_account_id();
     let zone_b = [2_u8; 32];
-    let ordinal = 0;
 
     let mut state = base_state();
 
@@ -911,10 +901,8 @@ fn lock_escrows_balance_and_emits_to_outbox() {
     seed_holding(&mut state, holder_id, INITIAL_BALANCE);
     seed_bridge_lock_config(&mut state);
 
-    let payload = mint_payload();
     let escrow_id = bridge_lock_core::escrow_account_id(bridge_lock_id);
-    let outbox_record_id = outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal);
-    let tx = lock_tx(&holder_key, holder_id, zone_b, ordinal, 0);
+    let tx = lock_tx(&holder_key, holder_id, zone_b, 0);
 
     let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
         .expect("lock must validate and execute");
@@ -933,43 +921,86 @@ fn lock_escrows_balance_and_emits_to_outbox() {
     let escrow_after = public_diff[&escrow_id].data.native_balance().unwrap();
     assert_eq!(escrow_after, LOCK_AMOUNT, "escrow credited");
 
-    let record = OutboxRecord::from_bytes(
-        public_diff[&outbox_record_id]
-            .data
-            .actor_state(outbox_id)
-            .as_ref(),
-    )
-    .expect("outbox PDA holds an OutboxRecord");
     assert_eq!(
-        record.emitter, bridge_lock_id,
-        "the record names the program that emitted it"
-    );
-    assert_eq!(record.target_zone, zone_b);
-    assert_eq!(record.ordinal, ordinal);
-    assert_eq!(record.target_account_id, wrapped_token_id);
-    assert_eq!(
-        record.payload, payload,
-        "emitted payload is the wrapped mint"
+        diff.outbound(),
+        [lee::OutboundMessage {
+            from: Actor::new(holder_id, bridge_lock_id),
+            zone: zone_b,
+            to: Actor::new(wrapped_token_id, wrapped_token_id),
+            message: mint_payload(),
+            accounts: mint_target_accounts(wrapped_token_id),
+        }],
+        "the mint leaves the zone as the lock's outbound message"
     );
 }
 
-/// A `bridge_lock::Lock` emitting to `(zone_b, ordinal)`, ready to run twice.
+/// Two identical locks both execute: each debits the holder, and each leaves
+/// as its own outbound message (dedup is by block coordinates, not content).
+#[test]
+fn a_second_identical_lock_escrows_and_sends_again() {
+    let bridge_lock_id = programs::bridge_lock_account_id();
+    let zone_b = [2_u8; 32];
+
+    let mut state = base_state();
+    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
+    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
+    seed_bridge_lock_config(&mut state);
+    let escrow_id = bridge_lock_core::escrow_account_id(bridge_lock_id);
+
+    let first = ValidatedStateDiff::from_public_transaction(
+        &lock_tx(&holder_key, holder_id, zone_b, 0),
+        &state,
+        1,
+        0,
+    )
+    .expect("the first lock executes");
+    assert_eq!(first.outbound().len(), 1);
+    state
+        .apply_state_diff(first)
+        .expect("the first lock applies");
+
+    let second = ValidatedStateDiff::from_public_transaction(
+        &lock_tx(&holder_key, holder_id, zone_b, 1),
+        &state,
+        1,
+        1,
+    )
+    .expect("an identical second lock executes");
+    assert_eq!(
+        second.outbound().len(),
+        1,
+        "the second lock sends its own mint"
+    );
+    let public_diff = second.public_diff();
+    assert_eq!(
+        public_diff[&holding_id_of(holder_id)]
+            .data
+            .native_balance()
+            .unwrap(),
+        INITIAL_BALANCE - 2 * LOCK_AMOUNT,
+        "holding debited twice"
+    );
+    assert_eq!(
+        public_diff[&escrow_id].data.native_balance().unwrap(),
+        2 * LOCK_AMOUNT,
+        "escrow credited twice"
+    );
+}
+
+/// A `bridge_lock::Lock` to `zone_b`, ready to run twice.
 fn lock_tx(
     holder_key: &PrivateKey,
     holder_id: AccountId,
     zone_b: [u8; 32],
-    ordinal: u32,
     nonce: u128,
 ) -> PublicTransaction {
-    let wrapped_token_id = programs::wrapped_token_account_id();
     lock_tx_to(
         holder_key,
         holder_id,
         zone_b,
-        ordinal,
         nonce,
-        wrapped_token_id,
-        mint_target_accounts(wrapped_token_id),
+        programs::wrapped_token_account_id(),
     )
 }
 
@@ -988,52 +1019,30 @@ fn mint_target_accounts(wrapped_token_id: AccountId) -> Vec<Actor> {
     ]
 }
 
-/// The same lock aimed at `target_program_id` over `target_accounts`, so a test
-/// can vary what the destination would be asked to do.
+/// The same lock aimed at `target_account_id`, to vary the destination's instruction.
 fn lock_tx_to(
     holder_key: &PrivateKey,
     holder_id: AccountId,
     zone_b: [u8; 32],
-    ordinal: u32,
     nonce: u128,
     target_account_id: AccountId,
-    target_accounts: Vec<Actor>,
 ) -> PublicTransaction {
     signed_lock(
         holder_key,
         holder_id,
         nonce,
         bridge_lock_core::Message::Lock {
-            outbox: lock_slot(zone_b, ordinal),
             amount: LOCK_AMOUNT,
-            emission: CrossZoneEmission {
-                target_zone: zone_b,
-                target_account_id,
-                target_accounts,
-                payload: mint_payload(),
-                ordinal,
-            },
+            target_zone: zone_b,
+            target_account_id,
+            payload: mint_payload(),
         },
     )
 }
 
-/// The bridge-lock outbox slot for `(zone_b, ordinal)`.
-fn lock_slot(zone_b: [u8; 32], ordinal: u32) -> Actor {
-    let outbox_id = programs::cross_zone_outbox_account_id();
-    Actor::new(
-        outbox_pda(
-            outbox_id,
-            programs::bridge_lock_account_id(),
-            &zone_b,
-            ordinal,
-        ),
-        outbox_id,
-    )
-}
-
 /// `lock` received at `holder_id`'s own bridge-lock actor, signed by `key` at `nonce`. It declares
-/// what a lock reaches: the config it checks its route at, the holding it moves into the escrow,
-/// and the outbox slot it emits into.
+/// what a lock reaches: the config it checks its route at and the holding it moves into the
+/// escrow.
 fn signed_lock(
     key: &PrivateKey,
     holder_id: AccountId,
@@ -1041,12 +1050,6 @@ fn signed_lock(
     lock: bridge_lock_core::Message,
 ) -> PublicTransaction {
     let bridge_lock_id = programs::bridge_lock_account_id();
-    let bridge_lock_core::Message::Lock {
-        outbox, emission, ..
-    } = &lock
-    else {
-        panic!("signed_lock sends a Lock");
-    };
     let holder = Actor::new(holder_id, bridge_lock_id);
     let message = Message {
         admission_evidence: vec![
@@ -1057,10 +1060,6 @@ fn signed_lock(
             PublicAccountEvidence::Pda {
                 program: bridge_lock_id,
                 seed: bridge_lock_core::escrow_seed(),
-            },
-            PublicAccountEvidence::Pda {
-                program: outbox.program_account_id,
-                seed: outbox_pda_seed(bridge_lock_id, &emission.target_zone, emission.ordinal),
             },
         ],
         ..Message::try_new(
@@ -1073,7 +1072,6 @@ fn signed_lock(
                 ),
                 Actor::native_balance(holding_id_of(holder_id)),
                 Actor::native_balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
-                *outbox,
             ],
             BTreeMap::from([(
                 AccountId::from(&PublicKey::new_from_private_key(key)),
@@ -1085,153 +1083,6 @@ fn signed_lock(
     };
     let witness = WitnessSet::for_message(&message, &[key]);
     PublicTransaction::new(message, witness)
-}
-
-/// A slot holds one message for ever, so a second emission into it fails rather
-/// than replacing the record. Without this a later emitter silently destroys an
-/// earlier one, and for a bridge that means an escrow with no record of what it
-/// was for.
-#[test]
-fn a_second_emit_at_the_same_slot_is_rejected() {
-    let zone_b = [2_u8; 32];
-    let ordinal = 0;
-
-    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
-    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
-    let mut state = base_state();
-    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
-    seed_bridge_lock_config(&mut state);
-
-    let first = lock_tx(&holder_key, holder_id, zone_b, ordinal, 0);
-    let diff = ValidatedStateDiff::from_public_transaction(&first, &state, 1, 0)
-        .expect("the first lock executes");
-    state
-        .apply_state_diff(diff)
-        .expect("the validated diff applies");
-
-    // Same slot, fresh nonce, so the only thing that can reject it is the slot
-    // already holding a record. Matched on the guest's own message rather than
-    // any error, or a future change that rejected it earlier for an unrelated
-    // reason would keep this passing.
-    let second = lock_tx(&holder_key, holder_id, zone_b, ordinal, 1);
-    let Err(err) = ValidatedStateDiff::from_public_transaction(&second, &state, 2, 0) else {
-        panic!("a second emission into a written slot must not execute");
-    };
-    assert!(
-        format!("{err:?}").contains("Outbox slot already written"),
-        "rejected for the wrong reason: {err:?}"
-    );
-
-    // Control: the same second lock into a fresh ordinal executes, so the
-    // refusal above is the slot and not the transaction's shape.
-    let elsewhere = lock_tx(&holder_key, holder_id, zone_b, ordinal + 1, 1);
-    ValidatedStateDiff::from_public_transaction(&elsewhere, &state, 2, 0)
-        .expect("a lock into an unwritten slot executes");
-}
-
-/// Two programs emitting to one zone and ordinal address two different slots,
-/// so neither can overwrite or block the other.
-#[test]
-fn two_emitters_share_an_ordinal_without_colliding() {
-    let outbox_id = programs::cross_zone_outbox_account_id();
-    let sender_id = programs::ping_sender_account_id();
-    let bridge_lock_id = programs::bridge_lock_account_id();
-    let receiver_id = programs::ping_receiver_account_id();
-    let zone_b = [2_u8; 32];
-    let ordinal = 0;
-
-    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
-    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
-    let mut state = base_state();
-    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
-    seed_ping_sender_config(&mut state);
-    seed_bridge_lock_config(&mut state);
-
-    let lock_slot = outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal);
-    let send_slot = outbox_pda(outbox_id, sender_id, &zone_b, ordinal);
-    assert_ne!(
-        lock_slot, send_slot,
-        "the same zone and ordinal under two emitters are two slots"
-    );
-
-    let lock = lock_tx(&holder_key, holder_id, zone_b, ordinal, 0);
-    let diff = ValidatedStateDiff::from_public_transaction(&lock, &state, 1, 0)
-        .expect("the lock executes");
-    state
-        .apply_state_diff(diff)
-        .expect("the validated diff applies");
-
-    let send = send_tx(
-        Actor::new(sender_config_account_id(sender_id), sender_id),
-        Actor::new(send_slot, outbox_id),
-        zone_b,
-        ordinal,
-        vec![PublicAccountEvidence::Pda {
-            program: outbox_id,
-            seed: outbox_pda_seed(sender_id, &zone_b, ordinal),
-        }],
-    );
-    let send_diff = ValidatedStateDiff::from_public_transaction(&send, &state, 2, 0)
-        .expect("the send executes into its own slot, not the lock's");
-
-    let record = OutboxRecord::from_bytes(
-        send_diff.public_diff()[&send_slot]
-            .data
-            .actor_state(outbox_id)
-            .as_ref(),
-    )
-    .expect("outbox PDA holds an OutboxRecord");
-    assert_eq!(record.emitter, sender_id);
-    assert_eq!(record.target_account_id, receiver_id);
-
-    // And the lock's own slot is untouched by it.
-    let lock_record = OutboxRecord::from_bytes(
-        state
-            .get_account_by_id(lock_slot)
-            .data
-            .actor_state(outbox_id)
-            .as_ref(),
-    )
-    .expect("the lock's record survives");
-    assert_eq!(lock_record.emitter, bridge_lock_id);
-}
-
-/// A caller can no longer aim an emission at a program of their own and still
-/// succeed, leaving no record of it. The pinned outbox program is checked, so the
-/// slot's account is the only way left to try.
-#[test]
-fn a_send_into_a_foreign_outbox_slot_is_rejected() {
-    let sender_id = programs::ping_sender_account_id();
-    let zone_b = [2_u8; 32];
-    let ordinal = 0;
-
-    let mut state = base_state();
-    seed_ping_sender_config(&mut state);
-
-    // A slot under some other program, which is what the caller would have to
-    // pass to reach it.
-    let foreign_program = AccountId::from_builtin_program([3; 8]);
-    let foreign_slot = outbox_pda(foreign_program, sender_id, &zone_b, ordinal);
-    let send = send_tx(
-        Actor::new(sender_config_account_id(sender_id), sender_id),
-        Actor::new(foreign_slot, programs::cross_zone_outbox_account_id()),
-        zone_b,
-        ordinal,
-        vec![PublicAccountEvidence::Pda {
-            program: foreign_program,
-            seed: outbox_pda_seed(sender_id, &zone_b, ordinal),
-        }],
-    );
-
-    // Refused inside the pinned outbox, not by the sender: the emission goes
-    // there whatever slot account the caller names, which is the point.
-    let Err(err) = ValidatedStateDiff::from_public_transaction(&send, &state, 1, 0) else {
-        panic!("a send into a slot outside the pinned outbox must not execute");
-    };
-    assert!(
-        format!("{err:?}").contains("Account must be the outbox PDA"),
-        "rejected for the wrong reason: {err:?}"
-    );
 }
 
 /// Nothing releases an escrow, so a message the destination will refuse is a
@@ -1248,15 +1099,7 @@ fn a_lock_naming_another_target_program_is_rejected() {
     seed_bridge_lock_config(&mut state);
 
     let elsewhere = programs::ping_receiver_account_id();
-    let lock = lock_tx_to(
-        &holder_key,
-        holder_id,
-        zone_b,
-        0,
-        0,
-        elsewhere,
-        mint_target_accounts(elsewhere),
-    );
+    let lock = lock_tx_to(&holder_key, holder_id, zone_b, 0, elsewhere);
 
     let Err(err) = ValidatedStateDiff::from_public_transaction(&lock, &state, 1, 0) else {
         panic!("a lock aimed at another program must not execute");
@@ -1277,63 +1120,12 @@ fn a_lock_to_an_unpinned_zone_is_rejected() {
     seed_holding(&mut state, holder_id, INITIAL_BALANCE);
     seed_bridge_lock_config(&mut state);
 
-    let lock = lock_tx(&holder_key, holder_id, unpinned, 0, 0);
+    let lock = lock_tx(&holder_key, holder_id, unpinned, 0);
     rejects_at(
         &state,
         &lock,
         1,
         "bridge_lock only locks to a zone it is pinned to",
-    );
-}
-
-/// The same burn by a different route: the right target program, the wrong
-/// accounts for it. `wrapped_token::Mint` fails its own address asserts on the
-/// destination, so the escrow has to be refused here instead.
-#[test]
-fn a_lock_naming_other_mint_accounts_is_rejected() {
-    let wrapped_token_id = programs::wrapped_token_account_id();
-    let zone_b = [2_u8; 32];
-
-    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
-    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
-    let mut state = base_state();
-    seed_holding(&mut state, holder_id, INITIAL_BALANCE);
-    seed_bridge_lock_config(&mut state);
-
-    // A holding under someone other than the payload's recipient: a mint the
-    // destination would credit to the wrong account if it credited it at all.
-    let other_holding = wrapped_token_core::holding_account_id(wrapped_token_id, &[4; 32]);
-    let lock = lock_tx_to(
-        &holder_key,
-        holder_id,
-        zone_b,
-        0,
-        0,
-        wrapped_token_id,
-        vec![
-            Actor::new(
-                wrapped_token_core::config_account_id(wrapped_token_id),
-                wrapped_token_id,
-            ),
-            Actor::new(other_holding, wrapped_token_id),
-        ],
-    );
-
-    let Err(err) = ValidatedStateDiff::from_public_transaction(&lock, &state, 1, 0) else {
-        panic!("a lock over the wrong mint accounts must not execute");
-    };
-    assert!(
-        format!("{err:?}").contains("target accounts must be the mint's config"),
-        "rejected for the wrong reason: {err:?}"
-    );
-    assert_eq!(
-        state
-            .get_account_by_id(holding_id_of(holder_id))
-            .data
-            .native_balance()
-            .unwrap(),
-        INITIAL_BALANCE,
-        "a refused lock leaves the holding's balance alone"
     );
 }
 
@@ -1391,7 +1183,7 @@ fn lock_debits_the_holding_not_the_holder() {
     seed_holding(&mut state, holder_id, INITIAL_BALANCE);
     seed_bridge_lock_config(&mut state);
 
-    let tx = lock_tx(&holder_key, holder_id, zone_b, 0, 0);
+    let tx = lock_tx(&holder_key, holder_id, zone_b, 0);
     let diff =
         ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0).expect("the lock executes");
     state
@@ -1434,15 +1226,10 @@ fn a_zero_amount_lock_is_refused() {
         holder_id,
         0,
         bridge_lock_core::Message::Lock {
-            outbox: lock_slot(zone_b, 0),
             amount: 0,
-            emission: CrossZoneEmission {
-                target_zone: zone_b,
-                target_account_id: wrapped_token_id,
-                target_accounts: mint_target_accounts(wrapped_token_id),
-                payload: mint_payload_of(0),
-                ordinal: 0,
-            },
+            target_zone: zone_b,
+            target_account_id: wrapped_token_id,
+            payload: mint_payload_of(0),
         },
     );
     rejects_at(&state, &tx, 1, "locked amount must be positive");
@@ -1468,15 +1255,10 @@ fn a_lock_naming_someone_elses_holding_is_refused() {
         victim_id,
         0,
         bridge_lock_core::Message::Lock {
-            outbox: lock_slot(zone_b, 0),
             amount: LOCK_AMOUNT,
-            emission: CrossZoneEmission {
-                target_zone: zone_b,
-                target_account_id: wrapped_token_id,
-                target_accounts: mint_target_accounts(wrapped_token_id),
-                payload: mint_payload(),
-                ordinal: 0,
-            },
+            target_zone: zone_b,
+            target_account_id: wrapped_token_id,
+            payload: mint_payload(),
         },
     );
     rejects_at(&state, &tx, 1, "holder must authorize the lock");
@@ -1501,12 +1283,12 @@ fn a_lock_before_the_pins_are_set_is_rejected() {
     let mut state = base_state();
     seed_holding(&mut state, holder_id, INITIAL_BALANCE);
 
-    let lock = lock_tx(&holder_key, holder_id, zone_b, 0, 0);
+    let lock = lock_tx(&holder_key, holder_id, zone_b, 0);
     let Err(err) = ValidatedStateDiff::from_public_transaction(&lock, &state, 1, 0) else {
         panic!("a lock with nothing pinned must not execute");
     };
     assert!(
-        format!("{err:?}").contains("config account holds an outbox, a mint target and the zones"),
+        format!("{err:?}").contains("config account holds a mint target and the zones"),
         "rejected for the wrong reason: {err:?}"
     );
 }
@@ -1517,10 +1299,9 @@ fn a_lock_before_the_pins_are_set_is_rejected() {
 fn the_bridge_pins_are_written_once_and_replayable() {
     let bridge_lock_id = programs::bridge_lock_account_id();
     let config_id = bridge_lock_core::config_account_id(bridge_lock_id);
-    let outbox_id = programs::cross_zone_outbox_account_id();
     let wrapped_token_id = programs::wrapped_token_account_id();
 
-    let init = |outbox: AccountId, target: AccountId, zones: Vec<[u8; 32]>| {
+    let init = |target: AccountId, zones: Vec<[u8; 32]>| {
         let config = Actor::new(config_id, bridge_lock_id);
         let message = Message {
             admission_evidence: vec![PublicAccountEvidence::Pda {
@@ -1532,7 +1313,6 @@ fn the_bridge_pins_are_written_once_and_replayable() {
                 vec![config],
                 BTreeMap::new(),
                 bridge_lock_core::Message::InitConfig {
-                    outbox_account_id: outbox,
                     target_account_id: target,
                     lock_target_zones: zones,
                 },
@@ -1545,13 +1325,9 @@ fn the_bridge_pins_are_written_once_and_replayable() {
 
     let mut state = base_state();
 
-    let diff = ValidatedStateDiff::from_public_transaction(
-        &init(outbox_id, wrapped_token_id, zones()),
-        &state,
-        1,
-        0,
-    )
-    .expect("the first init claims the config PDA");
+    let diff =
+        ValidatedStateDiff::from_public_transaction(&init(wrapped_token_id, zones()), &state, 1, 0)
+            .expect("the first init claims the config PDA");
     state
         .apply_state_diff(diff)
         .expect("the validated diff applies");
@@ -1563,45 +1339,25 @@ fn the_bridge_pins_are_written_once_and_replayable() {
                 .actor_state(bridge_lock_id)
                 .as_ref()
         ),
-        Some((outbox_id, wrapped_token_id, zones())),
-        "the config pins both programs and the zones it locks to after genesis"
+        Some((wrapped_token_id, zones())),
+        "the config pins the mint target and the zones it locks to after genesis"
     );
 
-    ValidatedStateDiff::from_public_transaction(
-        &init(outbox_id, wrapped_token_id, zones()),
-        &state,
-        2,
-        0,
-    )
-    .expect("replaying the identical init is a no-op, not a failure");
+    ValidatedStateDiff::from_public_transaction(&init(wrapped_token_id, zones()), &state, 2, 0)
+        .expect("replaying the identical init is a no-op, not a failure");
 
-    // Any one of the three moving is a redirect.
-    for (outbox, target, pinned, what) in [
+    // Either one moving is a redirect.
+    for (target, pinned, what) in [
         (
-            AccountId::from_builtin_program([3; 8]),
-            wrapped_token_id,
-            zones(),
-            "outbox",
-        ),
-        (
-            outbox_id,
             AccountId::from_builtin_program([3; 8]),
             zones(),
             "mint target",
         ),
-        (
-            outbox_id,
-            wrapped_token_id,
-            vec![[0xAA; 32]],
-            "lock target zone",
-        ),
+        (wrapped_token_id, vec![[0xAA; 32]], "lock target zone"),
     ] {
-        let Err(err) = ValidatedStateDiff::from_public_transaction(
-            &init(outbox, target, pinned),
-            &state,
-            3,
-            0,
-        ) else {
+        let Err(err) =
+            ValidatedStateDiff::from_public_transaction(&init(target, pinned), &state, 3, 0)
+        else {
             panic!("a re-init naming a different {what} must not execute");
         };
         assert!(
@@ -1609,137 +1365,6 @@ fn the_bridge_pins_are_written_once_and_replayable() {
             "rejected for the wrong reason: {err:?}"
         );
     }
-}
-
-/// An emitter with no pin cannot fall back to a caller-named outbox: it stops
-/// emitting. The state a zone reaches by skipping the genesis init.
-#[test]
-fn a_send_before_the_pin_is_set_is_rejected() {
-    let sender_id = programs::ping_sender_account_id();
-    let outbox_id = programs::cross_zone_outbox_account_id();
-    let zone_b = [2_u8; 32];
-    let ordinal = 0;
-
-    let state = base_state();
-    let slot = outbox_pda(outbox_id, sender_id, &zone_b, ordinal);
-    let send = send_tx(
-        Actor::new(sender_config_account_id(sender_id), sender_id),
-        Actor::new(slot, outbox_id),
-        zone_b,
-        ordinal,
-        vec![PublicAccountEvidence::Pda {
-            program: sender_id,
-            seed: sender_config_seed(),
-        }],
-    );
-
-    let Err(err) = ValidatedStateDiff::from_public_transaction(&send, &state, 1, 0) else {
-        panic!("a send with no outbox pinned must not execute");
-    };
-    assert!(
-        format!("{err:?}").contains("config account holds an outbox program id"),
-        "rejected for the wrong reason: {err:?}"
-    );
-}
-
-/// The config is read by address, so substituting another account for it fails
-/// rather than pinning the outbox to whatever that account happens to hold.
-#[test]
-fn a_send_with_a_substituted_config_account_is_rejected() {
-    let sender_id = programs::ping_sender_account_id();
-    let outbox_id = programs::cross_zone_outbox_account_id();
-    let zone_b = [2_u8; 32];
-    let ordinal = 0;
-
-    let mut state = base_state();
-    seed_ping_sender_config(&mut state);
-
-    let slot = outbox_pda(outbox_id, sender_id, &zone_b, ordinal);
-    let send = send_tx(
-        Actor::new(ping_record_pda(sender_id), sender_id),
-        Actor::new(slot, outbox_id),
-        zone_b,
-        ordinal,
-        vec![PublicAccountEvidence::Pda {
-            program: sender_id,
-            seed: ping_record_seed(),
-        }],
-    );
-
-    let Err(err) = ValidatedStateDiff::from_public_transaction(&send, &state, 1, 0) else {
-        panic!("a send over a substituted config account must not execute");
-    };
-    assert!(
-        format!("{err:?}").contains("must be the ping-sender config PDA"),
-        "rejected for the wrong reason: {err:?}"
-    );
-}
-
-/// Written once: an identical re-init has to succeed, since genesis is replayed
-/// during multi-sequencer reconstruction, while one naming a different outbox has
-/// to fail, or anyone could redirect every emission on the zone after genesis.
-#[test]
-fn the_outbox_pin_is_written_once_and_replayable() {
-    let sender_id = programs::ping_sender_account_id();
-    let config_id = sender_config_account_id(sender_id);
-
-    // Unsigned and nonce-free, as genesis builds it: the config PDA has no signer.
-    let init = |outbox: AccountId| {
-        let config = Actor::new(config_id, sender_id);
-        let message = Message {
-            admission_evidence: vec![PublicAccountEvidence::Pda {
-                program: sender_id,
-                seed: sender_config_seed(),
-            }],
-            ..Message::try_new(
-                config,
-                vec![config],
-                BTreeMap::new(),
-                ping_core::SenderMessage::InitConfig {
-                    outbox_account_id: outbox,
-                },
-            )
-            .expect("build InitConfig message")
-        };
-        PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
-    };
-
-    let mut state = base_state();
-    let outbox_id = programs::cross_zone_outbox_account_id();
-
-    let first = init(outbox_id);
-    let diff = ValidatedStateDiff::from_public_transaction(&first, &state, 1, 0)
-        .expect("the first init claims the config PDA");
-    state
-        .apply_state_diff(diff)
-        .expect("the validated diff applies");
-    assert_eq!(
-        read_outbox(
-            state
-                .get_account_by_id(config_id)
-                .data
-                .actor_state(sender_id)
-                .as_ref()
-        ),
-        Some(outbox_id),
-        "the config pins the outbox after genesis"
-    );
-
-    ValidatedStateDiff::from_public_transaction(&init(outbox_id), &state, 2, 0)
-        .expect("replaying the identical init is a no-op, not a failure");
-
-    let Err(err) = ValidatedStateDiff::from_public_transaction(
-        &init(AccountId::from_builtin_program([3; 8])),
-        &state,
-        3,
-        0,
-    ) else {
-        panic!("a re-init naming a different outbox must not execute");
-    };
-    assert!(
-        format!("{err:?}").contains("actor state already holds different data"),
-        "rejected for the wrong reason: {err:?}"
-    );
 }
 
 /// The token's authority path, end to end: each guard refuses for its own
@@ -3149,11 +2774,10 @@ fn an_unauthorized_claim_at_the_program_account_is_refused() {
     rejects_at(&state, &tx, 1, "must authorize the receiver config claim");
 }
 
-/// A chained `Post` is refused and a top-level one executes without writing:
-/// emissions are recognized only at a transaction's top level, so a chained
-/// declaration would be a send that silently never leaves the zone.
+/// A chained `Post` is refused and a top-level one sends: the chat program asserts
+/// top level itself, so a proxy cannot send under its name.
 #[test]
-fn a_chained_post_is_refused_and_a_top_level_post_is_a_no_op() {
+fn a_chained_post_is_refused_and_a_top_level_post_sends() {
     let chat_id = AccountId::from_builtin_program(test_programs::zone_chat().id());
     let proxy_id = AccountId::from_builtin_program(test_programs::scripted().id());
     let mut state = base_state().with_programs_at([
@@ -3162,12 +2786,11 @@ fn a_chained_post_is_refused_and_a_top_level_post_is_a_no_op() {
     ]);
     seed_inbox_config(&mut state, [1_u8; 32]);
 
-    let emission = CrossZoneEmission {
+    let post_message = || ChatMessage::Post {
         target_zone: [2; 32],
-        target_account_id: AccountId::new([9; 32]),
-        target_accounts: vec![],
+        target: Actor::new(AccountId::new([9; 32]), AccountId::new([9; 32])),
+        accounts: vec![],
         payload: b"hi".to_vec(),
-        ordinal: 0,
     };
     let entry = Actor::new(chat_id, chat_id);
 
@@ -3175,7 +2798,7 @@ fn a_chained_post_is_refused_and_a_top_level_post_is_a_no_op() {
     let caller = Actor::new(AccountId::for_public_pda(&proxy_id, &seed), proxy_id);
     let script = Script::default().send(SyncMessage {
         to: entry.into(),
-        message: bytes_of!(&ChatMessage::post(emission.clone())),
+        message: bytes_of!(&post_message()),
         pda_seeds: std::collections::BTreeSet::new(),
     });
     let message = Message {
@@ -3192,14 +2815,20 @@ fn a_chained_post_is_refused_and_a_top_level_post_is_a_no_op() {
     // way, and a crafted delivery is stopped by the config's deliverer pin.
     rejects_at(&state, &chained, 1, "a delivery decodes");
 
-    let post = Message::try_new(
-        entry,
-        vec![entry],
-        BTreeMap::new(),
-        ChatMessage::post(emission),
-    )
-    .expect("build Post message");
+    let post = Message::try_new(entry, vec![entry], BTreeMap::new(), post_message())
+        .expect("build Post message");
     let top_level = PublicTransaction::new(post, WitnessSet::from_raw_parts(vec![]));
-    ValidatedStateDiff::from_public_transaction(&top_level, &state, 1, 0)
-        .expect("a top-level Post declares the emission and writes nothing");
+    let diff = ValidatedStateDiff::from_public_transaction(&top_level, &state, 1, 0)
+        .expect("a top-level Post sends and writes nothing");
+    assert_eq!(
+        diff.outbound(),
+        [lee::OutboundMessage {
+            from: entry,
+            zone: [2; 32],
+            to: Actor::new(AccountId::new([9; 32]), AccountId::new([9; 32])),
+            message: b"hi".to_vec(),
+            accounts: vec![],
+        }],
+        "the post is the transaction's outbound message"
+    );
 }

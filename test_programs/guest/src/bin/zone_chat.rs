@@ -3,8 +3,8 @@ use lee_core::{
     program::{ReceiveInput, Response, write_once},
 };
 use test_guest_core::chat::{
-    ChatLog, ChatMessage, Delivery, EMITTER_MAGIC, ReceiverConfig, chat_log_account_id,
-    chat_log_seed, receiver_config_account_id, receiver_config_seed,
+    ChatLog, ChatMessage, Delivery, ReceiverConfig, chat_log_account_id, chat_log_seed,
+    receiver_config_account_id, receiver_config_seed,
 };
 
 lee_core::actor_entrypoint!(raw handle_message);
@@ -18,16 +18,28 @@ fn handle_message(input: &ReceiveInput) -> Response {
     let message: ChatMessage =
         borsh::from_slice(&input.message).expect("message must decode from borsh");
     match message {
-        // Declaring the emission is the whole send: the watcher reads it off
-        // this instruction. Top level only, since emissions are recognized only
-        // at a transaction's top level.
-        ChatMessage::Post { magic, .. } => {
+        ChatMessage::Post {
+            target_zone,
+            target,
+            accounts,
+            payload,
+        } => {
             assert!(
                 input.from.is_none(),
-                "Post is a top-level instruction; a chained emission is never recognized"
+                "Post is a top-level instruction of the chat's deployer or users"
             );
-            assert!(magic == EMITTER_MAGIC, "a Post declares the emitter magic");
-            Response::keep_state()
+            assert_eq!(
+                input.receiver.account_id, program,
+                "a Post runs at the chat program actor"
+            );
+            Response::keep_state().send(lee_core::program::AsyncMessage {
+                to: lee_core::account::Target::Remote {
+                    zone: target_zone,
+                    actor: target,
+                },
+                message: payload,
+                accounts,
+            })
         }
         // The claim arrives at the program account, whose key only the deployer
         // holds, and is forwarded to the config PDA; a bare first write at the

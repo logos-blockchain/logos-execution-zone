@@ -1,29 +1,31 @@
 //! Types for the `zone_chat` test guest: a program with no builtin privileges
-//! that is both a generic emitter and a conforming receiver.
+//! that both sends across zones and is a conforming receiver.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-pub use cross_zone_emission_core::{CrossZoneEmission, EMITTER_MAGIC};
 pub use cross_zone_receiver_core::{
     Delivery, INIT_CONFIG_TAG, ReceiverConfig, ZoneId, init_config_instruction_bytes,
     receiver_config_account_id, receiver_config_seed,
 };
-use lee_core::{account::AccountId, program::PdaSeed};
+use lee_core::{
+    account::{AccountId, Actor},
+    program::PdaSeed,
+};
 
 const CHAT_LOG_SEED: [u8; 32] = *b"/LEZ/test/ZoneChatLog/0000000000";
 
 /// Newest-last entries kept in the log; older ones are dropped.
 pub const CHAT_LOG_CAP: usize = 64;
 
-/// `zone_chat`'s instruction set. The first two tags are the two cross-zone
-/// contracts: `Post` the emitter shape, `InitConfig` the receiver's claim.
+/// `zone_chat`'s instruction set.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum ChatMessage {
-    /// Declare an outbound message; the watcher reads the emission off this
-    /// instruction when the program is listed in the peer's emitters. `magic`
-    /// must be [`EMITTER_MAGIC`]: it is how the variant opts into the contract.
+    /// Send `payload` to `target` in `target_zone`, declaring `accounts` for
+    /// its delivery.
     Post {
-        magic: [u8; 8],
-        emission: CrossZoneEmission,
+        target_zone: ZoneId,
+        target: Actor,
+        accounts: Vec<Actor>,
+        payload: Vec<u8>,
     },
     /// Claims the receiver config. At the program actor it requires the
     /// program account's authorization (the deployer's key) and is forwarded
@@ -40,18 +42,6 @@ pub enum ChatMessage {
     },
     /// The config appends an authorized delivery to the log. Internal.
     WriteLog { src_zone: ZoneId, text: Vec<u8> },
-}
-
-impl ChatMessage {
-    /// A [`ChatMessage::Post`] carrying the contract's magic, so no caller
-    /// hand-writes it.
-    #[must_use]
-    pub const fn post(emission: CrossZoneEmission) -> Self {
-        Self::Post {
-            magic: EMITTER_MAGIC,
-            emission,
-        }
-    }
 }
 
 /// The per-zone message log, newest last.
@@ -96,28 +86,6 @@ pub const fn chat_log_seed() -> PdaSeed {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// `Post`'s encoding must be exactly the generic emitter contract, or the
-    /// guest this crate exists for would not be recognized.
-    #[test]
-    fn post_matches_the_generic_emitter_contract() {
-        let emission = CrossZoneEmission {
-            target_zone: [2; 32],
-            target_account_id: AccountId::new([9; 32]),
-            target_accounts: vec![],
-            payload: b"hi".to_vec(),
-            ordinal: 0,
-        };
-        let bytes = borsh::to_vec(&ChatMessage::Post {
-            magic: EMITTER_MAGIC,
-            emission: emission.clone(),
-        })
-        .expect("Post serializes");
-        assert_eq!(
-            cross_zone_emission_core::declared_emission(&bytes),
-            Some(emission)
-        );
-    }
 
     /// `InitConfig`'s encoding must be exactly the receiver contract's.
     #[test]

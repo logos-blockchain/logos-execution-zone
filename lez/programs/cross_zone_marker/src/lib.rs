@@ -10,7 +10,7 @@
 //! it out barely moves the guest.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-pub use cross_zone_emission_core::ZoneId;
+pub use lee_core::account::ZoneId;
 use lee_core::{account::AccountId, program::PdaSeed};
 
 const SOURCE_MARKER_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneSource/00000/";

@@ -3,11 +3,8 @@
 //! cross-zone message minting the wrapped token on the target zone.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-pub use cross_zone_emission_core::{CrossZoneEmission, ZoneId};
-use lee_core::{
-    account::{AccountId, Actor},
-    program::PdaSeed,
-};
+pub use lee_core::account::ZoneId;
+use lee_core::{account::AccountId, program::PdaSeed};
 
 const ESCROW_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/BridgeLockEscrow/0000/";
 const CONFIG_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/BridgeLockCfg/0000000/";
@@ -20,35 +17,29 @@ pub const BRIDGE_LOCK_NAME: lee_core::program::SystemProgramName =
 /// so inserting one ahead of `Lock` shifts every existing encoding.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Message {
-    /// Lock `amount` of the holder's balance and emit a cross-zone message
-    /// minting the wrapped token on the emission's target zone.
-    ///
-    /// The emission's target fields are supplied though the guest accepts one
-    /// value for each: `cross_zone::extract_emission` reads them off the
-    /// transaction, decoding every emitter through one shape.
+    /// Lock `amount` of the holder's balance and send a cross-zone message
+    /// minting the wrapped token on `target_zone`.
     ///
     /// The target zone is the caller's, so the config pins it: a lock to a zone
     /// this zone does not lock to is refused.
     ///
-    /// Sent to the holder's own actor under this program, signed by the holder;
-    /// `outbox` is the outbox PDA actor the emission goes to. The trailing
-    /// fields are the emission wire contract.
+    /// Sent to the holder's own actor under this program, signed by the holder.
+    /// `payload` is the wrapped-token mint instruction delivered on the target.
     Lock {
-        outbox: Actor,
         amount: u128,
-        emission: CrossZoneEmission,
+        target_zone: ZoneId,
+        target_account_id: AccountId,
+        payload: Vec<u8>,
     },
     /// Written once into the config actor state at genesis. Repeating the same
     /// configuration is a no-op; a different one is rejected.
     ///
     /// Sent to the config PDA.
     InitConfig {
-        outbox_account_id: AccountId,
         target_account_id: AccountId,
         lock_target_zones: Vec<ZoneId>,
     },
     CheckRoute {
-        outbox_account_id: AccountId,
         target_account_id: AccountId,
         target_zone: ZoneId,
     },
@@ -90,9 +81,8 @@ pub fn holding_seed(holder: &[u8; 32]) -> PdaSeed {
     PdaSeed::new(seed)
 }
 
-/// PDA holding the outbox program id, the mint target and the zones this zone
-/// locks to, seeded at genesis so the guest pins them without hardcoding any
-/// ids.
+/// PDA holding the mint target and the zones this zone locks to, seeded at
+/// genesis so the guest pins them without hardcoding any ids.
 #[must_use]
 pub fn config_account_id(bridge_lock_id: AccountId) -> AccountId {
     AccountId::for_public_pda(&bridge_lock_id, &config_seed())
@@ -103,16 +93,11 @@ pub const fn config_seed() -> PdaSeed {
     PdaSeed::new(CONFIG_SEED_DOMAIN)
 }
 
-/// Laid out as outbox ‖ mint target ‖ zone id*.
+/// Laid out as mint target ‖ zone id*.
 #[must_use]
-pub fn config_bytes(
-    outbox_account_id: AccountId,
-    target_account_id: AccountId,
-    lock_target_zones: &[ZoneId],
-) -> Vec<u8> {
+pub fn config_bytes(target_account_id: AccountId, lock_target_zones: &[ZoneId]) -> Vec<u8> {
     let mut bytes =
-        Vec::with_capacity(64_usize.saturating_add(lock_target_zones.len().saturating_mul(32)));
-    bytes.extend_from_slice(outbox_account_id.as_ref());
+        Vec::with_capacity(32_usize.saturating_add(lock_target_zones.len().saturating_mul(32)));
     bytes.extend_from_slice(target_account_id.as_ref());
     for zone in lock_target_zones {
         bytes.extend_from_slice(zone);
@@ -123,19 +108,14 @@ pub fn config_bytes(
 /// `None` unless the tail is whole zone ids: a partial tail would silently drop
 /// a zone from the pinned list.
 #[must_use]
-pub fn read_config(data: &[u8]) -> Option<(AccountId, AccountId, Vec<ZoneId>)> {
-    let (pinned, tail) = data.split_at_checked(64)?;
+pub fn read_config(data: &[u8]) -> Option<(AccountId, Vec<ZoneId>)> {
+    let (pinned, tail) = data.split_at_checked(32)?;
     let (zones, remainder) = tail.as_chunks::<32>();
     if !remainder.is_empty() {
         return None;
     }
-    let outbox: [u8; 32] = pinned[..32].try_into().unwrap_or_else(|_| unreachable!());
-    let target: [u8; 32] = pinned[32..].try_into().unwrap_or_else(|_| unreachable!());
-    Some((
-        AccountId::new(outbox),
-        AccountId::new(target),
-        zones.to_vec(),
-    ))
+    let target: [u8; 32] = pinned.try_into().unwrap_or_else(|_| unreachable!());
+    Some((AccountId::new(target), zones.to_vec()))
 }
 
 #[cfg(test)]
@@ -150,21 +130,20 @@ mod tests {
 
     #[test]
     fn config_ids_round_trip() {
-        let outbox = AccountId::new([3; 32]);
         let target = AccountId::new([5; 32]);
         for zones in [Vec::new(), vec![[7; 32]], vec![[7; 32], [8; 32], [9; 32]]] {
             assert_eq!(
-                read_config(&config_bytes(outbox, target, &zones)),
-                Some((outbox, target, zones))
+                read_config(&config_bytes(target, &zones)),
+                Some((target, zones))
             );
         }
     }
 
     #[test]
     fn a_config_that_is_not_whole_zone_ids_is_refused() {
-        let bytes = config_bytes(AccountId::new([3; 32]), AccountId::new([5; 32]), &[[7; 32]]);
+        let bytes = config_bytes(AccountId::new([5; 32]), &[[7; 32]]);
         assert_eq!(read_config(&bytes[..bytes.len().saturating_sub(1)]), None);
-        assert_eq!(read_config(&bytes[..63]), None);
+        assert_eq!(read_config(&bytes[..31]), None);
     }
 
     #[test]
@@ -177,36 +156,6 @@ mod tests {
         assert_eq!(
             holding_account_id(id, &[1; 32]),
             holding_account_id(id, &[1; 32])
-        );
-    }
-
-    /// `extract_emission` decodes `Lock` off peer transactions, so its tag byte is
-    /// wire format: a variant inserted ahead of it would silently shift every
-    /// existing encoding.
-    #[test]
-    fn lock_is_the_first_variant() {
-        let outbox = Actor::new(AccountId::new([2; 32]), AccountId::new([3; 32]));
-        let emission = CrossZoneEmission {
-            target_zone: [7; 32],
-            target_account_id: AccountId::new([1; 32]),
-            target_accounts: vec![],
-            payload: vec![],
-            ordinal: 0,
-        };
-        let lock = Message::Lock {
-            outbox,
-            amount: 1,
-            emission: emission.clone(),
-        };
-        let bytes = borsh::to_vec(&lock).expect("Lock serializes");
-
-        let mut expected = vec![0];
-        expected.extend(borsh::to_vec(&outbox).expect("outbox serializes"));
-        expected.extend(1_u128.to_le_bytes());
-        expected.extend(borsh::to_vec(&emission).expect("emission serializes"));
-        assert_eq!(
-            bytes, expected,
-            "Lock is the tag, the outbox actor, the amount, then the emission wire fields"
         );
     }
 }

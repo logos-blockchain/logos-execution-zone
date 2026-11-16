@@ -18,7 +18,6 @@ use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
-use cross_zone_outbox_core::outbox_pda_seed;
 use integration_tests::{
     config::{self, SequencerPartialConfig},
     indexer_client::IndexerClient,
@@ -193,8 +192,6 @@ fn build_lock_tx(
 ) -> LeeTransaction {
     let bridge_lock_id = programs::bridge_lock_account_id();
     let wrapped_token_id = programs::wrapped_token_account_id();
-    let outbox_id = programs::cross_zone_outbox_account_id();
-    let ordinal = 0;
 
     let mint = wrapped_token_core::Message::Mint {
         recipient: RECIPIENT,
@@ -202,36 +199,16 @@ fn build_lock_tx(
     };
     let payload = borsh::to_vec(&mint).expect("serialize mint");
 
-    let target_accounts = vec![
-        Actor::new(
-            wrapped_token_core::config_account_id(wrapped_token_id),
-            wrapped_token_id,
-        ),
-        Actor::new(
-            wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
-            wrapped_token_id,
-        ),
-    ];
     let holder = Actor::new(holder_id, bridge_lock_id);
-    let slot = PublicAccountEvidence::Pda {
-        program: outbox_id,
-        seed: outbox_pda_seed(bridge_lock_id, &target_zone, ordinal),
-    };
-    let outbox = Actor::new(slot.account_id(), outbox_id);
     let lock = bridge_lock_core::Message::Lock {
-        outbox,
         amount: LOCK_AMOUNT,
-        emission: bridge_lock_core::CrossZoneEmission {
-            target_zone,
-            target_account_id: wrapped_token_id,
-            target_accounts,
-            payload,
-            ordinal,
-        },
+        target_zone,
+        target_account_id: wrapped_token_id,
+        payload,
     };
 
     // The lock is received at the holder's own actor, which its signature authorizes; it
-    // checks the route at the config, moves the holding into escrow and emits to the outbox.
+    // checks the route at the config, moves the holding into escrow and sends the mint.
     let accounts = vec![
         holder,
         Actor::new(
@@ -243,19 +220,15 @@ fn build_lock_tx(
             &holder_id.into_value(),
         )),
         Actor::native_balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
-        outbox,
     ];
     // One nonce per signature: the holder signs, at its genesis nonce 0. The
     // lock is fee-exempt (cross-zone outbound traffic), so it carries no fee
     // declaration.
     let message = Message {
-        admission_evidence: vec![
-            PublicAccountEvidence::Pda {
-                program: bridge_lock_id,
-                seed: bridge_lock_core::escrow_seed(),
-            },
-            slot,
-        ],
+        admission_evidence: vec![PublicAccountEvidence::Pda {
+            program: bridge_lock_id,
+            seed: bridge_lock_core::escrow_seed(),
+        }],
         ..Message::try_new(
             holder,
             accounts,

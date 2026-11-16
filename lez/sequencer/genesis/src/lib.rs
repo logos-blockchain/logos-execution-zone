@@ -152,7 +152,6 @@ pub fn build_genesis_state(
         .map(|cross_zone| {
             [
                 cross_zone::build_wrapped_token_init_config_tx(cross_zone),
-                cross_zone::build_ping_sender_init_config_tx(),
                 cross_zone::build_ping_receiver_init_config_tx(cross_zone),
                 cross_zone::build_bridge_lock_init_config_tx(cross_zone),
             ]

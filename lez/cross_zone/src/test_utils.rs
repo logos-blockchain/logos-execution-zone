@@ -9,7 +9,7 @@ use common::{
 use cross_zone_inbox_core::ZoneId;
 use lee::GENESIS_BLOCK_ID;
 use lee_core::account::Actor;
-use ping_core::{ping_record_pda, receiver_config_account_id, sender_config_account_id};
+use ping_core::{ping_record_pda, receiver_config_account_id};
 
 /// The peer's hash-linked chain from its genesis up to and including `last`,
 /// each block carrying the transactions `txs_at(block_id)` returns. Empty when
@@ -30,7 +30,7 @@ pub fn ping_outbound(target_zone: ZoneId, payload: &[u8]) -> lee::OutboundMessag
     let receiver_id = programs::ping_receiver_account_id();
     let sender_id = programs::ping_sender_account_id();
     lee::OutboundMessage {
-        from: Actor::new(sender_config_account_id(sender_id), sender_id),
+        from: Actor::new(sender_id, sender_id),
         zone: target_zone,
         to: Actor::new(receiver_id, receiver_id),
         message: payload.to_vec(),

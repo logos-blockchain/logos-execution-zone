@@ -6,7 +6,7 @@
 //! This crate is the reference LEZ-to-LEZ adapter: it re-derives each delivery
 //! byte-for-byte from a peer LEZ zone's finalized blocks, valid only because the
 //! peer runs identical LEZ code. A non-LEZ peer needs a separate adapter with its
-//! own block-reading, emission-extraction, delivery-building, and trust model; a
+//! own block-reading, outbound-extraction, delivery-building, and trust model; a
 //! shared trait is best lifted from that first real adapter, not from this one.
 
 use std::collections::BTreeMap;
@@ -57,7 +57,7 @@ pub struct CrossZoneRoute {
     pub mint_cap: Option<Balance>,
 }
 
-/// A peer zone whose outbox a zone watches for inbound cross-zone messages.
+/// A peer zone whose blocks a zone watches for inbound cross-zone messages.
 ///
 /// Unknown fields are refused so a stale or misspelled key in an operator
 /// config fails startup instead of silently pinning nothing.
@@ -343,22 +343,8 @@ pub fn build_wrapped_token_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::
     )
 }
 
-/// The genesis transaction that pins the outbox `ping_sender` sends to,
-/// without importing the outbox id into the guest.
-#[must_use]
-pub fn build_ping_sender_init_config_tx() -> lee::PublicTransaction {
-    genesis_public_tx(
-        programs::ping_sender_account_id(),
-        ping_core::sender_config_seed(),
-        ping_core::SenderMessage::InitConfig {
-            outbox_account_id: programs::cross_zone_outbox_account_id(),
-        },
-    )
-}
-
-/// The genesis transaction that pins the outbox `bridge_lock` emits through, the
-/// wrapped token it mints and the zones it may lock to, without importing any of
-/// their ids into the guest.
+/// The genesis transaction that pins the wrapped token `bridge_lock` mints and
+/// the zones it may lock to, without importing their ids into the guest.
 ///
 /// The config is seeded even with an empty list, so its PDA cannot be claimed by
 /// a first initializer.
@@ -368,7 +354,6 @@ pub fn build_bridge_lock_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::Pu
         programs::bridge_lock_account_id(),
         bridge_lock_core::config_seed(),
         bridge_lock_core::Message::InitConfig {
-            outbox_account_id: programs::cross_zone_outbox_account_id(),
             target_account_id: programs::wrapped_token_account_id(),
             lock_target_zones: cross_zone.lock_target_zones.clone(),
         },
@@ -508,7 +493,6 @@ mod tests {
         for tx in [
             build_inbox_init_config_tx([1; 32]),
             build_wrapped_token_init_config_tx(&cross_zone),
-            build_ping_sender_init_config_tx(),
             build_bridge_lock_init_config_tx(&cross_zone),
             build_ping_receiver_init_config_tx(&cross_zone),
         ] {
@@ -539,7 +523,6 @@ mod tests {
             borsh::from_slice::<bridge_lock_core::Message>(&tx.message.execution.root.message)
                 .expect("the init config decodes"),
             bridge_lock_core::Message::InitConfig {
-                outbox_account_id: programs::cross_zone_outbox_account_id(),
                 target_account_id: programs::wrapped_token_account_id(),
                 lock_target_zones: vec![[7; 32], [8; 32]],
             }

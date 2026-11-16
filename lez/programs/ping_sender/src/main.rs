@@ -1,6 +1,8 @@
-use cross_zone_outbox_core::Message as OutboxMessage;
-use lee_core::program::{ReceiveInput, Response, write_once};
-use ping_core::{SenderMessage, outbox_bytes, read_outbox, sender_config_account_id};
+use lee_core::{
+    account::Target,
+    program::{AsyncMessage, ReceiveInput, Response},
+};
+use ping_core::SenderMessage;
 
 lee_core::actor_entrypoint!(handle_message);
 
@@ -9,162 +11,80 @@ fn handle_message(input: &ReceiveInput, message: SenderMessage) -> Response {
         input.from.is_none(),
         "ping_sender is only invoked as a top-level user transaction"
     );
-    assert_config_account(input);
-
-    match message {
-        SenderMessage::Send { outbox, emission } => {
-            // The outbox actor is transaction-chosen; the config is what pins its program.
-            let pinned =
-                read_outbox(&input.pre_state).expect("config account holds an outbox program id");
-            assert_eq!(
-                pinned, outbox.program_account_id,
-                "the emission names a program the ping-sender config does not pin as its outbox"
-            );
-            Response::keep_state().send_sync(
-                outbox,
-                &OutboxMessage::Emit {
-                    target_zone: emission.target_zone,
-                    target_account_id: emission.target_account_id,
-                    target_accounts: emission.target_accounts,
-                    payload: emission.payload,
-                    ordinal: emission.ordinal,
-                },
-            )
-        }
-        // Genesis is replayed onto seeded state during multi-sequencer reconstruction, so
-        // a written config must already pin exactly this outbox.
-        SenderMessage::InitConfig { outbox_account_id } => Response::set_state(write_once(
-            &input.pre_state,
-            outbox_bytes(outbox_account_id).to_vec(),
-        )),
-    }
-}
-
-/// Pinned rather than caller-named: the address is what makes the config's answer this
-/// program's own.
-fn assert_config_account(input: &ReceiveInput) {
     assert_eq!(
-        input.receiver.account_id,
-        sender_config_account_id(input.receiver.program_account_id),
-        "the receiver must be the ping-sender config PDA"
+        input.receiver.account_id, input.receiver.program_account_id,
+        "the receiver must be the ping-sender program actor"
     );
+
+    let SenderMessage::Send {
+        target_zone,
+        target,
+        accounts,
+        payload,
+    } = message;
+    Response::keep_state().send(AsyncMessage {
+        to: Target::Remote {
+            zone: target_zone,
+            actor: target,
+        },
+        message: payload,
+        accounts,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use lee_core::{
         account::{AccountId, Actor, ActorState},
-        program::{SyncMessage, Transition},
+        program::Transition,
     };
-    use ping_core::CrossZoneEmission;
 
     use super::*;
 
     const PING_SENDER: AccountId = AccountId::new([7; 32]);
-    const OUTBOX: AccountId = AccountId::new([9; 32]);
 
-    fn run(origin: Option<AccountId>, pre: &[u8], message: SenderMessage) -> Transition {
-        let receiver = Actor::new(sender_config_account_id(PING_SENDER), PING_SENDER);
+    fn run(origin: Option<AccountId>, message: SenderMessage) -> Transition {
+        let receiver = Actor::new(PING_SENDER, PING_SENDER);
         let input = ReceiveInput {
             receiver,
             from: origin.map(|sender| Actor::new(sender, sender).into()),
             is_authorized: false,
-            pre_state: ActorState::from(pre.to_vec()),
+            pre_state: ActorState::empty(),
             message: borsh::to_vec(&message).unwrap(),
         };
         handle_message(&input, message).into_transition(input)
     }
 
-    fn send_through(outbox_program: AccountId) -> SenderMessage {
+    fn send() -> SenderMessage {
         SenderMessage::Send {
-            outbox: Actor::new(AccountId::new([2; 32]), outbox_program),
-            emission: CrossZoneEmission {
-                target_zone: [1; 32],
-                target_account_id: AccountId::new([3; 32]),
-                target_accounts: vec![],
-                payload: b"ping".to_vec(),
-                ordinal: 0,
-            },
+            target_zone: [1; 32],
+            target: Actor::new(AccountId::new([3; 32]), AccountId::new([3; 32])),
+            accounts: vec![Actor::new(AccountId::new([4; 32]), AccountId::new([3; 32]))],
+            payload: b"ping".to_vec(),
         }
     }
 
-    fn config(outbox: AccountId) -> ActorState {
-        ActorState::from(outbox_bytes(outbox).to_vec())
-    }
-
     #[test]
-    fn the_pinned_outbox_is_accepted() {
-        let transition = run(None, &outbox_bytes(OUTBOX), send_through(OUTBOX));
+    fn a_send_becomes_a_remote_async_message() {
+        let transition = run(None, send());
 
         assert_eq!(transition.response.post_state, None);
         assert_eq!(
-            (
-                transition.response.sync_messages,
-                transition.response.async_messages
-            ),
-            (
-                vec![SyncMessage::new(
-                    Actor::new(AccountId::new([2; 32]), OUTBOX),
-                    &OutboxMessage::Emit {
-                        target_zone: [1; 32],
-                        target_account_id: AccountId::new([3; 32]),
-                        target_accounts: vec![],
-                        payload: b"ping".to_vec(),
-                        ordinal: 0,
-                    },
-                )],
-                Vec::new()
-            )
+            transition.response.async_messages,
+            vec![AsyncMessage {
+                to: Target::Remote {
+                    zone: [1; 32],
+                    actor: Actor::new(AccountId::new([3; 32]), AccountId::new([3; 32])),
+                },
+                message: b"ping".to_vec(),
+                accounts: vec![Actor::new(AccountId::new([4; 32]), AccountId::new([3; 32]))],
+            }]
         );
     }
 
     #[test]
-    #[should_panic(expected = "does not pin as its outbox")]
-    fn another_program_cannot_stand_in_for_the_outbox() {
-        // Unguarded this redirects the emission to an arbitrary program, which then records it,
-        // or not, under its own interpretation.
-        let _transition = run(
-            None,
-            &outbox_bytes(OUTBOX),
-            send_through(AccountId::new([1; 32])),
-        );
-    }
-
-    #[test]
-    fn an_empty_config_takes_the_first_init() {
-        let init = SenderMessage::InitConfig {
-            outbox_account_id: OUTBOX,
-        };
-        assert_eq!(
-            run(None, &[], init).response.post_state,
-            Some(config(OUTBOX))
-        );
-    }
-
-    #[test]
-    fn an_identical_reinit_is_a_no_op_rewrite() {
-        let init = SenderMessage::InitConfig {
-            outbox_account_id: OUTBOX,
-        };
-        assert_eq!(
-            run(None, &outbox_bytes(OUTBOX), init).response.post_state,
-            Some(config(OUTBOX))
-        );
-    }
-
-    #[test]
-    #[should_panic(expected = "actor state already holds different data")]
-    fn a_reinit_naming_a_different_outbox_is_refused() {
-        let init = SenderMessage::InitConfig {
-            outbox_account_id: AccountId::new([1; 32]),
-        };
-        let _transition = run(None, &outbox_bytes(OUTBOX), init);
-    }
-
-    #[test]
-    #[should_panic(expected = "ping_sender is only invoked as a top-level user transaction")]
-    fn a_message_from_another_program_is_refused() {
-        let sender = Some(AccountId::new([6; 32]));
-        let _transition = run(sender, &outbox_bytes(OUTBOX), send_through(OUTBOX));
+    #[should_panic(expected = "top-level user transaction")]
+    fn a_chained_send_is_refused() {
+        let _transition = run(Some(AccountId::new([9; 32])), send());
     }
 }
