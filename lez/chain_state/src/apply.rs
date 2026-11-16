@@ -2132,20 +2132,20 @@ mod tests {
 
         // A dust surplus adds to the proven tip.
         let dust = fee_core::market::MIN_PRIVATE_REFUND;
-        let mut summary = BlockFeeSummary::default();
-        let (_, receipt) = settle_transaction(
+        let mut dust_summary = BlockFeeSummary::default();
+        let (_, dust_receipt) = settle_transaction(
             &build(required + u128::from(TIP) + dust),
             &mut state.clone(),
             &FeeState::genesis(),
             1,
             100,
             0,
-            &mut summary,
+            &mut dust_summary,
         )
         .expect("settles");
-        assert_eq!(summary.revenue_tip, u128::from(TIP) + dust);
-        assert_eq!(receipt.fee.tip, u128::from(TIP) + dust);
-        assert_eq!(receipt.fee.refund, 0);
+        assert_eq!(dust_summary.revenue_tip, u128::from(TIP) + dust);
+        assert_eq!(dust_receipt.fee.tip, u128::from(TIP) + dust);
+        assert_eq!(dust_receipt.fee.refund, 0);
 
         // A reserve covering the fee but not the tip is not admissible.
         let short = build(required + u128::from(TIP) - 1);
