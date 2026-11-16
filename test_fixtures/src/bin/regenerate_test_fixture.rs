@@ -27,7 +27,7 @@ use wallet::config::WalletConfigOverrides;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::init();
+    logging::init();
 
     let dest = prebuilt_sequencer_db_dump_path();
     println!(
@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
         dest.display()
     );
 
-    generate_prebuilt_fixture(&dest)
+    Box::pin(generate_prebuilt_fixture(&dest))
         .await
         .context("Failed to regenerate prebuilt sequencer database fixture")?;
 

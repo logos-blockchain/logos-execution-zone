@@ -15,7 +15,9 @@ use wallet::AccountMention;
 use crate::{
     error::{FfiOperationError, print_error},
     wallet::{
-        FfiAccountMention, FfiBytes32, WalletHandle, block_on, lifecycle::get_wallet,
+        FfiAccountMention, FfiBytes32, WalletHandle, block_on, c_string_or_null,
+        fees::{FfiDeclaredFee, FfiDryRunReport, SendResult as _},
+        lifecycle::get_wallet,
         map_execution_error, read_optional_account_id,
     },
 };
@@ -196,6 +198,9 @@ impl TryFrom<&FfiProgramCatalog> for ProgramCatalog {
 }
 
 /// Result of a generic transaction operation.
+///
+/// A call overwrites the strings and secrets it holds without freeing them: free a filled result
+/// with `wallet_ffi_free_transaction_result` before passing it to another call, or they leak.
 #[repr(C)]
 pub struct FfiTransactionResult {
     // TODO: Replace with HashType FFI representation
@@ -206,6 +211,12 @@ pub struct FfiTransactionResult {
     pub secrets_data: *const FfiBytes32,
     /// Public transactions have 0 secrets.
     pub secrets_size: usize,
+    /// Whether the transaction was only simulated, leaving `tx_hash` null; `dry_run` holds its
+    /// report.
+    pub is_dry_run: bool,
+    pub dry_run: FfiDryRunReport,
+    /// The fee the transaction declared or, on a dry run, would declare.
+    pub fee: FfiDeclaredFee,
 }
 
 impl Default for FfiTransactionResult {
@@ -215,6 +226,9 @@ impl Default for FfiTransactionResult {
             success: false,
             secrets_data: std::ptr::null(),
             secrets_size: 0,
+            is_dry_run: false,
+            dry_run: FfiDryRunReport::default(),
+            fee: FfiDeclaredFee::default(),
         }
     }
 }
@@ -322,10 +336,10 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_public_transaction(
 
     let payer = unsafe { read_optional_account_id(payer) };
 
-    match block_on(wallet.send_pub_tx_paid_by(accounts, root_mention, message, payer)) {
+    let sent = block_on(wallet.send_pub_tx_paid_by(accounts, root_mention, message, payer));
+    match unsafe { (*out_result).record(&wallet, sent) } {
         Ok(tx_hash) => {
-            let tx_hash = CString::new(tx_hash.to_string())
-                .map_or(std::ptr::null_mut(), std::ffi::CString::into_raw);
+            let tx_hash = c_string_or_null(tx_hash);
 
             unsafe {
                 (*out_result).tx_hash = tx_hash;
@@ -422,10 +436,13 @@ pub unsafe extern "C" fn wallet_ffi_send_generic_private_transaction(
         Err(err) => return err,
     };
 
-    match block_on(wallet.send_privacy_preserving_tx(accounts, root_mention, message, &programs)) {
-        Ok((tx_hash, secrets)) => {
-            let tx_hash = CString::new(tx_hash.to_string())
-                .map_or(std::ptr::null_mut(), std::ffi::CString::into_raw);
+    let sent =
+        block_on(wallet.send_privacy_preserving_tx(accounts, root_mention, message, &programs));
+    match unsafe { (*out_result).record(&wallet, sent) } {
+        Ok(sent) => {
+            let (tx_hash, secrets) = sent.unzip();
+            let secrets = secrets.unwrap_or_default();
+            let tx_hash = c_string_or_null(tx_hash);
 
             unsafe {
                 (*out_result).tx_hash = tx_hash;
@@ -515,10 +532,11 @@ pub unsafe extern "C" fn wallet_ffi_free_transaction_result(result: *mut FfiTran
     }
 
     unsafe {
-        let result = &*result;
+        let result = &mut *result;
         if !result.tx_hash.is_null() {
             drop(CString::from_raw(result.tx_hash));
         }
+        result.dry_run.free();
 
         if !result.secrets_data.is_null() {
             let secrets =

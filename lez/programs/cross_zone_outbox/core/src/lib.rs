@@ -1,4 +1,5 @@
 use borsh::{BorshDeserialize, BorshSerialize};
+pub use cross_zone_emission_core::ZoneId;
 use lee_core::{
     account::{AccountId, Actor},
     program::PdaSeed,
@@ -10,10 +11,8 @@ use lee_core::{
 /// but the two version different things.
 const OUTBOX_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneOutbox/00001/";
 
-pub const CROSS_ZONE_OUTBOX_NAME: [u8; 17] = *b"cross_zone_outbox";
-
-/// Raw 32-byte zone (channel) id; the host maps it to the zone-sdk `ChannelId`.
-pub type ZoneId = [u8; 32];
+pub const CROSS_ZONE_OUTBOX_NAME: lee_core::program::SystemProgramName =
+    lee_core::program::SystemProgramName::new(b"cross_zone_outbox");
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Message {
@@ -66,7 +65,7 @@ impl OutboxRecord {
 
 #[must_use]
 pub fn cross_zone_outbox_account_id() -> AccountId {
-    AccountId::from_builtin_program_name(&CROSS_ZONE_OUTBOX_NAME)
+    AccountId::from_system_program_name(&CROSS_ZONE_OUTBOX_NAME)
 }
 
 /// PDA holding one emitted message, keyed by the emitting program, the

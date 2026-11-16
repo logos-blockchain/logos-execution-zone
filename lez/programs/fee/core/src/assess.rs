@@ -23,17 +23,19 @@ pub enum FeeTxView {
     /// The fee is paid inside the proof: `reserve` is the amount the proof
     /// credited to the fee inbox from `payer`, the address a refund of the
     /// surplus goes back to.
-    Private { payer: AccountId, reserve: Balance },
+    Private {
+        payer: AccountId,
+        reserve: Balance,
+        data_bytes: Gas,
+    },
 }
 
 impl FeeTxView {
-    /// Storage gas: serialized bytes for public, the canonical constant size
-    /// for private.
+    /// Storage gas: the transaction's serialized bytes.
     #[must_use]
     pub const fn gas_stor(&self) -> Gas {
         match self {
-            Self::Public { data_bytes, .. } => *data_bytes,
-            Self::Private { .. } => market::PRIVATE_GAS_STOR,
+            Self::Public { data_bytes, .. } | Self::Private { data_bytes, .. } => *data_bytes,
         }
     }
 
@@ -67,9 +69,28 @@ impl FeeTxView {
 /// corrupt state it could wrap silently in release.
 #[must_use]
 pub fn fee_reserve(view: &FeeTxView, fee_state: &FeeState) -> Balance {
-    u128::from(view.gas_limit()) * u128::from(fee_state.base_fee_exec)
-        + u128::from(view.gas_stor()) * u128::from(fee_state.base_fee_stor)
-        + u128::from(view.tip())
+    fee_for(
+        view.gas_limit(),
+        view.gas_stor(),
+        view.tip(),
+        fee_state.base_fee_exec,
+        fee_state.base_fee_stor,
+    )
+}
+
+/// The fee of `gas_exec` execution and `gas_stor` storage gas at the given base fees, plus `tip`:
+/// `gas_exec·base_fee_exec + gas_stor·base_fee_stor + tip`, under [`fee_reserve`]'s bounds.
+#[must_use]
+pub fn fee_for(
+    gas_exec: Gas,
+    gas_stor: Gas,
+    tip: Fee,
+    base_fee_exec: Fee,
+    base_fee_stor: Fee,
+) -> Balance {
+    u128::from(gas_exec) * u128::from(base_fee_exec)
+        + u128::from(gas_stor) * u128::from(base_fee_stor)
+        + u128::from(tip)
 }
 
 /// The base fee actually owed after execution.
@@ -86,31 +107,38 @@ pub fn fee_actual_base(charged_cycles: Cycles, view: &FeeTxView, fee_state: &Fee
         FeeTxView::Public { gas_limit, .. } => charged_cycles.min(*gas_limit),
         FeeTxView::Private { .. } => market::PRIVATE_VERIFY_GAS,
     };
-    u128::from(gas_exec) * u128::from(fee_state.base_fee_exec)
-        + u128::from(view.gas_stor()) * u128::from(fee_state.base_fee_stor)
+    fee_for(
+        gas_exec,
+        view.gas_stor(),
+        0,
+        fee_state.base_fee_exec,
+        fee_state.base_fee_stor,
+    )
 }
 
-/// The base fee a private transaction owes at the given base fees:
-/// `(PRIVATE_VERIFY_GAS + effect_cycles)·base_fee_exec + PRIVATE_GAS_STOR·base_fee_stor`.
+/// The base fee a private transaction of `data_bytes` serialized bytes owes at the given base
+/// fees: `(PRIVATE_VERIFY_GAS + effect_cycles)·base_fee_exec + data_bytes·base_fee_stor`.
 #[must_use]
 pub fn private_fee_required(
     effect_cycles: Cycles,
+    data_bytes: Gas,
     base_fee_exec: Fee,
     base_fee_stor: Fee,
 ) -> Balance {
     (u128::from(market::PRIVATE_VERIFY_GAS) + u128::from(effect_cycles)) * u128::from(base_fee_exec)
-        + u128::from(market::PRIVATE_GAS_STOR) * u128::from(base_fee_stor)
+        + u128::from(data_bytes) * u128::from(base_fee_stor)
 }
 
 /// The public cycles a privacy-preserving transaction's `reserve` pays for at these base fees,
-/// after its flat verification and storage cost: zero when the reserve does not cover that.
+/// after its verification and storage cost: zero when the reserve does not cover that.
 #[must_use]
 pub fn private_cycles_affordable(
     reserve: Balance,
+    data_bytes: Gas,
     base_fee_exec: Fee,
     base_fee_stor: Fee,
 ) -> Cycles {
-    let flat = private_fee_required(0, base_fee_exec, base_fee_stor);
+    let flat = private_fee_required(0, data_bytes, base_fee_exec, base_fee_stor);
     let cycles = reserve
         .saturating_sub(flat)
         .checked_div(u128::from(base_fee_exec))
@@ -149,10 +177,12 @@ mod tests {
     #[test]
     fn spec_worked_example_private() {
         // A private transaction with no metered effects pays
-        // 409,764·8 + 224,063·8 = 5,070,616; each effect cycle adds one
-        // base_fee_exec.
-        assert_eq!(private_fee_required(0, 8, 8), 5_070_616);
-        assert_eq!(private_fee_required(1_000, 8, 8), 5_070_616 + 8_000);
+        // 409,764·8 + 237,039·8 = 5,174,424; each effect cycle adds one
+        // base_fee_exec and each byte one base_fee_stor.
+        const BYTES: u64 = 237_039;
+        assert_eq!(private_fee_required(0, BYTES, 8, 8), 5_174_424);
+        assert_eq!(private_fee_required(1_000, BYTES, 8, 8), 5_174_424 + 8_000);
+        assert_eq!(private_fee_required(0, BYTES + 1, 8, 8), 5_174_424 + 8);
     }
 
     #[test]
@@ -194,12 +224,21 @@ mod tests {
 
     #[test]
     fn a_private_reserve_pays_for_the_cycles_above_its_flat_cost() {
-        let flat = private_fee_required(0, 8, 8);
-        assert_eq!(private_cycles_affordable(flat - 1, 8, 8), 0);
-        assert_eq!(private_cycles_affordable(flat, 8, 8), 0);
-        assert_eq!(private_cycles_affordable(flat + 8 * 1_000 + 7, 8, 8), 1_000);
+        let bytes = 1_000;
+        let flat = private_fee_required(0, bytes, 8, 8);
+        assert_eq!(private_cycles_affordable(flat - 1, bytes, 8, 8), 0);
+        assert_eq!(private_cycles_affordable(flat, bytes, 8, 8), 0);
         assert_eq!(
-            private_fee_required(private_cycles_affordable(flat + 8_003, 8, 8), 8, 8),
+            private_cycles_affordable(flat + 8 * 1_000 + 7, bytes, 8, 8),
+            1_000
+        );
+        assert_eq!(
+            private_fee_required(
+                private_cycles_affordable(flat + 8_003, bytes, 8, 8),
+                bytes,
+                8,
+                8
+            ),
             flat + 8_000
         );
     }

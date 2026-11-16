@@ -67,7 +67,7 @@ pub unsafe fn setup_sequencer(
     config_path: *const c_char,
 ) -> Result<SequencerServiceFFI, FfiOperationError> {
     if config_path.is_null() {
-        log::error!("Attempted to give a null config_path pointer. This is a bug. Aborting.");
+        tracing::error!("Attempted to give a null config_path pointer. This is a bug. Aborting.");
         return Err(FfiOperationError::NullPointer);
     }
 
@@ -75,12 +75,12 @@ pub unsafe fn setup_sequencer(
         unsafe { std::ffi::CStr::from_ptr(config_path) }
             .to_str()
             .map_err(|e| {
-                log::error!("Could not convert the config path to string: {e}");
+                tracing::error!(error = %e, "Could not convert the config path to string");
                 FfiOperationError::SequencerInitializationError
             })?,
     );
     let config = SequencerConfig::from_path(&user_config_path).map_err(|e| {
-        log::error!("Failed to read config: {e}");
+        tracing::error!(error = %e, "Failed to read config");
         FfiOperationError::SequencerInitializationError
     })?;
 
@@ -89,7 +89,7 @@ pub unsafe fn setup_sequencer(
     // when we own it; a borrowed one is left to its external owner.
     let runtime = if runtime.is_null() {
         Runtime::new().map_err(|e| {
-            log::error!("Could not create tokio runtime: {e}");
+            tracing::error!(error = %e, "Could not create tokio runtime");
             FfiOperationError::SequencerInitializationError
         })?
     } else {
@@ -107,7 +107,10 @@ pub unsafe fn setup_sequencer(
     let handle = runtime
         .block_on(sequencer_service::run(config, rpc_addr))
         .map_err(|e| {
-            log::error!("Could not start the sequencer: {e:#}");
+            tracing::error!(
+                error = format_args!("{e:#}"),
+                "Could not start the sequencer"
+            );
             FfiOperationError::SequencerInitializationError
         })?;
 
@@ -135,7 +138,7 @@ pub unsafe extern "C" fn sequencer_ffi_stop_sequencer(
     sequencer: *mut SequencerServiceFFI,
 ) -> FfiOperationError {
     if sequencer.is_null() {
-        log::error!("Attempted to stop a null sequencer pointer. This is a bug. Aborting.");
+        tracing::error!("Attempted to stop a null sequencer pointer. This is a bug. Aborting.");
         return FfiOperationError::NullPointer;
     }
 

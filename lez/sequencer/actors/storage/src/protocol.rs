@@ -1,4 +1,7 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use common::{
     HashType,
@@ -23,6 +26,11 @@ pub struct GetBlock {
 pub struct GetAllBlocks;
 
 pub struct GetTransactionByHash {
+    pub hash: HashType,
+}
+
+/// `None` also for a block's trailing fee and clock transactions, which have no receipt.
+pub struct GetTransactionReceiptByHash {
     pub hash: HashType,
 }
 
@@ -64,6 +72,18 @@ pub struct PutSlashRecordBytes {
     pub bytes: Vec<u8>,
 }
 
+pub struct GetSystemApprovalsBytes;
+
+pub struct PutSystemApprovalsBytes {
+    pub bytes: Vec<u8>,
+}
+
+pub struct GetFinalConfigsBytes;
+
+pub struct PutFinalConfigsBytes {
+    pub bytes: Vec<u8>,
+}
+
 pub struct GetZoneAnchor;
 
 pub struct SetZoneAnchor {
@@ -82,6 +102,9 @@ pub struct GetPendingCrossZoneDispatches;
 pub struct AddPendingCrossZoneDispatches {
     pub dispatches: Vec<PendingCrossZoneDispatchRecord>,
 }
+
+/// How many dispatches are pending, counted without decoding any of them.
+pub struct GetPendingCrossZoneDispatchCount;
 
 pub struct DropSettledCrossZoneDispatches {
     pub message_keys: HashSet<CrossZoneMessageKey>,
@@ -102,6 +125,9 @@ pub struct RequeueDeadLetterDispatch {
 }
 
 pub struct GetDeadLetterDispatchCount;
+
+/// Retained dead-letter count, without shipping bodies across the actor boundary.
+pub struct GetDeadLetterDispatchRetainedCount;
 
 pub struct GetCrossZonePeerFloorBytes {
     pub peer_zone: PeerZoneKey,
@@ -145,9 +171,29 @@ pub struct GetBlockEvents {
 
 pub struct GetEventFilter;
 
+/// Which program events the store keeps.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EventFilter {
+    /// Every event.
+    Archival,
+    /// Only events of the listed programs. Empty keeps nothing.
+    Sources(HashMap<AccountId, SelectorFilter>),
+}
+
+/// Which events of one program the store keeps.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelectorFilter {
+    /// Every event of the program.
+    All,
+    /// Only events with one of these selectors.
+    Only(HashSet<[u8; 8]>),
+}
+
 pub struct DumpDb;
 
 /// Update everything in the store at once, atomically.
+// TODO: Process orphaned blocks
+// TODO: Experiment with per-actor data types and agnostic storage.
 pub struct AtomicUpdate {
     /// Zone-sdk checkpoint for this event, kept only if it is newer than the
     /// stored one. The rest of the update lands either way.

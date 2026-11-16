@@ -796,6 +796,8 @@ impl AppDeployment<AppHostEnv> for WalletApp {
                             },
                         )?;
                     let mut wallet = wallet;
+                    // Scenarios submit invalid transactions on purpose, for the chain to reject.
+                    wallet.set_allow_revert(true);
                     if initialize_private_account_funding {
                         fund_private_accounts(&mut wallet, &public_accounts, &private_accounts)
                             .await

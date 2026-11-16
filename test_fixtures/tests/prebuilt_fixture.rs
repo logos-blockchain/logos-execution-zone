@@ -5,6 +5,7 @@
 use anyhow::{Context as _, Result};
 use lee::{AccountId, PublicKey};
 use sequencer_service_rpc::RpcClient as _;
+use sequencer_stake_core::SequencerStakeConfig;
 use test_fixtures::{
     MultiZoneTestContextBuilder, TestContext, ZoneTestContextBuilder,
     config::{
@@ -50,6 +51,29 @@ async fn assert_context_follows_config(ctx: &TestContext) -> Result<()> {
             "public account {account_id} balance"
         );
     }
+
+    let config_id = sequencer_stake_core::sequencer_stake_config_account_id(
+        programs::sequencer_stake_account_id(),
+    );
+    let config_account = ctx
+        .sequencer_client()
+        .get_account(config_id)
+        .await?
+        .context("the sequencer-stake config account")?;
+    let channel_params = SequencerStakeConfig::from_bytes(
+        config_account
+            .data
+            .actor_state(programs::sequencer_stake_account_id())
+            .as_ref(),
+    )
+    .context("decoding the sequencer-stake config")?
+    .channel_params
+    .context("genesis never ran InitChannelParams")?;
+    assert_eq!(
+        channel_params.posting_timeframe,
+        test_fixtures::config::TEST_POSTING_TIMEFRAME,
+        "the prebuilt fixture's posting_timeframe is stale; regenerate it"
+    );
 
     for account in default_private_accounts_for_wallet() {
         let account_id = account.account_id();

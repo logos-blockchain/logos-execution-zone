@@ -1,5 +1,5 @@
 use common::{
-    block::{Block, BlockMeta, PeerChainTip},
+    block::{Block, BlockMeta, PeerChainTip, TransactionReceipt},
     transaction::LeeTransaction,
 };
 use kameo::{Actor, message::Message};
@@ -14,13 +14,15 @@ use crate::{
         DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
         DropSettledCrossZoneDispatches, DumpDb, GetAccountTransactions, GetAllBlocks, GetBlock,
         GetBlockByHash, GetChannelViewBytes, GetCrossZonePeerFloorBytes, GetCrossZonePeerTip,
-        GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetFinalSnapshot, GetFirstBlockId,
-        GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatches,
-        GetPendingDepositEvents, GetSlashRecordBytes, GetTransactionByHash, GetZoneAnchor,
+        GetDeadLetterDispatchCount, GetDeadLetterDispatchRetainedCount, GetDeadLetterDispatches,
+        GetFinalConfigsBytes, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
+        GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatchCount,
+        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetSlashRecordBytes,
+        GetSystemApprovalsBytes, GetTransactionByHash, GetTransactionReceiptByHash, GetZoneAnchor,
         GetZoneCheckpoint, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
-        PutSlashRecordBytes, RecordDispatchFailure, RequeueDeadLetterDispatch,
-        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor, StoreUpdateOutcome,
-        UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
+        PutFinalConfigsBytes, PutSlashRecordBytes, PutSystemApprovalsBytes, RecordDispatchFailure,
+        RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
+        StoreUpdateOutcome, UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
     },
 };
 
@@ -30,6 +32,7 @@ pub trait StorageActorTrait:
     + Message<GetBlock, Reply = Result<Option<Block>>>
     + Message<GetAllBlocks, Reply = Result<Vec<Block>>>
     + Message<GetTransactionByHash, Reply = Result<Option<(LeeTransaction, BlockId)>>>
+    + Message<GetTransactionReceiptByHash, Reply = Result<Option<TransactionReceipt>>>
     + Message<DeleteBlock, Reply = Result<()>>
     + Message<GetFirstBlockId, Reply = Result<Option<BlockId>>>
     + Message<GetLastBlockId, Reply = Result<Option<BlockId>>>
@@ -40,6 +43,10 @@ pub trait StorageActorTrait:
     + Message<UpdateZoneCheckpoint, Reply = Result<()>>
     + Message<GetSlashRecordBytes, Reply = Result<Option<Vec<u8>>>>
     + Message<PutSlashRecordBytes, Reply = Result<()>>
+    + Message<GetSystemApprovalsBytes, Reply = Result<Option<Vec<u8>>>>
+    + Message<PutSystemApprovalsBytes, Reply = Result<()>>
+    + Message<GetFinalConfigsBytes, Reply = Result<Option<Vec<u8>>>>
+    + Message<PutFinalConfigsBytes, Reply = Result<()>>
     + Message<DeleteZoneCheckpoint, Reply = Result<()>>
     + Message<GetZoneAnchor, Reply = Result<Option<ZoneAnchorRecord>>>
     + Message<SetZoneAnchor, Reply = Result<()>>
@@ -47,11 +54,13 @@ pub trait StorageActorTrait:
     + Message<GetPendingDepositEvents, Reply = Result<Vec<PendingDepositEventRecord>>>
     + Message<GetPendingCrossZoneDispatches, Reply = Result<Vec<PendingCrossZoneDispatchRecord>>>
     + Message<AddPendingCrossZoneDispatches, Reply = Result<usize>>
+    + Message<GetPendingCrossZoneDispatchCount, Reply = Result<usize>>
     + Message<DropSettledCrossZoneDispatches, Reply = Result<()>>
     + Message<RecordDispatchFailure, Reply = Result<DispatchFailure>>
     + Message<RequeueDeadLetterDispatch, Reply = Result<DeadLetterRequeue>>
     + Message<GetDeadLetterDispatches, Reply = Result<Vec<DeadLetterDispatch>>>
     + Message<GetDeadLetterDispatchCount, Reply = Result<u64>>
+    + Message<GetDeadLetterDispatchRetainedCount, Reply = Result<usize>>
     + Message<GetCrossZonePeerFloorBytes, Reply = Result<Option<Vec<u8>>>>
     + Message<SetCrossZonePeerFloorBytes, Reply = Result<()>>
     + Message<DeleteCrossZonePeerFloor, Reply = Result<()>>

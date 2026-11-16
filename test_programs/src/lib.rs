@@ -46,6 +46,16 @@ pub const fn cooldown() -> Program {
 
 #[must_use]
 #[inline]
+pub const fn clock_reader() -> Program {
+    use guests::{CLOCK_READER_ELF, CLOCK_READER_ID, CLOCK_READER_PATH};
+
+    let _unused = CLOCK_READER_PATH;
+
+    Program::new_unchecked(CLOCK_READER_ID, Cow::Borrowed(CLOCK_READER_ELF))
+}
+
+#[must_use]
+#[inline]
 pub const fn listener() -> Program {
     use guests::{LISTENER_ELF, LISTENER_ID, LISTENER_PATH};
 
@@ -62,4 +72,14 @@ pub const fn live_payout() -> Program {
     let _unused = LIVE_PAYOUT_PATH;
 
     Program::new_unchecked(LIVE_PAYOUT_ID, Cow::Borrowed(LIVE_PAYOUT_ELF))
+}
+
+#[must_use]
+#[inline]
+pub const fn zone_chat() -> Program {
+    use guests::{ZONE_CHAT_ELF, ZONE_CHAT_ID, ZONE_CHAT_PATH};
+
+    let _unused = ZONE_CHAT_PATH;
+
+    Program::new_unchecked(ZONE_CHAT_ID, Cow::Borrowed(ZONE_CHAT_ELF))
 }

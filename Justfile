@@ -56,8 +56,8 @@ regenerate-test-fixture:
     @just resolve-bedrock-node
     RISC0_DEV_MODE=1 RUST_LOG=info cargo run -p test_fixtures --bin regenerate_test_fixture
 
-# Regenerate the four-node docker devnet's shared sequencer config and per-node keys (the genesis
-# stakes the whole committee, so the signatures are resigned; commit the result).
+# Regenerate the four-node docker devnet's shared sequencer config and per-node keys. The genesis
+# stakes the whole committee, so its stake signatures are re-signed; existing keys are kept.
 regenerate-devnet-configs:
     @echo "🕸️  Regenerating devnet sequencer config and keys"
     @cargo run -q -p devnet_configs
@@ -68,6 +68,9 @@ regenerate-dashboards:
     @echo "📊 Regenerating Grafana dashboards"
     @cargo build -q -p dashboard_gen
     @cargo run -q -p dashboard_gen -- sequencer > monitoring/grafana/dashboards/sequencer.json
+    @cargo run -q -p dashboard_gen -- network > monitoring/grafana/dashboards/network.json
+    @cargo run -q -p dashboard_gen -- actors > monitoring/grafana/dashboards/actors.json
+    @cargo run -q -p dashboard_gen -- messages > monitoring/grafana/dashboards/messages.json
 
 # Run criterion benches: fast crypto primitives, then the slow PPE verify (real proving setup).
 bench:
@@ -107,11 +110,12 @@ resolve-host-bedrock-node:
         --output-directory bedrock/.resolved-host \
         --target-directory target/bedrock-node-host
 
-# Run Prometheus + Grafana in docker. Grafana: http://localhost:3000 (anonymous
-# admin), Prometheus: http://localhost:9090. Scrapes the sequencer's /metrics.
+# Run Prometheus, Loki and Tempo (fed by Alloy) and Grafana in docker. Grafana: http://localhost:3000
+# (anonymous admin), Prometheus: http://localhost:9090, Loki: http://localhost:3100, Tempo: http://localhost:3200.
+# Scrapes the sequencers' /metrics, collects the stack's container logs, and takes traces over OTLP on :4318.
 run-monitoring:
-    @echo "📊 Running Prometheus (http://localhost:9090) + Grafana (http://localhost:3000)"
-    docker compose --profile monitoring up prometheus grafana
+    @echo "📊 Running Prometheus (http://localhost:9090), Loki (http://localhost:3100), Tempo (http://localhost:3200) + Grafana (http://localhost:3000)"
+    docker compose --profile monitoring up prometheus loki tempo alloy grafana
 
 # ---- Decentralized sequencing tools ----
 
@@ -176,8 +180,8 @@ get-sequencer-metrics:
 # Import test accounts supplied in sequencer configuration.
 wallet-import-test-accounts:
     @echo "⚙️ Initializing accounts"
-    just run-wallet account import public --private-key 7f273098f25b71e6c005a9519f2678da8d1c7f01f6a27778e2d9948abdf901fb
-    just run-wallet account import public --private-key f434f8741720014586ae43356d2aec6257da086222f604ddb75d69733b86fc4c
+    just run-wallet account import public --private-key 10a26a9aec7d34b82364eeae45c5294dbb0a764b000b94eeb9b58511dc487c4d
+    just run-wallet account import public --private-key 717940b1cc55e5d6b2066dbf1d9a3f26f212f4db08d02388177fcfedd8a9be1b
 
     just run-wallet account list
 

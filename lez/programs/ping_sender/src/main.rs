@@ -12,14 +12,7 @@ fn handle_message(input: &ReceiveInput, message: SenderMessage) -> Response {
     assert_config_account(input);
 
     match message {
-        SenderMessage::Send {
-            outbox,
-            target_zone,
-            target_account_id,
-            target_accounts,
-            payload,
-            ordinal,
-        } => {
+        SenderMessage::Send { outbox, emission } => {
             // The outbox actor is transaction-chosen; the config is what pins its program.
             let pinned =
                 read_outbox(&input.pre_state).expect("config account holds an outbox program id");
@@ -30,11 +23,11 @@ fn handle_message(input: &ReceiveInput, message: SenderMessage) -> Response {
             Response::keep_state().send_sync(
                 outbox,
                 &OutboxMessage::Emit {
-                    target_zone,
-                    target_account_id,
-                    target_accounts,
-                    payload,
-                    ordinal,
+                    target_zone: emission.target_zone,
+                    target_account_id: emission.target_account_id,
+                    target_accounts: emission.target_accounts,
+                    payload: emission.payload,
+                    ordinal: emission.ordinal,
                 },
             )
         }
@@ -63,6 +56,7 @@ mod tests {
         account::{AccountId, Actor, ActorState},
         program::{SyncMessage, Transition},
     };
+    use ping_core::CrossZoneEmission;
 
     use super::*;
 
@@ -84,11 +78,13 @@ mod tests {
     fn send_through(outbox_program: AccountId) -> SenderMessage {
         SenderMessage::Send {
             outbox: Actor::new(AccountId::new([2; 32]), outbox_program),
-            target_zone: [1; 32],
-            target_account_id: AccountId::new([3; 32]),
-            target_accounts: vec![],
-            payload: b"ping".to_vec(),
-            ordinal: 0,
+            emission: CrossZoneEmission {
+                target_zone: [1; 32],
+                target_account_id: AccountId::new([3; 32]),
+                target_accounts: vec![],
+                payload: b"ping".to_vec(),
+                ordinal: 0,
+            },
         }
     }
 

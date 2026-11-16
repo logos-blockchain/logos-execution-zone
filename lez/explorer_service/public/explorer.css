@@ -245,6 +245,12 @@ body {
   font-style: italic;
 }
 
+.tx-status-reverted {
+  background-color: #ffebee;
+  color: #b71c1c;
+  border-color: #d32f2f;
+}
+
 .tx-type-deployment {
   background-color: #fff3e0;
   color: #e65100;

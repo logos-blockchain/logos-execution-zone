@@ -69,9 +69,9 @@ pub fn setup_indexer_ffi(bedrock_addr: SocketAddr) -> Result<(IndexerServiceFFI,
     let temp_indexer_dir =
         tempfile::tempdir().context("Failed to create temp dir for indexer home")?;
 
-    log::debug!(
-        "Using temp indexer home at {}",
-        temp_indexer_dir.path().display()
+    tracing::debug!(
+        home = %temp_indexer_dir.path().display(),
+        "Using temp indexer home"
     );
 
     let indexer_config = integration_tests::config::indexer_config(

@@ -8,6 +8,7 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
+cross_zone_emission_core.workspace = true
 lee_core.workspace = true
 risc0-zkvm.workspace = true
 borsh.workspace = true

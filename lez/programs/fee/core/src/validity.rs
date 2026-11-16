@@ -67,10 +67,23 @@ pub fn validate_static_tx(view: &FeeTxView, fee_state: &FeeState) -> Result<(), 
             }
             Ok(())
         }
-        // The flat part only: metered effects are priced after execution.
-        FeeTxView::Private { reserve, .. } => {
-            let required =
-                private_fee_required(0, fee_state.base_fee_exec, fee_state.base_fee_stor);
+        // Verification and storage only: metered effects are priced after execution.
+        FeeTxView::Private {
+            reserve,
+            data_bytes,
+            ..
+        } => {
+            if *data_bytes == 0 || *data_bytes > market::MAX_GAS_STOR {
+                return Err(FeeError::DataBytesOutOfRange {
+                    data_bytes: *data_bytes,
+                });
+            }
+            let required = private_fee_required(
+                0,
+                *data_bytes,
+                fee_state.base_fee_exec,
+                fee_state.base_fee_stor,
+            );
             if *reserve < required {
                 return Err(FeeError::PrivateFeeBelowRequired {
                     required,
@@ -166,12 +179,13 @@ mod tests {
     }
 
     #[test]
-    fn private_view_needs_the_flat_fee_in_reserve() {
+    fn private_view_needs_its_verification_and_storage_in_reserve() {
         let state = FeeState::genesis();
-        let flat = private_fee_required(0, state.base_fee_exec, state.base_fee_stor);
+        let flat = private_fee_required(0, 1_000, state.base_fee_exec, state.base_fee_stor);
         let view = |reserve| FeeTxView::Private {
             payer: AccountId::new([7_u8; 32]),
             reserve,
+            data_bytes: 1_000,
         };
 
         assert_eq!(validate_static_tx(&view(flat), &state), Ok(()));

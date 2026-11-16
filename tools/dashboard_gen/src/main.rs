@@ -22,12 +22,18 @@ struct Args {
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum DashboardKind {
     Sequencer,
+    Network,
+    Actors,
+    Messages,
 }
 
 impl DashboardKind {
     fn build(self) -> Dashboard {
         match self {
             Self::Sequencer => dashboards::sequencer::dashboard(),
+            Self::Network => dashboards::network::dashboard(),
+            Self::Actors => dashboards::actors::dashboard(),
+            Self::Messages => dashboards::messages::dashboard(),
         }
     }
 }

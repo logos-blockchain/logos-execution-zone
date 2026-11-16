@@ -65,6 +65,8 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=30s --retries=3 \
 
 # Run the application
 ENV RUST_LOG=info,risc0_zkvm=warn,kameo=warn
+# One JSON object per log line, for log collectors. `LOG_FORMAT=text` for plain lines.
+ENV LOG_FORMAT=json
 
 # Set explicit location for r0vm binary
 ENV RISC0_SERVER_PATH=/usr/local/bin/r0vm

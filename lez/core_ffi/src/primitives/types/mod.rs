@@ -378,7 +378,7 @@ impl<T> From<FfiOption<T>> for Option<T> {
 /// pointer): a fee-exempt transaction carries `has_fee == false` and a zeroed
 /// declaration.
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, Debug)]
 pub struct FfiFeeDeclaration {
     pub payer: FfiAccountId,
     pub gas_limit: u64,
@@ -446,7 +446,7 @@ pub unsafe extern "C" fn primitives_ffi_free_private_account_keys_boxed(
     keys: *mut FfiPrivateAccountKeys,
 ) {
     if keys.is_null() {
-        log::error!("Trying to free a null pointer. Exiting");
+        tracing::error!("Trying to free a null pointer. Exiting");
         return;
     }
 
@@ -464,7 +464,7 @@ pub unsafe extern "C" fn primitives_ffi_free_private_account_keys(
     keys: *mut FfiPrivateAccountKeys,
 ) {
     if keys.is_null() {
-        log::error!("Trying to free a null pointer. Exiting");
+        tracing::error!("Trying to free a null pointer. Exiting");
         return;
     }
 

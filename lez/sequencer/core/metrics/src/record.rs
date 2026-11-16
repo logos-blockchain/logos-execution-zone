@@ -49,6 +49,7 @@ pub fn init() {
     mempool_failed_transactions_total_counter().increment(0);
     cross_zone_dispatches_retired_total_counter().increment(0);
     record_cross_zone_dead_letter_dispatches(0);
+    record_cross_zone_pending_dispatches(0);
     record_mempool_size(0);
     record_chain_height(0);
 
@@ -89,7 +90,7 @@ pub fn record_chain_height(height: u64) {
 
 fn blocks_produced_total_counter() -> Counter {
     counter!(
-        description: "Number of blocks produced by this sequencer and applied to the head",
+        description: "Number of blocks produced by this sequencer and finalized on the channel",
         unit: Unit::Count,
         names::BLOCKS_PRODUCED_TOTAL
     )
@@ -189,6 +190,27 @@ pub fn record_cross_zone_peer_committee_suspended(peer: String, suspended: bool)
         "peer" => peer
     )
     .set(if suspended { 1.0 } else { 0.0 });
+}
+
+/// Whether the watcher for `peer` (hex zone id) runs; 0 after a fail-stop until restart.
+pub fn record_cross_zone_watcher_alive(peer: String, alive: bool) {
+    gauge!(
+        description: "1 while the watcher for a cross-zone peer is running",
+        unit: Unit::Count,
+        names::CROSS_ZONE_WATCHER_ALIVE,
+        "peer" => peer
+    )
+    .set(if alive { 1.0 } else { 0.0 });
+}
+
+/// Deliveries recorded and awaiting a production turn.
+pub fn record_cross_zone_pending_dispatches(count: usize) {
+    gauge!(
+        description: "Cross-zone deliveries recorded and awaiting inclusion in a block",
+        unit: Unit::Count,
+        names::CROSS_ZONE_PENDING_DISPATCHES
+    )
+    .set(u64::try_from(count).expect("Pending dispatch count should fit into u64") as f64);
 }
 
 /// Retained dead letters. A gauge, not a counter: eviction and reconciliation

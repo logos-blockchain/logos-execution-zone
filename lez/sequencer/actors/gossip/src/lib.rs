@@ -7,8 +7,8 @@
 
 #[cfg(feature = "actor")]
 pub use actor::{
-    BOOTSTRAP_RETRY_INTERVAL, GossipActor, IngestSubmit, MAILBOX_CAPACITY, WatchdogGuard,
-    spawn_gossip_outage_watchdog,
+    BOOTSTRAP_RETRY_INTERVAL, GossipActor, IngestSubmit, MAILBOX_CAPACITY, SystemApprovalSubmit,
+    WatchdogGuard, spawn_gossip_outage_watchdog,
 };
 #[cfg(feature = "actor")]
 pub use libp2p::Multiaddr;

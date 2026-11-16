@@ -25,16 +25,18 @@ use libp2p::{
     swarm::{NetworkBehaviour, Swarm, SwarmEvent},
 };
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
-use sequencer_channel_signing_actor::Wire;
+use sequencer_channel_signing_actor::protocol::Wire;
 use sequencer_core::{
+    StakeConfigUpdate,
     config::{GossipConfig, MAX_BEDROCK_TX_SIZE, MAX_PUBLISHABLE_BLOCK_SIZE},
-    gossip::{AccreditedKeysReceiver, MaxBlockSizeReceiver},
 };
-use sequencer_slasher_actor::Approval;
+use sequencer_slasher_actor::protocol::Approval;
+use system_upgrader_core::SignedApproval;
 use tokio::select;
+use tracing::Instrument as _;
 
 use self::seen_cache::SeenCache;
-use crate::protocol::{GetConnectedPeers, PublishConfig, PublishTransaction, RetryBootstrap};
+use crate::protocol::{GetConnectedPeers, Publish, PublishConfig, RetryBootstrap};
 
 mod seen_cache;
 #[cfg(test)]
@@ -84,11 +86,16 @@ pub struct GossipActor {
     /// Slash approvals ride their own topic so the tx wire format is untouched.
     approvals_topic: gossipsub::IdentTopic,
     /// Where verified inbound approvals go; the slasher decides what to keep.
+    // TODO: Refeactor sink with a proper actor-style approach
     approval_sink: Recipient<Approval>,
-    /// The committee the follow path last read.
-    accredited_keys_rx: AccreditedKeysReceiver,
+    /// `system_upgrader` approvals ride their own topic too.
+    system_approvals_topic: gossipsub::IdentTopic,
+    /// Hands a verified inbound `system_upgrader` approval to the node's approval pool.
+    submit_system_approval: SystemApprovalSubmit,
+    /// The committee the follow path last read; `None` filters nothing.
+    accredited_keys: Option<HashSet<[u8; 32]>>,
     /// Keys with stake on record at head.
-    staked_keys_rx: AccreditedKeysReceiver,
+    staked_keys: Option<HashSet<[u8; 32]>>,
     /// Channel-config candidates and signatures ride their own topic, so the
     /// transaction wire format is untouched.
     config_topic: gossipsub::IdentTopic,
@@ -96,7 +103,8 @@ pub struct GossipActor {
     /// keep, since only it knows the candidate a signature belongs to.
     config_sink: Recipient<Wire>,
     seen: SeenCache,
-    max_block_size_rx: MaxBlockSizeReceiver,
+    /// The chain's `max_block_size` the follow path last read.
+    max_block_size: u64,
     submit: IngestSubmit,
     /// Configured bootstrap peers, re-dialed while the node is isolated.
     bootstrap: Vec<Multiaddr>,
@@ -105,6 +113,8 @@ pub struct GossipActor {
     pending_publish: BoundedVecDeque<LeeTransaction>,
     /// Same, for this node's own slash approvals.
     pending_approvals: BoundedVecDeque<Approval>,
+    /// Same, for `system_upgrader` approvals this node accepted.
+    pending_system_approvals: BoundedVecDeque<SignedApproval>,
     /// Same, for this node's own channel-config messages.
     pending_config: BoundedVecDeque<Wire>,
     listen_addrs: Vec<Multiaddr>,
@@ -119,6 +129,11 @@ pub struct GossipActor {
 pub type IngestSubmit =
     Arc<dyn Fn(LeeTransaction) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
 
+/// Hands a gossiped `system_upgrader` approval to the node's approval pool (the executor actor in
+/// production), which checks it against the head's committee.
+pub type SystemApprovalSubmit =
+    Arc<dyn Fn(SignedApproval) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
+
 /// Aborts the watchdog task when dropped, silencing the L1-only warning on
 /// node shutdown.
 pub struct WatchdogGuard(tokio::task::JoinHandle<()>);
@@ -126,20 +141,14 @@ pub struct WatchdogGuard(tokio::task::JoinHandle<()>);
 impl GossipActor {
     /// Builds the swarm, binds `listen_addr`, seeds Kademlia and dials
     /// bootstrap peers.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "each topic's inbound sink is a separate wiring point"
-    )]
     pub async fn new(
         config: GossipConfig,
         channel_id: [u8; 32],
         signing_key: Ed25519Key,
         approval_sink: Recipient<Approval>,
-        max_block_size_rx: MaxBlockSizeReceiver,
         submit: IngestSubmit,
-        accredited_keys_rx: AccreditedKeysReceiver,
-        staked_keys_rx: AccreditedKeysReceiver,
         config_sink: Recipient<Wire>,
+        submit_system_approval: SystemApprovalSubmit,
     ) -> Result<Self> {
         // Reuse the node's L1 channel signing key as the libp2p identity. The
         // secret stays in a `Zeroizing` buffer that both `ed25519_from_bytes`
@@ -159,9 +168,14 @@ impl GossipActor {
         // verbatim, so a content digest would make every re-announcement a
         // duplicate the sender itself drops.
         let approvals_topic_hash = Self::get_approvals_topic_for_channel(channel_id).hash();
+        let system_approvals_topic_hash =
+            Self::get_system_approvals_topic_for_channel(channel_id).hash();
         let config_topic_hash = Self::get_config_topic_for_channel(channel_id).hash();
         let message_id_fn = move |msg: &gossipsub::Message| {
-            if msg.topic == approvals_topic_hash || msg.topic == config_topic_hash {
+            if msg.topic == approvals_topic_hash
+                || msg.topic == system_approvals_topic_hash
+                || msg.topic == config_topic_hash
+            {
                 return default_message_id(msg);
             }
             // Undecodable messages still need a message-id, but it must be a
@@ -238,6 +252,13 @@ impl GossipActor {
             .subscribe(&approvals_topic)
             .context("Failed to subscribe to gossip slash approval topic")?;
 
+        let system_approvals_topic = Self::get_system_approvals_topic_for_channel(channel_id);
+        swarm
+            .behaviour_mut()
+            .gossipsub
+            .subscribe(&system_approvals_topic)
+            .context("Failed to subscribe to gossip system_upgrader approval topic")?;
+
         let config_topic = Self::get_config_topic_for_channel(channel_id);
         swarm
             .behaviour_mut()
@@ -251,7 +272,7 @@ impl GossipActor {
 
         // Fail fast on bind errors: wait for the first listen address.
         let listen_addrs = wait_for_listen_addr(&mut swarm).await?;
-        log::info!("Gossip listening on {listen_addrs:?} as {local_peer_id}");
+        tracing::info!(?listen_addrs, peer_id = %local_peer_id, "Gossip listening");
 
         // Seed Kademlia with bootstrap peers that carry an embedded peer id;
         // dial the rest directly, since Kademlia can't route to an address
@@ -269,11 +290,11 @@ impl GossipActor {
                 continue;
             }
             if let Err(err) = swarm.dial(addr.clone()) {
-                log::warn!("Failed to dial gossip bootstrap peer {addr}: {err}");
+                tracing::warn!(%addr, error = %err, "Failed to dial gossip bootstrap peer");
             }
         }
         if let Err(err) = swarm.behaviour_mut().kademlia.bootstrap() {
-            log::debug!("Kademlia bootstrap skipped (no known peers yet): {err}");
+            tracing::debug!(error = %err, "Kademlia bootstrap skipped: no known peers yet");
         }
 
         Ok(Self {
@@ -284,16 +305,19 @@ impl GossipActor {
             topic,
             approvals_topic,
             approval_sink,
-            accredited_keys_rx,
-            staked_keys_rx,
+            system_approvals_topic,
+            submit_system_approval,
+            accredited_keys: None,
+            staked_keys: None,
             config_topic,
             config_sink,
             seen: SeenCache::new(SEEN_CACHE_CAPACITY),
-            max_block_size_rx,
+            max_block_size: MAX_PUBLISHABLE_BLOCK_SIZE,
             submit,
             bootstrap,
             pending_publish: BoundedVecDeque::new(PENDING_PUBLISH_CAPACITY),
             pending_approvals: BoundedVecDeque::new(PENDING_PUBLISH_CAPACITY),
+            pending_system_approvals: BoundedVecDeque::new(PENDING_PUBLISH_CAPACITY),
             pending_config: BoundedVecDeque::new(PENDING_PUBLISH_CAPACITY),
             listen_addrs,
             local_peer_id,
@@ -317,6 +341,14 @@ impl GossipActor {
     fn get_approvals_topic_for_channel(channel_id: [u8; 32]) -> gossipsub::IdentTopic {
         gossipsub::IdentTopic::new(format!(
             "/lez/{}/v1/slash-approvals",
+            hex::encode(channel_id)
+        ))
+    }
+
+    /// `system_upgrader` approvals ride their own topic, like slash approvals.
+    fn get_system_approvals_topic_for_channel(channel_id: [u8; 32]) -> gossipsub::IdentTopic {
+        gossipsub::IdentTopic::new(format!(
+            "/lez/{}/v1/system-approvals",
             hex::encode(channel_id)
         ))
     }
@@ -392,17 +424,34 @@ impl GossipActor {
                 message_id,
                 message,
             }) => {
+                // Each roots the trace of what the message sets off.
+                let span = |name: &'static str| {
+                    tracing::info_span!(
+                        "gossip_message",
+                        otel.name = name,
+                        peer = %propagation_source,
+                    )
+                };
                 if message.topic == self.approvals_topic.hash() {
-                    self.on_approval_message(propagation_source, &message_id, &message.data);
+                    span("gossip.approval").in_scope(|| {
+                        self.on_approval_message(propagation_source, &message_id, &message.data);
+                    });
+                } else if message.topic == self.system_approvals_topic.hash() {
+                    self.on_system_approval_message(propagation_source, &message_id, &message.data)
+                        .instrument(span("gossip.system_approval"))
+                        .await;
                 } else if message.topic == self.config_topic.hash() {
-                    self.on_config_message(
-                        propagation_source,
-                        message.source.as_ref(),
-                        &message_id,
-                        &message.data,
-                    );
+                    span("gossip.config").in_scope(|| {
+                        self.on_config_message(
+                            propagation_source,
+                            message.source.as_ref(),
+                            &message_id,
+                            &message.data,
+                        );
+                    });
                 } else {
                     self.on_gossip_message(propagation_source, &message_id, &message.data)
+                        .instrument(span("gossip.transaction"))
                         .await;
                 }
             }
@@ -415,6 +464,11 @@ impl GossipActor {
                 if topic == self.approvals_topic.hash() =>
             {
                 self.flush_pending_approvals();
+            }
+            GossipBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed { topic, .. })
+                if topic == self.system_approvals_topic.hash() =>
+            {
+                self.flush_pending_system_approvals();
             }
             GossipBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed { topic, .. })
                 if topic == self.config_topic.hash() =>
@@ -442,7 +496,7 @@ impl GossipActor {
             GossipBehaviourEvent::Mdns(mdns::Event::Discovered(peers)) => {
                 for (peer_id, addr) in peers {
                     if let Err(err) = self.swarm_mut().dial(addr) {
-                        log::debug!("Failed to dial mdns-discovered peer {peer_id}: {err}");
+                        tracing::debug!(%peer_id, error = %err, "Failed to dial mdns-discovered peer");
                     }
                 }
             }
@@ -460,10 +514,9 @@ impl GossipActor {
     ) {
         use self::validation::{TxEvaluation, evaluate_transaction};
 
-        let max_block_size = *self.max_block_size_rx.borrow();
-        let acceptance = match evaluate_transaction(data, max_block_size) {
+        let acceptance = match evaluate_transaction(data, self.max_block_size) {
             TxEvaluation::Reject(reason) => {
-                log::debug!("Rejecting gossiped tx from {source}: {reason}");
+                tracing::debug!(%source, %reason, "Rejecting gossiped tx");
                 gossipsub::MessageAcceptance::Reject
             }
             TxEvaluation::Accept(tx) => {
@@ -480,7 +533,7 @@ impl GossipActor {
                             self.seen.insert(hash);
                         }
                         Err(reason) => {
-                            log::debug!("Not admitting gossiped tx {hash:?}: {reason}");
+                            tracing::debug!(tx_hash = %hash, %reason, "Not admitting gossiped tx");
                         }
                     }
 
@@ -505,22 +558,20 @@ impl GossipActor {
     ) {
         use self::validation::{ApprovalEvaluation, evaluate_approval};
 
-        let evaluation = {
-            let accredited_keys = self.accredited_keys_rx.borrow();
-            evaluate_approval(data, self.channel_id, accredited_keys.as_ref())
-        };
+        let evaluation =
+            { evaluate_approval(data, self.channel_id, self.accredited_keys.as_ref()) };
         let acceptance = match evaluation {
             ApprovalEvaluation::Reject(reason) => {
-                log::debug!("Rejecting gossiped slash approval from {source}: {reason}");
+                tracing::debug!(%source, %reason, "Rejecting gossiped slash approval");
                 gossipsub::MessageAcceptance::Reject
             }
             ApprovalEvaluation::Ignore(reason) => {
-                log::debug!("Ignoring gossiped slash approval from {source}: {reason}");
+                tracing::debug!(%source, %reason, "Ignoring gossiped slash approval");
                 gossipsub::MessageAcceptance::Ignore
             }
             ApprovalEvaluation::Accept(approval) => {
                 if let Err(err) = self.approval_sink.tell(approval).try_send() {
-                    log::debug!("Dropping inbound slash approval: {err}");
+                    tracing::debug!(error = %err, "Dropping inbound slash approval");
                 }
                 gossipsub::MessageAcceptance::Accept
             }
@@ -545,7 +596,7 @@ impl GossipActor {
         {
             Ok(_) | Err(gossipsub::PublishError::Duplicate) => {}
             Err(err) => {
-                log::debug!("Queueing slash approval publish for retry: {err}");
+                tracing::debug!(error = %err, "Queueing slash approval publish for retry");
                 _ = self.pending_approvals.push_back(approval);
             }
         }
@@ -554,6 +605,70 @@ impl GossipActor {
     fn flush_pending_approvals(&mut self) {
         for approval in self.pending_approvals.drain_all() {
             self.publish_approval(approval);
+        }
+    }
+
+    /// Verifies an inbound `system_upgrader` approval and hands it to the approval pool.
+    async fn on_system_approval_message(
+        &mut self,
+        source: PeerId,
+        message_id: &gossipsub::MessageId,
+        data: &[u8],
+    ) {
+        use self::validation::{SystemApprovalEvaluation, evaluate_system_approval};
+
+        let evaluation =
+            evaluate_system_approval(data, self.channel_id, self.accredited_keys.as_ref());
+        let acceptance = match evaluation {
+            SystemApprovalEvaluation::Reject(reason) => {
+                tracing::debug!(%source, %reason, "Rejecting gossiped system_upgrader approval");
+                gossipsub::MessageAcceptance::Reject
+            }
+            SystemApprovalEvaluation::Ignore(reason) => {
+                tracing::debug!(%source, %reason, "Ignoring gossiped system_upgrader approval");
+                gossipsub::MessageAcceptance::Ignore
+            }
+            SystemApprovalEvaluation::Accept(signed) => {
+                // The pool's verdict (e.g. expired at this head) doesn't affect the mesh.
+                if let Err(err) = (self.submit_system_approval)(signed).await {
+                    tracing::debug!(
+                        error = format_args!("{err:#}"),
+                        "The approval pool refused a gossiped approval"
+                    );
+                }
+                gossipsub::MessageAcceptance::Accept
+            }
+        };
+
+        _ = self
+            .swarm_mut()
+            .behaviour_mut()
+            .gossipsub
+            .report_message_validation_result(message_id, &source, acceptance);
+    }
+
+    /// Publishes a `system_upgrader` approval this node accepted, queued and retried like a
+    /// transaction.
+    fn publish_system_approval(&mut self, signed: SignedApproval) {
+        let bytes = borsh::to_vec(&signed).expect("approval borsh serialization should not fail");
+        let topic = self.system_approvals_topic.clone();
+        match self
+            .swarm_mut()
+            .behaviour_mut()
+            .gossipsub
+            .publish(topic, bytes)
+        {
+            Ok(_) | Err(gossipsub::PublishError::Duplicate) => {}
+            Err(err) => {
+                tracing::debug!(error = %err, "Queueing system_upgrader approval publish for retry");
+                _ = self.pending_system_approvals.push_back(signed);
+            }
+        }
+    }
+
+    fn flush_pending_system_approvals(&mut self) {
+        for signed in self.pending_system_approvals.drain_all() {
+            self.publish_system_approval(signed);
         }
     }
 
@@ -570,25 +685,24 @@ impl GossipActor {
         use self::validation::{ConfigEvaluation, evaluate_config_message};
 
         let evaluation = {
-            let staked_keys = self.staked_keys_rx.borrow();
             evaluate_config_message(
                 data,
                 origin.and_then(inlined_ed25519_key),
-                staked_keys.as_ref(),
+                self.staked_keys.as_ref(),
             )
         };
         let acceptance = match evaluation {
             ConfigEvaluation::Reject(reason) => {
-                log::debug!("Rejecting a channel-config message from {source}: {reason}");
+                tracing::debug!(%source, %reason, "Rejecting a channel-config message");
                 gossipsub::MessageAcceptance::Reject
             }
             ConfigEvaluation::Ignore(reason) => {
-                log::debug!("Ignoring a channel-config message from {source}: {reason}");
+                tracing::debug!(%source, %reason, "Ignoring a channel-config message");
                 gossipsub::MessageAcceptance::Ignore
             }
             ConfigEvaluation::Accept(message) => {
                 if let Err(err) = self.config_sink.tell(message).try_send() {
-                    log::debug!("Dropping an inbound channel-config message: {err}");
+                    tracing::debug!(error = %err, "Dropping an inbound channel-config message");
                 }
                 gossipsub::MessageAcceptance::Accept
             }
@@ -614,7 +728,7 @@ impl GossipActor {
         {
             Ok(_) | Err(gossipsub::PublishError::Duplicate) => {}
             Err(err) => {
-                log::debug!("Queueing a channel-config publish for retry: {err}");
+                tracing::debug!(error = %err, "Queueing a channel-config publish for retry");
                 _ = self.pending_config.push_back(message);
             }
         }
@@ -645,11 +759,11 @@ impl GossipActor {
                 self.seen.insert(hash);
             }
             Err(err) => {
-                log::debug!("Queueing local tx publish {hash:?} for retry: {err}");
+                tracing::debug!(tx_hash = %hash, error = %err, "Queueing local tx publish for retry");
                 if let Some(dropped) = self.pending_publish.push_back(tx) {
-                    log::debug!(
-                        "Pending publish queue full; dropping oldest tx {:?}",
-                        dropped.hash()
+                    tracing::debug!(
+                        tx_hash = %dropped.hash(),
+                        "Pending publish queue full, dropping the oldest tx"
                     );
                 }
             }
@@ -671,13 +785,13 @@ impl GossipActor {
         if !self.connected.is_empty() || self.bootstrap.is_empty() {
             return;
         }
-        log::debug!(
-            "No connected gossip peers; retrying {} bootstrap peer(s)",
-            self.bootstrap.len()
+        tracing::debug!(
+            bootstrap_peers = self.bootstrap.len(),
+            "No connected gossip peers, retrying bootstrap peers"
         );
         for addr in self.bootstrap.clone() {
             if let Err(err) = self.swarm_mut().dial(addr.clone()) {
-                log::debug!("Failed to dial gossip bootstrap peer {addr}: {err}");
+                tracing::debug!(%addr, error = %err, "Failed to dial gossip bootstrap peer");
             }
         }
         _ = self.swarm_mut().behaviour_mut().kademlia.bootstrap();
@@ -762,15 +876,14 @@ impl Message<PublishConfig> for GossipActor {
     }
 }
 
-impl Message<PublishTransaction> for GossipActor {
+impl Message<Publish> for GossipActor {
     type Reply = ();
 
-    async fn handle(
-        &mut self,
-        PublishTransaction(tx): PublishTransaction,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.publish_transaction(tx);
+    async fn handle(&mut self, msg: Publish, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
+        match msg {
+            Publish::Transaction(tx) => self.publish_transaction(*tx),
+            Publish::SystemApproval(signed) => self.publish_system_approval(signed),
+        }
     }
 }
 
@@ -783,6 +896,24 @@ impl Message<RetryBootstrap> for GossipActor {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.retry_bootstrap();
+    }
+}
+
+impl Message<StakeConfigUpdate> for GossipActor {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        StakeConfigUpdate {
+            accredited,
+            staked,
+            max_block_size,
+        }: StakeConfigUpdate,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.accredited_keys = Some(accredited);
+        self.staked_keys = Some(staked);
+        self.max_block_size = max_block_size.unwrap_or(MAX_PUBLISHABLE_BLOCK_SIZE);
     }
 }
 
@@ -868,7 +999,7 @@ pub fn spawn_gossip_outage_watchdog(actor_ref: ActorRef<GossipActor>) -> Watchdo
             return;
         }
         loop {
-            log::error!(
+            tracing::error!(
                 "Sequencer gossip network is down; continuing L1-only. \
                  Restart the node to restore p2p."
             );

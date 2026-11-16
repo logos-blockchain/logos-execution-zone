@@ -2,16 +2,18 @@ use std::ops::RangeInclusive;
 
 use common::{HashType, PageLimit, transaction::LeeTransaction};
 use kameo::Reply;
+use lee::PublicationsPage;
 use lee_core::{
     BlockId, Commitment, CommitmentPosition, CommitmentSetDigest, MembershipProof,
-    account::{Account, AccountId, Actor},
+    account::{AccountId, Actor},
 };
+pub use sequencer_bedrock_actor::protocol::{ChannelId, MsgId, Slot};
+// TODO: Move to this module once sequencer_core will be in internal implementation detail of
+// executor.
 pub use sequencer_storage_actor::protocol::{CrossZoneMessageKey, DeadLetterRequeue};
 
 /// The widest range a [`GetBlockRange`] may span.
 pub const MAX_BLOCK_RANGE_LEN: usize = 1024;
-
-pub type ChannelId = [u8; 32];
 
 #[derive(Copy, Clone)]
 pub struct ProduceBlock;
@@ -104,6 +106,11 @@ pub struct GetTransaction {
     pub tx_hash: HashType,
 }
 
+/// `None` also for a block's trailing fee and clock transactions, which have no receipt.
+pub struct GetTransactionReceipt {
+    pub tx_hash: HashType,
+}
+
 pub struct GetAccountNonces {
     pub account_ids: Vec<AccountId>,
 }
@@ -113,12 +120,16 @@ pub struct GetProofsAndRoot {
     pub message_positions: Vec<CommitmentPosition>,
 }
 
-/// The membership paths of the requested commitments and messages, and the root they reach.
-pub type ProofsAndRoot = (
-    Vec<Option<MembershipProof>>,
-    Vec<Option<MembershipProof>>,
-    CommitmentSetDigest,
-);
+#[derive(Reply)]
+pub struct GetProofsAndRootReply {
+    /// Proof for each of [`GetProofsAndRoot::commitments`] in the same order, [`None`] for an
+    /// unknown commitment.
+    pub proofs: Vec<Option<MembershipProof>>,
+    /// Proof for each of [`GetProofsAndRoot::message_positions`] in the same order, [`None`] for
+    /// an unknown position.
+    pub message_paths: Vec<Option<MembershipProof>>,
+    pub root: CommitmentSetDigest,
+}
 
 pub struct GetAccount {
     pub account_id: AccountId,
@@ -128,14 +139,14 @@ pub struct GetAccountView {
     pub actor_state_selector: Actor,
 }
 
-#[derive(Reply)]
-pub struct GetAccountReply {
-    pub account: Option<Account>,
-}
-
 pub struct GetPublications {
     pub from_position: CommitmentPosition,
     pub limit: PageLimit,
+}
+
+#[derive(Reply)]
+pub struct GetPublicationsReply {
+    pub page: PublicationsPage,
 }
 
 pub struct GetMessagePath {
@@ -148,6 +159,25 @@ pub struct GetRecoveryBinding {
 
 pub struct GetChannelId;
 
+pub struct GetStatus;
+
+/// What the executor is doing.
+#[derive(Debug, Clone, Reply)]
+pub enum ExecutorStatus {
+    /// Replaying the channel's finalized history up to the last slot the node has finalized.
+    Bootstrapping {
+        /// The slot bootstrapping completes at: the last one the node had finalized, as of the
+        /// latest batch. [`None`] before the first batch.
+        target: Option<Slot>,
+        /// The slot the finalized history is replayed up to, [`None`] before the first batch.
+        replayed_up_to: Option<Slot>,
+        /// Height of the chain replayed so far, [`None`] while it is empty.
+        height: Option<BlockId>,
+    },
+    /// Following the channel and producing blocks on its turns.
+    Online { height: BlockId, is_our_turn: bool },
+}
+
 pub struct GetCrossZoneDeadLetters;
 
 #[derive(Reply)]
@@ -158,6 +188,21 @@ pub struct GetCrossZoneDeadLettersReply {
 
 pub struct RequeueCrossZoneDeadLetter {
     pub message_key: CrossZoneMessageKey,
+}
+
+/// The `system_upgrader` changes the approval pool holds approvals of.
+pub struct GetSystemProposals;
+
+#[derive(Reply)]
+pub struct GetSystemProposalsReply {
+    /// Approvals the head's committee must reach for a change.
+    pub threshold: usize,
+    pub proposals: Vec<common::system_upgrades::ProposalApprovals>,
+}
+
+/// A committee member's approval of a `system_upgrader` change, for the producer's pool.
+pub struct SubmitSystemApproval {
+    pub approval: system_upgrader_core::SignedApproval,
 }
 
 #[derive(Reply)]

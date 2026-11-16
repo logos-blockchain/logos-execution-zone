@@ -154,7 +154,7 @@ unsafe fn actor_states_from_raw(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free_ffi_account_opt(val: *mut FfiOption<FfiAccount>) {
     if val.is_null() {
-        log::error!("Trying to free a null pointer. Exiting");
+        tracing::error!("Trying to free a null pointer. Exiting");
         return;
     }
     // Reclaim the outer box, then the inner account box (if any), converting it to drop the actor

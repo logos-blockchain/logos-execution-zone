@@ -8,11 +8,6 @@
 //! draft and its peers sign that exact transaction or nothing.
 
 pub use actor::{ChannelSigningActor, MAILBOX_CAPACITY};
-pub use protocol::{
-    Action, BlockDeposits, ChannelView, ConfigTarget, Draft, FinalMints, FundedTx, ObservedDeposit,
-    ObservedDeposits, Propose, Reset, SetPublisher, SetSubmitter, SignPin, Signature, Submission,
-    SubmitConfig, Wire,
-};
 
 pub mod actor;
 pub mod error;

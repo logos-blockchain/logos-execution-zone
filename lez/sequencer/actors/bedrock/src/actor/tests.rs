@@ -1,34 +1,42 @@
+use std::{collections::HashMap, num::NonZero};
+
 use common::{
     HashType,
     block::{Block, HashableBlockData},
 };
-use logos_blockchain_core::mantle::{
-    SignedOps,
-    channel::Channels,
-    ledger::{VerifiableOperation as _, verification_mode::StandardMode},
-    ops::{
-        Op, OpProof, SignedOperation,
-        channel::{
-            ChannelId, MsgId, VerifiedChannelKeys,
-            config::ChannelConfigValidationContext,
-            inscribe::{Inscription, InscriptionOp},
+use logos_blockchain_core::{
+    era::ForkDigest,
+    mantle::{
+        SignedOps,
+        channel::Channels,
+        ledger::{VerifiableOperation as _, verification_mode::StandardMode},
+        ops::{
+            Op, OpProof, SignedOperation,
+            channel::{
+                ChannelId, MsgId, VerifiedChannelKeys,
+                config::ChannelConfigValidationContext,
+                inscribe::{Inscription, InscriptionOp},
+            },
         },
-    },
-    transactions::{
-        MantleTxBuilder, OpProofs,
-        hash::{TxHash, TxHashView},
-        states::Unverified,
+        transactions::{
+            MantleTxBuilder, OpProofs,
+            hash::{TxHash, TxHashView},
+            states::Unverified,
+        },
     },
 };
 use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-use logos_blockchain_zone_sdk::sequencer::ChannelUpdateTx;
+use logos_blockchain_zone_sdk::{node_types::HeaderId, sequencer::ChannelUpdateTx};
 
-use super::channel_entries;
+use super::{
+    BlockSummary, NodeReader, keep_newest_block_summaries,
+    publisher::{channel_entries, genesis_config_op, genesis_config_proof},
+};
 use crate::protocol::ChannelParams;
 
 /// A tx wrapping `block` in one inscribe op on `channel`.
 fn inscribing_tx(channel: ChannelId, block: &Block) -> SignedOps<Unverified, StandardMode> {
-    let inscription: Inscription = borsh::to_vec(block).expect("serialize").try_into().unwrap();
+    let inscription = Inscription::new_unchecked(borsh::to_vec(block).expect("serialize"));
     let signer = Ed25519Key::generate(&mut rand::rngs::OsRng);
     let op = Op::ChannelInscribe(InscriptionOp {
         channel_id: channel,
@@ -39,7 +47,7 @@ fn inscribing_tx(channel: ChannelId, block: &Block) -> SignedOps<Unverified, Sta
     let raw = MantleTxBuilder::new()
         .extend_ops([op])
         .expect("ops fit")
-        .build()
+        .build(ForkDigest::new([0; 32]))
         .expect("tx builds");
     // Extraction never checks the proof, only that there is one per op.
     let proof = OpProof::Ed25519Sig(signer.sign_payload(&[0; 32]));
@@ -50,7 +58,7 @@ fn inscribing_tx(channel: ChannelId, block: &Block) -> SignedOps<Unverified, Sta
 fn a_custom_tx_yields_its_block() {
     let channel = ChannelId::from([1; 32]);
     let block = HashableBlockData {
-        reverted: Vec::new(),
+        receipts: Vec::new(),
         block_id: 7,
         prev_block_hash: HashType([0; 32]),
         timestamp: 700,
@@ -73,7 +81,9 @@ fn a_custom_tx_yields_its_block() {
 #[test]
 fn a_config_tx_yields_nothing() {
     let channel = ChannelId::from([1; 32]);
-    let raw = MantleTxBuilder::new().build().expect("tx builds");
+    let raw = MantleTxBuilder::new()
+        .build(ForkDigest::new([0; 32]))
+        .expect("tx builds");
     let config = ChannelUpdateTx::Config(
         SignedOps::from_parts(raw, OpProofs::empty()).expect("no ops, no proofs"),
     );
@@ -86,25 +96,25 @@ fn a_config_tx_yields_nothing() {
 #[test]
 fn the_genesis_config_op_and_its_proof_pass_bedrock_verification() {
     let keys = VerifiedChannelKeys::from(Ed25519Key::generate(&mut rand::rngs::OsRng).public_key());
-    let op = super::genesis_config_op(
+    let op = genesis_config_op(
         ChannelId::from([1; 32]),
         keys,
         &ChannelParams {
             minimum_sequencer_stake: 0,
             posting_timeframe: 10,
             posting_timeout: 20,
-            exit_delay: 10,
             max_block_size: 1 << 20,
+            finality_depth: 5,
         },
-        1,
-        1,
-    );
+        NonZero::<u16>::MIN,
+        NonZero::<u16>::MIN,
+    )
+    .expect("a one-key channel with thresholds of one is valid");
     let tx_hash_view = TxHashView::new(TxHash::from([7; 32]));
 
-    let signed =
-        SignedOperation::<_, Unverified, StandardMode>::new(op, super::genesis_config_proof())
-            .into_preverified(&())
-            .expect("the config is well formed");
+    let signed = SignedOperation::<_, Unverified, StandardMode>::new(op, genesis_config_proof())
+        .into_preverified(&())
+        .expect("the config is well formed");
 
     signed
         .verify(&ChannelConfigValidationContext {
@@ -113,4 +123,40 @@ fn the_genesis_config_op_and_its_proof_pass_bedrock_verification() {
             tx_hash_view: &tx_hash_view,
         })
         .expect("Bedrock accepts the channel-creating config op");
+}
+
+#[test]
+fn a_full_cache_keeps_the_newest_block_summaries_by_slot() {
+    let summary = |n: u64, slot: u64| {
+        let mut id = [0_u8; 32];
+        id[..8].copy_from_slice(&n.to_le_bytes());
+        BlockSummary {
+            id: HeaderId::from(id),
+            parent: HeaderId::from([0; 32]),
+            slot,
+            inscription_msgs: Vec::new(),
+            config_keys: Vec::new(),
+        }
+    };
+    let capacity = u64::try_from(NodeReader::CACHE_CAPACITY).unwrap();
+    let cutoff = capacity.saturating_sub(u64::try_from(NodeReader::CACHE_KEPT).unwrap());
+    // One block per slot, plus a fork block at the cutoff slot.
+    let mut cache: HashMap<_, _> = (0..capacity)
+        .map(|slot| summary(slot, slot))
+        .chain([summary(capacity, cutoff)])
+        .map(|block_summary| (block_summary.id, block_summary))
+        .collect();
+
+    keep_newest_block_summaries(&mut cache);
+
+    assert_eq!(
+        cache.len(),
+        NodeReader::CACHE_KEPT.saturating_add(1),
+        "the newest summaries and the fork block at the cutoff slot should be kept"
+    );
+    assert!(
+        cache
+            .values()
+            .all(|block_summary| block_summary.slot >= cutoff)
+    );
 }

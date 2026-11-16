@@ -4,7 +4,7 @@
 )]
 
 use common::{
-    block::{Block, BlockMeta, PeerChainTip},
+    block::{Block, BlockMeta, PeerChainTip, TransactionReceipt},
     transaction::LeeTransaction,
 };
 use kameo::{
@@ -16,24 +16,29 @@ use lee::V03State;
 use lee_core::BlockId;
 pub use sequencer_actors_common::mock::{Checkpoint, Replace, ReplaceReply};
 
+pub use self::canned_store::{CannedStore, SharedStore};
 use crate::{
     Result, StorageActorTrait,
-    actor::event_filter::EventFilter,
     error::Error,
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, DbDump, DeadLetterDispatch, DeadLetterRequeue,
         DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
-        DropSettledCrossZoneDispatches, DumpDb, GetAccountTransactions, GetAllBlocks, GetBlock,
-        GetBlockByHash, GetChannelViewBytes, GetCrossZonePeerFloorBytes, GetCrossZonePeerTip,
-        GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetEventFilter, GetFinalSnapshot,
+        DropSettledCrossZoneDispatches, DumpDb, EventFilter, GetAccountTransactions, GetAllBlocks,
+        GetBlock, GetBlockByHash, GetChannelViewBytes, GetCrossZonePeerFloorBytes,
+        GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatchRetainedCount,
+        GetDeadLetterDispatches, GetEventFilter, GetFinalConfigsBytes, GetFinalSnapshot,
         GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
-        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetSlashRecordBytes,
-        GetTransactionByHash, GetZoneAnchor, GetZoneCheckpoint, PendingCrossZoneDispatchRecord,
-        PendingDepositEventRecord, PutSlashRecordBytes, RecordDispatchFailure,
+        GetPendingCrossZoneDispatchCount, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
+        GetSlashRecordBytes, GetSystemApprovalsBytes, GetTransactionByHash,
+        GetTransactionReceiptByHash, GetZoneAnchor, GetZoneCheckpoint,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutFinalConfigsBytes,
+        PutSlashRecordBytes, PutSystemApprovalsBytes, RecordDispatchFailure,
         RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
         StoreUpdateOutcome, UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
     },
 };
+
+mod canned_store;
 
 mockall::mock! {
     pub StorageActor {
@@ -54,6 +59,12 @@ mockall::mock! {
             msg: GetTransactionByHash,
             ctx: &mut Context<Self, Result<Option<(LeeTransaction, BlockId)>>>
         ) -> Result<Option<(LeeTransaction, BlockId)>>;
+
+        pub fn handle_get_transaction_receipt_by_hash(
+            &mut self,
+            msg: GetTransactionReceiptByHash,
+            ctx: &mut Context<Self, Result<Option<TransactionReceipt>>>
+        ) -> Result<Option<TransactionReceipt>>;
 
         pub fn handle_delete_block(
             &mut self,
@@ -109,6 +120,30 @@ mockall::mock! {
             ctx: &mut Context<Self, Result<()>>
         ) -> Result<()>;
 
+        pub fn handle_get_system_approvals_bytes(
+            &mut self,
+            msg: GetSystemApprovalsBytes,
+            ctx: &mut Context<Self, Result<Option<Vec<u8>>>>
+        ) -> Result<Option<Vec<u8>>>;
+
+        pub fn handle_put_system_approvals_bytes(
+            &mut self,
+            msg: PutSystemApprovalsBytes,
+            ctx: &mut Context<Self, Result<()>>
+        ) -> Result<()>;
+
+        pub fn handle_get_final_configs_bytes(
+            &mut self,
+            msg: GetFinalConfigsBytes,
+            ctx: &mut Context<Self, Result<Option<Vec<u8>>>>
+        ) -> Result<Option<Vec<u8>>>;
+
+        pub fn handle_put_final_configs_bytes(
+            &mut self,
+            msg: PutFinalConfigsBytes,
+            ctx: &mut Context<Self, Result<()>>
+        ) -> Result<()>;
+
         pub fn handle_delete_zone_checkpoint(
             &mut self,
             msg: DeleteZoneCheckpoint,
@@ -157,6 +192,12 @@ mockall::mock! {
             ctx: &mut Context<Self, Result<Vec<PendingCrossZoneDispatchRecord>>>
         ) -> Result<Vec<PendingCrossZoneDispatchRecord>>;
 
+        pub fn handle_get_pending_cross_zone_dispatch_count(
+            &mut self,
+            msg: GetPendingCrossZoneDispatchCount,
+            ctx: &mut Context<Self, Result<usize>>
+        ) -> Result<usize>;
+
         pub fn handle_add_pending_cross_zone_dispatches(
             &mut self,
             msg: AddPendingCrossZoneDispatches,
@@ -192,6 +233,12 @@ mockall::mock! {
             msg: GetDeadLetterDispatchCount,
             ctx: &mut Context<Self, Result<u64>>
         ) -> Result<u64>;
+
+        pub fn handle_get_dead_letter_dispatch_retained_count(
+            &mut self,
+            msg: GetDeadLetterDispatchRetainedCount,
+            ctx: &mut Context<Self, Result<usize>>
+        ) -> Result<usize>;
 
         pub fn handle_get_cross_zone_peer_floor_bytes(
             &mut self,
@@ -311,6 +358,18 @@ impl Message<GetTransactionByHash> for MockStorageActor {
     }
 }
 
+impl Message<GetTransactionReceiptByHash> for MockStorageActor {
+    type Reply = Result<Option<TransactionReceipt>>;
+
+    async fn handle(
+        &mut self,
+        msg: GetTransactionReceiptByHash,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_transaction_receipt_by_hash(msg, ctx)
+    }
+}
+
 impl Message<DeleteBlock> for MockStorageActor {
     type Reply = Result<()>;
 
@@ -407,6 +466,30 @@ impl Message<GetSlashRecordBytes> for MockStorageActor {
     }
 }
 
+impl Message<GetSystemApprovalsBytes> for MockStorageActor {
+    type Reply = Result<Option<Vec<u8>>>;
+
+    async fn handle(
+        &mut self,
+        msg: GetSystemApprovalsBytes,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_system_approvals_bytes(msg, ctx)
+    }
+}
+
+impl Message<PutSystemApprovalsBytes> for MockStorageActor {
+    type Reply = Result<()>;
+
+    async fn handle(
+        &mut self,
+        msg: PutSystemApprovalsBytes,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_put_system_approvals_bytes(msg, ctx)
+    }
+}
+
 impl Message<PutSlashRecordBytes> for MockStorageActor {
     type Reply = Result<()>;
 
@@ -416,6 +499,30 @@ impl Message<PutSlashRecordBytes> for MockStorageActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_put_slash_record_bytes(msg, ctx)
+    }
+}
+
+impl Message<GetFinalConfigsBytes> for MockStorageActor {
+    type Reply = Result<Option<Vec<u8>>>;
+
+    async fn handle(
+        &mut self,
+        msg: GetFinalConfigsBytes,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_final_configs_bytes(msg, ctx)
+    }
+}
+
+impl Message<PutFinalConfigsBytes> for MockStorageActor {
+    type Reply = Result<()>;
+
+    async fn handle(
+        &mut self,
+        msg: PutFinalConfigsBytes,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_put_final_configs_bytes(msg, ctx)
     }
 }
 
@@ -523,6 +630,18 @@ impl Message<GetPendingCrossZoneDispatches> for MockStorageActor {
     }
 }
 
+impl Message<GetPendingCrossZoneDispatchCount> for MockStorageActor {
+    type Reply = Result<usize>;
+
+    async fn handle(
+        &mut self,
+        msg: GetPendingCrossZoneDispatchCount,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_pending_cross_zone_dispatch_count(msg, ctx)
+    }
+}
+
 impl Message<AddPendingCrossZoneDispatches> for MockStorageActor {
     type Reply = Result<usize>;
 
@@ -592,6 +711,18 @@ impl Message<GetDeadLetterDispatchCount> for MockStorageActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_get_dead_letter_dispatch_count(msg, ctx)
+    }
+}
+
+impl Message<GetDeadLetterDispatchRetainedCount> for MockStorageActor {
+    type Reply = Result<usize>;
+
+    async fn handle(
+        &mut self,
+        msg: GetDeadLetterDispatchRetainedCount,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_dead_letter_dispatch_retained_count(msg, ctx)
     }
 }
 

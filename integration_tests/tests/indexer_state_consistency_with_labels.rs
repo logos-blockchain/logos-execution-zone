@@ -1,6 +1,7 @@
 #![expect(
     clippy::shadow_unrelated,
     clippy::tests_outside_test_module,
+    clippy::arithmetic_side_effects,
     reason = "We don't care about these in tests"
 )]
 
@@ -9,8 +10,10 @@ use std::time::Duration;
 use anyhow::Result;
 use indexer_service_rpc::RpcClient as _;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext,
-    config::INITIAL_PUBLIC_BALANCES_FOR_WALLET,
+    MultiZoneTestContextBuilder, TIME_TO_WAIT_FOR_BLOCK_SECONDS, ZoneTestContextBuilder,
+    config::{
+        INITIAL_PUBLIC_BALANCES_FOR_WALLET, MultiNodeTestContextConfig, SequencerPartialConfig,
+    },
     public_mention,
     utils::{account_balance, get_account, send, wait_for_indexer_to_catch_up},
 };
@@ -21,7 +24,17 @@ use wallet::{
 
 #[tokio::test]
 async fn indexer_state_consistency_with_labels() -> Result<()> {
-    let mut ctx = TestContext::new().await?;
+    let mut ctx = MultiZoneTestContextBuilder::default()
+        .with_zone(
+            ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default())
+                .with_sequencer_partial_config(SequencerPartialConfig {
+                    // Covers the storage price doubling at the devnet's first epoch rotations.
+                    priority_fee_percent: 150,
+                    ..SequencerPartialConfig::default()
+                }),
+        )
+        .build()
+        .await?;
 
     // Assign labels to both accounts
     let from_label = Label::new("idx-sender-label");
@@ -48,7 +61,7 @@ async fn indexer_state_consistency_with_labels() -> Result<()> {
     )
     .await?;
 
-    log::info!("Waiting for next block creation");
+    tracing::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let acc_1_balance = account_balance(&ctx, ctx.existing_public_accounts()[0]).await?;
@@ -65,7 +78,7 @@ async fn indexer_state_consistency_with_labels() -> Result<()> {
         "the sender must pay a positive fee within the protocol ceiling, got {fee}",
     );
 
-    log::info!("Waiting for indexer to parse blocks");
+    tracing::info!("Waiting for indexer to parse blocks");
     wait_for_indexer_to_catch_up(&ctx).await?;
 
     let acc1_ind_state = ctx
@@ -77,7 +90,7 @@ async fn indexer_state_consistency_with_labels() -> Result<()> {
 
     assert_eq!(acc1_ind_state, Some(acc1_seq_state.into()));
 
-    log::info!("Indexer state is consistent after label-based transfer");
+    tracing::info!("Indexer state is consistent after label-based transfer");
 
     Ok(())
 }

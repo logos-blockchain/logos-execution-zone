@@ -96,7 +96,7 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
         .context("Failed to get recipient's private account")?;
     assert_eq!(to_res_acc.data.native_balance().unwrap(), 100);
 
-    log::info!("Successfully transferred");
+    tracing::info!("Successfully transferred");
 
     Ok(())
 }
@@ -157,7 +157,7 @@ async fn restore_keys_from_seed() -> Result<()> {
     )
     .await?;
 
-    log::info!("Preparation complete, performing keys restoration");
+    tracing::info!("Preparation complete, performing keys restoration");
 
     // Restore keys from seed
     ctx.wallet_mut().restore_keys(10).await?;
@@ -173,7 +173,7 @@ async fn restore_keys_from_seed() -> Result<()> {
     assert_eq!(acc1.account.data, Account::funded(ACC1_FUNDING).data);
     assert_eq!(acc2.account.data, Account::funded(ACC2_FUNDING).data);
 
-    log::info!("Tree checks passed, testing restored accounts can transact");
+    tracing::info!("Tree checks passed, testing restored accounts can transact");
 
     // Test that restored accounts can send transactions
     send(
@@ -224,7 +224,7 @@ async fn restore_keys_from_seed() -> Result<()> {
         "sender must also pay a fee on the transfer, got {acc3}"
     );
 
-    log::info!("Successfully restored keys and verified transactions");
+    tracing::info!("Successfully restored keys and verified transactions");
 
     Ok(())
 }

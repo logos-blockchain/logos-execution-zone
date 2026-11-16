@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     hash::Hash,
     panic::{AssertUnwindSafe, catch_unwind},
@@ -12,7 +13,7 @@ use lee_core::{
         BoundaryStep, PublicExecutionContext, PublicOutcome, PublicPart, TransactionEntry,
         TransitionView, WholeExecution,
     },
-    program::{MessageBody, PROGRAM_LOADER_ACCOUNT_ID, Publication, TransactionEvent},
+    program::{PROGRAM_LOADER_ACCOUNT_ID, Publication, ReceiveInput, TransactionEvent, Transition},
 };
 use public_backend::PublicBackend;
 
@@ -24,6 +25,10 @@ use crate::{
 };
 
 mod public_backend;
+
+/// Cycles charged per loader actor state byte read, as the native loader records none. ~3.7x
+/// below measured cost, kept so the default wallet gas limit covers any legal chain.
+pub const LOADER_CYCLES_PER_BYTE: Cycles = 1;
 
 #[derive(Default)]
 pub struct StateDiff {
@@ -313,8 +318,8 @@ impl ValidatedStateDiff {
     /// carries one: the diff then spends only the payer's nullifier, commits its post-state
     /// after the fee transfer and replays that transfer's crossing. Of the recovery bindings it
     /// keeps only the payer's, which a refund is published through; the notes the others bind
-    /// never exist. Without a fallback the
-    /// failure is an error, as every pre-execution check is.
+    /// never exist. A transaction whose fee a public signer declares reverts to the signers'
+    /// nonce advances alone. Otherwise the failure is an error, as every pre-execution check is.
     pub fn from_privacy_preserving_transaction_metered(
         tx: &PrivacyPreservingTransaction,
         state: &V03State,
@@ -400,22 +405,26 @@ impl ValidatedStateDiff {
                 recovery_bindings: execution.recovery_bindings.clone(),
                 ..StateDiff::default()
             },
-        );
+        )
+        .and_then(|mut diff| {
+            // The proven private async messages follow the live public ones.
+            for publication in &execution.async_messages {
+                diff.published.push(publish(
+                    state,
+                    &diff.recovery_bindings,
+                    publication.clone(),
+                )?);
+            }
+            Ok(diff)
+        });
         // As for a public action.
         let cycles = charged_cycles(&result, cycles_used, cycle_budget);
-        let fallback = execution.fee.as_ref().and_then(|fee| fee.fallback.as_ref());
+        let fallback = execution
+            .proven_fee
+            .as_ref()
+            .and_then(|fee| fee.fallback.as_ref());
         let (diff, revert) = match (result, fallback) {
-            (Ok(mut diff), _) => {
-                // The proven private async messages follow the live public ones.
-                diff.published.extend(
-                    execution
-                        .async_messages
-                        .iter()
-                        .cloned()
-                        .map(Publication::Sealed),
-                );
-                (diff, None)
-            }
+            (Ok(diff), _) => (diff, None),
             (Err(err), Some(fallback)) if err.is_chargeable() => {
                 state.check_commitments_are_new(&[fallback.action.commitment])?;
                 let fallback_request = PublicPart::new(
@@ -459,6 +468,15 @@ impl ValidatedStateDiff {
                 )?;
                 (diff, Some(err.to_string()))
             }
+            // A declared fee is paid outside the proof: the revert keeps only the signers' nonce
+            // advances.
+            (Err(err), None) if err.is_chargeable() && message.fee.is_some() => (
+                StateDiff {
+                    signer_account_ids,
+                    ..StateDiff::default()
+                },
+                Some(err.to_string()),
+            ),
             (Err(err), _) => return Err(err),
         };
         Ok((Self(diff), ExecutionCharge { cycles, revert }))
@@ -489,19 +507,49 @@ fn loader_actor_state<'state>(
         .or_else(|| state.loader_actor_state(account_id))
 }
 
-/// The cycles a public action is charged: what it metered, plus a failing call's own count on a
-/// non-zero exit, since execution bailed before adding them; a panic or session-limit bail loses
-/// the count and pays the full budget.
+/// The cycles a public action is charged: what it metered, also when it ran whole and then
+/// published to an unbound destination; plus a failing call's own count on a non-zero exit, since
+/// execution bailed before adding them; a panic or session-limit bail loses the count and pays
+/// the full budget.
 pub const fn charged_cycles<T>(
     result: &Result<T, LeeError>,
     cycles_used: Cycles,
     cycle_budget: Cycles,
 ) -> Cycles {
     match result {
-        Ok(_) => cycles_used,
+        Ok(_) | Err(LeeError::UnboundAsyncDestination { .. }) => cycles_used,
         Err(LeeError::ProgramExitedWithCode { cycles, .. }) => cycles_used.saturating_add(*cycles),
         Err(_) => cycle_budget,
     }
+}
+
+/// Runs a loader message as Rust, charging [`LOADER_CYCLES_PER_BYTE`] for its pre-state and
+/// every actor state it reads.
+pub fn run_program_loader<'state>(
+    input: &ReceiveInput,
+    actor_state: impl Fn(AccountId) -> &'state ActorState,
+    cycle_budget: Cycles,
+    cycles_used: &mut Cycles,
+) -> Result<(Transition, Option<Commitment>), LeeError> {
+    let bytes_read = Cell::new(byte_len(&input.pre_state));
+    let output = catch_program_loader_panic(|| {
+        program_loader_core::handle_message(input, |account_id| {
+            let read = actor_state(account_id);
+            bytes_read.set(bytes_read.get().saturating_add(byte_len(read)));
+            read
+        })
+    })?;
+    let call_cycles = bytes_read.get().saturating_mul(LOADER_CYCLES_PER_BYTE);
+    let budget = cycle_budget.saturating_sub(*cycles_used);
+    ensure!(call_cycles <= budget, LeeError::OutOfGas { budget });
+    *cycles_used = cycles_used
+        .checked_add(call_cycles)
+        .expect("cycle sums fit u64: the charge is within the budget");
+    Ok(output)
+}
+
+fn byte_len(actor_state: &ActorState) -> u64 {
+    u64::try_from(actor_state.len()).expect("an actor state's length fits u64")
 }
 
 /// `program_loader_core`'s functions panic on malformed input, mirroring the assert-based style
@@ -522,13 +570,15 @@ pub fn catch_program_loader_panic<T>(run: impl FnOnce() -> T) -> Result<T, LeeEr
 fn publish(
     state: &V03State,
     introduced: &[RecoveryBinding],
-    body: MessageBody,
+    publication: Publication,
 ) -> Result<Publication, LeeError> {
-    let recovery = state
-        .bound_note(introduced, body.to.account_id)
-        .ok_or(LeeError::UnboundAsyncDestination { actor: body.to })?
-        .clone();
-    Ok(Publication::Clear { body, recovery })
+    if let Publication::Clear(body) = &publication {
+        ensure!(
+            state.bound_note(introduced, body.to.account_id).is_some(),
+            LeeError::UnboundAsyncDestination { actor: body.to }
+        );
+    }
+    Ok(publication)
 }
 
 fn settle(
@@ -571,7 +621,7 @@ fn settle(
         .collect();
     diff.published = async_messages
         .into_iter()
-        .map(|body| publish(state, &diff.recovery_bindings, body))
+        .map(|body| publish(state, &diff.recovery_bindings, Publication::Clear(body)))
         .collect::<Result<_, _>>()?;
     Ok(diff)
 }

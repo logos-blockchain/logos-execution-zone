@@ -1,4 +1,4 @@
-use cross_zone_marker_core::{Delivery, inbox_source_marker_account_id};
+use cross_zone_marker_core::Delivery;
 use lee_core::{
     account::{AccountId, Actor},
     program::{ReceiveInput, Response, SyncMessage, write_once},
@@ -39,11 +39,8 @@ fn handle_message(input: &ReceiveInput) -> Response {
                 "Record is only callable by the authorized deliverer (the cross-zone inbox)"
             );
             // Which peer sent it is this program's own business.
-            let marker = inbox_source_marker_account_id(deliverer, &src_zone, src_account_id);
             assert!(
-                cfg.sources.iter().any(|(zone, account_id)| {
-                    marker == inbox_source_marker_account_id(cfg.deliverer, zone, *account_id)
-                }),
+                cfg.authorizes(&src_zone, src_account_id),
                 "Record is only callable for a peer source this receiver authorizes"
             );
             Response::keep_state().send(

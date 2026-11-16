@@ -31,7 +31,7 @@ async fn indexer_status_rpc_reports_caught_up_with_no_stall() -> Result<()> {
             if status.state == IndexerSyncState::CaughtUp {
                 return anyhow::Ok(status);
             }
-            log::info!("Waiting for caught-up indexer status, got {status:?}");
+            tracing::info!(?status, "Waiting for caught-up indexer status, got");
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
     })

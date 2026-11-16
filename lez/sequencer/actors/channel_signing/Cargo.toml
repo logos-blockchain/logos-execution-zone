@@ -13,7 +13,7 @@ logos-blockchain-core.workspace = true
 logos-blockchain-key-management-system-service.workspace = true
 
 kameo.workspace = true
-log.workspace = true
+tracing.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 

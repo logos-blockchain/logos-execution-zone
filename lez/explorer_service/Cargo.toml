@@ -22,9 +22,11 @@ leptos_router = "0.8.11"
 serde.workspace = true
 
 # Logging
-log.workspace = true
+tracing.workspace = true
 console_error_panic_hook = "0.1"
-console_log = "1.0"
+# Without a subscriber, as in the browser, `tracing` events go to `log`.
+log = { workspace = true, optional = true }
+console_log = { version = "1.0", optional = true }
 
 # Date/Time
 chrono.workspace = true
@@ -51,12 +53,12 @@ axum = { version = "0.8.8", optional = true }
 leptos_axum = { version = "0.8.7", optional = true }
 clap = { workspace = true, features = ["derive"], optional = true }
 url = { workspace = true, optional = true }
-env_logger = { workspace = true, optional = true }
+logging = { workspace = true, optional = true }
 
 # Mandatory server side dependencies
 
 [features]
-hydrate = ["leptos/hydrate"]
+hydrate = ["leptos/hydrate", "tracing/log", "dep:log", "dep:console_log"]
 ssr = [
   "leptos/ssr",
   "dep:indexer_service_rpc",
@@ -66,7 +68,7 @@ ssr = [
   "dep:leptos_axum",
   "dep:clap",
   "dep:url",
-  "dep:env_logger",
+  "dep:logging",
 ]
 
 [package.metadata.leptos]
