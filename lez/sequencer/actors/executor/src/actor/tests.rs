@@ -1,7 +1,11 @@
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::{Context as _, Result};
-use chain_state::ProofStore;
+use chain_state::{ProofStore, classify::ClassifyError};
 use common::{
     HashType,
     block::{BedrockStatus, Block, BlockBody, BlockHeader, BlockMeta},
@@ -17,7 +21,11 @@ use lee::{
     Account, AccountId, Actor, PrivateKey, PublicKey, PublicTransaction, V03State,
     public_transaction::{Message, WitnessSet},
 };
-use lee_core::native_token::Message as NativeMessage;
+use lee_core::{
+    execution_state::{BoundaryStep, Delivery},
+    native_token::Message as NativeMessage,
+    program::MessageEnvelope,
+};
 use mockall::predicate::{always, eq, function};
 use sequencer_bedrock_actor::{
     mock::{MockBedrockActor, SharedChannel, mock_msg_of},
@@ -1066,6 +1074,102 @@ async fn handle_transaction_rejects_a_transaction_too_large_for_any_block() -> R
         ),
         "{full_refusal:#}"
     );
+
+    Ok(())
+}
+
+#[test]
+async fn handle_transaction_caches_a_proof_only_within_the_proof_cap() -> Result<()> {
+    let _res = env_logger::try_init();
+
+    let (config, _home) = sequencer_config();
+    let channel_id = config.bedrock_config.channel_id;
+    let args = Box::pin(executor_args(
+        config,
+        MockStorageActor::spawn(prepare_mock_storage_with_empty_genesis()),
+        spawn_bedrock_pool(prepare_mock_bedrock_on_genesis),
+    ))
+    .await;
+    let proofs = args.proofs.clone();
+    let executor = ExecutorActor::spawn(args);
+    executor
+        .wait_for_startup_with_result(|res| {
+            res.map_err(|err| anyhow::anyhow!("Executor failed to start: {err:?}"))
+        })
+        .await?;
+    executor
+        .ask(ChannelEvent {
+            channel_id,
+            event: ChannelEventKind::FinalizedBlock(Arc::new(finalized_at(&empty_genesis(), 0))),
+        })
+        .await?;
+    executor.ask(finalized_up_to(channel_id, 0)).await?;
+
+    // A private transaction whose one fee crossing reserves far less than the head's fee.
+    let proven = |proof: &lee::privacy_preserving_transaction::circuit::Proof| {
+        let mut message = lee::privacy_preserving_transaction::Message::default();
+        message.execution.boundary = vec![
+            BoundaryStep::PrivateToPublic(Delivery {
+                envelope: MessageEnvelope {
+                    from: Actor::native_balance(AccountId::new([7; 32])),
+                    to: Actor::native_balance(system_accounts::fee_inbox_account_id()),
+                    message: borsh::to_vec(&NativeMessage::Credit(1)).expect("serializes"),
+                },
+                inherited_authorizations: BTreeSet::new(),
+                inherits_entry_authorizations: true,
+                pda_seeds: BTreeSet::new(),
+            }),
+            BoundaryStep::EndPublicSubtree,
+        ];
+        LeeTransaction::PrivacyPreserving(lee::PrivacyPreservingTransaction::new(
+            message,
+            lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(
+                Vec::new(),
+                proof.clone(),
+            ),
+        ))
+    };
+    let cap = usize::try_from(fee_core::market::PROOF_BYTES)?;
+    let over_cap =
+        lee::privacy_preserving_transaction::circuit::Proof::from_inner(vec![1; cap + 1]);
+    let at_cap = lee::privacy_preserving_transaction::circuit::Proof::from_inner(vec![2; cap]);
+    assert!(!proofs.contains(&over_cap.digest()));
+    assert!(!proofs.contains(&at_cap.digest()));
+
+    let Err(Some(crate::error::Error::IncorrectFee(refusal))) = executor
+        .ask(protocol::Transaction {
+            transaction: proven(&over_cap),
+            origin: TransactionOrigin::User,
+        })
+        .await
+        .map_err(SendError::err)
+    else {
+        panic!("a transaction with a proof over the cap was admitted");
+    };
+    assert!(
+        matches!(
+            refusal.downcast_ref(),
+            Some(sequencer_core::fees::Error::Classification(ClassifyError::OversizedProof { size }))
+                if *size == cap + 1
+        ),
+        "{refusal:#}"
+    );
+    assert!(!proofs.contains(&over_cap.digest()));
+
+    let res = executor
+        .ask(protocol::Transaction {
+            transaction: proven(&at_cap),
+            origin: TransactionOrigin::User,
+        })
+        .await;
+    assert!(matches!(
+        res.map_err(SendError::err),
+        Err(Some(crate::error::Error::PrivateFeeBelowHead {
+            reserve: 1,
+            ..
+        }))
+    ));
+    assert_eq!(proofs.get(&at_cap.digest()), Some(at_cap));
 
     Ok(())
 }
