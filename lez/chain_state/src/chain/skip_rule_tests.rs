@@ -10,7 +10,7 @@ use sequencer_stake_core::ChannelParams;
 use testnet_initial_state::initial_pub_accounts_private_keys;
 
 use crate::{
-    ChainState, ChannelEntry, Judged, ProofStore, Verdict,
+    BlockIngestError, ChainState, ChannelEntry, Judged, ProofStore, Verdict,
     apply::tests::{private_sender_state, private_tx, settled_block, tip_of},
     apply_block,
     test_utils::{inbox_fee, required_for},
@@ -270,6 +270,22 @@ fn reported(outcomes: &[Judged], entry: &ChannelEntry) -> bool {
     })
 }
 
+fn misplaced(outcomes: &[Judged], entry: &ChannelEntry, expected: u64, got: u64) -> bool {
+    outcomes.iter().any(|judged| {
+        judged.msg == entry.msg
+            && matches!(
+                &judged.verdict,
+                Verdict::Dropped {
+                    error: BlockIngestError::UnexpectedBlockId {
+                        expected: dropped_expected,
+                        got: dropped_got,
+                    },
+                    punishable: true,
+                } if *dropped_expected == expected && *dropped_got == got
+            )
+    })
+}
+
 fn dropped(outcomes: &[Judged], entry: &ChannelEntry) -> bool {
     outcomes
         .iter()
@@ -327,6 +343,7 @@ fn nodes_with_and_without_the_proof_take_a_skip_that_only_an_l1_reorg_undoes() {
 
     lacking.proofs().insert(&fixture.proof);
     lacking.hydrate();
+    assert_eq!(lacking.head_tip(), Some(tip_of(&fixture.skip_candidate)));
     for node in [&mut holding, &mut lacking] {
         node.apply_extension(vec![entries[1].clone()]);
         let outcomes = node
@@ -361,14 +378,25 @@ fn a_node_without_a_confirmed_blocks_proof_stalls_instead_of_diverging_until_the
         Some(tip_of(&fixture.confirming_successor))
     );
 
-    let outcomes = stalled
-        .apply_finalized(&at_slots(&entries, &[1, 2, 3]), Slot::from(100))
-        .judged;
+    let finalized = at_slots(&entries, &[1, 2, 3]);
+    let outcomes = stalled.apply_finalized(&finalized, Slot::from(100)).judged;
     assert_eq!(stalled.head_tip(), Some(tip_of(&fixture.genesis)));
     assert_eq!(stalled.final_tip(), Some(tip_of(&fixture.genesis)));
     for pending in &entries[1..] {
         assert!(!dropped(&outcomes, pending));
     }
+
+    stalled.proofs().insert(&fixture.proof);
+    stalled.hydrate();
+    stalled.apply_finalized(&[], Slot::from(100));
+    following.apply_finalized(&finalized, Slot::from(100));
+    for node in [&following, &stalled] {
+        assert_eq!(
+            node.final_tip(),
+            Some(tip_of(&fixture.confirming_successor))
+        );
+    }
+    assert!(stalled.final_state() == following.final_state());
 }
 
 #[test]
@@ -415,7 +443,7 @@ fn a_skip_of_a_plain_block_is_misplaced() {
     assert_eq!(node.head_tip(), Some(tip_of(&fixture.public_candidate)));
 
     let outcomes = node.apply_finalized(&finalized, Slot::from(3)).judged;
-    assert!(reported(&outcomes, &entries[2]));
+    assert!(misplaced(&outcomes, &entries[2], 3, 2));
 }
 
 #[test]
@@ -448,14 +476,15 @@ fn a_provisional_block_settles_once_the_window_passes_and_at_l1_finality_with_a_
     for node in [&mut windowed, &mut zero_window] {
         node.proofs().insert(&fixture.proof);
         node.apply_extension(entries.clone());
-        node.apply_finalized(&at_slots(&entries, &[1, 10]), Slot::from(19));
+        node.apply_finalized(&at_slots(&entries, &[1, 10]), Slot::from(10));
     }
-    assert_eq!(windowed.final_tip(), Some(tip_of(&fixture.genesis)));
     assert_eq!(
         zero_window.final_tip(),
         Some(tip_of(&fixture.private_candidate))
     );
 
+    windowed.apply_finalized(&[], Slot::from(19));
+    assert_eq!(windowed.final_tip(), Some(tip_of(&fixture.genesis)));
     windowed.apply_finalized(&[], Slot::from(20));
     assert_eq!(
         windowed.final_tip(),
@@ -528,20 +557,22 @@ fn a_plain_block_above_an_unsettled_private_block_cannot_be_skipped() {
         (&fixture.confirming_successor, [1; 32]),
         (&public_successor, [2; 32]),
     ]);
+    let mut node = fixture.node(SKIP_WINDOW);
+    node.proofs().insert(&fixture.proof);
+    node.apply_extension(entries.clone());
 
-    for (node, outcomes) in at_once_and_stepwise(
-        &fixture,
-        &[&fixture.proof],
-        &entries,
-        &[1, 2, 3, 13],
-        &[(3, 12), (4, 13)],
-    ) {
-        assert_eq!(
-            node.final_tip(),
-            Some(tip_of(&fixture.confirming_successor))
-        );
-        assert!(reported(&outcomes, &entries[3]));
-    }
+    let outcomes = node
+        .apply_finalized(&at_slots(&entries, &[1, 2, 3, 4]), Slot::from(4))
+        .judged;
+    assert_eq!(node.final_tip(), Some(tip_of(&fixture.genesis)));
+    assert_eq!(node.head_tip(), Some(tip_of(&fixture.confirming_successor)));
+    assert!(misplaced(&outcomes, &entries[3], 4, 3));
+
+    node.apply_finalized(&[], Slot::from(12));
+    assert_eq!(
+        node.final_tip(),
+        Some(tip_of(&fixture.confirming_successor))
+    );
 }
 
 #[test]
