@@ -2417,18 +2417,24 @@ mod tests {
             initial_pub_accounts_private_keys()[0].account_id,
             AccountId::from_builtin_program(event_emitter().id()),
         );
-        // The block is empty, but the reserve pays for only `budget` cycles, which the scripted
-        // public root runs out of: a charged revert, not a fee above the reserve.
+        // The block is empty, but the reserve pays for only `budget` cycles past the tip, which
+        // the scripted public root runs out of: a charged revert, not a fee above the reserve.
         let budget = 5_000;
+        // Worth 100 cycles at the genesis base fee, so a budget that ignored it would show.
+        let tip = 800;
         let build = |amount| {
             public_root_private_tx(
                 &state,
                 sender,
                 scripted,
-                inbox_fee(amount, sender.0.account_id()),
+                lee_core::FeeTransfer {
+                    tip,
+                    ..inbox_fee(amount, sender.0.account_id())
+                },
             )
         };
-        let reserve = required_for(budget, build);
+        let required = required_for(budget, build);
+        let reserve = required + u128::from(tip);
         let tx = build(reserve);
 
         let mut settled = state;
@@ -2448,7 +2454,8 @@ mod tests {
             summary.gas_used_exec,
             fee_core::market::PRIVATE_VERIFY_GAS + budget
         );
-        assert_eq!(summary.revenue_base, reserve);
+        assert_eq!(summary.revenue_base, required);
+        assert_eq!(summary.revenue_tip, u128::from(tip));
         assert_eq!(
             native_balance(&settled, system_accounts::fee_inbox_account_id()),
             reserve
