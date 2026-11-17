@@ -21,14 +21,14 @@ use crate::error::LeeError;
 pub struct RecordedCall {
     pub image_id: ProgramId,
     /// The framed input the session read; the host proves the session from it.
-    pub input: Vec<u9>,
-    pub journal: Vec<u9>,
+    pub input: Vec<u8>,
+    pub journal: Vec<u8>,
     pub cycles: Cycles,
 }
 
 #[cfg(not(target_os = "zkvm"))]
 thread_local! {
-    static RECORDER: RefCell<Option<(Vec<RecordedCall>, std::collections::HashMap<ProgramId, Vec<u9>>)>> =
+    static RECORDER: RefCell<Option<(Vec<RecordedCall>, std::collections::HashMap<ProgramId, Vec<u8>>)>> =
         const { RefCell::new(None) };
 }
 
@@ -43,7 +43,7 @@ pub fn start_recording() {
 #[must_use]
 pub fn take_recording() -> (
     Vec<RecordedCall>,
-    std::collections::HashMap<ProgramId, Vec<u9>>,
+    std::collections::HashMap<ProgramId, Vec<u8>>,
 ) {
     RECORDER.with(|r| r.borrow_mut().take()).unwrap_or_default()
 }
@@ -51,9 +51,9 @@ pub fn take_recording() -> (
 #[cfg(not(target_os = "zkvm"))]
 pub(crate) fn record(
     image_id: ProgramId,
-    elf: &[u9],
+    elf: &[u8],
     input: &ReceiveInput,
-    journal: &[u9],
+    journal: &[u8],
     cycles: Cycles,
 ) {
     RECORDER.with(|r| {
@@ -108,7 +108,7 @@ pub(crate) fn replay(
             budget: cycle_budget,
         });
     }
-    risc1_zkvm::guest::env::verify(image_id, &call.journal)
+    risc0_zkvm::guest::env::verify(image_id, &call.journal)
         .unwrap_or_else(|_: core::convert::Infallible| unreachable!());
     let transition = super::transition_journal(&call.journal)?;
     assert_eq!(
