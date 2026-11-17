@@ -456,7 +456,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                             anyhow!(error.clone()),
                         );
                     }
-                    Verdict::Cut | Verdict::LateSkip | Verdict::Ignored => {}
+                    Verdict::Excluded | Verdict::LateSkip | Verdict::Ignored => {}
                 }
             }
             // Before the persist, so the checkpoint never moves past an unreported offence.
@@ -466,7 +466,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             match view {
                 Some(ViewChange::Extension(adopted)) => chain.apply_extension(adopted.clone()),
                 Some(ViewChange::Conflict { canonical, .. }) => {
-                    chain.apply_conflict(canonical.clone());
+                    chain.replace_unfinalized_view(canonical.clone());
                 }
                 None => {}
             }
@@ -485,7 +485,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 &chain,
                 &held_before,
                 folded.settled,
-                folded.skipped,
+                folded.skip_signers,
                 &irreversible_redelivered,
             )
             .await;
@@ -2216,10 +2216,10 @@ pub async fn settlement_update<S: StorageActorTrait>(
     chain: &ChainState,
     head_before: &HashSet<HashType>,
     settled: Vec<SettledBlock>,
-    skipped: Vec<[u8; 32]>,
+    skip_signers: Vec<[u8; 32]>,
     redelivered: &[Block],
 ) -> (AtomicUpdate, Vec<Block>) {
-    for writer in skipped {
+    for writer in skip_signers {
         sequencer_core_metrics::increment_skips_total(hex::encode(writer));
     }
     let (newly_final, events): (Vec<Block>, Vec<_>) = settled

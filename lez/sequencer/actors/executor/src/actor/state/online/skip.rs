@@ -74,7 +74,7 @@ impl SkipPolicy {
             .unwrap_or((blocker.msg, now));
         self.blocked = Some(blocked);
         // A failed block past its window leaves the branch before ours is placed.
-        if blocker.dead
+        if blocker.failed_to_apply
             && let (Some(slot), Some(current)) = (blocker.slot, turn.slot_at(now))
             && current
                 > slot
@@ -83,7 +83,7 @@ impl SkipPolicy {
         {
             return Ok(());
         }
-        if !blocker.private || !blocker.in_run {
+        if !blocker.private || !blocker.in_unconfirmed_run {
             return Err("not a private block of the unconfirmed run");
         }
         if blocker.signer == Some(own) {
@@ -99,7 +99,7 @@ impl SkipPolicy {
                 .checked_div(2)
                 .expect("the divisor is not zero"),
         ));
-        if !blocker.dead && now.saturating_duration_since(since) < wait {
+        if !blocker.failed_to_apply && now.saturating_duration_since(since) < wait {
             return Err("waiting for its proofs");
         }
         let current = turn.slot_at(now).ok_or("the current slot is unknown")?;
@@ -141,16 +141,16 @@ mod tests {
         max_block_size: 0,
     };
 
-    /// A private block of the unconfirmed run, final at [`BLOCKER_SLOT`]: failed if `dead`, else
-    /// missing its proofs.
-    fn blocker(signer: [u8; 32], dead: bool) -> Blocker {
+    /// A private block of the unconfirmed run, final at [`BLOCKER_SLOT`]: failed if
+    /// `failed_to_apply`, else missing its proofs.
+    fn blocker(signer: [u8; 32], failed_to_apply: bool) -> Blocker {
         Blocker {
             msg: MsgId::from([7; 32]),
             signer: Some(signer),
             private: true,
             slot: Some(Slot::from(BLOCKER_SLOT)),
-            dead,
-            in_run: true,
+            failed_to_apply,
+            in_unconfirmed_run: true,
         }
     }
 
@@ -184,7 +184,7 @@ mod tests {
     async fn a_block_another_writer_built_on_holds_the_turn_past_the_wait() {
         let mut policy = SkipPolicy::default();
         let built_on = Blocker {
-            in_run: false,
+            in_unconfirmed_run: false,
             ..blocker(PEER, false)
         };
         let turn = turn_from(BLOCKER_SLOT + 1);

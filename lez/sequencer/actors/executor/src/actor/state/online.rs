@@ -290,7 +290,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                 .await?;
 
         let block_id = block.header.block_id;
-        chain.apply_conflict(vec![published_entry(&outcome, &block, own_sequencer_key)]);
+        chain.replace_unfinalized_view(vec![published_entry(&outcome, &block, own_sequencer_key)]);
         storage_ref
             .ask(AtomicUpdate {
                 checkpoint: Some(checkpoint_record(&outcome.checkpoint, outcome.seq)?),
@@ -366,7 +366,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         // These blocks are already stored, so only the view and the sdk's
         // pending set moved. Checkpoints are cumulative, so the last one
         // covers every publish above.
-        chain.apply_conflict(published);
+        chain.replace_unfinalized_view(published);
         storage_ref
             .ask(AtomicUpdate {
                 checkpoint: Some(checkpoint_record(&outcome.checkpoint, outcome.seq)?),

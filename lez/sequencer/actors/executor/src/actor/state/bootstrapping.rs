@@ -232,7 +232,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
             &self.chain,
             &head_before,
             folded.settled,
-            folded.skipped,
+            folded.skip_signers,
             &[],
         )
         .await;

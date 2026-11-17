@@ -259,7 +259,14 @@ fn at_slots(entries: &[ChannelEntry], slots: &[u64]) -> Vec<ChannelEntry> {
 
 fn reported(outcomes: &[Judged], entry: &ChannelEntry) -> bool {
     outcomes.iter().any(|judged| {
-        judged.msg == entry.msg && matches!(judged.verdict, Verdict::Dropped { next: true, .. })
+        judged.msg == entry.msg
+            && matches!(
+                judged.verdict,
+                Verdict::Dropped {
+                    punishable: true,
+                    ..
+                }
+            )
     })
 }
 
@@ -315,7 +322,7 @@ fn nodes_with_and_without_the_proof_take_a_skip_that_only_an_l1_reorg_undoes() {
     }
     assert!(holding.head_state() == lacking.head_state());
 
-    holding.apply_conflict(entries[..2].to_vec());
+    holding.replace_unfinalized_view(entries[..2].to_vec());
     assert_eq!(holding.head_tip(), Some(tip_of(&fixture.private_candidate)));
 
     lacking.proofs().insert(&fixture.proof);
@@ -376,15 +383,19 @@ fn a_final_skip_is_counted_once_for_its_signer() {
     node.proofs().insert(&fixture.proof);
 
     node.apply_extension(entries.clone());
-    assert!(node.apply_finalized(&[], Slot::from(0)).skipped.is_empty());
+    assert!(
+        node.apply_finalized(&[], Slot::from(0))
+            .skip_signers
+            .is_empty()
+    );
     let finalized = at_slots(&entries, &[1, 2, 3]);
     assert_eq!(
-        node.apply_finalized(&finalized, Slot::from(3)).skipped,
+        node.apply_finalized(&finalized, Slot::from(3)).skip_signers,
         vec![[2; 32]]
     );
     assert!(
         node.apply_finalized(&finalized, Slot::from(30))
-            .skipped
+            .skip_signers
             .is_empty()
     );
 }
@@ -593,7 +604,7 @@ fn a_failed_private_block_is_skipped_like_a_missing_one() {
         judged.msg == entries[2].msg
             && matches!(
                 &judged.verdict,
-                Verdict::Dropped { error, next: true } if !error.is_invalid_block()
+                Verdict::Dropped { error, punishable: true } if !error.is_invalid_block()
             )
     }));
 }
@@ -632,7 +643,7 @@ fn a_node_without_the_proof_of_a_confirmed_failed_block_stalls_then_converges() 
     assert_eq!(lacking.final_tip(), Some(tip_of(&fixture.genesis)));
     let blocked = |node: &ChainState| {
         node.blocker()
-            .map(|blocker| (blocker.msg, blocker.private, blocker.in_run))
+            .map(|blocker| (blocker.msg, blocker.private, blocker.in_unconfirmed_run))
     };
     assert_eq!(blocked(&holding), Some((entries[2].msg, true, false)));
     assert_eq!(blocked(&lacking), Some((entries[2].msg, true, true)));
@@ -694,13 +705,13 @@ fn a_node_without_the_proof_cuts_the_blocks_held_behind_a_skipped_block() {
         .apply_finalized(&at_slots(&entries, &[1, 10, 11, 12, 13]), Slot::from(22))
         .judged;
 
-    let judged_cut = |entry: &ChannelEntry| {
+    let judged_excluded = |entry: &ChannelEntry| {
         outcomes
             .iter()
-            .any(|judged| judged.msg == entry.msg && matches!(judged.verdict, Verdict::Cut))
+            .any(|judged| judged.msg == entry.msg && matches!(judged.verdict, Verdict::Excluded))
     };
-    assert!(judged_cut(&entries[1]));
-    assert!(judged_cut(&entries[2]));
+    assert!(judged_excluded(&entries[1]));
+    assert!(judged_excluded(&entries[2]));
     assert_eq!(lacking.final_tip(), Some(tip_of(&fixture.skip_candidate)));
     let view: Vec<MsgId> = lacking.view().iter().map(|entry| entry.msg).collect();
     assert_eq!(view, vec![entries[4].msg]);

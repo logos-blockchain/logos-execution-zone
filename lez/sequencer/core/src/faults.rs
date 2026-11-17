@@ -12,7 +12,11 @@ pub fn judge(undecodable: &[(MsgId, Ed25519PublicKey)], judged: &[Judged]) -> Ve
         .iter()
         .map(|(inscription, signer)| offence(*inscription, signer.to_bytes(), Fault::NotABlock));
     let bad_blocks = judged.iter().filter_map(|entry| {
-        let Verdict::Dropped { error, next: true } = &entry.verdict else {
+        let Verdict::Dropped {
+            error,
+            punishable: true,
+        } = &entry.verdict
+        else {
             return None;
         };
         let fault = if error.is_invalid_block() {
@@ -59,12 +63,12 @@ mod tests {
         }
     }
 
-    fn dropped(error: BlockIngestError, next: bool) -> Verdict {
-        Verdict::Dropped { error, next }
+    fn dropped(error: BlockIngestError, punishable: bool) -> Verdict {
+        Verdict::Dropped { error, punishable }
     }
 
     #[test]
-    fn only_a_parked_next_block_is_an_offence() {
+    fn reports_undecodable_entries_and_punishable_drops() {
         let wrong_id = BlockIngestError::UnexpectedBlockId {
             expected: 5,
             got: 7,

@@ -102,9 +102,9 @@ impl Ingest {
             match &outcome.verdict {
                 Verdict::Settled | Verdict::AlreadySettled(_) => {}
                 Verdict::Dropped { error, .. } => error!("Dropped block {block_id}: {error}"),
-                Verdict::Cut => error!(
-                    "Block {block_id} left the branch: cut by a skip, or with a dead ancestor"
-                ),
+                Verdict::Excluded => {
+                    error!("Excluded block {block_id}: cut by a skip, or with a failed ancestor");
+                }
                 Verdict::LateSkip => error!("Ignored block {block_id}: a skip after its window"),
                 Verdict::Ignored => error!("Ignored block {block_id}: its parent is not known"),
             }

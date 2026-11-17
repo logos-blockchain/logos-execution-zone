@@ -88,7 +88,7 @@ impl StructuralChain {
     fn place(&mut self, entry: &ChannelEntry, block: &DigestedBlock, slot: Slot) {
         self.record.confirm(entry.signer);
         let placed = BlockRecord::new(entry, block);
-        self.record.run.push(placed.clone());
+        self.record.writer_run.push(placed.clone());
         self.record.branch.push(Placed {
             entry: entry.msg,
             block: placed,

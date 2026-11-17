@@ -119,7 +119,7 @@ pub(in crate::actor) fn with_view(mut store: CannedStore) -> CannedStore {
             entry
         })
         .collect();
-    chain.apply_conflict(entries);
+    chain.replace_unfinalized_view(entries);
     store.channel_view = Some(chain.encode_view());
     store
 }

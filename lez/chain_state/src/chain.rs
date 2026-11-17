@@ -61,8 +61,8 @@ pub struct FoldOutcome {
     pub judged: Vec<Judged>,
     /// Every block the final tier applied, ancestors a finalized entry pulled in included.
     pub settled: Vec<SettledBlock>,
-    /// The signer of every final skip judged, once per skip.
-    pub skipped: Vec<[u8; 32]>,
+    /// The signer of each newly judged finalized skip, once per skip.
+    pub skip_signers: Vec<[u8; 32]>,
 }
 
 /// What became of one finalized entry carrying a block.
@@ -80,10 +80,15 @@ pub enum Verdict {
     Settled,
     /// A re-delivery of the final tip.
     AlreadySettled(Block),
-    /// The block is not on the branch; `next` says it is an offence.
-    Dropped { error: BlockIngestError, next: bool },
-    /// Cut by a valid skip, or dropped with a dead ancestor.
-    Cut,
+    /// The block was rejected.
+    Dropped {
+        error: BlockIngestError,
+        /// Whether this drop is eligible for offence reporting.
+        punishable: bool,
+    },
+    /// Excluded by a valid skip or with a failed ancestor, without an application error of its
+    /// own.
+    Excluded,
     /// A skip that came after its window.
     LateSkip,
     /// A block whose parent is not known.
@@ -161,9 +166,9 @@ pub struct Blocker {
     /// The L1 slot its entry finalized in; `None` until it is final.
     pub slot: Option<Slot>,
     /// It failed to apply; otherwise its proofs are missing.
-    pub dead: bool,
-    /// It is still in the unconfirmed run.
-    pub in_run: bool,
+    pub failed_to_apply: bool,
+    /// It is still in the unconfirmed writer run, one condition for skipping it.
+    pub in_unconfirmed_run: bool,
 }
 
 /// The persisted form of the view.
@@ -233,10 +238,10 @@ struct Fold {
     events: Option<Vec<TxEvents>>,
     /// The entry's own verdict, when folding it reached one.
     verdict: Option<Verdict>,
-    /// The entries whose blocks left the branch here, with the failure of a dead one.
-    left: Vec<(MsgId, Option<BlockIngestError>)>,
-    /// Held behind a pending block of its signer: neither placed nor judged.
-    held: bool,
+    /// Entries excluded while folding this entry, with any known application error.
+    excluded_entries: Vec<(MsgId, Option<BlockIngestError>)>,
+    /// Placement and judgment wait for the proofs of an earlier block from the same signer.
+    deferred: bool,
     /// Its block was placed as a skip.
     skipped: bool,
 }
@@ -246,16 +251,21 @@ struct Fold {
 pub(crate) struct Record {
     /// The branch above the final tier, oldest first.
     pub(crate) branch: Vec<Placed>,
-    /// A block leaves the run, unless it is the tip, once a finalized entry is past its window.
-    pub(crate) run: Vec<BlockRecord>,
+    /// One writer's blocks awaiting confirmation by another writer. Settlement leaves them, so
+    /// placement does not depend on what has settled.
+    pub(crate) writer_run: Vec<BlockRecord>,
     /// The blocks of the entries held behind a pending block.
     held: Vec<HashType>,
 }
 
 impl Record {
     pub(crate) fn confirm(&mut self, signer: Option<[u8; 32]>) {
-        if self.run.first().is_some_and(|run| run.signer != signer) {
-            let run = std::mem::take(&mut self.run);
+        if self
+            .writer_run
+            .first()
+            .is_some_and(|run| run.signer != signer)
+        {
+            let run = std::mem::take(&mut self.writer_run);
             for below in &mut self.branch {
                 below.confirmed |= run
                     .iter()
@@ -264,6 +274,7 @@ impl Record {
         }
     }
 
+    /// Drops the run's blocks whose skip window has passed, except the current tip.
     pub(crate) fn prune_run(
         &mut self,
         settled: Option<&Tip>,
@@ -274,7 +285,7 @@ impl Record {
             .last()
             .map(|placed| placed.block.hash)
             .or_else(|| settled.map(|tip| tip.hash));
-        self.run
+        self.writer_run
             .retain(|run| Some(run.hash) == tip || !passed(run.slot));
     }
 }
@@ -509,8 +520,11 @@ impl ChainState {
             signer: placed.block.signer,
             private: placed.block.private,
             slot: placed.block.slot.map(Slot::from),
-            dead: matches!(placed.status, Status::Dead(_)),
-            in_run: record.run.iter().any(|run| run.hash == placed.block.hash),
+            failed_to_apply: matches!(placed.status, Status::Dead(_)),
+            in_unconfirmed_run: record
+                .writer_run
+                .iter()
+                .any(|run| run.hash == placed.block.hash),
         })
     }
 
@@ -595,7 +609,7 @@ impl ChainState {
         let stored = StoredView {
             final_msg: self.final_msg.into(),
             lib_slot: self.lib_slot.into_inner(),
-            run: self.record.run.clone(),
+            run: self.record.writer_run.clone(),
             finalized: finalized.iter().map(stored_entry).collect(),
             entries: unfinalized.iter().map(stored_entry).collect(),
         };
@@ -608,7 +622,7 @@ impl ChainState {
         self.final_msg = MsgId::from(stored.final_msg);
         self.lib_slot = Slot::from(stored.lib_slot);
         self.record = Record {
-            run: stored.run,
+            writer_run: stored.run,
             ..Record::default()
         };
         self.finalized = stored.finalized.len();
@@ -679,9 +693,10 @@ impl ChainState {
         }
     }
 
-    /// The unfinalized view at the new tip, on a channel update that dropped
-    /// entries.
-    pub fn apply_conflict(&mut self, canonical: Vec<ChannelEntry>) {
+    /// Replaces the unfinalized view with `canonical`, as after a reorg, a genesis inscription or
+    /// a republication, and refolds from the first entry that differs. Finalized entries stay;
+    /// dropped entries lose their cached data.
+    pub fn replace_unfinalized_view(&mut self, canonical: Vec<ChannelEntry>) {
         let final_len = self.finalized;
         // A conflict can re-seat entries the lineage already finalized.
         let start = canonical
@@ -767,20 +782,20 @@ impl ChainState {
         if let Some(idx) = changed {
             self.refold(idx, true);
         }
-        let (mut settled, mut skipped) = (Vec::new(), Vec::new());
-        judged.extend(self.judge(&mut skipped));
+        let (mut settled, mut skip_signers) = (Vec::new(), Vec::new());
+        judged.extend(self.judge(&mut skip_signers));
         judged.extend(self.settle(&mut settled));
         // A root lineage over a held tier is a store restored without its view.
         let judgeable = self.final_tip.is_some() && self.final_msg != MsgId::root();
         for outcome in &mut judged {
-            if let Verdict::Dropped { next, .. } = &mut outcome.verdict {
-                *next &= judgeable;
+            if let Verdict::Dropped { punishable, .. } = &mut outcome.verdict {
+                *punishable &= judgeable;
             }
         }
         FoldOutcome {
             judged,
             settled,
-            skipped,
+            skip_signers,
         }
     }
 
@@ -866,7 +881,10 @@ impl ChainState {
                 })
             };
             linked.map_or_else(
-                |error| Verdict::Dropped { error, next: false },
+                |error| Verdict::Dropped {
+                    error,
+                    punishable: false,
+                },
                 |()| Verdict::Ignored,
             )
         };
@@ -881,29 +899,32 @@ impl ChainState {
     /// The verdicts of the finalized entries decided since the last call:
     /// each entry's own, and those of the entries whose blocks left the branch
     /// at it.
-    fn judge(&mut self, newly_skipped: &mut Vec<[u8; 32]>) -> Vec<Judged> {
+    fn judge(&mut self, skip_signers: &mut Vec<[u8; 32]>) -> Vec<Judged> {
         let decided = self.finalized.min(self.folds.len());
         let mut judged = Vec::new();
         for (entry, fold) in self.view[..decided].iter().zip(&self.folds) {
-            if fold.held || !self.judged.insert(entry.msg) {
+            if fold.deferred || !self.judged.insert(entry.msg) {
                 continue;
             }
             if fold.skipped {
-                newly_skipped.extend(entry.signer);
+                skip_signers.extend(entry.signer);
             }
-            let left = fold.left.iter().filter_map(|(msg, dead)| {
-                let left_entry = self.view.iter().find(|held| held.msg == *msg)?;
+            let excluded = fold.excluded_entries.iter().filter_map(|(msg, dead)| {
+                let excluded_entry = self.view.iter().find(|held| held.msg == *msg)?;
                 let verdict = dead
                     .clone()
-                    .map_or(Verdict::Cut, |error| Verdict::Dropped { error, next: true });
-                Some((left_entry, verdict))
+                    .map_or(Verdict::Excluded, |error| Verdict::Dropped {
+                        error,
+                        punishable: true,
+                    });
+                Some((excluded_entry, verdict))
             });
             judged.extend(
                 fold.verdict
                     .clone()
                     .map(|verdict| (entry, verdict))
                     .into_iter()
-                    .chain(left)
+                    .chain(excluded)
                     .filter_map(|(judged_entry, verdict)| {
                         Some(Judged {
                             msg: judged_entry.msg,
@@ -977,7 +998,7 @@ impl ChainState {
         }
         let undecided = self.folds[..decided]
             .iter()
-            .take_while(|fold| !fold.held)
+            .take_while(|fold| !fold.deferred)
             .count();
         if let Some(last) = self.folds[..undecided]
             .iter()
@@ -1002,7 +1023,7 @@ impl ChainState {
         let undecided = self.view[..final_len]
             .iter()
             .enumerate()
-            .find(|&(idx, _)| self.folds.get(idx).is_none_or(|held| held.held))
+            .find(|&(idx, _)| self.folds.get(idx).is_none_or(|stored| stored.deferred))
             .map(|(_, entry)| entry.slot);
         let timed_out = |slot: Option<u64>| {
             window_passed(slot, delta, None, self.lib_slot)
@@ -1078,8 +1099,8 @@ impl ChainState {
             record: record.clone(),
             events: None,
             verdict: None,
-            left: Vec::new(),
-            held: false,
+            excluded_entries: Vec::new(),
+            deferred: false,
             skipped: false,
         };
         let Some(block) = &entry.block else {
@@ -1092,7 +1113,7 @@ impl ChainState {
                     computed,
                     header: block.header.hash,
                 },
-                next: true,
+                punishable: true,
             });
             return Some(fold);
         }
@@ -1112,16 +1133,16 @@ impl ChainState {
             {
                 return None;
             }
-            fold.held = entry.signer == pending.block.signer;
+            fold.deferred = entry.signer == pending.block.signer;
         }
-        if fold.held {
+        if fold.deferred {
             fold.record.held.push(block.header.hash);
         } else {
             // A dead block leaves with its descendants once its window closes.
             if let Some(dead) = fold.record.branch.iter().position(|placed| {
                 matches!(placed.status, Status::Dead(_)) && passed(placed.block.slot)
             }) {
-                fold.left = cut(&mut fold.record, dead);
+                fold.excluded_entries = cut(&mut fold.record, dead);
             }
             self.place(&entry, block, &mut fold, passed, refolded);
         }
@@ -1145,17 +1166,17 @@ impl ChainState {
             Placement::Extends => {}
             Placement::Skips(at) => {
                 fold.skipped = true;
-                fold.left.extend(cut(&mut fold.record, at));
+                fold.excluded_entries.extend(cut(&mut fold.record, at));
                 // Only a final skip decides the entries held behind the pending block it cuts.
                 if entry.slot.is_some() {
                     for (held, stored) in self
                         .view
                         .iter()
                         .zip(&mut self.folds)
-                        .filter(|(_, stored)| stored.held)
+                        .filter(|(_, stored)| stored.deferred)
                     {
-                        stored.held = false;
-                        fold.left.push((held.msg, None));
+                        stored.deferred = false;
+                        fold.excluded_entries.push((held.msg, None));
                     }
                 }
                 fold.state = fold.record.branch.last().map_or_else(
@@ -1173,7 +1194,10 @@ impl ChainState {
                 return;
             }
             Placement::Misplaced(error) => {
-                fold.verdict = Some(Verdict::Dropped { error, next: true });
+                fold.verdict = Some(Verdict::Dropped {
+                    error,
+                    punishable: true,
+                });
                 return;
             }
             Placement::Ignored => {
@@ -1185,7 +1209,7 @@ impl ChainState {
         fold.record.confirm(entry.signer);
         fold.record.held.clear();
         let placed = BlockRecord::new(entry, block);
-        fold.record.run.push(placed.clone());
+        fold.record.writer_run.push(placed.clone());
         let below = fold.record.branch.last();
         let status = if below.is_some_and(|parent| !matches!(parent.status, Status::Executed)) {
             Status::Unexecutable
@@ -1201,8 +1225,11 @@ impl ChainState {
                 Err(Some(error)) if placed.private => Status::Dead(error),
                 // A plain block that fails leaves the branch, and the tip stays.
                 Err(Some(error)) => {
-                    fold.record.run.pop();
-                    fold.verdict = Some(Verdict::Dropped { error, next: true });
+                    fold.record.writer_run.pop();
+                    fold.verdict = Some(Verdict::Dropped {
+                        error,
+                        punishable: true,
+                    });
                     return;
                 }
             }
@@ -1331,8 +1358,8 @@ pub(crate) fn placement(
     let Err(error) = validate_link(tip.as_ref(), header) else {
         return Placement::Extends;
     };
-    let run_signer = record.run.first().map(|run| run.signer);
-    let skipped = record.run.iter().find(|run| {
+    let run_signer = record.writer_run.first().map(|run| run.signer);
+    let skipped = record.writer_run.iter().find(|run| {
         run.private
             && run.parent == parent
             && run.block_id == header.block_id
@@ -1350,7 +1377,7 @@ pub(crate) fn placement(
         }
         None if tip.is_some_and(|structural| structural.hash == parent)
             || record
-                .run
+                .writer_run
                 .iter()
                 .any(|run| run.hash == parent || run.parent == parent) =>
         {
@@ -1365,7 +1392,7 @@ pub(crate) fn placement(
 pub(crate) fn cut(record: &mut Record, at: usize) -> Vec<(MsgId, Option<BlockIngestError>)> {
     let cut = record.branch.split_off(at);
     record
-        .run
+        .writer_run
         .retain(|run| cut.iter().all(|placed| placed.block.hash != run.hash));
     cut.into_iter()
         .map(|placed| match placed.status {
@@ -1607,7 +1634,7 @@ mod tests {
         let blocks = chain_of(4);
         finalize_all(&mut chain, &blocks[..3]);
 
-        chain.apply_conflict(entries_for(&blocks));
+        chain.replace_unfinalized_view(entries_for(&blocks));
 
         assert!(chain.check_for_gaps_in_lineage().is_none());
     }
@@ -1620,7 +1647,7 @@ mod tests {
         let entries = entries_for(&blocks);
 
         // Entry 3 is missing.
-        chain.apply_conflict(vec![
+        chain.replace_unfinalized_view(vec![
             entries[0].clone(),
             entries[1].clone(),
             entries[3].clone(),
@@ -1672,7 +1699,7 @@ mod tests {
         chain.apply_extension(entries_for(&blocks));
 
         let block2_prime = competing_block2(&blocks);
-        chain.apply_conflict(vec![
+        chain.replace_unfinalized_view(vec![
             entry(1, MsgId::root(), Some(&blocks[0])),
             entry(12, msg(1), Some(&block2_prime)),
         ]);
@@ -2101,7 +2128,7 @@ mod tests {
         let mut canonical = entries_for(&blocks);
         canonical.push(canonical[1].clone());
 
-        chain.apply_conflict(canonical);
+        chain.replace_unfinalized_view(canonical);
 
         assert_eq!(chain.view().len(), 2);
         chain.apply_finalized(&[entry(2, msg(1), Some(&blocks[1]))], Slot::from(0));
@@ -2487,7 +2514,7 @@ mod tests {
         mark_fold(&mut chain, 0);
 
         let block2_prime = competing_block2(&blocks);
-        chain.apply_conflict(vec![
+        chain.replace_unfinalized_view(vec![
             entry(1, MsgId::root(), Some(&blocks[0])),
             entry(12, msg(1), Some(&block2_prime)),
         ]);
@@ -2504,7 +2531,7 @@ mod tests {
         chain.apply_extension(entries_for(&blocks));
         mark_fold(&mut chain, 0);
 
-        chain.apply_conflict(vec![
+        chain.replace_unfinalized_view(vec![
             entry(11, MsgId::root(), Some(&blocks[0])),
             entry(12, msg(11), Some(&blocks[1])),
         ]);
@@ -2590,8 +2617,8 @@ mod tests {
             record: Record::default(),
             events: None,
             verdict: None,
-            left: Vec::new(),
-            held: false,
+            excluded_entries: Vec::new(),
+            deferred: false,
             skipped: false,
         };
         chain.folds = vec![unfolded(), unfolded()];
@@ -2616,8 +2643,8 @@ mod tests {
             record: chain.folds[0].record.clone(),
             events: None,
             verdict: None,
-            left: Vec::new(),
-            held: false,
+            excluded_entries: Vec::new(),
+            deferred: false,
             skipped: false,
         };
         let (second, third) = (unfolded(), unfolded());
