@@ -7,18 +7,16 @@ use wallet::AccountIdentity;
 
 use crate::{
     error::{FfiOperationError, print_error},
-    primitives::types::{FfiBytes32, FfiPrivateAccountKeys, FfiPublicAccountKey},
+    primitives::types::{FfiBytes32, FfiPrivateAccountKeys, FfiSigningKeyState},
     wallet::{FfiAccountIdentity, lifecycle::get_wallet, types::WalletHandle},
 };
 
-/// Get the public key for a public account.
-///
-/// This returns the public key derived from the account's signing key.
+/// Get the initial key of a public account: what others name it by to pay it.
 ///
 /// # Parameters
 /// - `handle`: Valid wallet handle
 /// - `account_id`: The account ID (32 bytes)
-/// - `out_public_key`: Output pointer for the public key
+/// - `out_initial_key`: Output pointer for the initial key
 ///
 /// # Returns
 /// - `Success` on successful retrieval
@@ -28,19 +26,19 @@ use crate::{
 /// # Safety
 /// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
 /// - `account_id` must be a valid pointer to a `FfiBytes32` struct
-/// - `out_public_key` must be a valid pointer to a `FfiPublicAccountKey` struct
+/// - `out_initial_key` must be a valid pointer to a `FfiSigningKeyState` struct
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn wallet_ffi_get_public_account_key(
+pub unsafe extern "C" fn wallet_ffi_get_public_account_initial_key(
     handle: *mut WalletHandle,
     account_id: *const FfiBytes32,
-    out_public_key: *mut FfiPublicAccountKey,
+    out_initial_key: *mut FfiSigningKeyState,
 ) -> FfiOperationError {
     let wrapper = match get_wallet(handle) {
         Ok(w) => w,
         Err(e) => return e,
     };
 
-    if account_id.is_null() || out_public_key.is_null() {
+    if account_id.is_null() || out_initial_key.is_null() {
         print_error("Null pointer argument");
         return FfiOperationError::NullPointer;
     }
@@ -55,13 +53,13 @@ pub unsafe extern "C" fn wallet_ffi_get_public_account_key(
 
     let account_id = AccountId::new(unsafe { (*account_id).data });
 
-    let Some((_private_key, public_key)) = wallet.get_account_public_signing_key(account_id) else {
+    let Some(initial_key) = wallet.get_account_initial_key(account_id) else {
         print_error("Public account key not found in wallet");
         return FfiOperationError::KeyNotFound;
     };
 
     unsafe {
-        *out_public_key = public_key.into();
+        *out_initial_key = initial_key.into();
     }
 
     FfiOperationError::Success
@@ -378,7 +376,7 @@ pub unsafe extern "C" fn wallet_ffi_free_account_identity(
             kind: _,
             account_id: _,
             key_path,
-            public_key: _,
+            initial_key: _,
             authority: _,
             seed: _,
             authorization_secret_key: _,

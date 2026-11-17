@@ -7,12 +7,12 @@ pub use ffi_types::{
 use ffi_types::{empty_root_call, proven_fee_from_ffi};
 use indexer_service_protocol::{
     HashType, PdaSeed, PrivacyPreservingMessage, PrivacyPreservingTransaction, Proof,
-    PublicAccountEvidence, PublicKey, PublicMessage, PublicTransaction, Transaction,
-    ValidityWindow, WitnessSet,
+    PublicAccountEvidence, PublicMessage, PublicTransaction, Transaction, ValidityWindow,
+    WitnessSet,
 };
 
 use crate::api::types::{
-    FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiPublicKey, FfiVec,
+    FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiVec,
     vectors::{
         FfiBoundaryStepList, FfiNonceList, FfiPrivateActionList, FfiProof,
         FfiPublicAccountEvidenceList, FfiPublicationList, FfiRecoveryBindingList,
@@ -476,7 +476,7 @@ fn public_account_evidence_to_ffi(evidence: &PublicAccountEvidence) -> FfiPublic
         },
         PublicAccountEvidence::Pda { program, seed } => FfiPublicAccountEvidence {
             kind: FfiPublicAccountEvidenceKind::Pda,
-            key: FfiPublicKey::default(),
+            key: FfiSigningKeyState::default(),
             program: program.into(),
             seed: FfiBytes32 { data: seed.0 },
         },
@@ -485,9 +485,7 @@ fn public_account_evidence_to_ffi(evidence: &PublicAccountEvidence) -> FfiPublic
 
 fn public_account_evidence_from_ffi(evidence: &FfiPublicAccountEvidence) -> PublicAccountEvidence {
     match evidence.kind {
-        FfiPublicAccountEvidenceKind::Key => {
-            PublicAccountEvidence::Key(PublicKey(evidence.key.data))
-        }
+        FfiPublicAccountEvidenceKind::Key => PublicAccountEvidence::Key(evidence.key.into()),
         FfiPublicAccountEvidenceKind::Pda => PublicAccountEvidence::Pda {
             program: evidence.program.into(),
             seed: PdaSeed(evidence.seed.data),
@@ -522,8 +520,9 @@ const fn cast_ffi_validity_window(ffi_window: [u64; 2]) -> ValidityWindow {
 mod tests {
     use indexer_service_protocol::{
         AccountId, Actor, BoundaryStep, Ciphertext, Commitment, CommitmentSetDigest, Delivery,
-        EncryptedNote, EphemeralPublicKey, FeeDeclaration, FeeFallback, MessageEnvelope, Nullifier,
-        PrivateAction, ProvenFee, PublicExecutionContext, Publication, RootCall, SealedMessage,
+        EncryptedNote, EphemeralPublicKey, FeeDeclaration, FeeFallback, KeyType, MessageEnvelope,
+        Nullifier, PrivateAction, ProvenFee, PublicExecutionContext, Publication, RootCall,
+        SealedMessage, SigningKeyState,
     };
 
     use super::*;
@@ -541,7 +540,10 @@ mod tests {
 
     fn admission_evidence() -> Vec<PublicAccountEvidence> {
         vec![
-            PublicAccountEvidence::Key(PublicKey([1; 32])),
+            PublicAccountEvidence::Key(SigningKeyState {
+                key_type: KeyType::Schnorr,
+                key_commitment: [1; 32],
+            }),
             PublicAccountEvidence::Pda {
                 program: account_id(2),
                 seed: PdaSeed([3; 32]),

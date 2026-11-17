@@ -57,10 +57,10 @@
             132,
             121
           ],
-          "ownership_public_key": "44d0006989cef6e155fd9ff26a075591e1819e51d791937550a586ab721528b7",
+          "ownership_id": "J5sTKEfnZpDxcdtSNFUqnZWfrKzup2tRnicZ1C4inCRT",
           "stake_entry": {
-            "auth_data": "ef17b5660b8b22f5f30a3e9b46c1ec47d397ce74ad6be9eae545f1f1e85683970f5a4f760edd57f57b0b63c8554b8a4ba02e37bf9b6a3f4f86988e69ad15432a44d0006989cef6e155fd9ff26a075591e1819e51d791937550a586ab721528b7",
-            "next": "0041383292149fd02310878aa4728c8184657a71ab10b960de165fcad284b08219"
+            "auth_data": "002b45b9f023194e95342a8518ed2ff50401e76b84f2909165c362b1d7830ba10956e1ddbcd2dfa78fc9215988b5a838d50aa1ead52c17a3743cc79cc9b0b5c6916a50b9f822896cc3d0bd3a870714a6140dd156b68fdf9c270ad95eed797707e6609b6395fe796d796ac846ec3cfd776e2d4761530771df315f82497990d00823",
+            "next": "009e8e552585153280ac5fe1f50efa4a9f70eb482f85db90c157725911b9cea3a7"
           }
         }
       },
@@ -100,10 +100,10 @@
             42,
             251
           ],
-          "ownership_public_key": "b38f788eb7ecb1c22abc0e41b1a6d70aecbe77b8c6b105706ce20c3fb2923b39",
+          "ownership_id": "or46Fg7qtBMZfc68AJAz43VJCdv4aUfE7mWJZk8raBD",
           "stake_entry": {
-            "auth_data": "fbc869df414baf45eb0988a6ebfb43fc0d2aef7b11135a1792e1159f50ce0f37398e72694f678f2dd566047f96cbbbbf4e9411f3e1aa7497ef10f16c2b5e62fdb38f788eb7ecb1c22abc0e41b1a6d70aecbe77b8c6b105706ce20c3fb2923b39",
-            "next": "00e2bf94e588892d69594dbcd4e98d2fc7d6c50246e71663b8b7ee64a136263843"
+            "auth_data": "003a816a3925b9b6862dcbbb36596161d2d155e0cc56185f5c056d9f7b97285ce2c62ab824ee114e2a8a0c95a02f7eb9bc4061efdbad473a7efc63871e0deae95d7eb6ab37e9eb318ae5c321b8fbf890f82ea9276e94fb5360640ad93d6c28c73999be7424052e2dd400e63d03746461f550e4168278641ca2dd20355c7bdb5854",
+            "next": "00c66a3fe58e9a78ff3535034af95af070ad291421aba378f9a0e0646bd48ab5a6"
           }
         }
       },
@@ -143,10 +143,10 @@
             113,
             209
           ],
-          "ownership_public_key": "2564e59a093037bf625f900d1c8efc67a0147c3cbc7fea57a1c5e3ceb0a88616",
+          "ownership_id": "Azw4Ta4hFATyfpmtbaWJE8g2uKgtRC99jbfNuSdzusbD",
           "stake_entry": {
-            "auth_data": "2fef7e9118f1455481dcd9a256a70cc37ddc9f901f00bee2c6ca8c04120ec2b5d89eaf8cdbe2fdb57d244c0cd8419fe0fe9d3f472ac75abf0a3e631622f2bb8a2564e59a093037bf625f900d1c8efc67a0147c3cbc7fea57a1c5e3ceb0a88616",
-            "next": "0044805de9f98d1d900b4e2a8886f40f48e192c9918a63e1814a469b43c8b99578"
+            "auth_data": "00d6e1a34a7b49d62c70696bd6f421d2376be1a596ab2ca1de89d958859c1cb89070c3f2c6af9aa4cd3837fcd4194cb8c13d108b2a97097561639c170225aac16842690b58931c95b2fe2fa16ba76b51b2204f4d7fff322d48aedc8c5db4d64d9536f78ac2fd35e1b3c529bfcda64eca6ccf396a3920f97e0081055cc32d46c3b6",
+            "next": "005142dbbb963b0f9708f5f21b9ad1a5f9a0be5b1f6036a24af6ab926296b6be91"
           }
         }
       },
@@ -186,10 +186,10 @@
             17,
             10
           ],
-          "ownership_public_key": "804423d605303851a25fbc40f5f954c2655d259aebb62165d72a5ede7ab58f09",
+          "ownership_id": "DSQi5m18xN2UWAU8WXGTy3vGubBpFgYqXpFaeBk4mBSV",
           "stake_entry": {
-            "auth_data": "5161f5b050c492c2816932858234390db0294ba141011f174f1a73feb9b641f32a9894fd3773207097243cad5dd5c88153274438d5baa8830f1d0ad0e5f2eab0804423d605303851a25fbc40f5f954c2655d259aebb62165d72a5ede7ab58f09",
-            "next": "0072d4adc873edd6c9ae3b8dcdf2f0a1dcad49b53865a14bddb57690eb0a311beb"
+            "auth_data": "003adcca687edae0434320ea59b3c59b02aecfc937e24785ebc7c21a8382e01e5ddf1e127af49cb19d5af31e719fcbbb8ab624003f5aa465dc8e823ee0f7d7c15cae237eb9d161c979e28a82fbfa3d16c4f1f60a40dfc51357a8251eb21ecc45dc2555a5062133bbe89c7130757d88356d2fb9262cc6d8d14c2707ef06653b8818",
+            "next": "005994de4f0eff738acac1e1badbf2688942d9ea355bf769e25fab909a9b2137fa"
           }
         }
       },
@@ -197,7 +197,7 @@
         "supply_account": {
           "recipient": {
             "identified": {
-              "key": "c69355638428f6e7469b96f0a9842907af28e5cdb0e84ec78a0d418d6e141635"
+              "key": "00f00d1e62fa5278307fbde46d84a022f571caff20c157b2831884cc3cc2ae4c29"
             }
           },
           "balance": 10000
@@ -207,7 +207,7 @@
         "supply_account": {
           "recipient": {
             "identified": {
-              "key": "b5521196ad30b60898b765f67e2e6d4daa7998c9aff3e8b8c8a5daa679d23392"
+              "key": "000223ea30d102c2f066dca058325ee30af21c23cf4dd9a16c3e4ab190ba0b49cb"
             }
           },
           "balance": 20000

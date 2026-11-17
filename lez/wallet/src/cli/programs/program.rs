@@ -2,8 +2,8 @@ use std::str::FromStr;
 
 use anyhow::{Context as _, Result, bail, ensure};
 use clap::Subcommand;
-use lee::{AccountId, PublicKey};
-use lee_core::program::PdaSeed;
+use lee::AccountId;
+use lee_core::{program::PdaSeed, signing_key::SigningKeyState};
 
 use crate::{
     AccountIdentity, AccountMention, WalletCore, WalletSequencerClient,
@@ -20,7 +20,7 @@ pub enum ProgramSubcommand {
     /// Nothing is inferred: the root actor and every other actor the call touches are named, and
     /// so is who signs. An actor is `<account>[@program][:sign]`,
     /// `pda:[<owner>/]<seed>[@program]` for a public PDA (admitted by its seed), or
-    /// `pk:<hex>[@program]` for an account known by its public key (admitted by it). `@program`
+    /// `ik:<hex>[@program]` for an account known by its initial key (admitted by it). `@program`
     /// selects that program's state of the account and defaults to `--program`, as does a PDA's
     /// owner. An account is base58, `Public/<id>`, a label, or a keycard key path; a program or
     /// owner is base58, `Public/<id>`, or a label; a seed is 0x hex or base58.
@@ -99,8 +99,8 @@ pub enum CliActorAccount {
         owner: Option<String>,
         seed: PdaSeed,
     },
-    /// `pk:<hex>`.
-    Key(PublicKey),
+    /// `ik:<hex>`: a public account by its initial key (key type byte, then key commitment).
+    Key(SigningKeyState),
 }
 
 impl FromStr for CliActor {
@@ -125,10 +125,10 @@ impl FromStr for CliActor {
                 owner,
                 seed: parse_seed(seed)?,
             }
-        } else if let Some(key) = account.strip_prefix("pk:") {
+        } else if let Some(key) = account.strip_prefix("ik:") {
             CliActorAccount::Key(
                 key.parse()
-                    .with_context(|| format!("{key:?} isn't a public key (64 hex digits)"))?,
+                    .with_context(|| format!("{key:?} isn't an initial key (66 hex digits)"))?,
             )
         } else {
             let Ok(PublicMention(mention)) = account.parse();
@@ -185,10 +185,18 @@ impl CliActor {
                     seed,
                 }
             }
-            CliActorAccount::Key(key) if self.sign || payer == Some(AccountId::from(&key)) => {
-                AccountIdentity::Public(AccountId::from(&key))
+            CliActorAccount::Key(initial_key) => {
+                let account_id = AccountId::for_initial_key(&initial_key)
+                    .context("an account cannot start on a key of this type")?;
+                if self.sign || payer == Some(account_id) {
+                    AccountIdentity::Public(account_id)
+                } else {
+                    AccountIdentity::PublicForeign {
+                        account_id,
+                        initial_key,
+                    }
+                }
             }
-            CliActorAccount::Key(key) => AccountIdentity::PublicForeign(key),
         };
         Ok(identity.select_program_actor_state(actor_program))
     }
@@ -305,10 +313,10 @@ mod tests {
     }
 
     #[test]
-    fn parses_public_keys() {
-        let key = PublicKey::new_from_private_key(&lee::PrivateKey::new_os_random());
-        let actor: CliActor = format!("pk:{key}").parse().unwrap();
+    fn parses_initial_keys() {
+        let key = lee::signature::initial_key(&lee::signature::PublicAccountSecret::new([1; 32]));
+        let actor: CliActor = format!("ik:{key}").parse().unwrap();
         assert_eq!(actor.account, CliActorAccount::Key(key));
-        assert!("pk:00".parse::<CliActor>().is_err());
+        assert!("ik:00".parse::<CliActor>().is_err());
     }
 }

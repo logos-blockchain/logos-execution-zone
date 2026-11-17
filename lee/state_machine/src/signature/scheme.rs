@@ -5,7 +5,9 @@ use lee_core::{
 use thiserror::Error;
 
 use super::{Schnorr, SchnorrAuthData};
-use crate::PublicKey;
+
+/// Length of the initial key state that prefixes a nonce-0 entry's authentication data.
+const INITIAL_KEY_LEN: usize = 33;
 
 #[derive(Error, Debug, Clone, Copy, PartialEq, Eq)]
 #[error("invalid signature")]
@@ -86,23 +88,25 @@ pub trait KeyScheme: SignatureScheme {
     }
 }
 
-/// The account's current key: its stored key or, at nonce 0, the initial-key rule
-/// (for now: a Schnorr key whose revealed `pk` gives the account id via `AccountId::from(&pk)`).
+/// The account's current key, and the authentication data to check against it: its stored key
+/// or, at nonce 0, the initial key prefixing `auth_data`, which must give the account id.
 pub fn current_key(
     stored: Option<SigningKeyState>,
     account_id: AccountId,
     auth_data: &[u8],
-) -> Result<SigningKeyState, AuthError> {
+) -> Result<(SigningKeyState, &[u8]), AuthError> {
     if let Some(stored) = stored {
-        return Ok(stored);
+        return Ok((stored, auth_data));
     }
-    let auth = SchnorrAuthData::try_from(auth_data).map_err(|_err| AuthError::Malformed)?;
-    let pk = PublicKey::try_new(*auth.last_chunk().expect("auth data ends with the key"))
-        .map_err(|_err| AuthError::Malformed)?;
-    if AccountId::from(&pk) != account_id {
+    let (prefix, rest) = auth_data
+        .split_at_checked(INITIAL_KEY_LEN)
+        .ok_or(AuthError::Malformed)?;
+    let initial: SigningKeyState =
+        borsh::from_slice(prefix).map_err(|_err| AuthError::Malformed)?;
+    if AccountId::for_initial_key(&initial) != Some(account_id) {
         return Err(AuthError::AccountIdMismatch);
     }
-    Ok(Schnorr::key_state(&pk))
+    Ok((initial, rest))
 }
 
 /// Authenticates one signer against its current key, dispatching on `current.key_type`
@@ -125,11 +129,21 @@ pub fn authenticate(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::PublicKey;
 
     fn signed(seed: u8, message: &[u8; 32]) -> (PublicKey, SchnorrAuthData) {
         let (sk, pk) = Schnorr::keygen(&[seed; 32]);
         let auth = Schnorr::auth_data(&pk, &Schnorr::sign(&sk, message));
         (pk, auth)
+    }
+
+    /// A Schnorr initial key, and a nonce-0 entry's authentication data: the key, then the
+    /// scheme's authentication data.
+    fn initial(seed: u8, message: &[u8; 32]) -> (SigningKeyState, Vec<u8>) {
+        let (pk, auth) = signed(seed, message);
+        let key = Schnorr::key_state(&pk);
+        let auth_data = [borsh::to_vec(&key).unwrap(), auth.to_vec()].concat();
+        (key, auth_data)
     }
 
     #[test]
@@ -139,27 +153,42 @@ mod tests {
             key_commitment: [0; 32],
         };
         assert_eq!(
-            current_key(Some(stored), AccountId::new([1; 32]), &[]),
-            Ok(stored)
+            current_key(Some(stored), AccountId::new([1; 32]), &[7]),
+            Ok((stored, &[7][..]))
         );
     }
 
     #[test]
-    fn current_key_accepts_key_giving_account_id_at_nonce_zero() {
-        let (pk, auth) = signed(0, &[1; 32]);
+    fn current_key_takes_the_initial_key_giving_the_account_id_at_nonce_zero() {
+        let (key, auth_data) = initial(0, &[1; 32]);
+        let account_id = AccountId::for_initial_key(&key).unwrap();
         assert_eq!(
-            current_key(None, AccountId::from(&pk), &auth),
-            Ok(Schnorr::key_state(&pk))
+            current_key(None, account_id, &auth_data),
+            Ok((key, &auth_data[INITIAL_KEY_LEN..]))
         );
     }
 
     #[test]
-    fn current_key_rejects_key_not_giving_account_id_at_nonce_zero() {
-        let (_pk, auth) = signed(0, &[1; 32]);
+    fn current_key_rejects_an_initial_key_not_giving_the_account_id() {
+        let (_key, auth_data) = initial(0, &[1; 32]);
         assert_eq!(
-            current_key(None, AccountId::new([2; 32]), &auth),
+            current_key(None, AccountId::new([2; 32]), &auth_data),
             Err(AuthError::AccountIdMismatch)
         );
+    }
+
+    #[test]
+    fn current_key_rejects_a_missing_or_unknown_initial_key() {
+        let (key, auth_data) = initial(0, &[1; 32]);
+        let account_id = AccountId::for_initial_key(&key).unwrap();
+        let mut unknown_type = auth_data.clone();
+        unknown_type[0] = 2;
+        for malformed in [&auth_data[..INITIAL_KEY_LEN - 1], &[][..], &*unknown_type] {
+            assert_eq!(
+                current_key(None, account_id, malformed),
+                Err(AuthError::Malformed)
+            );
+        }
     }
 
     #[test]
@@ -170,6 +199,18 @@ mod tests {
         assert_eq!(
             authenticate(&Schnorr::key_state(&pk), &message, &auth, &next),
             Ok(next)
+        );
+    }
+
+    #[test]
+    fn authenticate_checks_an_initial_key_against_the_rest_of_its_auth_data() {
+        let message = [1; 32];
+        let (key, auth_data) = initial(0, &message);
+        let rest = &auth_data[INITIAL_KEY_LEN..];
+        assert_eq!(authenticate(&key, &message, rest, &key), Ok(key));
+        assert_eq!(
+            authenticate(&key, &[2; 32], rest, &key),
+            Err(AuthError::InvalidSignature)
         );
     }
 
@@ -185,5 +226,11 @@ mod tests {
                 Err(AuthError::Malformed)
             );
         }
+        let (key, auth_data) = initial(0, &message);
+        assert_eq!(
+            authenticate(&key, &message, &auth_data, &key),
+            Err(AuthError::Malformed),
+            "authentication data with the initial-key prefix still attached"
+        );
     }
 }

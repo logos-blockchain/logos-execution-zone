@@ -44,12 +44,12 @@ wallet account import public --secret 10a26a9aec7d34b82364eeae45c5294dbb0a764b00
 
 Output:
 ```
-Imported public account Public/Apc9nDR3RAvh8aYajPik6DJ4nM5zWmygraJuyvxU2K36
+Imported public account Public/7VDm7YRPvimbZgCzuFqCGf6RwPsTV3XY5W9DzT71oain
 ```
 
 Every runner takes this account as its fee payer. For convenience, export it:
 ```bash
-export PAYER=Apc9nDR3RAvh8aYajPik6DJ4nM5zWmygraJuyvxU2K36
+export PAYER=7VDm7YRPvimbZgCzuFqCGf6RwPsTV3XY5W9DzT71oain
 ```
 
 # 2. Compile the example programs

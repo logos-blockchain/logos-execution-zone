@@ -733,7 +733,7 @@ mod tests {
 
     use lee::{
         AccountId, Actor, BoundaryStep, Delivery, EphemeralPublicKey, FeeDeclaration,
-        MessageEnvelope, PublicExecutionContext, PublicKey, RootCall,
+        MessageEnvelope, PublicExecutionContext, RootCall,
     };
     use lee_core::{
         Commitment, EncryptedNote, SealedMessage,
@@ -796,8 +796,8 @@ mod tests {
         }
     }
 
-    fn signer() -> PublicKey {
-        PublicKey::new_from_private_key(&lee::PrivateKey::try_new([1; 32]).expect("valid key"))
+    fn signer() -> lee_core::signing_key::SigningKeyState {
+        lee::signature::initial_key(&lee::signature::PublicAccountSecret::new([1; 32]))
     }
 
     fn witness_entry() -> WitnessEntry {
@@ -961,10 +961,6 @@ mod tests {
             nonce: nonces[0].nonce,
         };
         nonces.push(duplicate);
-    }
-
-    fn invalidate_first_key(evidence: &mut [FfiPublicAccountEvidence]) {
-        evidence[0].key.data = [0xFF; 32];
     }
 
     fn end_of_subtree_deliveries(
@@ -1165,14 +1161,8 @@ mod tests {
     #[test]
     fn a_rejected_public_body_releases_every_buffer_whether_converted_or_freed() {
         assert!(PublicTransaction::try_from(Box::new(signed_public_body(|_| {}))).is_ok());
-        let corruptions: [fn(&mut FfiPublicTransactionBody); 2] = [
-            |body| edit(&mut body.message.nonces, duplicate_first_nonce),
-            |body| {
-                edit(&mut body.message.admission_evidence, |e| {
-                    invalidate_first_key(e);
-                });
-            },
-        ];
+        let corruptions: [fn(&mut FfiPublicTransactionBody); 1] =
+            [|body| edit(&mut body.message.nonces, duplicate_first_nonce)];
         for corrupt in corruptions {
             let converted = || {
                 assert!(
@@ -1190,7 +1180,7 @@ mod tests {
         assert!(
             PrivacyPreservingTransaction::try_from(Box::new(signed_private_body(|_| {}))).is_ok()
         );
-        let corruptions: [fn(&mut FfiPrivateTransactionBody); 4] = [
+        let corruptions: [fn(&mut FfiPrivateTransactionBody); 3] = [
             |body| body.message.block_validity_window = [5, 3],
             |body| {
                 edit(&mut body.message.program_image_claims, |claims| {
@@ -1198,11 +1188,6 @@ mod tests {
                 });
             },
             |body| edit(&mut body.message.nonces, duplicate_first_nonce),
-            |body| {
-                edit(&mut body.message.admission_evidence, |e| {
-                    invalidate_first_key(e);
-                });
-            },
         ];
         for corrupt in corruptions {
             let converted = || {

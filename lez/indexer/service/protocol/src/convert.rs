@@ -374,7 +374,7 @@ impl TryFrom<PublicAccountEvidence> for lee::PublicAccountEvidence {
 
     fn try_from(value: PublicAccountEvidence) -> Result<Self, Self::Error> {
         match value {
-            PublicAccountEvidence::Key(key) => Ok(Self::Key(key.try_into()?)),
+            PublicAccountEvidence::Key(key) => Ok(Self::Key(key.into())),
             PublicAccountEvidence::Pda { program, seed } => Ok(Self::Pda {
                 program: program.into(),
                 seed: seed.into(),

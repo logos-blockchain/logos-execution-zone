@@ -330,8 +330,12 @@ pub struct RootCall {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub enum PublicAccountEvidence {
-    Key(PublicKey),
-    Pda { program: AccountId, seed: PdaSeed },
+    /// The account's initial key.
+    Key(SigningKeyState),
+    Pda {
+        program: AccountId,
+        seed: PdaSeed,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

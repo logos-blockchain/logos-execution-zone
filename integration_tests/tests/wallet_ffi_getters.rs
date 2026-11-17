@@ -13,7 +13,7 @@ use anyhow::Result;
 use core_ffi::{
     error,
     primitives::types::{
-        FfiBytes32, FfiPrivateAccountKeys, FfiPublicAccountKey, account::FfiAccount,
+        FfiBytes32, FfiPrivateAccountKeys, FfiSigningKeyState, account::FfiAccount,
     },
     wallet::lifecycle::FfiCreateWalletOutput,
 };
@@ -23,10 +23,12 @@ use integration_tests::{
         primitives as primitives_ffi_helpers, sequencer as sequencer_ffi_helpers, wallet::*,
     },
 };
-use lee::{Account, AccountId, PublicKey, test_utils::TestSigner};
+use lee::{Account, AccountId, test_utils::TestSigner};
 use lee_core::{
-    account::Nonce, native_token::NATIVE_TOKEN_PROGRAM_ID, program::PROGRAM_LOADER_ACCOUNT_ID,
-    signing_key::SIGNATURE_PROGRAM_ID,
+    account::Nonce,
+    native_token::NATIVE_TOKEN_PROGRAM_ID,
+    program::PROGRAM_LOADER_ACCOUNT_ID,
+    signing_key::{SIGNATURE_PROGRAM_ID, SigningKeyState},
 };
 
 #[test]
@@ -308,27 +310,24 @@ fn test_wallet_ffi_get_public_account_keys() -> Result<()> {
         wallet: wallet_ffi_handle,
         mnemonic: _,
     } = new_wallet_ffi_with_test_context_config(&ctx, home.path(), sequencer_ffi_res.value)?;
-    let mut out_key = FfiPublicAccountKey::default();
+    let mut out_key = FfiSigningKeyState::default();
 
-    let key: PublicKey = unsafe {
+    let key: SigningKeyState = unsafe {
         let ffi_account_id = FfiBytes32::from(account_id);
-        wallet_ffi_get_public_account_key(
+        wallet_ffi_get_public_account_initial_key(
             wallet_ffi_handle,
             &raw const ffi_account_id,
             &raw mut out_key,
         )
         .unwrap();
-        (&out_key).try_into().unwrap()
+        out_key.into()
     };
 
-    let expected_key = {
-        let (_private_key, public_key) = ctx
-            .ctx()
-            .wallet()
-            .get_account_public_signing_key(account_id)
-            .unwrap();
-        public_key
-    };
+    let expected_key = ctx
+        .ctx()
+        .wallet()
+        .get_account_initial_key(account_id)
+        .unwrap();
 
     assert_eq!(key, expected_key);
 

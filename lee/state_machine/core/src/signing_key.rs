@@ -1,4 +1,7 @@
+use std::{fmt, str::FromStr};
+
 use borsh::{BorshDeserialize, BorshSerialize};
+use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 use crate::account::{AccountId, ActorState};
 
@@ -6,6 +9,7 @@ use crate::account::{AccountId, ActorState};
 /// actor state holds each account's signing key. Never dispatched, deployed or upgraded.
 pub const SIGNATURE_PROGRAM_ID: AccountId = AccountId::new([0xFC; 32]);
 
+/// Append only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
@@ -16,10 +20,56 @@ pub enum KeyType {
 /// 32-byte commitment to a signing key; its encoding/decoding depends on the `KeyType`.
 pub type KeyCommitment = [u8; 32];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+/// Serialized as the hex of its 33-byte borsh encoding.
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    PartialEq,
+    Eq,
+    BorshSerialize,
+    BorshDeserialize,
+    SerializeDisplay,
+    DeserializeFromStr,
+)]
 pub struct SigningKeyState {
     pub key_type: KeyType,
     pub key_commitment: KeyCommitment,
+}
+
+impl fmt::Display for SigningKeyState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        borsh::to_vec(self)
+            .expect("a signing key state encodes to 33 bytes")
+            .iter()
+            .try_for_each(|byte| write!(f, "{byte:02x}"))
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("invalid signing key state: expected the hex of a 33-byte encoding")]
+pub struct SigningKeyStateParseError;
+
+impl FromStr for SigningKeyState {
+    type Err = SigningKeyStateParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if !s.is_ascii() {
+            return Err(SigningKeyStateParseError);
+        }
+        let bytes = s
+            .as_bytes()
+            .chunks(2)
+            .map(|pair| {
+                std::str::from_utf8(pair)
+                    .ok()
+                    .filter(|pair| pair.len() == 2)
+                    .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+                    .ok_or(SigningKeyStateParseError)
+            })
+            .collect::<Result<Vec<u8>, _>>()?;
+        borsh::from_slice(&bytes).map_err(|_err| SigningKeyStateParseError)
+    }
 }
 
 impl From<SigningKeyState> for ActorState {

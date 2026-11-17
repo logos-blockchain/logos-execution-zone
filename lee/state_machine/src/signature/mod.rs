@@ -10,7 +10,10 @@ pub use scheme::{
 };
 pub use schnorr::{Schnorr, SchnorrAuthData};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
-pub use signing_keys::{PublicAccountSecret, signing_key};
+pub use signing_keys::{
+    INITIAL_KEY_TYPE, PublicAccountSecret, Signer, initial_key, key_state, public_account_id,
+    signing_key,
+};
 
 mod private_key;
 mod public_key;
@@ -95,12 +98,6 @@ mod bip340_test_vectors;
 mod tests {
 
     use crate::{Signature, signature::bip340_test_vectors};
-
-    impl Signature {
-        pub(crate) fn new_for_tests(value: [u8; 64]) -> Self {
-            Self { value }
-        }
-    }
 
     #[test]
     fn signature_generation_from_bip340_test_vectors() {

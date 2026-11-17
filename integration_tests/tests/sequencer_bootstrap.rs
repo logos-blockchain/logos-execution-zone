@@ -101,7 +101,9 @@ fn supplied_account(balance: u64) -> (AccountId, GenesisAction) {
         TestSigner::from(&PublicAccountSecret::new_os_random()).evidence(),
     );
     (
-        recipient.account_id(),
+        recipient
+            .account_id()
+            .expect("a key's evidence names its account"),
         GenesisAction::SupplyAccount { recipient, balance },
     )
 }

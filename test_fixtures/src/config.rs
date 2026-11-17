@@ -4,10 +4,9 @@ use anyhow::{Context as _, Result};
 use indexer_service::{ChannelId, ClientConfig, EventFilterConfig, IndexerConfig};
 use key_protocol::key_management::{KeyChain, secret_holders::SeedHolder};
 use lee::{
-    AccountId, PublicAccountEvidence, PublicKey,
-    signature::{PublicAccountSecret, Schnorr, signing_key},
+    AccountId, PublicAccountEvidence,
+    signature::{PublicAccountSecret, initial_key, public_account_id},
 };
-use lee_core::account::Nonce;
 use logos_blockchain_zone_sdk::key_management_system_service::keys::{
     UnsecuredEd25519Key, ZkPublicKey,
 };
@@ -48,6 +47,9 @@ pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000_000_000, 20_0
 /// It is the fixed `PROOF_BYTES` (223,047) plus the rest of the serialized transaction (14,030),
 /// mostly its padded private slots.
 pub const SHIELD_BYTES: u64 = 237_077;
+
+/// The funder's initial key, which its signature carries at nonce 0, so in the first shield only.
+const INITIAL_KEY_BYTES: u64 = 33;
 
 /// The public account for funding the private accounts' balances at genesis.
 pub(crate) const PRIVATE_FUNDER_INDEX: usize = 0;
@@ -197,9 +199,7 @@ pub fn default_public_accounts_for_wallet() -> Vec<(PublicAccountSecret, u128)> 
         .iter()
         .map(|seed| PublicAccountSecret::new(*seed))
         .collect::<Vec<_>>();
-    secrets.sort_unstable_by_key(|secret| {
-        AccountId::from(&signing_key::<Schnorr>(secret, Nonce(0)).1)
-    });
+    secrets.sort_unstable_by_key(public_account_id);
 
     secrets
         .into_iter()
@@ -211,7 +211,7 @@ pub fn default_public_accounts_for_wallet() -> Vec<(PublicAccountSecret, u128)> 
 #[must_use]
 pub fn private_funder_account_id() -> AccountId {
     let secret = PublicAccountSecret::new(PRIVATE_FUNDER_ACCOUNT_SEED);
-    AccountId::from(&signing_key::<Schnorr>(&secret, Nonce(0)).1)
+    public_account_id(&secret)
 }
 
 #[must_use]
@@ -268,19 +268,29 @@ pub fn private_fee(bytes: u64) -> u128 {
     )
 }
 
-/// The fee of the shield that funds a private account at setup.
+/// The fee of a shield that funds a private account at setup, after the first.
 #[must_use]
 pub fn shield_fee() -> u128 {
     private_fee(SHIELD_BYTES)
+}
+
+/// The fee of the `index`-th shield that funds a private account at setup.
+#[must_use]
+pub fn shield_fee_at(index: usize) -> u128 {
+    if index == 0 {
+        private_fee(SHIELD_BYTES.saturating_add(INITIAL_KEY_BYTES))
+    } else {
+        shield_fee()
+    }
 }
 
 /// What funding the private accounts costs the funder: every balance plus the fee of each
 /// shielding transaction, which the funder pays since the recipients hold nothing yet.
 #[must_use]
 pub fn private_funding_cost(private_accounts: &[InitialPrivateAccountForWallet]) -> u128 {
-    let fees = u128::try_from(private_accounts.len())
-        .expect("account count fits u128")
-        .checked_mul(shield_fee())
+    let fees = (0..private_accounts.len())
+        .map(shield_fee_at)
+        .try_fold(0_u128, u128::checked_add)
         .expect("private funding fees overflow");
     private_total(private_accounts)
         .checked_add(fees)
@@ -292,9 +302,9 @@ pub fn genesis_from_accounts(
     public_accounts: &[(PublicAccountSecret, u128)],
     private_funding_cost: u128,
 ) -> Vec<GenesisAction> {
-    let mut balances: Vec<(PublicKey, u128)> = public_accounts
+    let mut balances: Vec<_> = public_accounts
         .iter()
-        .map(|(secret, balance)| (signing_key::<Schnorr>(secret, Nonce(0)).1, *balance))
+        .map(|(secret, balance)| (initial_key(secret), *balance))
         .collect();
 
     let funder_balance = &mut balances[PRIVATE_FUNDER_INDEX].1;
@@ -304,8 +314,8 @@ pub fn genesis_from_accounts(
 
     balances
         .into_iter()
-        .map(|(public_key, balance)| GenesisAction::SupplyAccount {
-            recipient: DepositRecipient::Identified(PublicAccountEvidence::Key(public_key)),
+        .map(|(key, balance)| GenesisAction::SupplyAccount {
+            recipient: DepositRecipient::Identified(PublicAccountEvidence::Key(key)),
             balance: u64::try_from(balance).expect("genesis balance exceeds u64"),
         })
         .collect()
@@ -431,11 +441,9 @@ pub fn genesis_sequencer_stakes(
             let sequencer_key = SequencerKey::new(public_key.to_bytes())
                 .context("Sequencer signing key is not a valid Ed25519 point")?;
             let owner = founding_stake_owner_secret(index);
-            let (_, ownership_public_key) =
-                lee::signature::signing_key::<Schnorr>(&owner, Nonce(0));
             Ok(GenesisAction::StakeSequencer {
                 sequencer_key,
-                ownership_public_key,
+                ownership_id: public_account_id(&owner),
                 stake_entry: sign_genesis_stake(index, sequencer_key, &owner, minimum_stake),
             })
         })
@@ -496,9 +504,7 @@ mod tests {
     #[test]
     fn private_funder_identity_matches_configured_index() {
         let public_accounts = default_public_accounts_for_wallet();
-        let configured_funder = AccountId::from(
-            &signing_key::<Schnorr>(&public_accounts[PRIVATE_FUNDER_INDEX].0, Nonce(0)).1,
-        );
+        let configured_funder = public_account_id(&public_accounts[PRIVATE_FUNDER_INDEX].0);
 
         assert_eq!(
             private_funder_account_id(),
@@ -516,13 +522,11 @@ mod tests {
         let funding_cost = private_funding_cost(&private_accounts);
         let genesis = genesis_from_accounts(&public_accounts, funding_cost);
 
-        let funder = AccountId::from(
-            &signing_key::<Schnorr>(&public_accounts[PRIVATE_FUNDER_INDEX].0, Nonce(0)).1,
-        );
+        let funder = public_account_id(&public_accounts[PRIVATE_FUNDER_INDEX].0);
         let supplied = |wanted: AccountId| {
             genesis.iter().find_map(|action| match action {
                 GenesisAction::SupplyAccount { recipient, balance }
-                    if recipient.account_id() == wanted =>
+                    if recipient.account_id() == Some(wanted) =>
                 {
                     Some(*balance)
                 }

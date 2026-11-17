@@ -70,7 +70,7 @@ async fn private_transfer_to_foreign_account() -> Result<()> {
         to_npk: Some(to_npk_string),
         to_vpk: Some(hex::encode(to_vpk.to_bytes())),
         to_keys: None,
-        to_pk: None,
+        to_initial_key: None,
         amount: 100,
     });
 
@@ -252,7 +252,7 @@ async fn deshielded_transfer_does_not_sign_with_recipient_key() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         to_keys: None,
-        to_pk: None,
+        to_initial_key: None,
         amount: 100,
     });
 
@@ -300,7 +300,7 @@ async fn private_transfer_to_owned_account_over_foreign_keys() -> Result<()> {
         to_npk: Some(hex::encode(to.key_chain.nullifier_public_key.0)),
         to_vpk: Some(hex::encode(to.key_chain.viewing_public_key.to_bytes())),
         to_keys: None,
-        to_pk: None,
+        to_initial_key: None,
         amount: 100,
     });
 
@@ -392,7 +392,7 @@ async fn shielded_transfer_to_foreign_account() -> Result<()> {
         to_npk: Some(to_npk_string),
         to_vpk: Some(hex::encode(to_vpk.to_bytes())),
         to_keys: None,
-        to_pk: None,
+        to_initial_key: None,
         amount: 100,
     });
 
@@ -450,7 +450,7 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
         to_npk: Some(hex::encode(to.key_chain.nullifier_public_key.0)),
         to_vpk: Some(hex::encode(to.key_chain.viewing_public_key.to_bytes())),
         to_keys: None,
-        to_pk: None,
+        to_initial_key: None,
         amount: 100,
     });
 

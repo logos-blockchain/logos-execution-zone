@@ -89,7 +89,7 @@ pub mod tests {
     use sha2::{Digest as _, digest::FixedOutput as _};
 
     use crate::{
-        AccountId, InvalidTransaction, PublicTransaction, Signature, V03State,
+        AccountId, InvalidTransaction, PublicTransaction, V03State,
         error::LeeError,
         public_transaction::{Message, WitnessSet},
         test_utils::{TestSigner, witness_for},
@@ -163,12 +163,12 @@ pub mod tests {
         let tx = transaction_for_tests();
         let expected_signer_account_ids = vec![
             AccountId::new([
-                78, 249, 149, 215, 137, 187, 12, 155, 123, 165, 139, 182, 106, 153, 255, 181, 229,
-                84, 209, 253, 128, 186, 73, 194, 81, 193, 43, 37, 118, 48, 130, 185,
+                114, 83, 166, 143, 160, 156, 94, 122, 224, 105, 223, 2, 29, 64, 102, 35, 77, 69,
+                163, 112, 86, 191, 187, 179, 35, 250, 63, 42, 139, 197, 161, 45,
             ]),
             AccountId::new([
-                229, 77, 12, 101, 63, 210, 180, 152, 150, 196, 64, 82, 197, 49, 25, 80, 63, 139,
-                250, 29, 220, 19, 218, 114, 153, 32, 172, 225, 87, 199, 17, 32,
+                181, 34, 253, 23, 228, 197, 158, 103, 215, 145, 57, 36, 172, 61, 169, 218, 159,
+                133, 254, 66, 40, 25, 75, 112, 207, 251, 110, 125, 246, 232, 196, 243,
             ]),
         ];
         let signer_account_ids = tx.signer_account_ids();
@@ -292,8 +292,8 @@ pub mod tests {
         let state = state_for_tests();
         let mut tx = transaction_for_tests();
         let first = tx.signer_account_ids()[0];
-        tx.witness_set.entries[0].auth_data[..64]
-            .copy_from_slice(&Signature::new_for_tests([1; 64]).value);
+        let last = tx.witness_set.entries[0].auth_data.len() - 1;
+        tx.witness_set.entries[0].auth_data[last] ^= 1;
         let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);
         assert!(matches!(
             result,

@@ -259,31 +259,6 @@ impl FfiPrivateAccountKeys {
     }
 }
 
-/// Public key info for a public account.
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct FfiPublicAccountKey {
-    pub public_key: FfiBytes32,
-}
-
-impl From<lee::PublicKey> for FfiPublicAccountKey {
-    fn from(value: lee::PublicKey) -> Self {
-        Self {
-            public_key: FfiBytes32::from_bytes(*value.value()),
-        }
-    }
-}
-
-impl TryFrom<&FfiPublicAccountKey> for lee::PublicKey {
-    type Error = PrimitiveOperationStatus;
-
-    fn try_from(value: &FfiPublicAccountKey) -> Result<Self, Self::Error> {
-        let public_key = Self::try_new(value.public_key.data)
-            .map_err(|_err| PrimitiveOperationStatus::CastError)?;
-        Ok(public_key)
-    }
-}
-
 #[repr(C)]
 #[derive(Debug)]
 pub struct FfiVec<T> {
@@ -421,12 +396,15 @@ impl From<FfiFeeDeclaration> for FeeDeclaration {
 
 /// A signing key's type.
 #[repr(C)]
+#[derive(Clone, Copy, Default)]
 pub enum FfiKeyType {
+    #[default]
     Schnorr = 0,
 }
 
 /// A signing key's type and 32-byte commitment.
 #[repr(C)]
+#[derive(Clone, Copy, Default)]
 pub struct FfiSigningKeyState {
     pub key_type: FfiKeyType,
     pub key_commitment: FfiBytes32,

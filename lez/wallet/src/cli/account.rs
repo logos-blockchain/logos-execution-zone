@@ -6,12 +6,9 @@ use itertools::Itertools as _;
 use key_protocol::key_management::{KeyChain, key_tree::chain_index::ChainIndex};
 use lee::{
     Account, AccountId, Actor,
-    signature::{PublicAccountSecret, Schnorr, signing_key},
+    signature::{PublicAccountSecret, public_account_id},
 };
-use lee_core::{
-    account::{AccountIdError, Nonce},
-    native_token::NATIVE_TOKEN_PROGRAM_ID,
-};
+use lee_core::{account::AccountIdError, native_token::NATIVE_TOKEN_PROGRAM_ID};
 
 use crate::{
     WalletCore, WalletSequencerClient,
@@ -176,11 +173,11 @@ impl NewSubcommand {
 
         let (account_id, chain_index) = wallet_core.create_new_account_public(cci);
 
-        let (_private_key, public_key) = wallet_core
+        let initial_key = wallet_core
             .storage
             .key_chain()
-            .pub_account_signing_key(account_id)
-            .unwrap();
+            .pub_account_initial_key(account_id)
+            .expect("the account was just created");
 
         if let Some(label) = label {
             wallet_core
@@ -189,7 +186,7 @@ impl NewSubcommand {
         }
 
         println!("Generated new account with account_id Public/{account_id} at path {chain_index}");
-        println!("With pk {}", hex::encode(public_key.value()));
+        println!("With initial key {initial_key}");
 
         wallet_core.store_persistent_data()?;
 
@@ -412,12 +409,12 @@ impl AccountSubcommand {
         let display_keys = |wallet_core: &WalletCore<C>| -> Result<()> {
             match resolved {
                 AccountIdWithPrivacy::Public(account_id) => {
-                    let (_private_key, public_key) = wallet_core
+                    let initial_key = wallet_core
                         .storage
                         .key_chain()
-                        .pub_account_signing_key(account_id)
+                        .pub_account_initial_key(account_id)
                         .context("Public account not found in storage")?;
-                    println!("pk {}", hex::encode(public_key.value()));
+                    println!("initial key {initial_key}");
                 }
                 AccountIdWithPrivacy::Private(account_id) => {
                     let acc = wallet_core
@@ -676,7 +673,7 @@ impl WalletSubcommand for ImportSubcommand {
     ) -> Result<SubcommandReturnValue> {
         match self {
             Self::Public { secret } => {
-                let account_id = lee::AccountId::from(&signing_key::<Schnorr>(&secret, Nonce(0)).1);
+                let account_id = public_account_id(&secret);
 
                 wallet_core
                     .storage_mut()
