@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::anyhow;
 use common::block::Block;
-use logos_blockchain_core::mantle::ledger::{Inputs, NoteId, Utxo};
+use logos_blockchain_zone_sdk::core::mantle::ledger::{Inputs, NoteId, Utxo};
 use sequencer_storage_actor::protocol::ZoneAnchorRecord;
 
 use super::MockBedrockActor;

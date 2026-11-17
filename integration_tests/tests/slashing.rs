@@ -14,7 +14,7 @@ use anyhow::{Context as _, Result, ensure};
 use common::{block::Block, transaction::LeeTransaction};
 use integration_tests::{committee, get_account, init_logger, wait_for_same_chain, wait_until};
 use lee::AccountId;
-use logos_blockchain_key_management_system_service::keys::Ed25519Key;
+use logos_blockchain_zone_sdk::key_management_system_service::keys::Ed25519Key;
 use sequencer_bedrock_actor::protocol::{
     CheckIsOurTurn, InitializeChannelPublisher, PublishRawInscription,
 };

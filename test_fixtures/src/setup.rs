@@ -10,7 +10,7 @@ use std::{
 use anyhow::{Context as _, Result, bail};
 use indexer_service::{ChannelId, IndexerHandle};
 use lee::{AccountId, PrivateKey, PublicKey};
-use logos_blockchain_key_management_system_service::keys::UnsecuredEd25519Key;
+use logos_blockchain_zone_sdk::key_management_system_service::keys::UnsecuredEd25519Key;
 use sequencer_service::{GenesisAction, SequencerConfig, SequencerHandle};
 use sequencer_service_protocol::SequencerStatus;
 use sequencer_service_rpc::{ClientError, RpcClient as _, SequencerClient, SequencerClientBuilder};

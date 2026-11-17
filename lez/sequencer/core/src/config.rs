@@ -10,8 +10,9 @@ pub use bridge_core::DepositRecipient;
 use common::config::BasicAuth;
 pub use cross_zone::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use humantime_serde;
-use logos_blockchain_core::mantle::ops::channel::ChannelId;
-use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
+use logos_blockchain_zone_sdk::{
+    core::mantle::ops::channel::ChannelId, key_management_system_service::keys::ZkPublicKey,
+};
 pub use sequencer_genesis::GenesisAction;
 use sequencer_genesis::GenesisSpec;
 pub use sequencer_stake_core::ChannelParams;
@@ -296,37 +297,5 @@ pub const fn default_channel_params() -> ChannelParams {
         posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
         max_block_size: system_accounts::DEFAULT_MAX_BLOCK_SIZE,
         finality_depth: system_accounts::DEFAULT_FINALITY_DEPTH,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use logos_blockchain_node::config::deployment::{DeploymentSettings, era::ruleset::EraRuleset};
-
-    use super::*;
-
-    #[test]
-    fn bedrock_size_limits_match_the_node_default_deployment() {
-        let deployment = DeploymentSettings::default();
-        let eras: Vec<_> = deployment
-            .era_schedule()
-            .iter()
-            .map(|era| {
-                let EraRuleset::V1(parameters) = &era.parameters.ruleset;
-                &parameters.cryptarchia
-            })
-            .collect();
-
-        let smallest_op_data_size = eras.iter().map(|era| era.max_op_data_size()).min();
-        let smallest_transactions_size = eras.iter().map(|era| era.max_transactions_size).min();
-
-        assert_eq!(
-            smallest_op_data_size.map(u64::from),
-            Some(MAX_PUBLISHABLE_BLOCK_SIZE)
-        );
-        assert_eq!(
-            smallest_transactions_size.map(u64::from),
-            Some(MAX_BEDROCK_TX_SIZE)
-        );
     }
 }

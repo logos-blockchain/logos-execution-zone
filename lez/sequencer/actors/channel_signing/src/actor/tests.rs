@@ -1,25 +1,27 @@
 use std::num::NonZero;
 
 use kameo::actor::Spawn as _;
-use logos_blockchain_core::{
-    crypto::ZkHash,
-    era::ForkDigest,
-    events::DepositNote,
-    mantle::{
-        channel::{SlotTimeframe, SlotTimeout},
-        ledger::{Inputs, Outputs},
-        ops::{
-            channel::{
-                ChannelId, MsgId, VerifiedChannelKeys,
-                channel_transfer::ChannelTransferOp,
-                inscribe::{Inscription, InscriptionOp},
-                withdraw::ChannelWithdrawOp,
+use logos_blockchain_zone_sdk::{
+    core::{
+        crypto::ZkHash,
+        era::ForkDigest,
+        events::DepositNote,
+        mantle::{
+            channel::{SlotTimeframe, SlotTimeout},
+            ledger::{Inputs, Outputs},
+            ops::{
+                channel::{
+                    ChannelId, MsgId, VerifiedChannelKeys,
+                    channel_transfer::ChannelTransferOp,
+                    inscribe::{Inscription, InscriptionOp},
+                    withdraw::ChannelWithdrawOp,
+                },
+                transfer::TransferOp,
             },
-            transfer::TransferOp,
         },
     },
+    key_management_system_service::keys::{Ed25519Signature, ZkPublicKey},
 };
-use logos_blockchain_key_management_system_service::keys::{Ed25519Signature, ZkPublicKey};
 
 use super::*;
 use crate::protocol::ObservedDeposit;

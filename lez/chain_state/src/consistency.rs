@@ -7,8 +7,9 @@ use anyhow::Result;
 use common::{HashType, block::Block};
 use futures::StreamExt as _;
 use lee_core::BlockId;
-use logos_blockchain_core::mantle::ops::channel::ChannelId;
-use logos_blockchain_zone_sdk::{Slot, ZoneMessage, adapter};
+use logos_blockchain_zone_sdk::{
+    Slot, ZoneMessage, adapter, core::mantle::ops::channel::ChannelId,
+};
 use tracing::warn;
 
 use crate::zone_indexer::ZoneIndexer;
