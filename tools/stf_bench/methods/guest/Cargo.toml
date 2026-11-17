@@ -1,0 +1,26 @@
+[package]
+name = "stf_bench_guest"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+publish = false
+
+# Whole state in, SHA-256 of its borsh encoding before and after.
+[[bin]]
+name = "stf_block"
+path = "src/bin/flat.rs"
+
+# Touched public accounts in, compact sparse Merkle root before and after.
+[[bin]]
+name = "stf_block_merkle"
+path = "src/bin/merkle.rs"
+
+[dependencies]
+chain_state = { path = "../../../../lez/chain_state", default-features = false }
+common.workspace = true
+lee.workspace = true
+lee_core.workspace = true
+stf_smt = { path = "../../smt" }
+
+borsh.workspace = true
+risc0-zkvm = { workspace = true, features = ["std"] }

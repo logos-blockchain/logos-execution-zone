@@ -1,0 +1,12 @@
+[package]
+name = "stf_bench_methods"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+publish = false
+
+[build-dependencies]
+risc0-build.workspace = true
+
+[package.metadata.risc0]
+methods = ["guest"]

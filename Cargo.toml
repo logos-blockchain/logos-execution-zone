@@ -88,13 +88,17 @@ members = [
   "tools/cross_zone_chat",
   "tools/dashboard_gen",
   "tools/devnet_configs",
+  "tools/stf_bench",
+  "tools/stf_bench/methods",
+  "tools/stf_bench/methods/guest",
+  "tools/stf_bench/smt",
 ]
 
 [workspace.dependencies]
 lee = { path = "lee/state_machine" }
 lee_core = { path = "lee/state_machine/core" }
 program_loader_core = { path = "lee/program_loader" }
-common = { path = "lez/common" }
+common = { path = "lez/common", default-features = false }
 chain_state = { path = "lez/chain_state" }
 mempool = { path = "lez/mempool" }
 logging = { path = "lez/logging" }
@@ -304,6 +308,8 @@ codegen-units = 1
 
 # Keccak speedup for in-guest ML KEM
 [patch.crates-io]
+# STF prototype: accelerated secp256k1 in guests.
+k256 = { git = "https://github.com/risc0/RustCrypto-elliptic-curves", tag = "k256/v0.13.4-risczero.1" }
 keccak = { git = "https://github.com/logos-blockchain/sponges", rev = "3a56e99771beedf04946eab21a4a62adc2951377" }
 curve25519-dalek = { git = "https://github.com/risc0/curve25519-dalek", rev = "385adda1fa3b66d9aaa8b8fcc99ddc324d33ba32" }
 crypto-bigint = { git = "https://github.com/risc0/RustCrypto-crypto-bigint", rev = "3ab63a6f1048833f7047d5a50532e4a4cc789384" }

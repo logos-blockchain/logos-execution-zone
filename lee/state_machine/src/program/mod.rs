@@ -5,17 +5,21 @@ use lee_core::{
     account::{AccountId, ActorState, Cycles},
     from_frame,
     program::{MessageData, ProgramId, ReceiveInput, Transition},
-    to_frame,
 };
+#[cfg(not(target_os = "zkvm"))]
+use lee_core::to_frame;
 use program_loader_core::get_program_via;
-#[cfg(not(feature = "prove"))]
+use risc0_zkvm::ExitCode;
+#[cfg(all(not(feature = "prove"), not(target_os = "zkvm")))]
 use risc0_zkvm::default_executor;
-use risc0_zkvm::{ExecutorEnv, ExecutorEnvBuilder, ExitCode};
+#[cfg(not(target_os = "zkvm"))]
+use risc0_zkvm::{ExecutorEnv, ExecutorEnvBuilder};
 
 use crate::error::LeeError;
 
-#[cfg(feature = "prove")]
+#[cfg(all(feature = "prove", not(target_os = "zkvm")))]
 pub(crate) mod image_cache;
+pub mod stf_oracle;
 
 #[cfg(test)]
 mod tests;
@@ -28,6 +32,7 @@ pub const DEFAULT_PUBLIC_CYCLE_BUDGET: Cycles = 1024 * 1024 * 32; // 32M cycles
 /// What `execute_session` needs off a no-proof run: the committed journal and the user-cycle
 /// count. Narrower than `risc0_zkvm::SessionInfo`, which is `#[non_exhaustive]` and so cannot be
 /// built outside risc0.
+#[cfg(not(target_os = "zkvm"))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SessionOutcome {
     pub journal: Vec<u8>,
@@ -85,9 +90,17 @@ impl Program {
         input: &ReceiveInput,
         cycle_budget: Cycles,
     ) -> Result<(Transition, Cycles), LeeError> {
-        let (journal, cycles) =
-            self.run(|env| Self::write_receive_input(input, env), cycle_budget)?;
-        Ok((transition_journal(&journal)?, cycles))
+        #[cfg(target_os = "zkvm")]
+        {
+            stf_oracle::replay(self.id, input, cycle_budget)
+        }
+        #[cfg(not(target_os = "zkvm"))]
+        {
+            let (journal, cycles) =
+                self.run(|env| Self::write_receive_input(input, env), cycle_budget)?;
+            stf_oracle::record(self.id, self.elf(), input, &journal, cycles);
+            Ok((transition_journal(&journal)?, cycles))
+        }
     }
 
     pub(crate) fn handle_message_metered(
@@ -104,6 +117,7 @@ impl Program {
         Ok(transition)
     }
 
+    #[cfg(not(target_os = "zkvm"))]
     fn run(
         &self,
         write: impl FnOnce(&mut ExecutorEnvBuilder) -> Result<(), LeeError>,
@@ -121,6 +135,7 @@ impl Program {
     /// Runs the session, translating the executor's session-limit bail into the
     /// typed [`LeeError::OutOfGas`]. The only place that error string is
     /// recognized.
+    #[cfg(not(target_os = "zkvm"))]
     pub(crate) fn execute_session(
         env: ExecutorEnv<'_>,
         elf: &[u8],
@@ -164,6 +179,7 @@ impl Program {
         Ok(outcome)
     }
 
+    #[cfg(not(target_os = "zkvm"))]
     pub fn write_receive_input(
         input: &ReceiveInput,
         env_builder: &mut ExecutorEnvBuilder,
@@ -181,6 +197,7 @@ impl Program {
 /// - `ExitCode::Halted(code)` with a non-zero `code` is a cycle-counted failure
 /// - `ExitCode::Paused(code)` is treated as a full failure as we do not expect `Pause`'s to occur
 /// - Any other exit code is treated as a full failure
+#[cfg_attr(target_os = "zkvm", allow(dead_code))]
 pub(crate) fn check_exit_code(
     exit_code: ExitCode,
     cycles: Cycles,

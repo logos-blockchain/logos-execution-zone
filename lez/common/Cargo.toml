@@ -28,7 +28,12 @@ sha2.workspace = true
 tracing.workspace = true
 hex.workspace = true
 borsh.workspace = true
-logos-blockchain-common-http-client.workspace = true
+logos-blockchain-common-http-client = { workspace = true, optional = true }
+
+[features]
+default = ["node"]
+# Off in the STF prototype guest.
+node = ["dep:logos-blockchain-common-http-client"]
 
 [dev-dependencies]
 lee = { workspace = true, features = ["test-utils"] }

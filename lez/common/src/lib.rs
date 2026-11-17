@@ -6,6 +6,7 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
 pub mod block;
 mod borsh_base64;
 pub mod bounded_vec_deque;
+#[cfg(feature = "node")]
 pub mod config;
 pub mod system_upgrades;
 pub mod transaction;

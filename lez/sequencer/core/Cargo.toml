@@ -11,7 +11,7 @@ workspace = true
 lee.workspace = true
 lee_core.workspace = true
 chain_state.workspace = true
-common.workspace = true
+common = { workspace = true, features = ["node"] }
 sequencer_core_metrics = { workspace = true, features = ["record"] }
 sequencer_channel_signing_actor.workspace = true
 sequencer_bridge.workspace = true

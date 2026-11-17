@@ -1,0 +1,22 @@
+[package]
+name = "stf_bench"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+publish = false
+
+[dependencies]
+stf_bench_methods = { path = "methods" }
+stf_smt = { path = "smt" }
+chain_state.workspace = true
+common = { workspace = true, features = ["node"] }
+lee = { workspace = true, features = ["prove"] }
+lee_core = { workspace = true, features = ["host"] }
+testnet_initial_state.workspace = true
+
+anyhow.workspace = true
+borsh.workspace = true
+clap = { workspace = true }
+risc0-zkvm = { workspace = true, features = ["prove"] }
+serde.workspace = true
+serde_json.workspace = true

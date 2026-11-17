@@ -10,7 +10,7 @@ workspace = true
 [dependencies]
 lee_core.workspace = true
 lee.workspace = true
-common.workspace = true
+common = { workspace = true, features = ["node"] }
 fee_core.workspace = true
 key_protocol.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }

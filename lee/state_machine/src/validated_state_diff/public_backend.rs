@@ -13,8 +13,9 @@ use super::{loader_actor_state, run_program_loader};
 use crate::{
     V03State,
     error::{InvalidProgramBehaviorError, LeeError},
-    program::load_program,
 };
+#[cfg(not(target_os = "zkvm"))]
+use crate::program::load_program;
 
 pub(super) struct PublicBackend<'state> {
     state: &'state V03State,
@@ -80,12 +81,35 @@ impl ExecutionEnvironment for PublicBackend<'_> {
             native_token::handle_message(input)
                 .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?
         } else {
-            let program = load_program(program_account_id, |account_id| {
-                loader_actor_state(view, state, account_id)
-            })
-            .ok_or(LeeError::UnknownProgram {
-                at_root: view.at_root(),
-            })?;
+            // The guest needs only the header's image id: the session is replayed, not run.
+            #[cfg(target_os = "zkvm")]
+            let program = {
+                use program_loader_core::LoaderActorState as _;
+                let header = loader_actor_state(view, state, program_account_id)
+                    .and_then(|actor_state| {
+                        lee_core::program::ProgramHeader::from_loader_actor_state(actor_state)
+                    })
+                    .ok_or(LeeError::UnknownProgram {
+                        at_root: view.at_root(),
+                    })?;
+                crate::program::Program::new_unchecked(
+                    header.image_id,
+                    std::borrow::Cow::Borrowed(&[]),
+                )
+            };
+            // The guest reads only the header, so only the header counts as read here.
+            #[cfg(not(target_os = "zkvm"))]
+            let program = {
+                crate::stf_partial::note(program_account_id);
+                crate::stf_partial::paused(|| {
+                    load_program(program_account_id, |account_id| {
+                        loader_actor_state(view, state, account_id)
+                    })
+                })
+                .ok_or(LeeError::UnknownProgram {
+                    at_root: view.at_root(),
+                })?
+            };
             program.handle_message_metered(input, self.cycle_budget, self.cycles_used)?
         };
         debug!(program = ?program_account_id, ?transition, "Program transition");

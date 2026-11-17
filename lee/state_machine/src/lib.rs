@@ -23,17 +23,16 @@ pub use lee_core::{
 pub use privacy_preserving_circuit::{
     PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID,
 };
-pub use privacy_preserving_transaction::{
-    PrivacyPreservingTransaction,
-    circuit::{
-        Simulation, execute_and_prove, execute_and_prove_with_cross_messages, execute_unproven,
-        execute_unproven_with_cross_messages, simulate_privacy_preserving_transaction,
-        simulate_public_transaction,
-    },
+pub use privacy_preserving_transaction::PrivacyPreservingTransaction;
+#[cfg(not(target_os = "zkvm"))]
+pub use privacy_preserving_transaction::circuit::{
+    Simulation, execute_and_prove, execute_and_prove_with_cross_messages, execute_unproven,
+    execute_unproven_with_cross_messages, simulate_privacy_preserving_transaction,
+    simulate_public_transaction,
 };
 pub use public_transaction::PublicTransaction;
 pub use signature::{PrivateKey, PublicKey, Signature};
-pub use state::{GenesisBuilder, PublicationsPage, V03State};
+pub use state::{GenesisBuilder, PublicationsPage, V03State, stf_partial};
 pub use transaction_message::{
     InvalidTransaction, PublicAccountEvidence, TransactionMessage, nonce_map,
 };

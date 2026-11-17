@@ -22,6 +22,7 @@ use crate::{
 };
 
 mod genesis;
+pub mod stf_partial;
 
 #[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(test, derive(Debug))]
@@ -288,6 +289,7 @@ impl V03State {
             reason = "Iteration order doesn't matter here"
         )]
         for (account_id, account) in public_diff {
+            stf_partial::note(account_id);
             self.public_state.insert_mut(account_id, account);
         }
         for account_id in signer_account_ids {
@@ -331,6 +333,7 @@ impl V03State {
     }
 
     fn get_account_by_id_mut(&mut self, account_id: AccountId) -> &mut Account {
+        stf_partial::note(account_id);
         if !self.public_state.contains_key(&account_id) {
             self.public_state.insert_mut(account_id, Account::default());
         }
@@ -341,6 +344,7 @@ impl V03State {
 
     #[must_use]
     pub fn get_account_by_id(&self, account_id: AccountId) -> Account {
+        stf_partial::note(account_id);
         self.public_state
             .get(&account_id)
             .cloned()
@@ -350,6 +354,7 @@ impl V03State {
     /// Borrowing counterpart of [`Self::get_account_by_id`].
     #[must_use]
     pub fn get_account_by_id_ref(&self, account_id: AccountId) -> Option<&Account> {
+        stf_partial::note(account_id);
         self.public_state.get(&account_id)
     }
 
