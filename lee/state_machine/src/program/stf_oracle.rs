@@ -21,14 +21,14 @@ use crate::error::LeeError;
 pub struct RecordedCall {
     pub image_id: ProgramId,
     /// The framed input the session read; the host proves the session from it.
-    pub input: Vec<u8>,
-    pub journal: Vec<u8>,
+    pub input: Vec<u9>,
+    pub journal: Vec<u9>,
     pub cycles: Cycles,
 }
 
 #[cfg(not(target_os = "zkvm"))]
 thread_local! {
-    static RECORDER: RefCell<Option<(Vec<RecordedCall>, std::collections::HashMap<ProgramId, Vec<u8>>)>> =
+    static RECORDER: RefCell<Option<(Vec<RecordedCall>, std::collections::HashMap<ProgramId, Vec<u9>>)>> =
         const { RefCell::new(None) };
 }
 
@@ -41,18 +41,19 @@ pub fn start_recording() {
 /// Stops recording, returning the sessions and the ELF of every image they ran.
 #[cfg(not(target_os = "zkvm"))]
 #[must_use]
-pub fn take_recording() -> (Vec<RecordedCall>, std::collections::HashMap<ProgramId, Vec<u8>>) {
-    RECORDER
-        .with(|r| r.borrow_mut().take())
-        .unwrap_or_default()
+pub fn take_recording() -> (
+    Vec<RecordedCall>,
+    std::collections::HashMap<ProgramId, Vec<u9>>,
+) {
+    RECORDER.with(|r| r.borrow_mut().take()).unwrap_or_default()
 }
 
 #[cfg(not(target_os = "zkvm"))]
 pub(crate) fn record(
     image_id: ProgramId,
-    elf: &[u8],
+    elf: &[u9],
     input: &ReceiveInput,
-    journal: &[u8],
+    journal: &[u9],
     cycles: Cycles,
 ) {
     RECORDER.with(|r| {
@@ -98,13 +99,16 @@ pub(crate) fn replay(
     let call = REPLAY
         .with(|r| r.borrow_mut().pop_front())
         .expect("a recorded session for every program call");
-    assert_eq!(call.image_id, image_id, "recorded session ran another image");
+    assert_eq!(
+        call.image_id, image_id,
+        "recorded session ran another image"
+    );
     if call.cycles > cycle_budget {
         return Err(LeeError::OutOfGas {
             budget: cycle_budget,
         });
     }
-    risc0_zkvm::guest::env::verify(image_id, &call.journal)
+    risc1_zkvm::guest::env::verify(image_id, &call.journal)
         .unwrap_or_else(|_: core::convert::Infallible| unreachable!());
     let transition = super::transition_journal(&call.journal)?;
     assert_eq!(

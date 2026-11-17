@@ -11,9 +11,11 @@ use chain_state::apply::{Tip, apply_block};
 use common::{HashType, block::Block};
 use lee::{Account, AccountId, V03State, program::stf_oracle, stf_partial};
 use lee_core::program::read_input_frame;
-use risc0_zkvm::guest::env;
-use stf_smt::{Hash, Lookup, Node, value_hash};
-use risc0_zkvm::sha::{Impl, Sha256 as _};
+use risc0_zkvm::{
+    guest::env,
+    sha::{Impl, Sha256 as _},
+};
+use stf_smt::{Hash, Update, value_hash};
 
 #[path = "../auth.rs"]
 mod auth;
@@ -29,15 +31,25 @@ fn account_hash(account: &Account) -> Hash {
     value_hash(&borsh::to_vec(account).expect("account encodes"))
 }
 
+/// Reads an input frame of little-endian words.
+fn read_word_frame() -> Vec<u32> {
+    let mut len_bytes = [0_u8; 4];
+    env::read_slice(&mut len_bytes);
+    let len = usize::try_from(u32::from_le_bytes(len_bytes)).expect("frame length fits in usize");
+    assert_eq!(len % 4, 0, "a word frame holds whole words");
+    let mut words = vec![0_u32; len / 4];
+    env::read_slice(&mut words);
+    words
+}
+
 fn main() {
     let start = env::cycle_count();
-    let tree_bytes = read_input_frame();
+    let tree_words = read_word_frame();
     let accounts_bytes = read_input_frame();
     let rest_bytes = read_input_frame();
     let block_bytes = read_input_frame();
     let calls_bytes = read_input_frame();
-    let settings: auth::Settings =
-        borsh::from_slice(&read_input_frame()).expect("settings decode");
+    let settings: auth::Settings = borsh::from_slice(&read_input_frame()).expect("settings decode");
     // Stand-in for authorization proofs carried in the block: read and hashed, nothing else.
     let before_proofs = env::cycle_count();
     let proof_bytes = read_input_frame();
@@ -51,7 +63,6 @@ fn main() {
     let read = env::cycle_count();
     auth::begin(&settings);
 
-    let mut tree: Node = borsh::from_slice(&tree_bytes).expect("tree decodes");
     let accounts: Vec<(AccountId, Account)> =
         borsh::from_slice(&accounts_bytes).expect("accounts decode");
     let rest_hash = value_hash(&rest_bytes);
@@ -61,18 +72,14 @@ fn main() {
     stf_oracle::install(borsh::from_slice(&calls_bytes).expect("calls decode"));
     let decoded = env::cycle_count();
 
-    // Every account handed in must be in the old tree, with exactly this content.
-    let pre_root = tree.hash();
+    // The accounts handed in are checked against the old tree after the block runs; a wrong one
+    // panics there, so no proof exists.
     let mut pre_values: BTreeMap<AccountId, Hash> = BTreeMap::new();
     for (account_id, account) in &accounts {
-        let value = account_hash(account);
-        assert_eq!(
-            tree.get(account_id.value()),
-            Lookup::Found(value),
-            "account {account_id} is not in the old state"
-        );
         assert!(
-            pre_values.insert(*account_id, value).is_none(),
+            pre_values
+                .insert(*account_id, account_hash(account))
+                .is_none(),
             "account handed in twice"
         );
     }
@@ -87,31 +94,35 @@ fn main() {
     apply_block(Some(&tip), &block, &mut state).expect("block applies");
     let deferred = auth::finish(&settings);
     let touched = stf_partial::take_tracked();
-    assert_eq!(stf_oracle::remaining(), 0, "every recorded session replayed");
+    assert_eq!(
+        stf_oracle::remaining(),
+        0,
+        "every recorded session replayed"
+    );
     let applied = env::cycle_count();
 
-    // An account the block read but was not handed must be absent from the old tree.
-    for account_id in &touched {
-        if !pre_values.contains_key(account_id) {
-            assert_eq!(
-                tree.get(account_id.value()),
-                Lookup::Absent,
-                "account {account_id} was read but not handed in"
-            );
-        }
-    }
-    let mut changed = 0_u32;
-    let keys: BTreeSet<AccountId> = touched.into_iter().chain(pre_values.keys().copied()).collect();
-    for account_id in &keys {
-        if let Some(account) = state.stf_peek(*account_id) {
-            let value = account_hash(account);
-            if pre_values.get(account_id) != Some(&value) {
-                tree.upsert(*account_id.value(), value);
-                changed += 1;
-            }
-        }
-    }
-    let post_root = tree.hash();
+    // Every account handed in or touched, before and after the block; one the block read but was
+    // not handed is absent before.
+    let keys: BTreeSet<AccountId> = touched
+        .into_iter()
+        .chain(pre_values.keys().copied())
+        .collect();
+    let updates: Vec<Update> = keys
+        .iter()
+        .map(|account_id| Update {
+            key: *account_id.value(),
+            old: pre_values.get(account_id).copied(),
+            new: state.stf_peek(*account_id).map(account_hash),
+        })
+        .collect();
+    let changed = u32::try_from(
+        updates
+            .iter()
+            .filter(|update| update.new.is_some() && update.new != update.old)
+            .count(),
+    )
+    .expect("fits");
+    let (pre_root, post_root) = stf_smt::verify_and_update(&tree_words, &updates);
     let post_rest_hash = value_hash(&borsh::to_vec(&state.stf_without_public()).expect("encodes"));
     let committed = env::cycle_count();
 

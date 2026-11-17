@@ -5,8 +5,8 @@
 //! block guest re-runs `chain_state::apply_block`, checking each session's journal by
 //! composition. Two fingerprints:
 //! - `flat`: SHA-256 of the whole state's borsh encoding; the guest holds the whole state.
-//! - `merkle`: a compact sparse Merkle root over the public accounts, plus SHA-256 of the rest;
-//!   the guest holds only the accounts the block touches.
+//! - `merkle`: a compact sparse Merkle root over the public accounts, plus SHA-256 of the rest; the
+//!   guest holds only the accounts the block touches.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -305,7 +305,9 @@ fn main() -> Result<()> {
 
         // One authorization receipt per signer, which the signer's wallet would prove.
         for (index, check) in authorizations.iter().enumerate() {
-            let secret = secrets.get(&check.public_key).context("a signer the bench holds")?;
+            let secret = secrets
+                .get(&check.public_key)
+                .context("a signer the bench holds")?;
             let env = ExecutorEnv::builder()
                 .write_slice(&to_frame(secret))
                 .write_slice(&to_frame(&check.message_hash))
@@ -409,7 +411,12 @@ fn main() -> Result<()> {
             succinct.verify(image_id)?;
             row.verify_ms = started.elapsed().as_millis();
             row.receipt_bytes = borsh::to_vec(&succinct.inner)?.len();
-            let output = succinct.claim()?.value()?.output.value()?.context("output")?;
+            let output = succinct
+                .claim()?
+                .value()?
+                .output
+                .value()?
+                .context("output")?;
             if !output.assumptions.is_empty() {
                 bail!("the succinct receipt still has assumptions");
             }
@@ -465,7 +472,7 @@ fn merkle_input(
     let entries = account_entries(state)?;
     let mut touched_keys: Vec<Key> = touched.iter().map(|id| *id.value()).collect();
     touched_keys.sort_unstable();
-    let tree = borsh::to_vec(&stf_smt::witness(&entries, &touched_keys))?;
+    let tree = stf_smt::multiproof(&entries, &touched_keys);
     let accounts: Vec<(AccountId, Account)> = touched
         .iter()
         .filter_map(|id| state.stf_peek(*id).map(|account| (*id, account.clone())))
@@ -536,7 +543,10 @@ fn transfer(from: &Signer, to: AccountId) -> Result<LeeTransaction> {
         } => {
             let message = Message::try_new_with_fees(
                 Actor::native_balance(*account_id),
-                [Actor::native_balance(*account_id), Actor::native_balance(to)],
+                [
+                    Actor::native_balance(*account_id),
+                    Actor::native_balance(to),
+                ],
                 BTreeMap::from([(*account_id, lee_core::account::Nonce(0))]),
                 lee_core::native_token::Message::Transfer { to, amount: 1 },
                 test_fee_declaration(*account_id),
