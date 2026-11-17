@@ -11,10 +11,10 @@ use lee::GENESIS_BLOCK_ID;
 
 /// Consecutive passes a reader spends stuck on one slot before it says so as something more than
 /// the per-pass failure.
-pub const STUCK_SLOT_ALERT_PASSES: u32 = 5;
+const STUCK_SLOT_ALERT_PASSES: u32 = 5;
 
 /// How many consecutive failed committee reads keep the last known size.
-pub const KEPT_FLOOR_READ_FAILURES: u32 = STUCK_SLOT_ALERT_PASSES;
+const KEPT_FLOOR_READ_FAILURES: u32 = STUCK_SLOT_ALERT_PASSES;
 
 /// Where a screened peer block sits relative to the chain pinned by `tip`.
 #[derive(Debug, PartialEq, Eq)]

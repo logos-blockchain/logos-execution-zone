@@ -251,12 +251,6 @@ pub fn build_bridge_lock_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::Pu
     )
 }
 
-/// The holding PDA a holder's bridgeable balance lives in.
-#[must_use]
-pub fn bridge_lock_holding_account_id(holder: AccountId) -> AccountId {
-    bridge_lock_core::holding_account_id(programs::bridge_lock_account_id(), &holder.into_value())
-}
-
 /// The genesis transaction naming the peer sources `ping_receiver` accepts a delivery from, fanned
 /// out of the operator's routes exactly as the wrapped token's is.
 #[must_use]
