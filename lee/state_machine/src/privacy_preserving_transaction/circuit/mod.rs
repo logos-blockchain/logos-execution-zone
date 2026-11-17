@@ -60,13 +60,11 @@ impl Proof {
     #[must_use]
     pub fn digest(&self) -> ProofDigest {
         const PREFIX: &[u8; 32] = b"/LEE/v0.3/ProofDigest/\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
-        ProofDigest(
-            Sha256::new()
-                .chain_update(PREFIX)
-                .chain_update(&self.0)
-                .finalize()
-                .into(),
-        )
+        Sha256::new()
+            .chain_update(PREFIX)
+            .chain_update(&self.0)
+            .finalize()
+            .into()
     }
 
     pub(crate) fn is_valid_for(
@@ -95,8 +93,7 @@ impl Proof {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, BorshSerialize, BorshDeserialize)]
-pub struct ProofDigest([u8; 32]);
+pub type ProofDigest = [u8; 32];
 
 #[derive(Clone)]
 pub enum ProgramKind {
