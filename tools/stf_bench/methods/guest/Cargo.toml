@@ -15,6 +15,11 @@ path = "src/bin/flat.rs"
 name = "stf_block_merkle"
 path = "src/bin/merkle.rs"
 
+# Authorizes one signer: knows the secret whose SHA-256 is the public key.
+[[bin]]
+name = "auth"
+path = "src/bin/auth.rs"
+
 [dependencies]
 chain_state = { path = "../../../../lez/chain_state", default-features = false }
 common.workspace = true

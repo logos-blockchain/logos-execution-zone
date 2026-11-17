@@ -8,7 +8,11 @@
 //! - `merkle`: a compact sparse Merkle root over the public accounts, plus SHA-256 of the rest;
 //!   the guest holds only the accounts the block touches.
 
-use std::{collections::BTreeSet, path::PathBuf, time::Instant};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+    time::Instant,
+};
 
 use anyhow::{Context as _, Result, bail};
 use chain_state::apply::{Tip, apply_block, derive_block_summary};
@@ -17,25 +21,43 @@ use common::{
     block::{Block, HashableBlockData},
     test_utils::{
         create_transaction_native_token_transfer, produce_dummy_block,
-        producer_account_for_testing, producer_seed,
+        producer_account_for_testing, producer_seed, test_fee_declaration,
     },
     transaction::{FeePayee, LeeTransaction, clock_invocation, fee_invocation},
 };
 use lee::{
-    Account, AccountId, PrivateKey, PublicKey, V03State, program::stf_oracle, stf_partial,
+    Account, AccountId, Actor, PrivateKey, PublicKey, PublicTransaction, Signature, V03State,
+    program::stf_oracle,
+    public_transaction::{Message, WitnessSet},
+    stf_partial::{self, DeferredSignature},
 };
 use lee_core::{from_frame, to_frame};
 use risc0_zkvm::{AssumptionReceipt, ExecutorEnv, ProverOpts, default_executor, default_prover};
 use serde::Serialize;
-use stf_bench_methods::{STF_BLOCK_ELF, STF_BLOCK_ID, STF_BLOCK_MERKLE_ELF, STF_BLOCK_MERKLE_ID};
+use stf_bench_methods::{
+    AUTH_ELF, AUTH_ID, STF_BLOCK_ELF, STF_BLOCK_ID, STF_BLOCK_MERKLE_ELF, STF_BLOCK_MERKLE_ID,
+};
 use stf_smt::{Hash, Key, value_hash};
-use testnet_initial_state::{PublicAccountPrivateInitialData, initial_state};
+use testnet_initial_state::initial_state;
 
 #[derive(Clone, Copy, Debug, ValueEnum, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum Mode {
     Flat,
     Merkle,
+}
+
+/// How public accounts authorize a transaction; the order matches the guest's codes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum Auth {
+    /// BIP340 signatures, checked in the guest.
+    Schnorr,
+    /// BIP340 signatures, committed by the guest and checked by the verifier.
+    Defer,
+    /// Public key = SHA-256(secret); each signer proves it knows the secret, and the guest
+    /// checks that receipt by composition.
+    Preimage,
 }
 
 #[derive(Parser)]
@@ -48,6 +70,12 @@ struct Args {
     /// Funded accounts added to genesis, so the tree has a realistic depth.
     #[arg(long, default_value_t = 0)]
     extra_accounts: usize,
+    #[arg(long, value_enum, default_value = "schnorr")]
+    auth: Auth,
+    /// Under `preimage`: bytes each authorization receipt adds to the block, read and hashed by
+    /// the guest as a block hash covering them would be.
+    #[arg(long, default_value_t = 0)]
+    auth_proof_bytes: usize,
     /// Prove; without it only the executor runs.
     #[arg(long)]
     prove: bool,
@@ -67,6 +95,7 @@ struct SessionRow {
 #[derive(Serialize, Default)]
 struct BlockRow {
     mode: Option<Mode>,
+    auth: Option<Auth>,
     extra_accounts: usize,
     public_accounts: usize,
     user_txs: usize,
@@ -83,14 +112,42 @@ struct BlockRow {
     guest_segments: usize,
     /// flat: read, hash pre, decode, apply, encode + hash post, one signature check.
     /// merkle: read, decode, verify accounts, apply, new root + rest hash, accounts changed.
-    guest_breakdown: [u64; 6],
+    /// Both then: reading and hashing the stand-in authorization proof bytes.
+    guest_breakdown: Vec<u64>,
     guest_exec_ms: u128,
     sessions_prove_ms: u128,
     guest_prove_ms: u128,
     compress_ms: u128,
     verify_ms: u128,
     receipt_bytes: usize,
+    /// Signature checks the guest left for the verifier, and the time to run them natively.
+    deferred_signatures: usize,
+    verify_signatures_us: u128,
+    /// Hash-preimage authorizations: how many, cycles of one, and each one's proving time.
+    authorizations: usize,
+    auth_user_cycles: u64,
+    auth_prove_ms: Vec<u128>,
     session_rows: Vec<SessionRow>,
+}
+
+/// A public account that sends one transfer.
+enum Signer {
+    Schnorr {
+        account_id: AccountId,
+        key: PrivateKey,
+    },
+    Preimage {
+        account_id: AccountId,
+        public_key: PublicKey,
+    },
+}
+
+impl Signer {
+    const fn account_id(&self) -> AccountId {
+        match self {
+            Self::Schnorr { account_id, .. } | Self::Preimage { account_id, .. } => *account_id,
+        }
+    }
 }
 
 struct GuestInput {
@@ -114,15 +171,30 @@ fn main() -> Result<()> {
         (AccountId::new(value_hash(&seed)), Account::funded(1))
     });
     // Each transfer gets its own fresh sender and recipient.
+    let preimage = args.auth == Auth::Preimage;
+    if preimage {
+        stf_partial::use_hash_keys();
+    }
     let total_txs: usize = args.txs.iter().sum();
-    let keys: Vec<PublicAccountPrivateInitialData> = (0..2 * total_txs)
+    let mut secrets: BTreeMap<[u8; 32], [u8; 32]> = BTreeMap::new();
+    let keys: Vec<Signer> = (0..2 * total_txs)
         .map(|i| {
             let mut seed = b"stf-bench-keyed-account".to_vec();
             seed.extend_from_slice(&(i as u64).to_le_bytes());
-            let pub_sign_key = PrivateKey::try_new(value_hash(&seed)).expect("valid key");
-            PublicAccountPrivateInitialData {
-                account_id: AccountId::from(&PublicKey::new_from_private_key(&pub_sign_key)),
-                pub_sign_key,
+            let secret = value_hash(&seed);
+            if preimage {
+                let public_key = PublicKey::try_new(value_hash(&secret)).expect("any 32 bytes");
+                secrets.insert(*public_key.value(), secret);
+                Signer::Preimage {
+                    account_id: AccountId::from(&public_key),
+                    public_key,
+                }
+            } else {
+                let key = PrivateKey::try_new(secret).expect("valid key");
+                Signer::Schnorr {
+                    account_id: AccountId::from(&PublicKey::new_from_private_key(&key)),
+                    key,
+                }
             }
         })
         .collect();
@@ -130,7 +202,7 @@ fn main() -> Result<()> {
         .with_public_accounts([producer_seed()])
         .with_public_accounts(
             keys.iter()
-                .map(|key| (key.account_id, Account::funded(1_000_000_000_000))),
+                .map(|key| (key.account_id(), Account::funded(1_000_000_000_000))),
         )
         .with_public_accounts(extra);
     let genesis = produce_dummy_block(1, None, vec![]);
@@ -141,15 +213,25 @@ fn main() -> Result<()> {
     let mut rows = Vec::new();
 
     for &user_txs in &args.txs {
+        // Under `preimage` the host has no signature to check either: the authorizations it
+        // records are proven below.
+        if preimage {
+            stf_partial::defer_signatures();
+        }
         let block = build_block(&state, &tip, &keys[2 * used..2 * (used + user_txs)])?;
+        let _ = stf_partial::take_deferred();
         used += user_txs;
 
         stf_oracle::start_recording();
         stf_partial::start_tracking();
         let mut post = state.clone();
+        if preimage {
+            stf_partial::defer_signatures();
+        }
         let host_start = Instant::now();
         apply_block(Some(&tip), &block, &mut post).context("block applies on the host")?;
         let host_apply_ms = host_start.elapsed().as_millis();
+        let authorizations = stf_partial::take_deferred();
         let touched = stf_partial::take_tracked();
         let (calls, elfs) = stf_oracle::take_recording();
 
@@ -160,6 +242,8 @@ fn main() -> Result<()> {
         };
         let mut row = BlockRow {
             mode: Some(args.mode),
+            auth: Some(args.auth),
+            authorizations: authorizations.len(),
             extra_accounts: args.extra_accounts,
             public_accounts: state.stf_public_accounts().count(),
             user_txs,
@@ -172,9 +256,10 @@ fn main() -> Result<()> {
             ..BlockRow::default()
         };
         eprintln!(
-            "\n== {:?} block, {user_txs} user txs, {} public accounts: {} sessions, {} touched \
-             accounts, witness {:?} B, block {} B, host apply {host_apply_ms} ms",
+            "\n== {:?} block, {:?} auth, {user_txs} user txs, {} public accounts: {} sessions, {} \
+             touched accounts, witness {:?} B, block {} B, host apply {host_apply_ms} ms",
             args.mode,
+            args.auth,
             row.public_accounts,
             row.sessions,
             row.touched_accounts,
@@ -218,8 +303,44 @@ fn main() -> Result<()> {
         }
         row.sessions_prove_ms = row.session_rows.iter().map(|s| s.prove_ms).sum();
 
+        // One authorization receipt per signer, which the signer's wallet would prove.
+        for (index, check) in authorizations.iter().enumerate() {
+            let secret = secrets.get(&check.public_key).context("a signer the bench holds")?;
+            let env = ExecutorEnv::builder()
+                .write_slice(&to_frame(secret))
+                .write_slice(&to_frame(&check.message_hash))
+                .build()?;
+            if args.prove {
+                let started = Instant::now();
+                let info = prover.prove_with_opts(env, AUTH_ELF, &ProverOpts::succinct())?;
+                let prove_ms = started.elapsed().as_millis();
+                row.auth_user_cycles = info.stats.user_cycles;
+                eprintln!(
+                    "   authorization {}/{}: {} user / {} total cycles, proved in {prove_ms} ms, \
+                     receipt {} B",
+                    index + 1,
+                    authorizations.len(),
+                    info.stats.user_cycles,
+                    info.stats.total_cycles,
+                    borsh::to_vec(&info.receipt.inner)?.len()
+                );
+                row.auth_prove_ms.push(prove_ms);
+                assumptions.push(info.receipt.into());
+            } else {
+                let session = default_executor().execute(env, AUTH_ELF)?;
+                row.auth_user_cycles = session.cycles();
+                assumptions.push(
+                    session
+                        .receipt_claim
+                        .context("the executor returned no claim")?
+                        .into(),
+                );
+            }
+        }
+        let proof_bytes = vec![0x5a_u8; args.auth_proof_bytes * authorizations.len()];
+
         let calls_bytes = borsh::to_vec(&calls)?;
-        let tip_bytes = borsh::to_vec(&(tip.block_id, tip.hash.0))?;
+        let settings = borsh::to_vec(&(tip.block_id, tip.hash.0, args.auth as u8, AUTH_ID))?;
         let guest_env = |assumptions: &[AssumptionReceipt]| -> Result<ExecutorEnv<'static>> {
             let mut builder = ExecutorEnv::builder();
             for frame in &input.frames {
@@ -228,7 +349,8 @@ fn main() -> Result<()> {
             builder
                 .write_slice(&to_frame(&block_bytes))
                 .write_slice(&to_frame(&calls_bytes))
-                .write_slice(&to_frame(&tip_bytes));
+                .write_slice(&to_frame(&settings))
+                .write_slice(&to_frame(&proof_bytes));
             for assumption in assumptions {
                 builder.add_assumption(assumption.clone());
             }
@@ -240,15 +362,31 @@ fn main() -> Result<()> {
         row.guest_exec_ms = started.elapsed().as_millis();
         row.guest_user_cycles = session.cycles();
         row.guest_segments = session.segments.len();
-        let (_, _, _, guest_post, breakdown): ([u8; 32], [u8; 32], [u8; 32], Hash, [u64; 6]) =
-            borsh::from_slice(from_frame(&session.journal.bytes).context("journal frame")?)?;
+        let (guest_post, breakdown, deferred, auth_image) = read_journal(&session.journal.bytes)?;
         if guest_post != input.expected_post {
             bail!("the guest's post-state fingerprint differs from the host's");
         }
+        if auth_image != AUTH_ID {
+            bail!("the guest committed another authorization image");
+        }
         row.guest_breakdown = breakdown;
+        row.deferred_signatures = deferred.len();
+        let started = Instant::now();
+        if !deferred.iter().all(DeferredSignature::verify) {
+            bail!("a deferred signature does not verify");
+        }
+        row.verify_signatures_us = started.elapsed().as_micros();
         eprintln!(
-            "   guest: {} user cycles, {} segments, executed in {} ms, breakdown {:?}",
-            row.guest_user_cycles, row.guest_segments, row.guest_exec_ms, row.guest_breakdown
+            "   guest: {} user cycles, {} segments, executed in {} ms, breakdown {:?}; {} \
+             deferred signatures verified natively in {} us; {} authorizations of {} cycles",
+            row.guest_user_cycles,
+            row.guest_segments,
+            row.guest_exec_ms,
+            row.guest_breakdown,
+            row.deferred_signatures,
+            row.verify_signatures_us,
+            row.authorizations,
+            row.auth_user_cycles
         );
 
         if args.prove {
@@ -291,6 +429,22 @@ fn main() -> Result<()> {
         tip = Tip::from(&block);
     }
     Ok(())
+}
+
+type Journal = (
+    [u8; 32],
+    [u8; 32],
+    [u8; 32],
+    Hash,
+    Vec<u64>,
+    Vec<DeferredSignature>,
+    [u32; 8],
+);
+
+fn read_journal(bytes: &[u8]) -> Result<(Hash, Vec<u64>, Vec<DeferredSignature>, [u32; 8])> {
+    let (_, _, _, post, breakdown, deferred, auth_image): Journal =
+        borsh::from_slice(from_frame(bytes).context("journal frame")?)?;
+    Ok((post, breakdown, deferred, auth_image))
 }
 
 fn flat_input(state: &V03State, post: &V03State) -> Result<GuestInput> {
@@ -346,25 +500,13 @@ fn fingerprint(account_root: &Hash, rest: &Hash) -> Hash {
 }
 
 /// A block of one transfer per pair in `pairs`, each from a sender that has not sent before.
-fn build_block(
-    state: &V03State,
-    tip: &Tip,
-    pairs: &[PublicAccountPrivateInitialData],
-) -> Result<Block> {
+fn build_block(state: &V03State, tip: &Tip, pairs: &[Signer]) -> Result<Block> {
     let id = tip.block_id + 1;
     let timestamp = id * 100;
     let mut transactions: Vec<LeeTransaction> = pairs
         .chunks_exact(2)
-        .map(|pair| {
-            create_transaction_native_token_transfer(
-                pair[0].account_id,
-                0,
-                pair[1].account_id,
-                1,
-                &pair[0].pub_sign_key,
-            )
-        })
-        .collect();
+        .map(|pair| transfer(&pair[0], pair[1].account_id()))
+        .collect::<Result<_>>()?;
     let (summary, payout, receipts) = derive_block_summary(state, &transactions, id, timestamp)
         .map_err(|err| anyhow::anyhow!("block settles: {err}"))?;
     transactions.push(LeeTransaction::Public(fee_invocation(
@@ -381,6 +523,30 @@ fn build_block(
         receipts,
     }
     .into_pending_block())
+}
+
+fn transfer(from: &Signer, to: AccountId) -> Result<LeeTransaction> {
+    Ok(match from {
+        Signer::Schnorr { account_id, key } => {
+            create_transaction_native_token_transfer(*account_id, 0, to, 1, key)
+        }
+        Signer::Preimage {
+            account_id,
+            public_key,
+        } => {
+            let message = Message::try_new_with_fees(
+                Actor::native_balance(*account_id),
+                [Actor::native_balance(*account_id), Actor::native_balance(to)],
+                BTreeMap::from([(*account_id, lee_core::account::Nonce(0))]),
+                lee_core::native_token::Message::Transfer { to, amount: 1 },
+                test_fee_declaration(*account_id),
+            )?;
+            // No signature: a receipt over (public key, message hash) authorizes the message.
+            let witness_set =
+                WitnessSet::from_parts(vec![(Signature { value: [0; 64] }, public_key.clone())]);
+            LeeTransaction::Public(PublicTransaction::new(message, witness_set))
+        }
+    })
 }
 
 fn hex(id: &lee::ProgramId) -> String {

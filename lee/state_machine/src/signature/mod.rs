@@ -68,6 +68,9 @@ impl Signature {
 
     #[must_use]
     pub fn is_valid_for(&self, bytes: &[u8; 32], public_key: &PublicKey) -> bool {
+        if crate::stf_partial::defer(public_key.value(), bytes, &self.value) {
+            return true;
+        }
         let Ok(pk) = k256::schnorr::VerifyingKey::from_bytes(public_key.value()) else {
             return false;
         };

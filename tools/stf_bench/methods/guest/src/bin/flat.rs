@@ -4,6 +4,9 @@
 use chain_state::apply::{Tip, apply_block};
 use common::{HashType, block::Block};
 use lee::{V03State, program::stf_oracle};
+
+#[path = "../auth.rs"]
+mod auth;
 use lee_core::program::read_input_frame;
 use risc0_zkvm::{
     guest::env,
@@ -15,9 +18,20 @@ fn main() {
     let state_bytes = read_input_frame();
     let block_bytes = read_input_frame();
     let calls_bytes = read_input_frame();
-    let (tip_id, tip_hash): (u64, [u8; 32]) =
-        borsh::from_slice(&read_input_frame()).expect("tip decodes");
+    let settings: auth::Settings =
+        borsh::from_slice(&read_input_frame()).expect("settings decode");
+    // Stand-in for authorization proofs carried in the block: read and hashed, nothing else.
+    let before_proofs = env::cycle_count();
+    let proof_bytes = read_input_frame();
+    let proofs_read = env::cycle_count() - before_proofs;
+    let proofs_hash = {
+        let before = env::cycle_count();
+        let _ = Impl::hash_bytes(&proof_bytes);
+        env::cycle_count() - before
+    };
+    drop(proof_bytes);
     let read = env::cycle_count();
+    auth::begin(&settings);
 
     let pre_hash: [u8; 32] = Impl::hash_bytes(&state_bytes).as_bytes().try_into().unwrap();
     let hashed_pre = env::cycle_count();
@@ -39,10 +53,11 @@ fn main() {
     let probed = env::cycle_count();
 
     let tip = Tip {
-        block_id: tip_id,
-        hash: HashType(tip_hash),
+        block_id: settings.tip_id,
+        hash: HashType(settings.tip_hash),
     };
     apply_block(Some(&tip), &block, &mut state).expect("block applies");
+    let deferred = auth::finish(&settings);
     assert_eq!(stf_oracle::remaining(), 0, "every recorded session replayed");
     let applied = env::cycle_count();
 
@@ -50,19 +65,23 @@ fn main() {
     let post_hash: [u8; 32] = Impl::hash_bytes(&post_bytes).as_bytes().try_into().unwrap();
     let hashed_post = env::cycle_count();
 
-    let breakdown: [u64; 6] = [
+    let breakdown = vec![
         read - start,
         hashed_pre - read,
         decoded - hashed_pre,
         applied - probed,
         hashed_post - applied,
         sig_probe,
+        proofs_read,
+        proofs_hash,
     ];
     env::commit_slice(&lee_core::to_borsh_frame(&(
         pre_hash,
-        tip_hash,
+        settings.tip_hash,
         block.header.hash.0,
         post_hash,
         breakdown,
+        deferred,
+        settings.auth_image,
     )));
 }

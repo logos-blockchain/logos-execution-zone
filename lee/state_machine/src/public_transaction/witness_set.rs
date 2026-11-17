@@ -25,6 +25,14 @@ impl WitnessSet {
         }
     }
 
+    /// STF prototype: a witness set from raw parts.
+    #[must_use]
+    pub const fn from_parts(signatures_and_public_keys: Vec<(Signature, PublicKey)>) -> Self {
+        Self {
+            signatures_and_public_keys,
+        }
+    }
+
     #[must_use]
     pub fn is_valid_for(&self, message: &Message) -> bool {
         let message_hash = message.hash();

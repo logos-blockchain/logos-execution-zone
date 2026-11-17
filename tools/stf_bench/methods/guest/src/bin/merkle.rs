@@ -13,6 +13,10 @@ use lee::{Account, AccountId, V03State, program::stf_oracle, stf_partial};
 use lee_core::program::read_input_frame;
 use risc0_zkvm::guest::env;
 use stf_smt::{Hash, Lookup, Node, value_hash};
+use risc0_zkvm::sha::{Impl, Sha256 as _};
+
+#[path = "../auth.rs"]
+mod auth;
 
 fn fingerprint(account_root: &Hash, rest: &Hash) -> Hash {
     let mut bytes = [0_u8; 64];
@@ -32,9 +36,20 @@ fn main() {
     let rest_bytes = read_input_frame();
     let block_bytes = read_input_frame();
     let calls_bytes = read_input_frame();
-    let (tip_id, tip_hash): (u64, [u8; 32]) =
-        borsh::from_slice(&read_input_frame()).expect("tip decodes");
+    let settings: auth::Settings =
+        borsh::from_slice(&read_input_frame()).expect("settings decode");
+    // Stand-in for authorization proofs carried in the block: read and hashed, nothing else.
+    let before_proofs = env::cycle_count();
+    let proof_bytes = read_input_frame();
+    let proofs_read = env::cycle_count() - before_proofs;
+    let proofs_hash = {
+        let before = env::cycle_count();
+        let _ = Impl::hash_bytes(&proof_bytes);
+        env::cycle_count() - before
+    };
+    drop(proof_bytes);
     let read = env::cycle_count();
+    auth::begin(&settings);
 
     let mut tree: Node = borsh::from_slice(&tree_bytes).expect("tree decodes");
     let accounts: Vec<(AccountId, Account)> =
@@ -66,10 +81,11 @@ fn main() {
 
     stf_partial::start_tracking();
     let tip = Tip {
-        block_id: tip_id,
-        hash: HashType(tip_hash),
+        block_id: settings.tip_id,
+        hash: HashType(settings.tip_hash),
     };
     apply_block(Some(&tip), &block, &mut state).expect("block applies");
+    let deferred = auth::finish(&settings);
     let touched = stf_partial::take_tracked();
     assert_eq!(stf_oracle::remaining(), 0, "every recorded session replayed");
     let applied = env::cycle_count();
@@ -99,19 +115,23 @@ fn main() {
     let post_rest_hash = value_hash(&borsh::to_vec(&state.stf_without_public()).expect("encodes"));
     let committed = env::cycle_count();
 
-    let breakdown: [u64; 6] = [
+    let breakdown = vec![
         read - start,
         decoded - read,
         verified - decoded,
         applied - verified,
         committed - applied,
         u64::from(changed),
+        proofs_read,
+        proofs_hash,
     ];
     env::commit_slice(&lee_core::to_borsh_frame(&(
         fingerprint(&pre_root, &rest_hash),
-        tip_hash,
+        settings.tip_hash,
         block.header.hash.0,
         fingerprint(&post_root, &post_rest_hash),
         breakdown,
+        deferred,
+        settings.auth_image,
     )));
 }

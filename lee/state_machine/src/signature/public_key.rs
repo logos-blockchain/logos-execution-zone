@@ -60,6 +60,9 @@ impl PublicKey {
     }
 
     pub fn try_new(value: [u8; 32]) -> Result<Self, LeeError> {
+        if crate::stf_partial::hash_keys() {
+            return Ok(Self(value));
+        }
         // Check point is a valid x-only public key
         let _ =
             k256::schnorr::VerifyingKey::from_bytes(&value).map_err(LeeError::InvalidPublicKey)?;

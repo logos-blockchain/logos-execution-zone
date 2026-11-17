@@ -1,7 +1,10 @@
 //! STF prototype: which public accounts a block touches, and the state split into its public
 //! accounts (committed by a Merkle tree) and the rest (committed by a flat hash).
 
-use std::{cell::RefCell, collections::BTreeSet};
+use std::{
+    cell::{Cell, RefCell},
+    collections::BTreeSet,
+};
 
 use lee_core::account::{Account, AccountId};
 use rpds::HashTrieMapSync;
@@ -61,4 +64,71 @@ impl V03State {
     pub fn stf_peek(&self, account_id: AccountId) -> Option<&Account> {
         self.public_state.get(&account_id)
     }
+}
+
+/// A signature check the guest skipped, left for whoever verifies the proof.
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Debug, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct DeferredSignature {
+    pub public_key: [u8; 32],
+    pub message_hash: [u8; 32],
+    pub signature: [u8; 64],
+}
+
+impl DeferredSignature {
+    /// The check the guest skipped.
+    #[must_use]
+    pub fn verify(&self) -> bool {
+        use k256::ecdsa::signature::hazmat::PrehashVerifier as _;
+        let Ok(public_key) = k256::schnorr::VerifyingKey::from_bytes(&self.public_key) else {
+            return false;
+        };
+        let Ok(signature) = k256::schnorr::Signature::try_from(self.signature.as_slice()) else {
+            return false;
+        };
+        public_key.verify_prehash(&self.message_hash, &signature).is_ok()
+    }
+}
+
+thread_local! {
+    static DEFERRED: RefCell<Option<Vec<DeferredSignature>>> = const { RefCell::new(None) };
+}
+
+/// From now on every signature check passes and is recorded instead.
+pub fn defer_signatures() {
+    DEFERRED.with(|deferred| *deferred.borrow_mut() = Some(Vec::new()));
+}
+
+/// The recorded checks, sorted and without repeats; stops deferring.
+pub fn take_deferred() -> Vec<DeferredSignature> {
+    let mut taken = DEFERRED.with(|deferred| deferred.borrow_mut().take().unwrap_or_default());
+    taken.sort_unstable();
+    taken.dedup();
+    taken
+}
+
+/// Records the check and returns true if signature checks are being deferred.
+pub(crate) fn defer(public_key: &[u8; 32], message_hash: &[u8; 32], signature: &[u8; 64]) -> bool {
+    DEFERRED.with(|deferred| {
+        deferred.borrow_mut().as_mut().is_some_and(|recorded| {
+            recorded.push(DeferredSignature {
+                public_key: *public_key,
+                message_hash: *message_hash,
+                signature: *signature,
+            });
+            true
+        })
+    })
+}
+
+thread_local! {
+    static HASH_KEYS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// From now on a public key is any 32 bytes: the hash of a secret, not a curve point.
+pub fn use_hash_keys() {
+    HASH_KEYS.with(|on| on.set(true));
+}
+
+pub(crate) fn hash_keys() -> bool {
+    HASH_KEYS.with(Cell::get)
 }
