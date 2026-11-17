@@ -79,9 +79,10 @@ pub const HOME_DIR_ENV_VAR: &str = "LEE_WALLET_HOME_DIR";
 /// Env var holding the storage password, read instead of prompting for it.
 pub const PASSWORD_ENV_VAR: &str = "LEE_WALLET_PASSWORD";
 
-/// Default execution gas limit for wallet-built public transactions: roughly
-/// three times the widest measured program call, one fifth of the per-block cap.
-pub const DEFAULT_GAS_LIMIT: u64 = 2_000_000;
+/// Default execution gas limit for wallet-built public transactions,
+/// equal to the max cap since dry-runs will determine the correct fee anyways,
+/// or the excess will be refunded in the end.
+pub const DEFAULT_GAS_LIMIT: u64 = fee_core::market::MAX_GAS_EXEC;
 
 /// Base fee the default `max_fee` is sized against: 8x the genesis minimum,
 /// so defaults survive early congestion without re-signing.
