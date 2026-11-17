@@ -12,6 +12,8 @@ chain_state.workspace = true
 common = { workspace = true, features = ["node"] }
 lee = { workspace = true, features = ["prove"] }
 lee_core = { workspace = true, features = ["host"] }
+ping_core.workspace = true
+cross_zone_outbox_core.workspace = true
 testnet_initial_state.workspace = true
 
 anyhow.workspace = true

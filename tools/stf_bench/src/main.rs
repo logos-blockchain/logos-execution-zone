@@ -26,12 +26,14 @@ use common::{
     transaction::{FeePayee, LeeTransaction, clock_invocation, fee_invocation},
 };
 use lee::{
-    Account, AccountId, Actor, PrivateKey, PublicKey, PublicTransaction, Signature, V03State,
+    Account, AccountId, Actor, PrivateKey, PublicAccountEvidence, PublicKey, PublicTransaction,
+    Signature, V03State,
     program::stf_oracle,
     public_transaction::{Message, WitnessSet},
     stf_partial::{self, DeferredSignature},
 };
 use lee_core::{from_frame, to_frame};
+use ping_core::{CrossZoneEmission, SenderMessage};
 use risc0_zkvm::{AssumptionReceipt, ExecutorEnv, ProverOpts, default_executor, default_prover};
 use serde::Serialize;
 use stf_bench_methods::{
@@ -60,11 +62,24 @@ enum Auth {
     Preimage,
 }
 
+/// What each user transaction does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum TxKind {
+    /// A native token transfer, which runs inside the block guest.
+    Transfer,
+    /// A `ping_sender` call that emits through `cross_zone_outbox` into a new slot: two program
+    /// sessions, each proven on its own.
+    Ping,
+}
+
 #[derive(Parser)]
 struct Args {
-    /// User native transfers per block, one block per value, applied in sequence.
+    /// User transactions per block, one block per value, applied in sequence.
     #[arg(long, value_delimiter = ',', default_value = "0,1,5,20")]
     txs: Vec<usize>,
+    #[arg(long, value_enum, default_value = "transfer")]
+    tx_kind: TxKind,
     #[arg(long, value_enum, default_value = "merkle")]
     mode: Mode,
     /// Funded accounts added to genesis, so the tree has a realistic depth.
@@ -96,6 +111,7 @@ struct SessionRow {
 struct BlockRow {
     mode: Option<Mode>,
     auth: Option<Auth>,
+    tx_kind: Option<TxKind>,
     extra_accounts: usize,
     public_accounts: usize,
     user_txs: usize,
@@ -205,6 +221,9 @@ fn main() -> Result<()> {
                 .map(|key| (key.account_id(), Account::funded(1_000_000_000_000))),
         )
         .with_public_accounts(extra);
+    if args.tx_kind == TxKind::Ping {
+        init_ping_sender(&mut state)?;
+    }
     let genesis = produce_dummy_block(1, None, vec![]);
     apply_block(None, &genesis, &mut state).context("genesis applies")?;
     let mut tip = Tip::from(&genesis);
@@ -218,7 +237,13 @@ fn main() -> Result<()> {
         if preimage {
             stf_partial::defer_signatures();
         }
-        let block = build_block(&state, &tip, &keys[2 * used..2 * (used + user_txs)])?;
+        let block = build_block(
+            &state,
+            &tip,
+            &keys[2 * used..2 * (used + user_txs)],
+            args.tx_kind,
+            u32::try_from(used)?,
+        )?;
         let _ = stf_partial::take_deferred();
         used += user_txs;
 
@@ -243,6 +268,7 @@ fn main() -> Result<()> {
         let mut row = BlockRow {
             mode: Some(args.mode),
             auth: Some(args.auth),
+            tx_kind: Some(args.tx_kind),
             authorizations: authorizations.len(),
             extra_accounts: args.extra_accounts,
             public_accounts: state.stf_public_accounts().count(),
@@ -256,10 +282,11 @@ fn main() -> Result<()> {
             ..BlockRow::default()
         };
         eprintln!(
-            "\n== {:?} block, {:?} auth, {user_txs} user txs, {} public accounts: {} sessions, {} \
-             touched accounts, witness {:?} B, block {} B, host apply {host_apply_ms} ms",
+            "\n== {:?} block, {:?} auth, {user_txs} user txs ({:?}), {} public accounts: {} \
+             sessions, {} touched accounts, witness {:?} B, block {} B, host apply {host_apply_ms} ms",
             args.mode,
             args.auth,
+            args.tx_kind,
             row.public_accounts,
             row.sessions,
             row.touched_accounts,
@@ -506,13 +533,24 @@ fn fingerprint(account_root: &Hash, rest: &Hash) -> Hash {
     value_hash(&bytes)
 }
 
-/// A block of one transfer per pair in `pairs`, each from a sender that has not sent before.
-fn build_block(state: &V03State, tip: &Tip, pairs: &[Signer]) -> Result<Block> {
+/// A block of one transaction per pair in `pairs`, each from a sender that has not sent before;
+/// pings take ordinals from `first_ordinal` on.
+fn build_block(
+    state: &V03State,
+    tip: &Tip,
+    pairs: &[Signer],
+    kind: TxKind,
+    first_ordinal: u32,
+) -> Result<Block> {
     let id = tip.block_id + 1;
     let timestamp = id * 100;
     let mut transactions: Vec<LeeTransaction> = pairs
         .chunks_exact(2)
-        .map(|pair| transfer(&pair[0], pair[1].account_id()))
+        .zip(first_ordinal..)
+        .map(|(pair, ordinal)| match kind {
+            TxKind::Transfer => transfer(&pair[0], pair[1].account_id()),
+            TxKind::Ping => ping(&pair[0], ordinal),
+        })
         .collect::<Result<_>>()?;
     let (summary, payout, receipts) = derive_block_summary(state, &transactions, id, timestamp)
         .map_err(|err| anyhow::anyhow!("block settles: {err}"))?;
@@ -557,6 +595,70 @@ fn transfer(from: &Signer, to: AccountId) -> Result<LeeTransaction> {
             LeeTransaction::Public(PublicTransaction::new(message, witness_set))
         }
     })
+}
+
+/// Pins `ping_sender` to the outbox, as the sequencer genesis does.
+fn init_ping_sender(state: &mut V03State) -> Result<()> {
+    let program = ping_core::ping_sender_account_id();
+    let seed = ping_core::sender_config_seed();
+    let config = Actor::new(AccountId::for_public_pda(&program, &seed), program);
+    let message = Message {
+        admission_evidence: vec![PublicAccountEvidence::Pda { program, seed }],
+        ..Message::try_new(
+            config,
+            [config],
+            BTreeMap::new(),
+            SenderMessage::InitConfig {
+                outbox_account_id: cross_zone_outbox_core::cross_zone_outbox_account_id(),
+            },
+        )?
+    };
+    let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
+    state
+        .transition_from_public_transaction(&tx, 1, 0)
+        .map_err(|err| anyhow::anyhow!("ping sender config: {err}"))?;
+    Ok(())
+}
+
+/// A ping through `ping_sender` into the outbox slot `ordinal`, paid for by `from`.
+fn ping(from: &Signer, ordinal: u32) -> Result<LeeTransaction> {
+    let sender = ping_core::ping_sender_account_id();
+    let outbox_program = cross_zone_outbox_core::cross_zone_outbox_account_id();
+    let config = Actor::new(ping_core::sender_config_account_id(sender), sender);
+    let target_zone = [0x42; 32];
+    let slot = PublicAccountEvidence::Pda {
+        program: outbox_program,
+        seed: cross_zone_outbox_core::outbox_pda_seed(sender, &target_zone, ordinal),
+    };
+    let outbox = Actor::new(slot.account_id(), outbox_program);
+    let payer = from.account_id();
+    let message = Message {
+        admission_evidence: vec![slot],
+        ..Message::try_new_with_fees(
+            config,
+            [config, outbox],
+            BTreeMap::from([(payer, lee_core::account::Nonce(0))]),
+            SenderMessage::Send {
+                outbox,
+                emission: CrossZoneEmission {
+                    target_zone,
+                    target_account_id: AccountId::new([0x43; 32]),
+                    target_accounts: vec![],
+                    payload: b"ping".to_vec(),
+                    ordinal,
+                },
+            },
+            test_fee_declaration(payer),
+        )?
+    };
+    let witness_set = match from {
+        Signer::Schnorr { key, .. } => WitnessSet::for_message(&message, &[key]),
+        // No signature: a receipt over (public key, message hash) authorizes the message.
+        Signer::Preimage { public_key, .. } => {
+            WitnessSet::from_parts(vec![(Signature { value: [0; 64] }, public_key.clone())])
+        }
+    };
+    Ok(LeeTransaction::Public(PublicTransaction::new(message, witness_set)))
 }
 
 fn hex(id: &lee::ProgramId) -> String {

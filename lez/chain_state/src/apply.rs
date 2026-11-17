@@ -4,12 +4,13 @@
 
 use std::collections::{BTreeSet, HashSet};
 
+use clock_core::ClockAccountData;
 use common::{
     HashType,
     block::{Block, BlockMeta, FeeReceipt, TransactionReceipt},
     transaction::{
-        LeeTransaction, TxEvents, clock_invocation, fee_invocation, fee_refund_invocation,
-        fee_reserve_invocation, private_fee_refund_invocation, validate_private_fee_credit,
+        FeePayee, LeeTransaction, TxEvents, clock_invocation, fee_invocation,
+        fee_refund_invocation, private_fee_refund_invocation, validate_private_fee_credit,
         validate_user_state_modification,
     },
 };
@@ -22,7 +23,7 @@ use fee_core::{
     state::FeeState,
     validity::{FeeError, accumulate_exec_gas, accumulate_stor_gas, validate_static_tx},
 };
-use lee::{GENESIS_BLOCK_ID, V03State};
+use lee::{Actor, GENESIS_BLOCK_ID, V03State, error::LeeError};
 use lee_core::{BlockId, Timestamp, program::TransactionEvent};
 use sequencer_stake_core::SequencerKey;
 
@@ -181,8 +182,7 @@ pub fn apply_judged_block_to_state(
     // settled: its summary is derived from their execution.
 
     // At most one `system_upgrader` transaction, directly before the fee: a change takes effect
-    // after every transaction in its block except the fee and clock transactions, which already
-    // run the new code.
+    // after every user transaction in its block.
     let last_index = user_txs.len().checked_sub(1);
     if let Some(tx_index) = user_txs.iter().enumerate().position(|(index, tx)| {
         common::system_upgrades::is_system_upgrader_tx(tx) && Some(index) != last_index
@@ -271,9 +271,9 @@ pub fn apply_judged_block_to_state(
     // settlement produced. Its reward target rides inside the tx; the
     // byte-compare pins the summary and tx shape. The producer chooses that
     // account freely, like a coinbase output, but it must not be a restricted
-    // system account: the fee tx settles via the direct transition, bypassing
-    // the user-tx restricted-account guards, so without this floor a producer
-    // could credit the bridge and decouple its balance from L1 deposits.
+    // system account: the distribution bypasses the user-tx restricted-account
+    // guards, so without this floor a producer could credit the bridge and
+    // decouple its balance from L1 deposits.
     let payee = common::transaction::fee_invocation_payee(fee_tx)
         .ok_or(BlockIngestError::InvalidFeeTransaction)?;
     if *fee_tx != fee_invocation(summary, block_payout(&opening, &summary), payee) {
@@ -282,32 +282,115 @@ pub fn apply_judged_block_to_state(
     common::transaction::validate_reward_target(payee.producer())
         .map_err(|reason| BlockIngestError::InvalidRewardTarget { reason })?;
 
-    let fee_events = state
-        .transition_from_public_transaction(fee_tx, block.header.block_id, block.header.timestamp)
-        .map_err(|err| BlockIngestError::StateTransition {
-            tx_index: user_txs.len().try_into().expect("tx index fits in u64"),
-            reason: format!("{:#}", anyhow::Error::from(err)),
-        })?;
-    collect_tx_events(&mut block_events, user_txs.len(), fee_entry, fee_events);
-
-    // Clock events are collected separately. The clock program currently emits
-    // none; this future-proofs the design with no bearing on current semantics.
-    let clock_events = state
-        .transition_from_public_transaction(clock_tx, block.header.block_id, block.header.timestamp)
-        .map_err(|err| BlockIngestError::StateTransition {
-            tx_index: (user_txs.len().saturating_add(1))
-                .try_into()
-                .expect("tx index fits in u64"),
-            reason: format!("{:#}", anyhow::Error::from(err)),
-        })?;
-    collect_tx_events(
-        &mut block_events,
-        user_txs.len().saturating_add(1),
-        clock_entry,
-        clock_events,
-    );
+    // The fee and clock transactions only pin the block's tail: neither emits events.
+    let tail = |offset: usize, err: LeeError| BlockIngestError::StateTransition {
+        tx_index: (user_txs.len().saturating_add(offset))
+            .try_into()
+            .expect("tx index fits in u64"),
+        reason: format!("{:#}", anyhow::Error::from(err)),
+    };
+    distribute_fees(
+        state,
+        &summary,
+        payee,
+        block.header.block_id,
+        block.header.timestamp,
+    )
+    .map_err(|err| tail(0, err))?;
+    tick_clock(state, block.header.block_id, block.header.timestamp).map_err(|err| tail(1, err))?;
 
     Ok(block_events)
+}
+
+/// Settles a block's fees: advances the fee state, moves the base revenue to the escrow and pays
+/// the producer its tips and smoothed payout.
+///
+/// What the block's fee transaction stands for, applied directly. A bound producer's credits
+/// are publications, which only an execution makes, so that one still runs the fee program.
+pub fn distribute_fees(
+    state: &mut V03State,
+    summary: &BlockFeeSummary,
+    payee: FeePayee,
+    block_id: BlockId,
+    timestamp: Timestamp,
+) -> Result<(), LeeError> {
+    let mut fee_state = opening_fee_state(state);
+    let FeePayee::Present(producer) = payee else {
+        let fee_tx = fee_invocation(*summary, block_payout(&fee_state, summary), payee);
+        return state
+            .transition_from_public_transaction(&fee_tx, block_id, timestamp)
+            .map(drop);
+    };
+    let payout = fee_state.apply_block(summary);
+
+    let inbox = system_accounts::fee_inbox_account_id();
+    let escrow = system_accounts::fee_escrow_account_id();
+    let revenue = summary
+        .revenue_base
+        .checked_add(summary.revenue_tip)
+        .expect("block revenue fits u128");
+    let held = state
+        .get_account_by_id_ref(inbox)
+        .and_then(|account| account.data.native_balance().ok());
+    if held.unwrap_or_default() != revenue {
+        return Err(LeeError::InvalidInput(format!(
+            "The fee inbox holds {held:?} instead of this block's revenue {revenue}"
+        )));
+    }
+
+    state.set_actor_state(
+        Actor::new(
+            system_accounts::fee_state_account_id(),
+            system_accounts::fee_program_id(),
+        ),
+        fee_state.to_bytes().into(),
+    );
+    // Order matters: the escrow receives the base before it pays out of it.
+    for (from, to, amount) in [
+        (inbox, escrow, summary.revenue_base),
+        (inbox, producer, summary.revenue_tip),
+        (escrow, producer, payout),
+    ] {
+        if amount > 0 {
+            state.transfer_native(from, to, amount)?;
+        }
+    }
+    Ok(())
+}
+
+/// Advances the clock to `block_id` and `timestamp`: what the block's clock transaction stands
+/// for, applied directly.
+pub fn tick_clock(
+    state: &mut V03State,
+    block_id: BlockId,
+    timestamp: Timestamp,
+) -> Result<(), LeeError> {
+    let clock = system_accounts::clock_actor();
+    let current = state
+        .get_account_by_id_ref(clock.account_id)
+        .and_then(|account| {
+            borsh::from_slice::<ClockAccountData>(
+                account.data.actor_state(clock.program_account_id),
+            )
+            .ok()
+        })
+        .ok_or_else(|| LeeError::InvalidInput("The clock account does not decode".into()))?;
+    if current.block_id.checked_add(1) != Some(block_id) {
+        return Err(LeeError::InvalidInput(format!(
+            "Clock block id must advance by exactly one from {}, not to {block_id}",
+            current.block_id
+        )));
+    }
+    state.set_actor_state(
+        clock,
+        ClockAccountData {
+            block_id,
+            timestamp,
+        }
+        .to_bytes()
+        .into(),
+    );
+    Ok(())
 }
 
 /// Collects a transaction's events into the block's event list, stamped with
@@ -660,7 +743,8 @@ fn settle_charged_transaction(
     let payer = *payer;
 
     validate_static_tx(view, opening).map_err(|err| fee_validity(err.to_string()))?;
-    if !transaction.is_fee_authorized() {
+    // The payer's signature is verified with every other signer's, by the action.
+    if !transaction.is_signed_by(payer) {
         return Err(fee_validity(
             "designated payer's authorization is missing".into(),
         ));
@@ -668,26 +752,13 @@ fn settle_charged_transaction(
 
     // Phase 1: Reserve
     //
-    // hold `reserved` from the payer in the inbox via a native transfer,
-    // authorized by the fee declaration.
+    // hold `reserved` from the payer in the inbox, authorized by the fee declaration.
     //
     // This does NOT advance the nonce, invalidates the tx if the payer cannot afford it.
     let reserved = fee_reserve(view, opening);
-    let reserve_msg = fee_reserve_invocation(payer, reserved);
-    let payer_authorized = HashSet::from([payer]);
-    let reserve_diff = lee::ValidatedStateDiff::from_fee_settlement_invocation(
-        reserve_msg.execution.root.to,
-        &reserve_msg.execution.root.message,
-        &reserve_msg.public_context.actors,
-        &payer_authorized,
-        state,
-        block_id,
-        timestamp,
-    )
-    .map_err(|err| fee_validity(format!("fee reserve failed: {err}")))?;
-    // Reserve is a fee-internal move; its events are not the user's.
+    let inbox = system_accounts::fee_inbox_account_id();
     state
-        .apply_state_diff(reserve_diff)
+        .transfer_native(payer, inbox, reserved)
         .map_err(|err| fee_validity(format!("fee reserve failed: {err}")))?;
 
     // Phase 2: Action
@@ -753,8 +824,8 @@ fn settle_charged_transaction(
 
     // Phase 3: Refund
     //
-    // Return the unspent reserve to the payer via the fee program,
-    // leaving the inbox holding exactly this transaction's actual fee.
+    // Return the unspent reserve to the payer, leaving the inbox holding
+    // exactly this transaction's actual fee.
     let fee_base = fee_actual_base(charged_cycles, view, opening);
     let fee_total = fee_base
         .checked_add(u128::from(view.tip()))
@@ -763,20 +834,8 @@ fn settle_charged_transaction(
         .checked_sub(fee_total)
         .expect("the reserve prices gas_limit, which bounds the actual fee");
     if refund > 0 {
-        let refund_msg = fee_refund_invocation(payer, refund);
-        let refund_diff = lee::ValidatedStateDiff::from_fee_settlement_invocation(
-            refund_msg.execution.root.to,
-            &refund_msg.execution.root.message,
-            &refund_msg.public_context.actors,
-            &HashSet::new(),
-            state,
-            block_id,
-            timestamp,
-        )
-        .map_err(|err| fee_validity(format!("fee refund failed: {err}")))?;
-        // Refund is a fee-internal move; its events are not the user's.
         state
-            .apply_state_diff(refund_diff)
+            .transfer_native(inbox, payer, refund)
             .map_err(|err| fee_validity(format!("fee refund failed: {err}")))?;
     }
 
@@ -1113,69 +1172,6 @@ mod tests {
             err,
             BlockIngestError::MissedSystemUpgrade { name } if name == "clock"
         ));
-    }
-
-    #[test]
-    fn a_clock_upgrade_runs_its_own_activation_blocks_tick() {
-        use program_loader_core::LoaderActorState as _;
-        use system_upgrader_core::{
-            Message, Registry, ScheduledUpgrade, loader_actor, registry_account_id, registry_actor,
-        };
-
-        // `ping_receiver` can't handle the clock's tick, so the first tick it runs fails.
-        let new_code = programs::ping_receiver();
-        let user_elf = new_code.user_elf().unwrap();
-        let ids: Vec<AccountId> = (0..program_loader_core::segment_count(&user_elf))
-            .map(|i| AccountId::new([0x40_u8.wrapping_add(u8::try_from(i).unwrap()); 32]))
-            .collect();
-        let segments = program_loader_core::build_segments(&user_elf, &ids).unwrap();
-        let mut registry = common::system_upgrades::registry(&initial_state(true)).unwrap();
-        registry.programs.insert(
-            clock_core::CLOCK_NAME,
-            Some(ScheduledUpgrade {
-                first_segment: ids[0],
-                image_id: new_code.id(),
-                immutable: false,
-                activation_height: 1,
-            }),
-        );
-        let mut state = initial_state(true)
-            .with_public_accounts([(
-                registry_account_id(),
-                lee::Account::default().with_actor_state(
-                    SYSTEM_UPGRADER_ACCOUNT_ID,
-                    Registry::to_bytes(&registry).into(),
-                ),
-            )])
-            .with_public_accounts(ids.iter().zip(segments).map(|(id, segment)| {
-                (
-                    *id,
-                    lee::Account::default().with_actor_state(
-                        lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
-                        segment.to_loader_actor_state().into(),
-                    ),
-                )
-            }));
-        let apply = LeeTransaction::Public(PublicTransaction::new(
-            public_transaction::Message::try_new(
-                registry_actor(),
-                [registry_actor(), loader_actor(&clock_core::CLOCK_NAME)],
-                BTreeMap::new(),
-                Message::Apply {
-                    name: clock_core::CLOCK_NAME,
-                    activation_height: 1,
-                },
-            )
-            .unwrap(),
-            public_transaction::WitnessSet::from_raw_parts(vec![]),
-        ));
-
-        let err =
-            apply_block(None, &block_with(vec![apply]), &mut state).expect_err("should reject");
-        assert!(
-            matches!(err, BlockIngestError::StateTransition { tx_index: 2, .. }),
-            "the Apply and the fee settle; the clock's tick fails: {err:?}"
-        );
     }
 
     #[test]
@@ -1589,10 +1585,7 @@ mod tests {
         );
 
         for (payee, refusal) in [
-            (
-                FeePayee::Present(producer),
-                "declared public but not admitted",
-            ),
+            (FeePayee::Present(producer), "is not admitted"),
             (FeePayee::Bound(producer), "without a recovery binding"),
         ] {
             let block = settled_block_rewarding(2, tip.hash, vec![transfer.clone()], &state, payee);
