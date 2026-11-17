@@ -32,24 +32,25 @@ pub mod status;
 /// Bytes of fetched proofs kept once no block the fold holds pins them.
 const PROOF_STORE_CAPACITY: usize = 256 * 1024 * 1024;
 
-/// How ingestion goes on once the settled blocks are handed to the store.
-enum Step {
-    Done,
-    /// A block is held for a retry next pass.
-    Held,
-    /// A forged dispatch halted ingestion.
-    Halted,
+/// What ingestion should do after attempting to store queued settled blocks.
+enum IngestionAction {
+    /// The queue is empty, so reading goes on, even with proofs still missing.
+    Continue,
+    /// A refusal, a store error or an unavailable peer leaves the front block queued for a retry.
+    RetryLater,
+    /// A forged dispatch halts ingestion.
+    Halt,
 }
 
-/// The fold over the channel and what the ingest loop carries between passes.
-struct Ingest {
+/// In-memory state retained between polling cycles while indexing finalized channel entries.
+struct IngestionState {
     chain: ChainState,
-    /// The last slot whose messages are all folded.
-    read: Option<Slot>,
+    /// The last slot whose channel entries are all read; they may still await proofs or storage.
+    read_through: Option<Slot>,
     /// The stored message a restart resumes after, until it is re-read.
     resume: Option<(MsgId, Slot)>,
     /// Settled blocks not yet stored, in order.
-    settled: VecDeque<SettledBlock>,
+    pending_storage: VecDeque<SettledBlock>,
     /// The proofs no source served this pass, not asked for again until the next.
     unserved: Vec<ProofDigest>,
     /// In-memory mirror of the persisted halt record, so clearing it when the
@@ -73,7 +74,7 @@ pub struct IndexerCore {
     pub proofs: ProofStore,
 }
 
-impl Ingest {
+impl IngestionState {
     /// Whether `msg`, read at `slot`, is a re-read of what the store already holds.
     fn re_read(&mut self, msg: MsgId, slot: Slot) -> bool {
         let Some((stored, at)) = self.resume else {
@@ -93,10 +94,12 @@ impl Ingest {
         true
     }
 
-    /// Folds the finalized `entries` with the L1 LIB at `lib`, and queues the
-    /// blocks that settle. Every finalized entry up to `lib` must be folded by then.
-    fn fold(&mut self, entries: &[ChannelEntry], lib: Slot) {
-        let folded = self.chain.apply_finalized(entries, lib);
+    /// Processes finalized channel entries and queues newly settled LEZ blocks. The caller must
+    /// have supplied all finalized entries through `complete_through`, including entries supplied
+    /// in earlier calls. An empty batch revisits settlement after proofs arrive or
+    /// `complete_through` moves.
+    fn process_finalized_entries(&mut self, entries: &[ChannelEntry], complete_through: Slot) {
+        let folded = self.chain.apply_finalized(entries, complete_through);
         for outcome in &folded.judged {
             let block_id = outcome.block.header.block_id;
             match &outcome.verdict {
@@ -109,7 +112,7 @@ impl Ingest {
                 Verdict::Ignored => error!("Ignored block {block_id}: its parent is not known"),
             }
         }
-        self.settled.extend(folded.settled);
+        self.pending_storage.extend(folded.settled);
     }
 }
 
@@ -440,7 +443,7 @@ impl IndexerCore {
 
     /// Rebuilds the fold from the store's settled state and tip, to re-read the
     /// channel from the entry of the last block the store applied.
-    fn resume(&self) -> Result<Ingest> {
+    fn resume(&self) -> Result<IngestionState> {
         let tip = self
             .store
             .get_last_block_id()?
@@ -461,11 +464,11 @@ impl IndexerCore {
                 None
             }
         };
-        Ok(Ingest {
-            read: resume.and_then(|(_, slot)| slot.checked_sub(Slot::from(1))),
+        Ok(IngestionState {
+            read_through: resume.and_then(|(_, slot)| slot.checked_sub(Slot::from(1))),
             resume,
             chain,
-            settled: VecDeque::new(),
+            pending_storage: VecDeque::new(),
             unserved: Vec::new(),
             pending_halt,
         })
@@ -475,11 +478,11 @@ impl IndexerCore {
     /// proofs the fold lacks, and hands what settles to the store in order.
     async fn advance(
         &self,
-        ingest: &mut Ingest,
+        ingest: &mut IngestionState,
         entries: &[ChannelEntry],
         lib: Slot,
-    ) -> (Vec<Block>, Step) {
-        ingest.fold(entries, lib);
+    ) -> (Vec<Block>, IngestionAction) {
+        ingest.process_finalized_entries(entries, lib);
         let mut missing = ingest.chain.missing_proofs();
         while !missing.is_empty() && missing != ingest.unserved {
             self.fetch_proofs(&missing).await;
@@ -497,15 +500,15 @@ impl IndexerCore {
             missing = ingest.chain.missing_proofs();
         }
         // Hydration refolds without settling.
-        ingest.fold(&[], lib);
+        ingest.process_finalized_entries(&[], lib);
         self.store_settled(ingest).await
     }
 
     /// Hands the settled blocks to the store in order, each through cross-zone
     /// verification, and moves the cursor to the entry of each one applied.
-    async fn store_settled(&self, ingest: &mut Ingest) -> (Vec<Block>, Step) {
+    async fn store_settled(&self, ingest: &mut IngestionState) -> (Vec<Block>, IngestionAction) {
         let mut applied = Vec::new();
-        while let Some(settled) = ingest.settled.front() {
+        while let Some(settled) = ingest.pending_storage.front() {
             let block = settled.block();
             let slot = settled
                 .slot()
@@ -527,7 +530,7 @@ impl IndexerCore {
                         Ok(keys) => keys,
                         Err(CrossZoneVerifyError::Forged(forged)) => {
                             self.handle_forged(block, &forged, &mut ingest.pending_halt);
-                            return (applied, Step::Halted);
+                            return (applied, IngestionAction::Halt);
                         }
                         // Not judged either way yet, so retry rather than halt.
                         Err(err @ CrossZoneVerifyError::PeerUnavailable { .. }) => {
@@ -538,7 +541,7 @@ impl IndexerCore {
                             self.set_status(IndexerSyncStatus::error(format!(
                                 "cross-zone peer unavailable: {err}"
                             )));
-                            return (applied, Step::Held);
+                            return (applied, IngestionAction::RetryLater);
                         }
                     },
                     None => Vec::new(),
@@ -577,7 +580,7 @@ impl IndexerCore {
                         "the store refused settled block {}: {refusal}",
                         block.header.block_id
                     )));
-                    return (applied, Step::Held);
+                    return (applied, IngestionAction::RetryLater);
                 }
                 Err(PutSettledError::Store(err)) => {
                     // Infrastructure error (DB read/write), not a bad block.
@@ -587,12 +590,12 @@ impl IndexerCore {
                         block.header.block_id
                     );
                     self.set_status(IndexerSyncStatus::error(format!("store error: {err:#}")));
-                    return (applied, Step::Held);
+                    return (applied, IngestionAction::RetryLater);
                 }
             }
-            ingest.settled.pop_front();
+            ingest.pending_storage.pop_front();
         }
-        (applied, Step::Done)
+        (applied, IngestionAction::Continue)
     }
 
     pub fn subscribe_parse_block_stream(&self) -> impl futures::Stream<Item = Result<Block>> + '_ {
@@ -621,22 +624,22 @@ impl IndexerCore {
 
                 // What the last pass held goes to the store, and the proofs it
                 // lacks are asked for again, before the fold reads on.
-                if !ingest.settled.is_empty() || !ingest.chain.missing_proofs().is_empty() {
-                    let (applied, step) = self.advance(&mut ingest, &[], Slot::genesis()).await;
+                if !ingest.pending_storage.is_empty() || !ingest.chain.missing_proofs().is_empty() {
+                    let (applied, action) = self.advance(&mut ingest, &[], Slot::genesis()).await;
                     for block in applied {
                         yield Ok(block);
                     }
-                    match step {
-                        Step::Done => {}
-                        Step::Held => {
+                    match action {
+                        IngestionAction::Continue => {}
+                        IngestionAction::RetryLater => {
                             tokio::time::sleep(poll_interval).await;
                             continue;
                         }
-                        Step::Halted => return,
+                        IngestionAction::Halt => return,
                     }
                 }
 
-                let stream = match self.zone_indexer.next_messages(ingest.read).await {
+                let stream = match self.zone_indexer.next_messages(ingest.read_through).await {
                     Ok(s) => s,
                     Err(err) => {
                         error!("Failed to start zone-sdk next_messages stream: {err}");
@@ -701,15 +704,15 @@ impl IndexerCore {
                     }
 
                     if let Some(lib) = read {
-                        let (applied, step) = self.advance(&mut ingest, &entries, lib).await;
-                        ingest.read = read;
+                        let (applied, action) = self.advance(&mut ingest, &entries, lib).await;
+                        ingest.read_through = read;
                         for block in applied {
                             yield Ok(block);
                         }
-                        match step {
-                            Step::Done => {}
-                            Step::Held => had_cycle_error = true,
-                            Step::Halted => return,
+                        match action {
+                            IngestionAction::Continue => {}
+                            IngestionAction::RetryLater => had_cycle_error = true,
+                            IngestionAction::Halt => return,
                         }
                     }
                     if had_cycle_error {

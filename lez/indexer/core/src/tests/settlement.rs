@@ -69,10 +69,10 @@ fn indexer(
 }
 
 /// A pass folding `entries`, which complete every slot up to `lib`, and storing what settles.
-async fn pass(core: &IndexerCore, ingest: &mut Ingest, entries: &[ChannelEntry], lib: u64) {
+async fn pass(core: &IndexerCore, ingest: &mut IngestionState, entries: &[ChannelEntry], lib: u64) {
     ingest.unserved.clear();
-    let (_, step) = core.advance(ingest, entries, Slot::from(lib)).await;
-    assert!(matches!(step, Step::Done));
+    let (_, action) = core.advance(ingest, entries, Slot::from(lib)).await;
+    assert!(matches!(action, IngestionAction::Continue));
 }
 
 fn stored_hash(core: &IndexerCore, block_id: u64) -> Option<HashType> {
