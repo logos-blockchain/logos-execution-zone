@@ -374,8 +374,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
                 .map_err(|err| Error::TransactionTooLarge(err.into()))?;
         }
 
-        // Kept even if the screen below turns the transaction away: a peer's block may carry it.
-        if let Some(proof) = transaction.proof() {
+        // A proof within the cap is kept even if the screen below turns the transaction away: a
+        // peer's block may carry it.
+        if let Some(proof) = transaction
+            .proof()
+            .filter(|proof| chain_state::classify::check_proof_size(proof).is_ok())
+        {
             online.sequencer().proof_store().insert(proof);
         }
 
