@@ -656,8 +656,9 @@ impl ChainState {
         Ok(())
     }
 
-    /// Refolds from the first pending block once its proofs are all present;
-    /// returns whether it did.
+    /// Rebuilds the first pending block from the stored proofs and refolds the view from it;
+    /// returns whether it did, which a missing proof or no pending block prevents. The refold
+    /// can find the block invalid.
     pub fn hydrate(&mut self) -> bool {
         let Some(idx) = self.pending() else {
             return false;

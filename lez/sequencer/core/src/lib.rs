@@ -391,8 +391,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         }
     }
 
-    /// Refolds the head on the proofs that arrived since, as a channel update
-    /// would, and returns the ones it still lacks.
+    /// Refolds the head on the proofs that arrived since and returns the digests it still lacks.
     pub async fn hydrate(&mut self) -> Vec<ProofDigest> {
         if self.follow(FollowUpdate::default()).await {
             self.refresh_committee()
@@ -402,8 +401,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         self.chain.lock().await.missing_proofs()
     }
 
-    /// Folds `update` into the chain state and mirrors it to the store. Without a
-    /// view change it does so only when hydration refolded the head; returns whether it did.
+    /// Folds `update` into the chain state and mirrors it to the store if it carries a view change
+    /// or newly available proofs rebuild a pending block; returns whether it did.
     async fn follow(&self, update: FollowUpdate<'_>) -> bool {
         let FollowUpdate {
             view,
@@ -427,8 +426,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             if let Some(view) = view {
                 log_update(view, finalized, head_tip_before);
             }
-            let hydrated = chain.hydrate();
-            if view.is_none() && !hydrated {
+            let reprocessed = chain.hydrate();
+            if view.is_none() && !reprocessed {
                 return false;
             }
 
