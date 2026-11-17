@@ -5,6 +5,10 @@ edition = "2024"
 license = { workspace = true }
 publish = false
 
+# BIP340 batch verification, shared by the bins and testable on the host.
+[lib]
+path = "src/batch.rs"
+
 # Whole state in, SHA-256 of its borsh encoding before and after.
 [[bin]]
 name = "stf_block"
@@ -28,4 +32,8 @@ lee_core.workspace = true
 stf_smt = { path = "../../smt" }
 
 borsh.workspace = true
+k256 = { workspace = true, features = ["schnorr"] }
 risc0-zkvm = { workspace = true, features = ["std"] }
+
+[target.'cfg(target_os = "zkvm")'.dependencies]
+risc0-bigint2 = "1.4.14"

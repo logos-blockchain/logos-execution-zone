@@ -1,5 +1,6 @@
-//! How a block guest checks public-account authorization: BIP340 in the guest, left for the
-//! verifier, or a hash-preimage receipt per signer checked by composition.
+//! How a block guest checks public-account authorization: BIP340 in the guest one at a time,
+//! left for the verifier, a hash-preimage receipt per signer checked by composition, or BIP340
+//! in the guest as one batch.
 
 use borsh::BorshDeserialize;
 use lee::stf_partial::{self, DeferredSignature};
@@ -8,6 +9,7 @@ use risc0_zkvm::guest::env;
 pub const SCHNORR: u8 = 0;
 pub const DEFER: u8 = 1;
 pub const PREIMAGE: u8 = 2;
+pub const BATCH: u8 = 3;
 
 /// Read from the host with the tip.
 #[derive(BorshDeserialize)]
@@ -22,7 +24,7 @@ pub struct Settings {
 /// Runs before the block is decoded, since hash keys change how public keys decode.
 pub fn begin(settings: &Settings) {
     assert!(
-        matches!(settings.auth, SCHNORR | DEFER | PREIMAGE),
+        matches!(settings.auth, SCHNORR | DEFER | PREIMAGE | BATCH),
         "unknown authorization mode"
     );
     if settings.auth == PREIMAGE {
@@ -36,6 +38,18 @@ pub fn begin(settings: &Settings) {
 /// Runs after the block is applied; returns the checks left for the verifier.
 pub fn finish(settings: &Settings) -> Vec<DeferredSignature> {
     let deferred = stf_partial::take_deferred();
+    if settings.auth == BATCH {
+        let checks: Vec<_> = deferred
+            .iter()
+            .map(|d| stf_bench_guest::Check {
+                public_key: &d.public_key,
+                message_hash: &d.message_hash,
+                signature: &d.signature,
+            })
+            .collect();
+        assert!(stf_bench_guest::verify(&checks), "a signature in the block is invalid");
+        return Vec::new();
+    }
     if settings.auth != PREIMAGE {
         return deferred;
     }

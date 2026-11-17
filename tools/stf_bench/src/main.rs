@@ -58,6 +58,8 @@ enum Auth {
     /// Public key = SHA-256(secret); each signer proves it knows the secret, and the guest
     /// checks that receipt by composition.
     Preimage,
+    /// BIP340 signatures, checked in the guest as one batch over a shared chain of doublings.
+    Batch,
 }
 
 #[derive(Parser)]
