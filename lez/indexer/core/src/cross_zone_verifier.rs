@@ -634,8 +634,8 @@ impl CrossZoneVerifier {
     }
 
     /// Verifies every cross-zone dispatch in a block, returning the keys to mark seen, or the
-    /// reason verification could not complete. Forged means the caller must halt ingestion;
-    /// PeerUnavailable means it must hold its read cursor and retry.
+    /// reason verification could not complete. `Forged` means the caller must halt ingestion;
+    /// `PeerUnavailable` means it must hold its read cursor and retry.
     pub async fn verify_block(
         &self,
         block: &Block,
