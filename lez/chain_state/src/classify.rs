@@ -15,7 +15,7 @@ use common::transaction::{
     LeeTransaction, is_cross_zone_lock, is_sequencer_stake_operation, validate_reward_target,
 };
 use fee_core::{assess::FeeTxView, market};
-use lee::privacy_preserving_transaction::Message as PrivateMessage;
+use lee::privacy_preserving_transaction::{Message as PrivateMessage, circuit::Proof};
 use lee_core::{
     account::{AccountId, Actor, Balance},
     execution_state::{BoundaryStep, Delivery},
@@ -97,6 +97,19 @@ fn private_fee_reserve(message: &PrivateMessage) -> Option<(AccountId, Balance, 
     }
 }
 
+/// Checks that `proof` is no longer than [`market::PROOF_BYTES`].
+///
+/// # Errors
+///
+/// [`ClassifyError::OversizedProof`] if it is longer.
+pub fn check_proof_size(proof: &Proof) -> Result<(), ClassifyError> {
+    let size = proof.size();
+    if u64::try_from(size).map_or(true, |size| size > market::PROOF_BYTES) {
+        return Err(ClassifyError::OversizedProof { size });
+    }
+    Ok(())
+}
+
 /// Classifies `tx` at its turn in the block.
 ///
 /// `is_genesis` covers the genesis block's config/supply transactions. The
@@ -141,10 +154,7 @@ pub fn classify(tx: &LeeTransaction, is_genesis: bool) -> Result<FeeClass, Class
             if count > market::MAX_PRIVATE_ACTIONS {
                 return Err(ClassifyError::TooManyPrivateActions { count });
             }
-            let size = private_tx.witness_set().proof().size();
-            if u64::try_from(size).map_or(true, |size| size > market::PROOF_BYTES) {
-                return Err(ClassifyError::OversizedProof { size });
-            }
+            check_proof_size(private_tx.witness_set().proof())?;
             if let Some(target) = execution.fee.as_ref().and_then(|fee| fee.refund_to) {
                 validate_reward_target(target)
                     .map_err(|reason| ClassifyError::InvalidRefundTarget { reason })?;
