@@ -9,7 +9,7 @@ use crate::{
         types::{
             FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiSelector, FfiVec,
             account::FfiAccount,
-            block::{FfiBlock, FfiBlockOpt},
+            block::{FfiBlock, FfiBlockOpt, FfiTransactionReceipt},
             event::FfiEventRecord,
             transaction::FfiTransaction,
         },
@@ -334,6 +334,56 @@ pub unsafe extern "C" fn query_transaction(
                 });
 
                 PointerResult::from_value(tx_ffi)
+            },
+        )
+}
+
+/// Query a transaction's receipt by its hash from indexer.
+///
+/// # Arguments
+///
+/// - `indexer`: A pointer to the [`IndexerServiceFFI`] instance to be queried.
+/// - `hash`: `FfiHashType` - hash of transaction
+///
+/// # Returns
+///
+/// A `PointerResult<FfiOption<FfiTransactionReceipt>, OperationStatus>` indicating success or
+/// failure. The option is empty for an unknown transaction, and for a block's trailing fee and
+/// clock transactions. Free it with `free_ffi_transaction_receipt_opt`.
+///
+/// # Safety
+///
+/// The caller must ensure that:
+/// - `indexer` is a valid pointer to a [`IndexerServiceFFI`] instance.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn query_transaction_receipt(
+    indexer: *const IndexerServiceFFI,
+    hash: FfiHashType,
+) -> PointerResult<FfiOption<FfiTransactionReceipt>, OperationStatus> {
+    if indexer.is_null() {
+        tracing::error!("Attempted to query a null indexer pointer. This is a bug. Aborting.");
+        return PointerResult::from_error(OperationStatus::NullPointer);
+    }
+
+    let indexer = unsafe { &*indexer };
+
+    indexer
+        .core()
+        .store
+        .get_transaction_receipt_by_hash(hash.data)
+        .map_or_else(
+            |e| {
+                tracing::error!(
+                    error = format_args!("{e:#}"),
+                    "Failed to query transaction receipt"
+                );
+                PointerResult::from_error(OperationStatus::ClientError)
+            },
+            |receipt| {
+                PointerResult::from_value(receipt.map_or_else(FfiOption::from_none, |receipt| {
+                    let receipt: indexer_service_protocol::TransactionReceipt = receipt.into();
+                    FfiOption::from_value(FfiTransactionReceipt::from(receipt))
+                }))
             },
         )
 }

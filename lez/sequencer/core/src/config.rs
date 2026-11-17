@@ -31,6 +31,11 @@ pub const BLOCK_OVERHEAD: u64 = 2_048;
 /// deployment.
 pub const MAX_PUBLISHABLE_BLOCK_SIZE: u64 = 0x001C_0000;
 
+const _: () = assert!(
+    sequencer_stake_core::MAX_MAX_BLOCK_SIZE == MAX_PUBLISHABLE_BLOCK_SIZE,
+    "the sequencer_stake program must bound max_block_size at Bedrock's inscription limit"
+);
+
 /// The largest Bedrock transaction, 2 MiB.
 ///
 /// An era caps a block's transactions at its `max_transactions_size` bytes; this
@@ -123,7 +128,7 @@ pub struct BedrockConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GenesisConfig {
-    /// Fixed for the chain's life; every other node reads them from the chain.
+    /// The chain's initial params; every other node reads them from the chain.
     pub channel_params: ChannelParams,
     #[serde(default)]
     pub actions: Vec<GenesisAction>,
@@ -282,15 +287,15 @@ pub const fn default_backfill_batch_slots() -> NonZero<u64> {
     chain_state::zone_indexer::DEFAULT_BACKFILL_BATCH_SLOTS
 }
 
-/// Production defaults for the values genesis fixes.
+/// Production defaults for the values genesis sets.
 #[must_use]
 pub const fn default_channel_params() -> ChannelParams {
     ChannelParams {
         minimum_sequencer_stake: system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE,
         posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
         posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
-        exit_delay: system_accounts::DEFAULT_SEQUENCER_EXIT_DELAY,
         max_block_size: system_accounts::DEFAULT_MAX_BLOCK_SIZE,
+        finality_depth: system_accounts::DEFAULT_FINALITY_DEPTH,
     }
 }
 

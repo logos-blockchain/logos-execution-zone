@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use chain_state::{AcceptOutcome, AnchorConsistencyCheck, ChainConsistency, ChainState};
 use common::{
@@ -9,11 +9,11 @@ use kameo::actor::ActorRef;
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
     protocol::{
-        BlockData, DepositInfo, Ed25519Key, FinalizedBlock, FinalizedUpTo, MsgId, Slot,
+        BlockData, DepositInfo, Ed25519Key, FinalizedBlock, FinalizedUpTo, L1Position, MsgId, Slot,
         WithdrawInfo,
     },
 };
-use sequencer_core::{config::SequencerConfig, faults};
+use sequencer_core::{config::SequencerConfig, faults, release_finality};
 use sequencer_slasher_actor::protocol::{Report, ReportedOffence};
 use sequencer_storage_actor::{
     StorageActorTrait,
@@ -180,6 +180,19 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
     ) -> Result<()> {
         let msg = finalized.msg_id;
         let slot = finalized.slot;
+        let finally_absent_keys = match entry_block {
+            Some(block) => {
+                release_finality::finally_absent_keys(
+                    &self.actors.bedrock_pool_ref,
+                    self.config.bedrock_config.channel_id,
+                    L1Position::FinalSlot(slot.into_inner()),
+                    block,
+                    release_finality::finality_depth(self.chain.final_state()),
+                )
+                .await
+            }
+            None => BTreeSet::new(),
+        };
         let storage_ref = &self.actors.storage_ref;
         let head_before: HashSet<HashType> = self
             .chain
@@ -190,9 +203,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
         // A root lineage over a held tier is a store restored without its view.
         let judgeable = !was_empty && self.chain.final_msg() != MsgId::root();
         let outcome = if self.on_lineage {
-            self.chain.apply_reconstructed(msg, entry_block)
+            self.chain
+                .apply_reconstructed(msg, entry_block, &finally_absent_keys)
         } else {
-            self.chain.apply_finalized_redelivery(msg, entry_block)
+            self.chain
+                .apply_finalized_redelivery(msg, entry_block, &finally_absent_keys)
         };
 
         // The channel's first finalized block is its genesis: one that is not

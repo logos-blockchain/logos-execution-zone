@@ -398,11 +398,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
     }
 }
 
-/// The view entry a publish of `block` produced.
+/// The view entry a publish of `block` produced; our own blocks are trusted for every key they
+/// name.
 fn published_entry(outcome: &PublishOutcome, block: &Block) -> ChannelEntry {
     ChannelEntry {
         msg: outcome.this_msg,
         parent: outcome.parent,
         block: Some(block.clone()),
+        finally_absent_keys: chain_state::full_stake_releases::finalize_unstake_keys(block),
+        final_slot: None,
     }
 }

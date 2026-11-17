@@ -11,7 +11,7 @@ use lee::{AccountId, Actor};
 
 use crate::{
     HashType,
-    block::{Block, HashableBlockData},
+    block::{Block, HashableBlockData, TransactionReceipt},
     transaction::{FeePayee, LeeTransaction, clock_invocation, fee_invocation},
 };
 
@@ -77,7 +77,7 @@ pub fn produce_dummy_block(
     prev_hash: Option<HashType>,
     transactions: Vec<LeeTransaction>,
 ) -> Block {
-    produce_dummy_block_with_reverted(id, prev_hash, transactions, Vec::new())
+    produce_dummy_block_with_reverted(id, prev_hash, transactions, &[])
 }
 
 /// Like [`produce_dummy_block`], declaring `outbound` on the block.
@@ -93,20 +93,26 @@ pub fn produce_dummy_block_with_outbound(
         prev_block_hash: block.header.prev_block_hash,
         timestamp: block.header.timestamp,
         transactions: block.body.transactions,
-        reverted: block.body.reverted,
+        receipts: block.body.receipts,
         outbound,
     }
     .into_pending_block()
 }
 
-/// Like [`produce_dummy_block`], with `reverted` indices into the final transaction list.
+/// Like [`produce_dummy_block`], with the transactions at the `reverted` indices reverted.
 #[must_use]
 pub fn produce_dummy_block_with_reverted(
     id: u64,
     prev_hash: Option<HashType>,
     mut transactions: Vec<LeeTransaction>,
-    reverted: Vec<u64>,
+    reverted: &[u64],
 ) -> Block {
+    let receipts = (0..transactions.len())
+        .map(|index| TransactionReceipt {
+            success: !reverted.contains(&u64::try_from(index).expect("index fits u64")),
+            ..TransactionReceipt::EXEMPT
+        })
+        .collect();
     transactions.push(LeeTransaction::Public(fee_invocation(
         fee_core::BlockFeeSummary::default(),
         0,
@@ -123,7 +129,7 @@ pub fn produce_dummy_block_with_reverted(
         prev_block_hash: prev_hash.unwrap_or_default(),
         timestamp: id.saturating_mul(100),
         transactions,
-        reverted,
+        receipts,
     };
 
     block_data.into_pending_block()

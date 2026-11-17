@@ -4,7 +4,10 @@ use std::collections::BTreeMap;
 
 pub use ed25519_dalek;
 pub use lee_core::program::PdaSeed;
-use lee_core::{BlockId, account::AccountId};
+use lee_core::{
+    BlockId,
+    account::{AccountId, Balance},
+};
 use serde::{Deserialize, Serialize};
 
 const INVALID_KEY: &str = "invalid Ed25519 public key";
@@ -15,12 +18,17 @@ const SLASH_SINK_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/SlashedStakeSink/00000";
 
 pub const SEQUENCER_STAKE_NAME: lee_core::program::SystemProgramName =
     lee_core::program::SystemProgramName::new(b"sequencer_stake");
-/// Blocks before `requested_at` in which an `UnstakeRequest` may land.
-pub const UNSTAKE_REQUEST_WINDOW: u64 = 16;
 
-/// Smallest `max_block_size` genesis accepts, leaving room for the header and the fee and clock
-/// transactions.
+/// Smallest `max_block_size` the program accepts, leaving room for the header and the fee and
+/// clock transactions.
 pub const MIN_MAX_BLOCK_SIZE: u64 = 4 * 1024;
+
+/// Largest `max_block_size` the program accepts: the most one Bedrock inscription carries.
+pub const MAX_MAX_BLOCK_SIZE: u64 = 1_835_008;
+
+/// Smallest `posting_timeout`, and so `posting_timeframe`, the program accepts: a shorter turn
+/// passes on before an inscription posted in it can land.
+pub const MIN_POSTING_TIMEOUT: u32 = 10;
 
 /// The channel signing public key a stake backs. Holds only a valid Ed25519
 /// public key.
@@ -81,7 +89,7 @@ pub enum Message {
     /// First use initializes the ownership account's actor state for this program.
     Stake {
         sequencer_key: SequencerKey,
-        amount: u128,
+        amount: Balance,
         has_record: bool,
         funding: AccountId,
     },
@@ -90,15 +98,15 @@ pub enum Message {
     /// moves yet. Must leave the account at zero or at/above the minimum.
     UnstakeRequest {
         sequencer_key: SequencerKey,
-        amount: u128,
+        amount: Balance,
         destination: AccountId,
-        /// The latest block the request may land in, dating the exit delay.
-        requested_at: u64,
     },
 
     /// Unsigned, permissionless: releases the key's pending unstake, as the config records it,
-    /// once [`ChannelParams::exit_delay`] blocks have passed since it. The payout is sent
-    /// asynchronously to the destination.
+    /// sending the payout asynchronously to the destination.
+    ///
+    /// Nodes refuse a block that releases a key's whole stake before the config removing the
+    /// key is [`ChannelParams::finality_depth`] L1 blocks deep.
     FinalizeUnstake { sequencer_key: SequencerKey },
 
     /// Burns the key's whole tracked stake, pending unstake included, to the sink and removes
@@ -112,8 +120,7 @@ pub enum Message {
         approvals: Vec<SlashApproval>,
     },
 
-    /// Sets the channel params and the channel id once, at genesis. Rejected
-    /// once they are set, so nothing can move them afterwards.
+    /// Sets the channel params and the channel id once, at genesis; rejected once they are set.
     InitChannelParams {
         params: ChannelParams,
         /// Bedrock `ChannelId`, raw to avoid Bedrock types.
@@ -123,15 +130,14 @@ pub enum Message {
     RecordStake {
         sequencer_key: SequencerKey,
         ownership: AccountId,
-        amount: u128,
+        amount: Balance,
         has_record: bool,
     },
     TrackUnstakeRequest {
         sequencer_key: SequencerKey,
         ownership: AccountId,
-        amount: u128,
+        amount: Balance,
         destination: AccountId,
-        requested_at: u64,
     },
 
     /// Asserts that `approvals` of `payload` meet the committee's threshold, on the rules `Slash`
@@ -144,6 +150,32 @@ pub enum Message {
         domain: [u8; 32],
         payload: Vec<u8>,
         approvals: Vec<CommitteeApproval>,
+    },
+
+    /// Sets the standing vote of the key the ownership account backs to `params`; signed by the
+    /// ownership account, and only an accredited key may vote.
+    ///
+    /// `params` replace the channel params in this transaction once [`params_vote_threshold`]
+    /// accredited keys vote for them, and every vote is then cleared. A vote for the params in
+    /// force is refused, as is one changing `finality_depth`.
+    VoteChannelParams {
+        sequencer_key: SequencerKey,
+        params: ChannelParams,
+    },
+
+    RecordChannelParamsVote {
+        sequencer_key: SequencerKey,
+        ownership: AccountId,
+        params: ChannelParams,
+    },
+
+    /// Drops the standing vote of the key the ownership account backs, if it has one; signed by
+    /// the ownership account.
+    WithdrawChannelParamsVote { sequencer_key: SequencerKey },
+
+    DropChannelParamsVote {
+        sequencer_key: SequencerKey,
+        ownership: AccountId,
     },
 }
 
@@ -183,27 +215,15 @@ impl StakeRecord {
     }
 }
 
-/// Fixed under the staker's signature at `UnstakeRequest` time — `FinalizeUnstake` needs no
-/// signature of its own.
+/// Recorded at `UnstakeRequest` time, so `FinalizeUnstake` needs no signature of its own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PendingUnstake {
-    pub amount: u128,
+    pub amount: Balance,
     pub destination: AccountId,
-    /// The latest block the request could land in.
-    pub requested_at: u64,
 }
 
-impl PendingUnstake {
-    /// The first block `FinalizeUnstake` may land in.
-    #[must_use]
-    pub const fn releasable_at(&self, exit_delay: u64) -> u64 {
-        self.requested_at.saturating_add(exit_delay)
-    }
-}
-
-/// The values genesis fixes for the chain's life.
-///
-/// The program refuses a second write, so once set these never move.
+/// Chain-wide values genesis sets; two thirds of the accredited keys voting for new values with
+/// [`Message::VoteChannelParams`] replace them, all but `finality_depth`.
 #[derive(
     Clone,
     Copy,
@@ -217,17 +237,18 @@ impl PendingUnstake {
 )]
 pub struct ChannelParams {
     /// Minimum summed stake for a key to be a committee candidate.
-    pub minimum_sequencer_stake: u128,
+    pub minimum_sequencer_stake: Balance,
     /// How long one sequencer's posting turn lasts, in slots.
     pub posting_timeframe: u32,
     /// Idle slots after which a turn nobody posted in passes on. Must stay
     /// above `block_create_timeout`, or a healthy sequencer loses its turn
     /// between its own blocks.
     pub posting_timeout: u32,
-    /// Blocks an unstake waits before `FinalizeUnstake` may release it.
-    pub exit_delay: u64,
     /// Largest block a sequencer builds, in borsh-encoded bytes.
     pub max_block_size: u64,
+    /// L1 blocks on top of the config removing a key before its whole stake can be released,
+    /// which must exceed Bedrock's `security_param`; fixed at genesis.
+    pub finality_depth: u64,
 }
 
 /// Minimum stake and per-key standing, stored in this program's config actor state.
@@ -240,6 +261,8 @@ pub struct SequencerStakeConfig {
     /// scopes a slash approval to this zone.
     pub channel_id: Option<[u8; 32]>,
     pub entries: BTreeMap<SequencerKey, SequencerEntry>,
+    /// Each key's standing [`Message::VoteChannelParams`] vote.
+    pub params_votes: BTreeMap<SequencerKey, ChannelParams>,
 }
 
 impl SequencerStakeConfig {
@@ -283,6 +306,12 @@ impl SequencerStakeConfig {
     pub fn accredited_committee_members_count(&self) -> usize {
         self.accredited_committee_members().count()
     }
+
+    /// Drops `key`'s entry together with its standing vote.
+    pub fn remove_key(&mut self, key: &SequencerKey) -> Option<SequencerEntry> {
+        self.params_votes.remove(key);
+        self.entries.remove(key)
+    }
 }
 
 /// One key's standing. `account_id` makes the ownership account findable — a plain account's id
@@ -290,7 +319,7 @@ impl SequencerStakeConfig {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct SequencerEntry {
     pub account_id: AccountId,
-    pub total_staked: u128,
+    pub total_staked: Balance,
     pub pending_unstake: Option<PendingUnstake>,
 }
 
@@ -300,7 +329,7 @@ impl SequencerEntry {
     /// stake funds account's balance: credits are free, so anyone can push
     /// that balance above `total_staked`.
     #[must_use]
-    pub const fn net_stake(&self) -> u128 {
+    pub const fn net_stake(&self) -> Balance {
         let pending = match self.pending_unstake {
             Some(pending) => pending.amount,
             None => 0,
@@ -310,7 +339,7 @@ impl SequencerEntry {
 
     /// Whether this entry still backs enough stake to stand for the committee.
     #[must_use]
-    pub const fn is_accredited(&self, minimum_stake: u128) -> bool {
+    pub const fn is_accredited(&self, minimum_stake: Balance) -> bool {
         self.net_stake() >= minimum_stake
     }
 
@@ -318,7 +347,7 @@ impl SequencerEntry {
     /// entry: covered by the stake tracked here, and leaving the key either
     /// fully exited or still at or above `minimum`.
     #[must_use]
-    pub const fn allows_unstake_request(&self, amount: u128, minimum: u128) -> bool {
+    pub const fn allows_unstake_request(&self, amount: Balance, minimum: Balance) -> bool {
         match self.net_stake().checked_sub(amount) {
             None => false,
             Some(remaining) => remaining == 0 || remaining >= minimum,
@@ -340,7 +369,18 @@ pub fn sequencer_stake_account_id() -> AccountId {
 /// ever sign, which leaves slashing inert rather than unilateral.
 #[must_use]
 pub fn slash_approval_threshold(committee_size: usize) -> usize {
-    committee_size.saturating_mul(2).div_ceil(3).max(2)
+    two_thirds_rounded_up(committee_size).max(2)
+}
+
+/// Votes that replace the channel params: two thirds of the accredited keys, never fewer than one.
+#[must_use]
+pub fn params_vote_threshold(committee_size: usize) -> usize {
+    two_thirds_rounded_up(committee_size).max(1)
+}
+
+/// `n - ⌊n/3⌋`, which equals `⌈2n/3⌉` for every `n` without computing `2n`.
+const fn two_thirds_rounded_up(n: usize) -> usize {
+    n.saturating_sub(n.checked_div(3).expect("the divisor is not zero"))
 }
 
 /// Bytes an approver signs. The channel id keeps the approval to one zone and
@@ -412,6 +452,8 @@ mod tests {
     use super::*;
 
     const PROGRAM_ID: AccountId = AccountId::new([9; 32]);
+    /// Exactly two thirds of `usize::MAX`, which is a multiple of 3.
+    const TWO_THIRDS_OF_MAX: usize = usize::MAX.div_euclid(3).saturating_mul(2);
 
     fn test_destination() -> AccountId {
         AccountId::new([3; 32])
@@ -458,11 +500,21 @@ mod tests {
                 minimum_sequencer_stake: 1_000_000,
                 posting_timeframe: 300,
                 posting_timeout: 25,
-                exit_delay: 10,
                 max_block_size: 1 << 20,
+                finality_depth: 5,
             }),
             channel_id: Some([0xC1; 32]),
             entries,
+            params_votes: BTreeMap::from([(
+                test_key(2),
+                ChannelParams {
+                    minimum_sequencer_stake: 2_000_000,
+                    posting_timeframe: 600,
+                    posting_timeout: 50,
+                    max_block_size: 1 << 19,
+                    finality_depth: 5,
+                },
+            )]),
         }
     }
 
@@ -497,7 +549,6 @@ mod tests {
             pending_unstake: (pending > 0).then_some(PendingUnstake {
                 amount: pending,
                 destination: test_destination(),
-                requested_at: 0,
             }),
         }
     }
@@ -577,6 +628,7 @@ mod tests {
             (6, 4),
             (7, 5),
             (9, 6),
+            (usize::MAX, TWO_THIRDS_OF_MAX),
         ];
         for (committee_size, threshold) in expected {
             assert_eq!(
@@ -617,6 +669,29 @@ mod tests {
         }
     }
     #[test]
+    fn params_change_at_two_thirds_of_the_committee() {
+        let expected = [
+            (0, 1),
+            (1, 1),
+            (2, 2),
+            (3, 2),
+            (4, 3),
+            (5, 4),
+            (6, 4),
+            (7, 5),
+            (9, 6),
+            (usize::MAX, TWO_THIRDS_OF_MAX),
+        ];
+        for (committee_size, threshold) in expected {
+            assert_eq!(
+                params_vote_threshold(committee_size),
+                threshold,
+                "committee of {committee_size}"
+            );
+        }
+    }
+
+    #[test]
     fn a_key_on_its_way_out_is_neither_an_approver_nor_a_head_to_count() {
         let staying = SequencerKey::new(
             ed25519_dalek::SigningKey::from_bytes(&[1; 32])
@@ -635,11 +710,12 @@ mod tests {
                 minimum_sequencer_stake: 1_000,
                 posting_timeframe: 300,
                 posting_timeout: 25,
-                exit_delay: 10,
                 max_block_size: 1 << 20,
+                finality_depth: 5,
             }),
             channel_id: Some([0xC1; 32]),
             entries: BTreeMap::from([(staying, entry(1_000, 0)), (leaving, entry(1_000, 1_000))]),
+            params_votes: BTreeMap::new(),
         };
 
         assert!(config.is_accredited_committee_member(&staying));

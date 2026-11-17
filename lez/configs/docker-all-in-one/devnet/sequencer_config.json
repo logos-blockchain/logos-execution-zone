@@ -17,8 +17,8 @@
       "minimum_sequencer_stake": 149,
       "posting_timeframe": 60,
       "posting_timeout": 25,
-      "exit_delay": 100,
-      "max_block_size": 1048576
+      "max_block_size": 1048576,
+      "finality_depth": 35
     },
     "actions": [
       {
@@ -57,8 +57,8 @@
             132,
             121
           ],
-          "ownership_public_key": "fe3443e524093bbe7b85e28453c90f6cd13d2a203994fdec55360c75d3345bf3",
-          "stake_signature": "64a7ffa272d0726f8cc7f4a48b3e53daa838cce8f8751f6a921f3db491ad979c939569434cbbc987a774bf733cbbeddd54217032953901c5811c287ecd0b3155"
+          "ownership_public_key": "975664622e4a1993349ececf91f16b0dd5028112ca6465f5d8e16276c9634ebc",
+          "stake_signature": "8c3a5b6495c11fb4363c86aa610ddabecff2924f1fa89175d63b6001afb06c02fee57516a433794e493e0a4e7456b5ec7d08c3644e831315827b692aeb283c02"
         }
       },
       {
@@ -97,8 +97,8 @@
             42,
             251
           ],
-          "ownership_public_key": "bfdb7085497a74d0f83be2c41cf4057244131d5f5421cdcd5bcb8066ab626a5a",
-          "stake_signature": "c58db8d41438fde0481a5e51d3b77385dbf9bf18c672e868dab40f4cc00c4a0701e83edaad32f2abf6c0f667ff2051b452ceb0e16a2ad6f1c203363fba08d4e3"
+          "ownership_public_key": "a28404b37304380011ae694dab3a405f52d8e3828880e1f71db2f46f35a1c4dc",
+          "stake_signature": "0905f462dcf61b6a5624135562024504a6ef7a7f59a87a0de21d9f1f85e756b9dff062eeb4522ed0e60115f1593a33ada407b574a92ca835a2c60cd5d6e114bc"
         }
       },
       {
@@ -137,8 +137,8 @@
             113,
             209
           ],
-          "ownership_public_key": "2f0881638c17eabfc32725bb77b202e563fbdc2e84ce4bcca7868a81cddf065a",
-          "stake_signature": "890372ec55ed0fa6dc43ccf5b1fb3709b63b9256076cfcb63d5cab769d939547b5e5ee835c0272ba34dac5b32d7b4f2c99f2ad868b4fe0f544f78a8fbe344740"
+          "ownership_public_key": "a4d0ed1eee76b42172ab520ad2bc7be256311a18b5d8c48d9c5d76311e55be19",
+          "stake_signature": "4e0ea8ae599e22ffeb9df777162f98b89580fec1abfa06decbc46deafb58358851edce18e10095d2175aa834866eae54dd7a856d1d3b00a1b16c3b4b762e93ed"
         }
       },
       {
@@ -177,8 +177,8 @@
             17,
             10
           ],
-          "ownership_public_key": "62a60b680869b972a23cfe5702e41222814a6a5184f30448d9c1c6b4b14314a2",
-          "stake_signature": "09bccf6328e1aff03636599e74f86c0af9cdf6e07fd12f8178dfd84e81afc2e3779952b439f68e756902e816ced64bb0e4b182b36b2d758bfd944427bb5fd448"
+          "ownership_public_key": "aa7b6ff92b7b74fc3aa3bc0b54a0c76d8b5346c552362b2d51470e4b7256c93e",
+          "stake_signature": "dd00cb1769eb5ce09eba3dfb89f0d3032333c553d67aefadf17b2e1129e5c536cc3d63423f2047b77794b09efeff3fb1ca9b51c2c8f450a125fad20f54c79151"
         }
       },
       {

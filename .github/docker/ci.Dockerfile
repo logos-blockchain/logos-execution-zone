@@ -58,8 +58,8 @@ RUN curl -L https://risczero.com/install | bash \
     && rm -rf /root/.risc0 \
     && rzup install rust 1.94.1 \
     && rzup install cpp 2024.1.5 \
-    && rzup install r0vm 3.0.5 \
-    && rzup install cargo-risczero 3.0.5
+    && rzup install r0vm 3.1.0 \
+    && rzup install cargo-risczero 3.1.0
 
 # Copying docker. Static Go binaries, so the alpine-built ones run fine here.
 COPY --from=docker:29.6.1-cli /usr/local/bin/docker /usr/local/bin/docker

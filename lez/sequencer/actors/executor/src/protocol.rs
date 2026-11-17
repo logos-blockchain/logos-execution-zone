@@ -2,6 +2,7 @@ use std::ops::RangeInclusive;
 
 use common::{HashType, PageLimit, transaction::LeeTransaction};
 use kameo::Reply;
+use lee::PublicationsPage;
 use lee_core::{
     BlockId, Commitment, CommitmentPosition, CommitmentSetDigest, MembershipProof,
     account::{AccountId, Actor},
@@ -105,6 +106,11 @@ pub struct GetTransaction {
     pub tx_hash: HashType,
 }
 
+/// `None` also for a block's trailing fee and clock transactions, which have no receipt.
+pub struct GetTransactionReceipt {
+    pub tx_hash: HashType,
+}
+
 pub struct GetAccountNonces {
     pub account_ids: Vec<AccountId>,
 }
@@ -136,6 +142,11 @@ pub struct GetAccountView {
 pub struct GetPublications {
     pub from_position: CommitmentPosition,
     pub limit: PageLimit,
+}
+
+#[derive(Reply)]
+pub struct GetPublicationsReply {
+    pub page: PublicationsPage,
 }
 
 pub struct GetMessagePath {
@@ -177,6 +188,21 @@ pub struct GetCrossZoneDeadLettersReply {
 
 pub struct RequeueCrossZoneDeadLetter {
     pub message_key: CrossZoneMessageKey,
+}
+
+/// The `system_upgrader` changes the approval pool holds approvals of.
+pub struct GetSystemProposals;
+
+#[derive(Reply)]
+pub struct GetSystemProposalsReply {
+    /// Approvals the head's committee must reach for a change.
+    pub threshold: usize,
+    pub proposals: Vec<common::system_upgrades::ProposalApprovals>,
+}
+
+/// A committee member's approval of a `system_upgrader` change, for the producer's pool.
+pub struct SubmitSystemApproval {
+    pub approval: system_upgrader_core::SignedApproval,
 }
 
 #[derive(Reply)]

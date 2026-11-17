@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use bridge_core::{BridgeAmount, DepositRecipient};
 use common::{
     HashType,
-    block::{Block, HashableBlockData},
+    block::{Block, HashableBlockData, TransactionReceipt},
     transaction::{FeePayee, LeeTransaction, TxEvents, clock_invocation, fee_invocation},
 };
 pub use cross_zone::CrossZoneConfig;
@@ -100,9 +100,11 @@ pub fn build_initial_state(cross_zone: bool) -> lee::V03State {
 #[must_use]
 pub fn genesis_block_and_state(spec: &GenesisSpec) -> (Block, lee::V03State, Vec<TxEvents>) {
     let (genesis_state, genesis_txs, genesis_events) = build_genesis_state(spec);
+    // Every genesis transaction but the trailing fee and clock ones is exempt.
+    let receipts = vec![TransactionReceipt::EXEMPT; genesis_txs.len().saturating_sub(2)];
     let genesis_block = HashableBlockData {
         outbound: Vec::new(),
-        reverted: Vec::new(),
+        receipts,
         block_id: GENESIS_BLOCK_ID,
         transactions: genesis_txs,
         prev_block_hash: HashType([0; 32]),
@@ -518,8 +520,8 @@ mod tests {
                 minimum_sequencer_stake: system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE,
                 posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
                 posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
-                exit_delay: system_accounts::DEFAULT_SEQUENCER_EXIT_DELAY,
                 max_block_size: system_accounts::DEFAULT_MAX_BLOCK_SIZE,
+                finality_depth: system_accounts::DEFAULT_FINALITY_DEPTH,
             },
             cross_zone: Some(cross_zone),
             actions,

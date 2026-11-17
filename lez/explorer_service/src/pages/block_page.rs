@@ -61,7 +61,7 @@ pub fn BlockPage() -> impl IntoView {
                                     },
                                     body: BlockBody {
                                         transactions,
-                                        reverted: _,
+                                        receipts,
                                         outbound: _,
                                     },
                                     bedrock_status,
@@ -123,7 +123,11 @@ pub fn BlockPage() -> impl IntoView {
                                         <div class="transactions-list">
                                             {transactions
                                                 .into_iter()
-                                                .map(|tx| view! { <TransactionPreview transaction=tx /> })
+                                                .enumerate()
+                                                .map(|(position, tx)| {
+                                                    let receipt = receipts.get(position).copied();
+                                                    view! { <TransactionPreview transaction=tx receipt=receipt /> }
+                                                })
                                                 .collect::<Vec<_>>()}
                                         </div>
                                     }

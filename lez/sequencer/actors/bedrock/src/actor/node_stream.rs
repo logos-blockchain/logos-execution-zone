@@ -374,8 +374,8 @@ mod tests {
 
     fn block(block_id: u64) -> Block {
         HashableBlockData {
+            receipts: Vec::new(),
             outbound: Vec::new(),
-            reverted: Vec::new(),
             block_id,
             prev_block_hash: HashType([0; 32]),
             timestamp: 0,

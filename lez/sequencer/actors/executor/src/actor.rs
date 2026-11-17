@@ -1,6 +1,10 @@
 use std::ops::ControlFlow;
 
-use common::{PageLimit, block::Block, transaction::LeeTransaction};
+use common::{
+    PageLimit,
+    block::{Block, TransactionReceipt},
+    transaction::LeeTransaction,
+};
 use fee_core::validity::FeeError;
 use futures::{
     FutureExt as _, StreamExt as _, TryFutureExt as _, TryStreamExt as _, future::ready, stream,
@@ -19,9 +23,8 @@ use kameo_actors::{
 };
 use lee::Account;
 use lee_core::{
-    BlockId, CommitmentPosition, EncryptedNote, MembershipProof,
+    BlockId, EncryptedNote, MembershipProof,
     account::{Actor, Balance, Nonce},
-    program::Publication,
 };
 use sequencer_actors_common::{Reply, SendErrorExt};
 use sequencer_bedrock_actor::{
@@ -47,8 +50,10 @@ use crate::{
         GetAccountTransactions, GetAccountView, GetBlock, GetBlockByHash, GetBlockRange,
         GetChannelId, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply, GetFeeQuote,
         GetLastBlockId, GetMessagePath, GetProofsAndRoot, GetProofsAndRootReply, GetPublications,
-        GetRecoveryBinding, GetStatus, GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter,
-        RequeueCrossZoneDeadLetterReply, Transaction,
+        GetPublicationsReply, GetRecoveryBinding, GetStatus, GetSystemProposals,
+        GetSystemProposalsReply, GetTransaction, GetTransactionReceipt, ProduceBlock,
+        RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, SubmitSystemApproval,
+        Transaction,
     },
 };
 
@@ -505,6 +510,23 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetTransaction> for Exe
     }
 }
 
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetTransactionReceipt>
+    for ExecutorActor<S, B>
+{
+    type Reply = Result<Option<TransactionReceipt>>;
+
+    async fn handle(
+        &mut self,
+        GetTransactionReceipt { tx_hash }: GetTransactionReceipt,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.storage_ref
+            .ask(sequencer_storage_actor::protocol::GetTransactionReceiptByHash { hash: tx_hash })
+            .await
+            .map_err(Into::into)
+    }
+}
+
 impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountNonces> for ExecutorActor<S, B> {
     type Reply = Result<Vec<Nonce>>;
 
@@ -610,7 +632,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountView> for Exe
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetPublications> for ExecutorActor<S, B> {
-    type Reply = Result<Vec<(CommitmentPosition, Publication)>>;
+    type Reply = Result<GetPublicationsReply>;
 
     async fn handle(
         &mut self,
@@ -622,12 +644,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetPublications> for Ex
     ) -> Self::Reply {
         let limit = usize::try_from(limit.min(MAX_PUBLICATIONS_PER_REQUEST))
             .expect("the request limit fits in usize");
-        Ok(self
-            .state
-            .online()?
-            .sequencer()
-            .with_state(|state| state.publications_from(from_position).take(limit).collect())
-            .await)
+        Ok(GetPublicationsReply {
+            page: self
+                .state
+                .online()?
+                .sequencer()
+                .with_state(|state| state.publications_page(from_position, limit))
+                .await,
+        })
     }
 }
 
@@ -744,6 +768,54 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<RequeueCrossZoneDeadLet
             .await
             .map_err(Error::CrossZoneDeadLetterRequeueFailed)?;
         Ok(RequeueCrossZoneDeadLetterReply { outcome })
+    }
+}
+
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetSystemProposals>
+    for ExecutorActor<S, B>
+{
+    type Reply = Result<GetSystemProposalsReply>;
+
+    async fn handle(
+        &mut self,
+        GetSystemProposals: GetSystemProposals,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let sequencer_core::system_approvals::SystemProposals {
+            threshold,
+            proposals,
+        } = self
+            .state
+            .online()?
+            .sequencer()
+            .system_proposals()
+            .await
+            .map_err(Error::SystemProposalsUnavailable)?;
+        Ok(GetSystemProposalsReply {
+            threshold,
+            proposals,
+        })
+    }
+}
+
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<SubmitSystemApproval>
+    for ExecutorActor<S, B>
+{
+    type Reply = Result<()>;
+
+    async fn handle(
+        &mut self,
+        SubmitSystemApproval { approval }: SubmitSystemApproval,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let State::Online(online) = &mut self.state else {
+            return Err(Error::NotOnline);
+        };
+        online
+            .sequencer_mut()
+            .submit_system_approval(approval)
+            .await
+            .map_err(Error::SystemApprovalRefused)
     }
 }
 

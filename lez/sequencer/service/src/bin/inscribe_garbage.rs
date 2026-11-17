@@ -174,6 +174,9 @@ async fn main() -> Result<()> {
     storage
         .expect_handle_get_zone_checkpoint()
         .returning(|_msg, _ctx| Ok(None));
+    storage
+        .expect_handle_put_final_configs_bytes()
+        .returning(|_msg, _ctx| Ok(()));
     let storage_ref = MockStorageActor::spawn(storage);
 
     let bedrock_ref = BedrockActor::spawn(sequencer_bedrock_actor::actor::Args {

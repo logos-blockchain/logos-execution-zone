@@ -1,18 +1,17 @@
 use std::collections::btree_map::Entry;
 
 use lee_core::{
-    BlockId,
-    account::{AccountId, Actor},
+    account::{AccountId, Actor, Balance},
     native_token::{self, custody_transfer},
-    program::{BlockValidityWindow, ReceiveInput, Response, SyncMessage},
+    program::{ReceiveInput, Response, SyncMessage},
 };
 use sequencer_stake_core::{
-    ChannelParams, CommitteeApproval, Message, PendingUnstake, SLASH_APPROVAL_DOMAIN,
-    SequencerEntry, SequencerKey, SequencerStakeConfig, SlashApproval, StakeRecord,
-    UNSTAKE_REQUEST_WINDOW, committee_approval_message,
+    ChannelParams, CommitteeApproval, MAX_MAX_BLOCK_SIZE, MIN_MAX_BLOCK_SIZE, MIN_POSTING_TIMEOUT,
+    Message, PendingUnstake, SLASH_APPROVAL_DOMAIN, SequencerEntry, SequencerKey,
+    SequencerStakeConfig, SlashApproval, StakeRecord, committee_approval_message,
     ed25519_dalek::{Signature, VerifyingKey},
-    sequencer_stake_config_account_id, slash_approval_message, slash_approval_threshold,
-    slash_sink_account_id, stake_funds_account_id, stake_funds_seed,
+    params_vote_threshold, sequencer_stake_config_account_id, slash_approval_message,
+    slash_approval_threshold, slash_sink_account_id, stake_funds_account_id, stake_funds_seed,
 };
 
 lee_core::actor_entrypoint!(handle_message);
@@ -29,8 +28,7 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
             sequencer_key,
             amount,
             destination,
-            requested_at,
-        } => unstake_request(input, sequencer_key, amount, destination, requested_at),
+        } => unstake_request(input, sequencer_key, amount, destination),
         Message::FinalizeUnstake { sequencer_key } => finalize_unstake(input, sequencer_key),
         Message::Slash {
             sequencer_key,
@@ -51,7 +49,6 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
             ownership,
             amount,
             destination,
-            requested_at,
         } => track_unstake_request(
             input,
             sequencer_key,
@@ -59,7 +56,6 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
             PendingUnstake {
                 amount,
                 destination,
-                requested_at,
             },
         ),
         Message::VerifyApprovals {
@@ -67,13 +63,29 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
             payload,
             approvals,
         } => verify_committee_approvals(input, domain, &payload, &approvals),
+        Message::VoteChannelParams {
+            sequencer_key,
+            params,
+        } => vote_channel_params(input, sequencer_key, params),
+        Message::RecordChannelParamsVote {
+            sequencer_key,
+            ownership,
+            params,
+        } => record_channel_params_vote(input, sequencer_key, ownership, params),
+        Message::WithdrawChannelParamsVote { sequencer_key } => {
+            withdraw_channel_params_vote(input, sequencer_key)
+        }
+        Message::DropChannelParamsVote {
+            sequencer_key,
+            ownership,
+        } => drop_channel_params_vote(input, sequencer_key, ownership),
     }
 }
 
 fn stake(
     input: &ReceiveInput,
     sequencer_key: SequencerKey,
-    amount: u128,
+    amount: Balance,
     has_record: bool,
     funding: AccountId,
 ) -> Response {
@@ -121,9 +133,8 @@ fn stake(
 fn unstake_request(
     input: &ReceiveInput,
     sequencer_key: SequencerKey,
-    amount: u128,
+    amount: Balance,
     destination: AccountId,
-    requested_at: BlockId,
 ) -> Response {
     assert_root_origin(
         input,
@@ -137,18 +148,15 @@ fn unstake_request(
     );
 
     // The config holds the request; the transfer happens in FinalizeUnstake.
-    Response::keep_state()
-        .block_window(request_window(requested_at))
-        .send(to_config(
-            input.receiver.program_account_id,
-            &Message::TrackUnstakeRequest {
-                sequencer_key,
-                ownership: input.receiver.account_id,
-                amount,
-                destination,
-                requested_at,
-            },
-        ))
+    Response::keep_state().send(to_config(
+        input.receiver.program_account_id,
+        &Message::TrackUnstakeRequest {
+            sequencer_key,
+            ownership: input.receiver.account_id,
+            amount,
+            destination,
+        },
+    ))
 }
 
 /// Unsigned, so the release is sized and addressed only by the config's pending request, and sent
@@ -160,7 +168,6 @@ fn finalize_unstake(input: &ReceiveInput, sequencer_key: SequencerKey) -> Respon
     );
     assert_config_account(input);
     let mut config = decode_config(&input.pre_state);
-    let exit_delay = channel_params(&config).exit_delay;
     let entry = config
         .entries
         .get_mut(&sequencer_key)
@@ -175,18 +182,16 @@ fn finalize_unstake(input: &ReceiveInput, sequencer_key: SequencerKey) -> Respon
         .expect("total staked underflow");
     let ownership = entry.account_id;
     if entry.total_staked == 0 {
-        config.entries.remove(&sequencer_key);
+        config.remove_key(&sequencer_key);
     }
 
     let program = input.receiver.program_account_id;
-    Response::set_state(config.to_bytes())
-        .block_window(pending.releasable_at(exit_delay)..)
-        .send(custody_transfer(
-            stake_funds_account_id(program, &ownership),
-            stake_funds_seed(&ownership),
-            pending.destination,
-            pending.amount,
-        ))
+    Response::set_state(config.to_bytes()).send(custody_transfer(
+        stake_funds_account_id(program, &ownership),
+        stake_funds_seed(&ownership),
+        pending.destination,
+        pending.amount,
+    ))
 }
 
 fn slash(
@@ -206,8 +211,7 @@ fn slash(
     verify_approvals(&config, sequencer_key, inscription, approvals);
     // The whole tracked stake burns, including any pending unstake.
     let entry = config
-        .entries
-        .remove(&sequencer_key)
+        .remove_key(&sequencer_key)
         .expect("slashed key must have a config entry");
 
     let program = input.receiver.program_account_id;
@@ -229,27 +233,7 @@ fn init_channel_params(
         "InitChannelParams is only invoked as a top-level user transaction",
     );
     assert_config_account(input);
-
-    // A zero timeframe would leave round robin unable to move off index 0, and
-    // a zero minimum would accredit every key that ever staked a nonzero amount.
-    assert!(
-        params.posting_timeframe > 0,
-        "posting_timeframe must be non-zero"
-    );
-    // A timeout above the timeframe never fires: the turn ends first.
-    assert!(
-        params.posting_timeout > 0 && params.posting_timeout <= params.posting_timeframe,
-        "posting_timeout must be non-zero and no longer than posting_timeframe"
-    );
-    assert!(
-        params.minimum_sequencer_stake > 0,
-        "minimum_sequencer_stake must be non-zero"
-    );
-    assert!(params.exit_delay > 0, "exit_delay must be non-zero");
-    assert!(
-        params.max_block_size >= sequencer_stake_core::MIN_MAX_BLOCK_SIZE,
-        "max_block_size must be at least MIN_MAX_BLOCK_SIZE"
-    );
+    assert_valid_params(&params);
 
     let mut config = decode_config(&input.pre_state);
     assert!(
@@ -265,7 +249,7 @@ fn record_stake(
     input: &ReceiveInput,
     sequencer_key: SequencerKey,
     ownership: AccountId,
-    amount: u128,
+    amount: Balance,
     has_record: bool,
 ) -> Response {
     assert_bookkeeping(input);
@@ -327,6 +311,127 @@ fn track_unstake_request(
     );
     entry.pending_unstake = Some(pending);
     Response::set_state(config.to_bytes())
+}
+
+fn vote_channel_params(
+    input: &ReceiveInput,
+    sequencer_key: SequencerKey,
+    params: ChannelParams,
+) -> Response {
+    assert_root_origin(
+        input,
+        "VoteChannelParams is only invoked as a top-level user transaction",
+    );
+    assert!(input.is_authorized, "must sign for the ownership account");
+    let record = decode_record(&input.pre_state);
+    assert_eq!(
+        record.sequencer_key, sequencer_key,
+        "ownership account backs a different sequencer key"
+    );
+    assert_valid_params(&params);
+
+    Response::keep_state().send(to_config(
+        input.receiver.program_account_id,
+        &Message::RecordChannelParamsVote {
+            sequencer_key,
+            ownership: input.receiver.account_id,
+            params,
+        },
+    ))
+}
+
+fn record_channel_params_vote(
+    input: &ReceiveInput,
+    sequencer_key: SequencerKey,
+    ownership: AccountId,
+    params: ChannelParams,
+) -> Response {
+    assert_bookkeeping(input);
+    let mut config = decode_config(&input.pre_state);
+    let params_in_force = channel_params(&config);
+    assert!(
+        entry_of(&mut config, sequencer_key, ownership)
+            .is_accredited(params_in_force.minimum_sequencer_stake),
+        "only an accredited key may vote on channel params"
+    );
+    // Nodes judge full releases at the depth in their own final state, so it never moves.
+    assert_eq!(
+        params.finality_depth, params_in_force.finality_depth,
+        "finality_depth is fixed at genesis"
+    );
+
+    assert_ne!(
+        params, params_in_force,
+        "the voted params are already in force"
+    );
+    config.params_votes.insert(sequencer_key, params);
+
+    let votes = config
+        .params_votes
+        .iter()
+        .filter(|(voter, voted)| **voted == params && config.is_accredited_committee_member(voter))
+        .count();
+    if votes >= params_vote_threshold(config.accredited_committee_members_count()) {
+        config.channel_params = Some(params);
+        config.params_votes.clear();
+        assert!(
+            config.accredited_committee_members_count() > 0,
+            "new channel params would leave no key accredited"
+        );
+    }
+    Response::set_state(config.to_bytes())
+}
+
+fn withdraw_channel_params_vote(input: &ReceiveInput, sequencer_key: SequencerKey) -> Response {
+    assert_root_origin(
+        input,
+        "WithdrawChannelParamsVote is only invoked as a top-level user transaction",
+    );
+    assert!(input.is_authorized, "must sign for the ownership account");
+    let record = decode_record(&input.pre_state);
+    assert_eq!(
+        record.sequencer_key, sequencer_key,
+        "ownership account backs a different sequencer key"
+    );
+
+    Response::keep_state().send(to_config(
+        input.receiver.program_account_id,
+        &Message::DropChannelParamsVote {
+            sequencer_key,
+            ownership: input.receiver.account_id,
+        },
+    ))
+}
+
+fn drop_channel_params_vote(
+    input: &ReceiveInput,
+    sequencer_key: SequencerKey,
+    ownership: AccountId,
+) -> Response {
+    assert_bookkeeping(input);
+    let mut config = decode_config(&input.pre_state);
+    entry_of(&mut config, sequencer_key, ownership);
+    config.params_votes.remove(&sequencer_key);
+    Response::set_state(config.to_bytes())
+}
+
+/// Bounds every channel params value, at genesis and on a vote.
+fn assert_valid_params(params: &ChannelParams) {
+    // A timeout above the timeframe never fires: the turn ends first.
+    assert!(
+        (MIN_POSTING_TIMEOUT..=params.posting_timeframe).contains(&params.posting_timeout),
+        "posting_timeout must be at least MIN_POSTING_TIMEOUT and no longer than posting_timeframe"
+    );
+    // A zero minimum would accredit every key that ever staked a nonzero amount.
+    assert!(
+        params.minimum_sequencer_stake > 0,
+        "minimum_sequencer_stake must be non-zero"
+    );
+    assert!(params.finality_depth > 0, "finality_depth must be non-zero");
+    assert!(
+        (MIN_MAX_BLOCK_SIZE..=MAX_MAX_BLOCK_SIZE).contains(&params.max_block_size),
+        "max_block_size must be between MIN_MAX_BLOCK_SIZE and MAX_MAX_BLOCK_SIZE"
+    );
 }
 
 fn assert_root_origin(input: &ReceiveInput, message: &str) {
@@ -484,19 +589,11 @@ const fn channel_id(config: &SequencerStakeConfig) -> [u8; 32] {
         .expect("genesis sets the channel id before any stake exists")
 }
 
-/// The blocks an `UnstakeRequest` dated `requested_at` may land in, so the date is never
-/// earlier than the block that records it.
-fn request_window(requested_at: BlockId) -> BlockValidityWindow {
-    (requested_at.saturating_sub(UNSTAKE_REQUEST_WINDOW)..requested_at.saturating_add(1))
-        .try_into()
-        .expect("a request window is never empty")
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use lee_core::{account::ActorState, program::Transition};
+    use lee_core::{BlockId, account::ActorState, program::Transition};
     use sequencer_stake_core::ed25519_dalek::{Signer as _, SigningKey};
 
     use super::*;
@@ -511,8 +608,6 @@ mod tests {
     const INSCRIPTION: [u8; 32] = [8; 32];
     const CHANNEL_ID: [u8; 32] = [9; 32];
     const MINIMUM: u128 = 1_000;
-    const EXIT_DELAY: u64 = 10;
-    const REQUESTED_AT: u64 = 7;
     const DOMAIN: [u8; 32] = [11; 32];
     const PAYLOAD: &[u8] = b"a change";
 
@@ -525,17 +620,40 @@ mod tests {
             .expect("a derived public key is a curve point")
     }
 
+    const fn genesis_params() -> ChannelParams {
+        ChannelParams {
+            minimum_sequencer_stake: MINIMUM,
+            posting_timeframe: 300,
+            posting_timeout: 25,
+            max_block_size: 1 << 20,
+            finality_depth: 5,
+        }
+    }
+
+    /// Valid params that differ from [`genesis_params`].
+    const fn new_params() -> ChannelParams {
+        ChannelParams {
+            minimum_sequencer_stake: 2 * MINIMUM,
+            posting_timeframe: 600,
+            posting_timeout: 50,
+            max_block_size: 1 << 19,
+            finality_depth: genesis_params().finality_depth,
+        }
+    }
+
     fn config_with(entries: &[(SequencerKey, SequencerEntry)]) -> Vec<u8> {
+        config_with_votes(entries, &[])
+    }
+
+    fn config_with_votes(
+        entries: &[(SequencerKey, SequencerEntry)],
+        votes: &[(SequencerKey, ChannelParams)],
+    ) -> Vec<u8> {
         SequencerStakeConfig {
-            channel_params: Some(ChannelParams {
-                minimum_sequencer_stake: MINIMUM,
-                posting_timeframe: 300,
-                posting_timeout: 25,
-                exit_delay: EXIT_DELAY,
-                max_block_size: 1 << 20,
-            }),
+            channel_params: Some(genesis_params()),
             channel_id: Some(CHANNEL_ID),
             entries: entries.iter().copied().collect::<BTreeMap<_, _>>(),
+            params_votes: votes.iter().copied().collect::<BTreeMap<_, _>>(),
         }
         .to_bytes()
     }
@@ -548,6 +666,18 @@ mod tests {
         ])
     }
 
+    /// Three keys staked at twice the minimum, so [`new_params`] keeps them all accredited.
+    fn committee_of_three_with_votes(votes: &[(SequencerKey, ChannelParams)]) -> Vec<u8> {
+        config_with_votes(
+            &[
+                (key(1), entry(OWNER, 2 * MINIMUM, 0)),
+                (key(2), entry(OTHER_OWNER, 2 * MINIMUM, 0)),
+                (key(3), entry(OTHER_OWNER, 2 * MINIMUM, 0)),
+            ],
+            votes,
+        )
+    }
+
     fn entry(account_id: AccountId, total_staked: u128, pending: u128) -> SequencerEntry {
         SequencerEntry {
             account_id,
@@ -555,7 +685,6 @@ mod tests {
             pending_unstake: (pending > 0).then_some(PendingUnstake {
                 amount: pending,
                 destination: DESTINATION,
-                requested_at: REQUESTED_AT,
             }),
         }
     }
@@ -643,7 +772,6 @@ mod tests {
             sequencer_key,
             amount,
             destination: DESTINATION,
-            requested_at: REQUESTED_AT,
         }
     }
 
@@ -671,7 +799,34 @@ mod tests {
             ownership,
             amount,
             destination: DESTINATION,
-            requested_at: REQUESTED_AT,
+        }
+    }
+
+    fn vote(params: ChannelParams) -> Message {
+        Message::VoteChannelParams {
+            sequencer_key: key(1),
+            params,
+        }
+    }
+
+    fn record_vote(ownership: AccountId, params: ChannelParams) -> Message {
+        Message::RecordChannelParamsVote {
+            sequencer_key: key(1),
+            ownership,
+            params,
+        }
+    }
+
+    fn withdraw_vote() -> Message {
+        Message::WithdrawChannelParamsVote {
+            sequencer_key: key(1),
+        }
+    }
+
+    fn drop_vote(ownership: AccountId) -> Message {
+        Message::DropChannelParamsVote {
+            sequencer_key: key(1),
+            ownership,
         }
     }
 
@@ -701,10 +856,7 @@ mod tests {
             decoded_config(&transition).entries.get(&key(1)).copied(),
             Some(entry(OWNER, 2_500, 0))
         );
-        assert_eq!(
-            transition.response.validity.blocks.start(),
-            Some(REQUESTED_AT + EXIT_DELAY)
-        );
+        assert_eq!(transition.response.validity.blocks.start(), None);
         assert_eq!(transition.response.validity.blocks.end(), None);
         assert_eq!(
             (
@@ -721,6 +873,19 @@ mod tests {
                 Vec::new()
             )
         );
+    }
+
+    #[test]
+    fn a_full_release_drops_the_keys_vote() {
+        let transition = at_config(
+            None,
+            &config_with_votes(
+                &[(key(1), entry(OWNER, 3_000, 3_000))],
+                &[(key(1), new_params())],
+            ),
+            finalize(key(1)),
+        );
+        assert!(decoded_config(&transition).params_votes.is_empty());
     }
 
     #[test]
@@ -771,11 +936,8 @@ mod tests {
         let transition = at_owner(true, &record(key(1)), request(key(1), 500));
 
         assert!(transition.response.post_state.is_none());
-        assert_eq!(transition.response.validity.blocks.start(), Some(0));
-        assert_eq!(
-            transition.response.validity.blocks.end(),
-            Some(REQUESTED_AT + 1)
-        );
+        assert_eq!(transition.response.validity.blocks.start(), None);
+        assert_eq!(transition.response.validity.blocks.end(), None);
         assert_eq!(
             (
                 transition.response.sync_messages,
@@ -797,6 +959,26 @@ mod tests {
         // The record and the config both read the proposed key; unchecked, it would point the
         // config's bookkeeping at a victim's entry.
         let _transition = at_owner(true, &record(key(1)), request(key(2), 500));
+    }
+
+    #[test]
+    fn a_tracked_request_records_the_pending_unstake() {
+        let transition = at_config(
+            Some(PROGRAM),
+            &config_with(&[(key(1), entry(OWNER, 3_000, 0))]),
+            track(OWNER, 500),
+        );
+
+        assert_eq!(
+            decoded_config(&transition)
+                .entries
+                .get(&key(1))
+                .and_then(|entry| entry.pending_unstake),
+            Some(PendingUnstake {
+                amount: 500,
+                destination: DESTINATION,
+            })
+        );
     }
 
     #[test]
@@ -929,15 +1111,20 @@ mod tests {
     fn an_approved_slash_removes_the_entry() {
         let transition = at_config(
             None,
-            &config_with(&[
-                (key(1), entry(OWNER, 3_000, 500)),
-                (key(2), entry(OTHER_OWNER, 3_000, 0)),
-                (key(3), entry(OTHER_OWNER, 3_000, 0)),
-            ]),
+            &config_with_votes(
+                &[
+                    (key(1), entry(OWNER, 3_000, 500)),
+                    (key(2), entry(OTHER_OWNER, 3_000, 0)),
+                    (key(3), entry(OTHER_OWNER, 3_000, 0)),
+                ],
+                &[(key(1), new_params())],
+            ),
             slash(vec![approval(2, key(1)), approval(3, key(1))]),
         );
 
-        assert!(!decoded_config(&transition).entries.contains_key(&key(1)));
+        let config = decoded_config(&transition);
+        assert!(!config.entries.contains_key(&key(1)));
+        assert!(config.params_votes.is_empty());
         assert_eq!(
             (
                 transition.response.sync_messages,
@@ -1006,15 +1193,422 @@ mod tests {
             None,
             &config_with(&[]),
             Message::InitChannelParams {
+                params: new_params(),
+                channel_id: CHANNEL_ID,
+            },
+        );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "max_block_size must be between MIN_MAX_BLOCK_SIZE and MAX_MAX_BLOCK_SIZE"
+    )]
+    fn genesis_cannot_set_a_block_size_bedrock_cannot_carry() {
+        let mut config = SequencerStakeConfig::from_bytes(&config_with(&[])).unwrap();
+        config.channel_params = None;
+        let _transition = at_config(
+            None,
+            &config.to_bytes(),
+            Message::InitChannelParams {
                 params: ChannelParams {
-                    minimum_sequencer_stake: 1,
-                    posting_timeframe: 1,
-                    posting_timeout: 1,
-                    exit_delay: 1,
-                    max_block_size: 1 << 20,
+                    max_block_size: MAX_MAX_BLOCK_SIZE + 1,
+                    ..genesis_params()
                 },
                 channel_id: CHANNEL_ID,
             },
+        );
+    }
+
+    // --- VoteChannelParams ---
+
+    #[test]
+    fn a_vote_is_forwarded_to_the_config() {
+        let transition = at_owner(true, &record(key(1)), vote(new_params()));
+
+        assert!(transition.response.post_state.is_none());
+        assert_eq!(
+            (
+                transition.response.sync_messages,
+                transition.response.async_messages
+            ),
+            (
+                vec![to_config(PROGRAM, &record_vote(OWNER, new_params()))],
+                Vec::new()
+            )
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "must sign for the ownership account")]
+    fn an_unsigned_vote_is_refused() {
+        let _transition = at_owner(false, &record(key(1)), vote(new_params()));
+    }
+
+    #[test]
+    #[should_panic(expected = "ownership account backs a different sequencer key")]
+    fn a_vote_cannot_name_a_key_this_account_does_not_back() {
+        let _transition = at_owner(true, &record(key(2)), vote(new_params()));
+    }
+
+    #[test]
+    #[should_panic(expected = "VoteChannelParams is only invoked as a top-level user transaction")]
+    fn a_vote_from_another_program_is_refused() {
+        let _transition = run(
+            OWNER,
+            true,
+            Some(OTHER_PROGRAM),
+            &record(key(1)),
+            vote(new_params()),
+        );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "posting_timeout must be at least MIN_POSTING_TIMEOUT and no longer than posting_timeframe"
+    )]
+    fn a_vote_for_invalid_params_is_refused() {
+        let _transition = at_owner(
+            true,
+            &record(key(1)),
+            vote(ChannelParams {
+                posting_timeout: 601,
+                ..new_params()
+            }),
+        );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "posting_timeout must be at least MIN_POSTING_TIMEOUT and no longer than posting_timeframe"
+    )]
+    fn a_vote_for_a_posting_timeout_under_the_floor_is_refused() {
+        let _transition = at_owner(
+            true,
+            &record(key(1)),
+            vote(ChannelParams {
+                posting_timeout: MIN_POSTING_TIMEOUT - 1,
+                ..new_params()
+            }),
+        );
+    }
+
+    #[test]
+    fn a_vote_for_the_posting_timeout_floor_is_forwarded() {
+        let params = ChannelParams {
+            posting_timeout: MIN_POSTING_TIMEOUT,
+            ..new_params()
+        };
+        let transition = at_owner(true, &record(key(1)), vote(params));
+
+        assert_eq!(
+            transition.response.sync_messages,
+            vec![to_config(PROGRAM, &record_vote(OWNER, params))]
+        );
+    }
+
+    #[test]
+    fn a_vote_short_of_the_threshold_is_recorded() {
+        let transition = at_config(
+            Some(PROGRAM),
+            &committee_of_three_with_votes(&[]),
+            record_vote(OWNER, new_params()),
+        );
+
+        let config = decoded_config(&transition);
+        assert_eq!(config.channel_params, Some(genesis_params()));
+        assert_eq!(
+            config.params_votes,
+            BTreeMap::from([(key(1), new_params())])
+        );
+    }
+
+    #[test]
+    fn a_vote_reaching_two_thirds_replaces_the_params_and_clears_every_vote() {
+        let other = ChannelParams {
+            posting_timeframe: 900,
+            ..new_params()
+        };
+        let transition = at_config(
+            Some(PROGRAM),
+            &committee_of_three_with_votes(&[(key(2), new_params()), (key(3), other)]),
+            record_vote(OWNER, new_params()),
+        );
+
+        let config = decoded_config(&transition);
+        assert_eq!(config.channel_params, Some(new_params()));
+        assert!(config.params_votes.is_empty());
+    }
+
+    #[test]
+    fn votes_for_different_params_do_not_add_up() {
+        let other = ChannelParams {
+            posting_timeframe: 900,
+            ..new_params()
+        };
+        let transition = at_config(
+            Some(PROGRAM),
+            &committee_of_three_with_votes(&[(key(2), other)]),
+            record_vote(OWNER, new_params()),
+        );
+
+        let config = decoded_config(&transition);
+        assert_eq!(config.channel_params, Some(genesis_params()));
+        assert_eq!(config.params_votes.len(), 2);
+    }
+
+    #[test]
+    fn a_new_vote_replaces_the_keys_old_one() {
+        let other = ChannelParams {
+            posting_timeframe: 900,
+            ..new_params()
+        };
+        let transition = at_config(
+            Some(PROGRAM),
+            &committee_of_three_with_votes(&[(key(1), other)]),
+            record_vote(OWNER, new_params()),
+        );
+
+        assert_eq!(
+            decoded_config(&transition).params_votes,
+            BTreeMap::from([(key(1), new_params())])
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "the voted params are already in force")]
+    fn a_vote_for_the_params_in_force_is_refused() {
+        let _transition = at_config(
+            Some(PROGRAM),
+            &committee_of_three_with_votes(&[(key(1), new_params())]),
+            record_vote(OWNER, genesis_params()),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "finality_depth is fixed at genesis")]
+    fn a_vote_changing_the_finality_depth_is_refused() {
+        let _transition = at_config(
+            Some(PROGRAM),
+            &committee_of_three_with_votes(&[]),
+            record_vote(
+                OWNER,
+                ChannelParams {
+                    finality_depth: 2 * genesis_params().finality_depth,
+                    ..new_params()
+                },
+            ),
+        );
+    }
+
+    #[test]
+    fn a_vote_held_by_a_key_on_its_way_out_is_not_counted() {
+        // Four staked keys, three accredited: the threshold is two, and key 4's vote does not
+        // count while its whole stake is pending release.
+        let transition = at_config(
+            Some(PROGRAM),
+            &config_with_votes(
+                &[
+                    (key(1), entry(OWNER, 2 * MINIMUM, 0)),
+                    (key(2), entry(OTHER_OWNER, 2 * MINIMUM, 0)),
+                    (key(3), entry(OTHER_OWNER, 2 * MINIMUM, 0)),
+                    (key(4), entry(OTHER_OWNER, 2 * MINIMUM, 2 * MINIMUM)),
+                ],
+                &[(key(4), new_params())],
+            ),
+            record_vote(OWNER, new_params()),
+        );
+
+        assert_eq!(
+            decoded_config(&transition).channel_params,
+            Some(genesis_params())
+        );
+    }
+
+    #[test]
+    fn a_key_on_its_way_out_does_not_raise_the_threshold() {
+        // Four staked keys, three accredited: two votes reach the threshold, where four keys
+        // would need three.
+        let transition = at_config(
+            Some(PROGRAM),
+            &config_with_votes(
+                &[
+                    (key(1), entry(OWNER, 2 * MINIMUM, 0)),
+                    (key(2), entry(OTHER_OWNER, 2 * MINIMUM, 0)),
+                    (key(3), entry(OTHER_OWNER, 2 * MINIMUM, 0)),
+                    (key(4), entry(OTHER_OWNER, 2 * MINIMUM, 2 * MINIMUM)),
+                ],
+                &[(key(2), new_params())],
+            ),
+            record_vote(OWNER, new_params()),
+        );
+
+        let config = decoded_config(&transition);
+        assert_eq!(config.channel_params, Some(new_params()));
+        assert!(config.params_votes.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "only an accredited key may vote on channel params")]
+    fn a_key_on_its_way_out_cannot_vote() {
+        let _transition = at_config(
+            Some(PROGRAM),
+            &config_with(&[(key(1), entry(OWNER, 3_000, 3_000))]),
+            record_vote(OWNER, new_params()),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "config entry points at a different ownership account")]
+    fn a_vote_cannot_be_recorded_for_another_accounts_key() {
+        let _transition = at_config(
+            Some(PROGRAM),
+            &committee_of_three_with_votes(&[]),
+            record_vote(ATTACKER, new_params()),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "new channel params would leave no key accredited")]
+    fn params_that_accredit_no_key_are_refused() {
+        let _transition = at_config(
+            Some(PROGRAM),
+            &config_with(&[(key(1), entry(OWNER, MINIMUM, 0))]),
+            record_vote(OWNER, new_params()),
+        );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "stake bookkeeping is only sent by this program's ownership accounts"
+    )]
+    fn a_vote_recorded_from_the_root_is_refused() {
+        let _transition = at_config(
+            None,
+            &committee_of_three_with_votes(&[]),
+            record_vote(OWNER, new_params()),
+        );
+    }
+
+    // --- WithdrawChannelParamsVote ---
+
+    #[test]
+    fn a_withdrawal_is_forwarded_to_the_config() {
+        let transition = at_owner(true, &record(key(1)), withdraw_vote());
+
+        assert!(transition.response.post_state.is_none());
+        assert_eq!(
+            (
+                transition.response.sync_messages,
+                transition.response.async_messages
+            ),
+            (vec![to_config(PROGRAM, &drop_vote(OWNER))], Vec::new())
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "must sign for the ownership account")]
+    fn an_unsigned_withdrawal_is_refused() {
+        let _transition = at_owner(false, &record(key(1)), withdraw_vote());
+    }
+
+    #[test]
+    #[should_panic(expected = "ownership account backs a different sequencer key")]
+    fn a_withdrawal_cannot_name_a_key_this_account_does_not_back() {
+        let _transition = at_owner(true, &record(key(2)), withdraw_vote());
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "WithdrawChannelParamsVote is only invoked as a top-level user transaction"
+    )]
+    fn a_withdrawal_from_another_program_is_refused() {
+        let _transition = run(
+            OWNER,
+            true,
+            Some(OTHER_PROGRAM),
+            &record(key(1)),
+            withdraw_vote(),
+        );
+    }
+
+    #[test]
+    fn a_withdrawal_drops_only_the_keys_vote() {
+        let transition = at_config(
+            Some(PROGRAM),
+            &committee_of_three_with_votes(&[(key(1), new_params()), (key(2), new_params())]),
+            drop_vote(OWNER),
+        );
+
+        let config = decoded_config(&transition);
+        assert_eq!(config.channel_params, Some(genesis_params()));
+        assert_eq!(
+            config.params_votes,
+            BTreeMap::from([(key(2), new_params())])
+        );
+    }
+
+    #[test]
+    fn a_withdrawal_without_a_vote_changes_nothing() {
+        let config = committee_of_three_with_votes(&[(key(2), new_params())]);
+        let transition = at_config(Some(PROGRAM), &config, drop_vote(OWNER));
+
+        assert_eq!(
+            decoded_config(&transition),
+            SequencerStakeConfig::from_bytes(&config).expect("config should decode")
+        );
+    }
+
+    #[test]
+    fn a_key_on_its_way_out_can_withdraw_its_vote() {
+        let transition = at_config(
+            Some(PROGRAM),
+            &config_with_votes(
+                &[(key(1), entry(OWNER, 3_000, 3_000))],
+                &[(key(1), new_params())],
+            ),
+            drop_vote(OWNER),
+        );
+
+        assert!(decoded_config(&transition).params_votes.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "config entry points at a different ownership account")]
+    fn a_withdrawal_cannot_be_recorded_for_another_accounts_key() {
+        let _transition = at_config(
+            Some(PROGRAM),
+            &committee_of_three_with_votes(&[(key(1), new_params())]),
+            drop_vote(ATTACKER),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "staked key must already have a config entry")]
+    fn a_withdrawal_for_a_key_with_no_stake_is_refused() {
+        let _transition = at_config(Some(PROGRAM), &config_with(&[]), drop_vote(OWNER));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "stake bookkeeping is only sent by this program's ownership accounts"
+    )]
+    fn a_withdrawal_recorded_from_another_program_is_refused() {
+        let _transition = at_config(
+            Some(OTHER_PROGRAM),
+            &committee_of_three_with_votes(&[(key(1), new_params())]),
+            drop_vote(OWNER),
+        );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "stake bookkeeping is only sent by this program's ownership accounts"
+    )]
+    fn a_withdrawal_recorded_from_the_root_is_refused() {
+        let _transition = at_config(
+            None,
+            &committee_of_three_with_votes(&[(key(1), new_params())]),
+            drop_vote(OWNER),
         );
     }
 

@@ -4,13 +4,13 @@ use jsonrpsee::proc_macros::rpc;
 pub use jsonrpsee::types::ErrorObjectOwned;
 #[cfg(feature = "client")]
 pub use jsonrpsee::{core::ClientError, http_client::HttpClientBuilder as SequencerClientBuilder};
-pub use sequencer_service_protocol::FeeStateQuote;
 use sequencer_service_protocol::{
     Account, AccountId, Actor, Block, BlockId, ChannelId, Commitment, CommitmentPosition,
     CommitmentSetDigest, CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, EncryptedNote,
-    HashType, LeeTransaction, MembershipProof, Nonce, PageLimit, ProgramId, Publication,
-    SequencerStatus,
+    HashType, LeeTransaction, MembershipProof, Nonce, PageLimit, ProgramId, PublicationsPage,
+    SequencerStatus, SystemProposalReport, TransactionReceipt,
 };
+pub use sequencer_service_protocol::{FeeStateQuote, HexBytes};
 
 #[cfg(all(not(feature = "server"), not(feature = "client")))]
 compile_error!("At least one of `server` or `client` features must be enabled.");
@@ -88,6 +88,13 @@ pub trait Rpc {
         tx_hash: HashType,
     ) -> Result<Option<(LeeTransaction, BlockId)>, ErrorObjectOwned>;
 
+    /// `None` for an unknown transaction, and for a block's trailing fee and clock transactions.
+    #[method(name = "getTransactionReceipt")]
+    async fn get_transaction_receipt(
+        &self,
+        tx_hash: HashType,
+    ) -> Result<Option<TransactionReceipt>, ErrorObjectOwned>;
+
     #[method(name = "getAccountsNonces")]
     async fn get_accounts_nonces(
         &self,
@@ -107,7 +114,7 @@ pub trait Rpc {
         &self,
         from_position: CommitmentPosition,
         limit: PageLimit,
-    ) -> Result<Vec<(CommitmentPosition, Publication)>, ErrorObjectOwned>;
+    ) -> Result<PublicationsPage, ErrorObjectOwned>;
 
     #[method(name = "getMessagePath")]
     async fn get_message_path(
@@ -175,4 +182,12 @@ pub trait Rpc {
         &self,
         message_key: HashType,
     ) -> Result<CrossZoneDeadLetterRequeue, ErrorObjectOwned>;
+
+    /// Hands the node a committee member's approval of a `system_upgrader` change: a borsh
+    /// `SignedApproval`, as `approve_system_change` prints it.
+    #[method(name = "submitSystemApproval")]
+    async fn submit_system_approval(&self, approval: HexBytes) -> Result<(), ErrorObjectOwned>;
+
+    #[method(name = "getSystemProposals")]
+    async fn get_system_proposals(&self) -> Result<SystemProposalReport, ErrorObjectOwned>;
 }

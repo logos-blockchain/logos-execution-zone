@@ -1,7 +1,7 @@
 #![allow(dead_code, reason = "TODO")]
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     path::Path,
     sync::Arc,
     time::Instant,
@@ -10,10 +10,11 @@ use std::{
 use anyhow::{Context as _, Result, anyhow};
 use borsh::BorshDeserialize as _;
 use bridge_core::DepositMetadata;
-use chain_state::{AcceptOutcome, ChainState, ChannelEntry, PublishRecord};
+use chain_state::{AcceptOutcome, ChainState, ChannelEntry, PublishRecord, full_stake_releases};
 use common::{
     HashType,
-    block::{BedrockStatus, Block, BlockMeta, HashableBlockData},
+    block::{BedrockStatus, Block, BlockMeta, HashableBlockData, TransactionReceipt},
+    system_upgrades::ProposalApprovals,
     transaction::{FeePayee, LeeTransaction, clock_invocation, fee_invocation},
 };
 use config::SequencerConfig;
@@ -52,10 +53,10 @@ use sequencer_storage_actor::{
         AtomicUpdate, CrossZoneMessageKey, DeadLetterDispatch, DeadLetterRequeue, DispatchFailure,
         DispatchOrigin, DropSettledCrossZoneDispatches, GetAllBlocks, GetDeadLetterDispatchCount,
         GetDeadLetterDispatchRetainedCount, GetDeadLetterDispatches, GetLeeState,
-        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetZoneCheckpoint,
-        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RecordDispatchFailure,
-        RequeueDeadLetterDispatch, StoreUpdateOutcome, WithdrawalReconciliationKey,
-        ZoneCheckpointRecord,
+        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetSystemApprovalsBytes,
+        GetZoneCheckpoint, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
+        RecordDispatchFailure, RequeueDeadLetterDispatch, StoreUpdateOutcome,
+        WithdrawalReconciliationKey, ZoneCheckpointRecord,
     },
 };
 use sharding_pool_actor::ShardingPoolActor;
@@ -74,6 +75,8 @@ pub mod cross_zone_watcher;
 pub mod faults;
 pub mod fees;
 pub mod logging;
+pub mod release_finality;
+pub mod system_approvals;
 pub mod task_group;
 
 /// Failed production attempts before a cross-zone dispatch is given up on.
@@ -198,6 +201,8 @@ pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
     finalized_config: MsgId,
     /// Channel sequence of the last thing `BedrockActor` handed us.
     applied_seq: Option<sequencer_bedrock_actor::protocol::ChannelSeq>,
+    /// Committee approvals of `system_upgrader` changes, until a threshold builds one.
+    system_approvals: system_approvals::SystemApprovals,
     /// Deposits seen on L1 but not yet final, minted in a block pinned on
     /// their notes. In memory only: after a restart they mint once final.
     observed_deposits: Vec<DepositInfo>,
@@ -280,6 +285,19 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .await?
             .map_or_else(MsgId::root, |checkpoint| checkpoint.finalized_config);
 
+        let system_approvals = storage_ref
+            .ask(GetSystemApprovalsBytes)
+            .await
+            .context("Failed to read the system_upgrader approvals")?
+            .and_then(|bytes| {
+                let approvals = system_approvals::SystemApprovals::from_bytes(&bytes);
+                if approvals.is_none() {
+                    warn!("Dropping persisted system_upgrader approvals that don't decode");
+                }
+                approvals
+            })
+            .unwrap_or_default();
+
         let mut sequencer = Self {
             channel_id,
             chain: Arc::new(Mutex::new(chain)),
@@ -296,6 +314,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             applied_seq,
             channel_signing_key,
             sequencer_config: config,
+            system_approvals,
             observed_deposits: Vec::new(),
         };
         sequencer_core_metrics::record_mempool_max_size(
@@ -335,6 +354,20 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 ViewChange::Extension(adopted) => !adopted.is_empty(),
                 ViewChange::Conflict { .. } => true,
             };
+
+        // Read off L1 before the lock is taken.
+        let release_finality::JudgedUpdate {
+            finalized,
+            view,
+            held_finally_absent_keys,
+        } = &release_finality::judged_update(
+            &self.bedrock_pool_ref,
+            self.channel_id,
+            &self.chain,
+            finalized,
+            view,
+        )
+        .await;
 
         let checkpoint_record = ZoneCheckpointRecord {
             bytes: checkpoint_bytes(checkpoint).unwrap_or_else(|err| {
@@ -377,6 +410,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             let pin_before = chain.pin();
             log_update(view, finalized, head_tip_before);
 
+            // Set before the finalized entries, which apply these held entries to the final tier.
+            chain.set_finally_absent_keys(held_finally_absent_keys.iter().cloned());
+
             // Finalized first: the view below is what lies above it.
             let mut irreversible_redelivered: Vec<Block> = Vec::new();
             let mut events = Vec::new();
@@ -384,7 +420,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             for entry in finalized {
                 // A root lineage over a held tier is a store restored without its view.
                 let judgeable = chain.final_tip().is_some() && chain.final_msg() != MsgId::root();
-                let outcome = chain.apply_finalized(entry.msg, entry.parent, entry.block.as_ref());
+                let outcome = chain.apply_finalized(
+                    entry.msg,
+                    entry.parent,
+                    entry.block.as_ref(),
+                    &entry.finally_absent_keys,
+                );
                 let (Some(block), Some(outcome)) = (&entry.block, outcome) else {
                     continue;
                 };
@@ -528,12 +569,24 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         log_recorded_deposits(&outcome);
         log_unmatched_withdrawals(&outcome);
 
-        // Rebuild orphaned work: return its user txs to the mempool so the
-        // next on-turn production re-includes them on the new head.
-        //
-        // TODO: a full mempool still drops the transaction; a durable resubmit
-        // queue is a follow-up.
-        for tx in resubmit_txs {
+        self.resubmit_orphaned(resubmit_txs);
+
+        self.finalized_config = checkpoint.finalized_config;
+
+        if moved_head {
+            self.refresh_committee()
+                .await
+                .expect("Failed to refresh committee");
+        }
+    }
+
+    /// Returns orphaned user txs to the mempool so the next on-turn production
+    /// re-includes them on the new head.
+    ///
+    /// TODO: a full mempool still drops the transaction; a durable resubmit
+    /// queue is a follow-up.
+    fn resubmit_orphaned(&self, txs: Vec<LeeTransaction>) {
+        for tx in txs {
             let tx_hash = tx.hash();
             if let Err(err) = self
                 .mempool
@@ -546,14 +599,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     "Dropping orphaned transaction on resubmit"
                 );
             }
-        }
-
-        self.finalized_config = checkpoint.finalized_config;
-
-        if moved_head {
-            self.refresh_committee()
-                .await
-                .expect("Failed to refresh committee");
         }
     }
 
@@ -1111,6 +1156,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             msg: this_msg,
             parent,
             block: Some(block.clone()),
+            finally_absent_keys: full_stake_releases::finalize_unstake_keys(&block),
+            final_slot: None,
         });
         match record {
             PublishRecord::Extended | PublishRecord::Skipped => {
@@ -1157,9 +1204,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     }
 
     /// Validates and applies a single mempool transaction to the current state.
-    /// Returns `Some(reverted)` if the transaction was valid and applied, with
-    /// whether its action reverted, or `None` if it was skipped due to validation
-    /// failure.
+    /// Returns its receipt if the transaction was valid and applied, or `None` if
+    /// it was skipped due to validation failure.
     #[expect(
         clippy::too_many_arguments,
         reason = "the settlement threads exactly the block-transition context the spec names"
@@ -1175,9 +1221,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         self_zone: Option<lee::ZoneId>,
         tx_index: u64,
         summary: &mut fee_core::BlockFeeSummary,
-    ) -> Option<(bool, Vec<lee::OutboundMessage>)> {
+    ) -> Option<(TransactionReceipt, Vec<lee::OutboundMessage>)> {
         let tx_hash = tx.hash();
-        let mut reverted = false;
+        let mut receipt = TransactionReceipt::EXEMPT;
         let outbound;
         match origin {
             // Gossiped transactions arrive from untrusted peers, same as
@@ -1221,13 +1267,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     tx_index,
                     &mut scratch_summary,
                 ) {
-                    Ok((_events, tx_reverted, tx_outbound)) => {
-                        if let Some(withdraw_data) = extract_bridge_withdraw_data(tx) {
+                    Ok((_events, tx_receipt, tx_outbound)) => {
+                        if tx_receipt.success
+                            && let Some(withdraw_data) = extract_bridge_withdraw_data(tx)
+                        {
                             withdrawals.push(withdraw_data);
                         }
                         *state = scratch;
                         *summary = scratch_summary;
-                        reverted = tx_reverted;
+                        receipt = tx_receipt;
                         outbound = tx_outbound;
                     }
                     Err(err) => {
@@ -1301,7 +1349,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         }
 
         debug!(%tx_hash, "Validated transaction, including it in block");
-        Some((reverted, outbound))
+        Some((receipt, outbound))
     }
 
     async fn build_block_from_mempool(&mut self) -> Result<BlockWithMeta> {
@@ -1345,14 +1393,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // The delivery records are classified in here rather than after, so the
         // final state can be read by reference. Cloning it cost a full state
         // copy on every block of every zone, cross-zone or not.
-        let (
-            prev_block_hash,
-            new_block_height,
-            mut working_state,
-            pending_dispatches,
-            finalize_unstake_txs,
-            parent,
-        ) = {
+        let (prev_block_hash, new_block_height, mut working_state, pending_dispatches, parent) = {
             let chain = self.chain.lock().await;
             if let Some(entry) = chain.check_for_gaps_in_lineage() {
                 error!(
@@ -1409,14 +1450,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 .collect();
             let pending = round_robin(queues, MAX_DISPATCHES_PER_BLOCK);
 
-            (
-                prev,
-                height,
-                chain.head_state().clone(),
-                pending,
-                build_finalize_unstake_txs(chain.head_state()),
-                parent,
-            )
+            (prev, height, chain.head_state().clone(), pending, parent)
         };
 
         // A Slash executes against the head config, so it is proposed from it.
@@ -1457,8 +1491,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         }
 
         let mut valid_transactions = Vec::new();
-        let mut reverted = Vec::new();
+        let mut receipts = Vec::new();
         let mut withdrawals = Vec::new();
+        let releasable_keys = release_finality::producible_releases(
+            &self.bedrock_pool_ref,
+            self.channel_id,
+            &working_state,
+        )
+        .await;
+        let finalize_unstake_txs = build_finalize_unstake_txs(&working_state, &releasable_keys);
 
         // Bridge deposit mints are drained from the store, not the mempool: the
         // follow path records the event durably but cannot enqueue the mint
@@ -1535,12 +1576,21 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         ));
         let clock_tx = clock_invocation(new_block_height, new_block_timestamp);
         let clock_lee_tx = LeeTransaction::Public(clock_tx.clone());
-        // The block an upgrade activates in must carry its `Apply`, so its room is held from the
-        // start, with the fee's and the clock's.
+        // The slot before the fee takes one `system_upgrader` transaction: the due `Apply`, which
+        // its block must carry, else the first approved change. Its room is held from the start,
+        // with the fee's and the clock's; the slot itself is filled after the mempool.
         let due_apply = build_due_apply_tx(&working_state, new_block_height)?;
+        let first_approved =
+            committee_discovery::read_config(&working_state).and_then(|committee| {
+                build_approved_txs(self.system_approvals.ready(&committee, new_block_height))
+                    .into_iter()
+                    .next()
+                    .map(|(_, tx, _)| tx)
+            });
         let trailing: Vec<LeeTransaction> = due_apply
-            .iter()
-            .cloned()
+            .clone()
+            .or(first_approved)
+            .into_iter()
             .chain([placeholder_fee_lee_tx.clone(), clock_lee_tx.clone()])
             .collect();
 
@@ -1550,7 +1600,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // record behind it and so needs no requeue, where the origin only says
         // it was not submitted by a user.
         let mut mempool_transactions = Vec::new();
-        // `system_upgrader` transactions handed to the node wait for the one slot before the fee.
+        // `system_upgrader` changes in the mempool, returned by a reorg, wait for the one slot
+        // before the fee.
         let mut upgrade_candidates = Vec::new();
         let mut pending_from_store = pending_deposits;
         pending_from_store.extend(pending_dispatches);
@@ -1595,11 +1646,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 transactions: temp_valid_transactions,
                 prev_block_hash,
                 timestamp: new_block_timestamp,
-                // Whether this transaction reverts is known only once it is settled below; if
-                // it does, its index joins the list and the block grows by one `u64`. Size the
-                // worst case now, with a placeholder index, so a revert doesn't push the block
-                // over the limit. Outbound messages are sized by the guard below instead.
-                reverted: reverted.iter().copied().chain([0]).collect(),
+                // Receipts are fixed-size, so placeholders size them exactly: one for this
+                // transaction and one for the reserved `system_upgrader` slot, if any.
+                receipts: receipts
+                    .iter()
+                    .copied()
+                    .chain(reserved_receipts(&trailing))
+                    .collect(),
+                // Outbound messages are sized by the guard below instead.
                 outbound: outbound.clone(),
             };
 
@@ -1702,6 +1756,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             let checkpoint_state = working_state.clone();
             let checkpoint_summary = summary;
             let checkpoint_withdrawals = withdrawals.len();
+            // Taken before a transaction that may release a stake.
+            let stake_entries_before = (!full_stake_releases::releases_no_stake(&tx))
+                .then(|| full_stake_releases::stake_entries(&working_state));
             let applied = Self::apply_mempool_transaction(
                 &mut working_state,
                 origin,
@@ -1714,63 +1771,89 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 valid_transactions.len().try_into().expect("fits u64"),
                 &mut summary,
             );
-            if let Some((tx_reverted, tx_outbound)) = applied {
+            if applied.is_some()
+                && let Some(before) = stake_entries_before
+            {
+                let after = full_stake_releases::stake_entries(&working_state);
+                let released = full_stake_releases::full_releases(&before, &after);
+                // Only a public `FinalizeUnstake` call's own key may be released.
+                let refused = released.into_iter().find(|key| {
+                    full_stake_releases::finalize_unstake_key(&tx) != Some(*key)
+                        || !releasable_keys.contains(key)
+                });
+                if let Some(key) = refused {
+                    info!(
+                        %tx_hash,
+                        sequencer_key = %hex::encode(key.to_bytes()),
+                        "Leaving out a transaction releasing a whole stake before its removal is final"
+                    );
+                    working_state = checkpoint_state;
+                    summary = checkpoint_summary;
+                    withdrawals.truncate(checkpoint_withdrawals);
+                    continue;
+                }
+            }
+            if let Some((_, tx_outbound)) = &applied
+                && !tx_outbound.is_empty()
+            {
                 // The settled outbound can overflow what the pre-check sized; roll back.
-                if !tx_outbound.is_empty() {
-                    let with_outbound = borsh::to_vec(&HashableBlockData {
+                let with_outbound = borsh::to_vec(&HashableBlockData {
+                    block_id: new_block_height,
+                    transactions: [
+                        valid_transactions.as_slice(),
+                        std::slice::from_ref(&tx),
+                        trailing.as_slice(),
+                    ]
+                    .concat(),
+                    prev_block_hash,
+                    timestamp: new_block_timestamp,
+                    receipts: receipts
+                        .iter()
+                        .copied()
+                        .chain(reserved_receipts(&trailing))
+                        .collect(),
+                    outbound: outbound.iter().chain(tx_outbound).cloned().collect(),
+                })
+                .context("Failed to serialize block for size check")?
+                .len();
+                if with_outbound > max_block_size {
+                    working_state = checkpoint_state;
+                    summary = checkpoint_summary;
+                    withdrawals.truncate(checkpoint_withdrawals);
+                    let alone = borsh::to_vec(&HashableBlockData {
                         block_id: new_block_height,
-                        transactions: [
-                            valid_transactions.as_slice(),
-                            std::slice::from_ref(&tx),
-                            trailing.as_slice(),
-                        ]
-                        .concat(),
+                        transactions: [std::slice::from_ref(&tx), trailing.as_slice()].concat(),
                         prev_block_hash,
                         timestamp: new_block_timestamp,
-                        reverted: reverted.iter().copied().chain([0]).collect(),
-                        outbound: outbound.iter().chain(&tx_outbound).cloned().collect(),
+                        receipts: reserved_receipts(&trailing).collect(),
+                        outbound: tx_outbound.clone(),
                     })
                     .context("Failed to serialize block for size check")?
                     .len();
-                    if with_outbound > max_block_size {
-                        working_state = checkpoint_state;
-                        summary = checkpoint_summary;
-                        withdrawals.truncate(checkpoint_withdrawals);
-                        let alone = borsh::to_vec(&HashableBlockData {
-                            block_id: new_block_height,
-                            transactions: [std::slice::from_ref(&tx), trailing.as_slice()].concat(),
-                            prev_block_hash,
-                            timestamp: new_block_timestamp,
-                            reverted: vec![0],
-                            outbound: tx_outbound,
-                        })
-                        .context("Failed to serialize block for size check")?
-                        .len();
-                        if alone > max_block_size {
-                            // Alone it already overflows: deferring would stall for ever.
-                            warn!(
-                                %tx_hash,
-                                "Transaction's outbound messages exceed the block size in an \
-                                 empty block, dropping it"
-                            );
-                            self.count_dispatch_failure(&tx).await;
-                            continue;
-                        }
+                    if alone > max_block_size {
+                        // Alone it already overflows: deferring would stall for ever.
                         warn!(
                             %tx_hash,
-                            "Transaction deferred to next block: its outbound messages would \
-                             exceed the block size limit"
+                            "Transaction's outbound messages exceed the block size in an \
+                             empty block, dropping it"
                         );
-                        if !from_store {
-                            self.mempool.push_front((origin, tx));
-                        }
-                        break;
+                        self.count_dispatch_failure(&tx).await;
+                        continue;
                     }
+                    warn!(
+                        %tx_hash,
+                        "Transaction deferred to next block: its outbound messages would \
+                         exceed the block size limit"
+                    );
+                    if !from_store {
+                        self.mempool.push_front((origin, tx));
+                    }
+                    break;
                 }
+            }
+            if let Some((receipt, tx_outbound)) = applied {
                 outbound.extend(tx_outbound);
-                if tx_reverted {
-                    reverted.push(u64::try_from(valid_transactions.len()).expect("fits u64"));
-                }
+                receipts.push(receipt);
                 // track the charged gas
                 gas_budget.sync(&summary);
                 sequencer_core_metrics::record_mempool_transaction_application_time(
@@ -1809,14 +1892,23 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         }
 
         // At most one `system_upgrader` transaction, directly before the fee: the due `Apply`
-        // first, then approved changes handed to the node, the first that fits and applies.
-        // Untried changes go back to the mempool.
+        // first, then changes a threshold of collected approvals carries, then approved changes a
+        // reorg returned, the first that fits and applies. Untried returned changes go back to
+        // the mempool.
+        let approved = committee_discovery::read_config(&working_state)
+            .map(|committee| self.system_approvals.ready(&committee, new_block_height))
+            .unwrap_or_default();
         let mut candidates = due_apply
             .into_iter()
-            .map(|tx| (TransactionOrigin::Sequencer, tx))
-            .chain(upgrade_candidates)
+            .map(|tx| (TransactionOrigin::Sequencer, tx, None))
+            .chain(build_approved_txs(approved))
+            .chain(
+                upgrade_candidates
+                    .into_iter()
+                    .map(|(origin, tx)| (origin, tx, None)),
+            )
             .collect::<VecDeque<_>>();
-        while let Some((origin, tx)) = candidates.pop_front() {
+        while let Some((origin, tx, proposal)) = candidates.pop_front() {
             let block_size = borsh::to_vec(&HashableBlockData {
                 block_id: new_block_height,
                 transactions: [
@@ -1830,7 +1922,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 .concat(),
                 prev_block_hash,
                 timestamp: new_block_timestamp,
-                reverted: reverted.clone(),
+                receipts: receipts
+                    .iter()
+                    .copied()
+                    .chain([TransactionReceipt::EXEMPT])
+                    .collect(),
                 outbound: outbound.clone(),
             })
             .context("Failed to serialize block for size check")?
@@ -1848,7 +1944,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             let checkpoint_state = working_state.clone();
             let checkpoint_summary = summary;
             let checkpoint_withdrawals = withdrawals.len();
-            if let Some((tx_reverted, tx_outbound)) = Self::apply_mempool_transaction(
+            if let Some((receipt, tx_outbound)) = Self::apply_mempool_transaction(
                 &mut working_state,
                 origin,
                 &tx,
@@ -1875,7 +1971,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                         .concat(),
                         prev_block_hash,
                         timestamp: new_block_timestamp,
-                        reverted: reverted.iter().copied().chain([0]).collect(),
+                        receipts: receipts
+                            .iter()
+                            .copied()
+                            .chain([TransactionReceipt::EXEMPT])
+                            .collect(),
                         outbound: outbound.iter().chain(&tx_outbound).cloned().collect(),
                     })
                     .context("Failed to serialize block for size check")?
@@ -1893,9 +1993,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     }
                 }
                 outbound.extend(tx_outbound);
-                if tx_reverted {
-                    reverted.push(u64::try_from(valid_transactions.len()).expect("fits u64"));
-                }
+                receipts.push(receipt);
                 if !matches!(origin, TransactionOrigin::Sequencer) {
                     mempool_transactions.push((origin, tx.clone()));
                 }
@@ -1903,11 +2001,23 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 break;
             }
             warn!(tx_hash = %tx.hash(), "system_upgrader transaction failed to apply");
+            // An approved change that no longer applies (already carried out, or invalid) is
+            // dropped; one that applied stays until a later attempt finds it done, so an orphaned
+            // block doesn't lose it.
+            if let Some(proposal) = proposal {
+                self.system_approvals.remove(&proposal);
+            }
         }
-        for (origin, tx) in candidates {
+        for (origin, tx, _) in candidates {
             if !matches!(origin, TransactionOrigin::Sequencer) {
                 self.mempool.push_front((origin, tx));
             }
+        }
+        if let Err(err) = self.persist_system_approvals().await {
+            warn!(
+                error = format_args!("{err:#}"),
+                "system_upgrader approvals not persisted"
+            );
         }
         // Peers reject a block that leaves its due upgrade pending, so never publish one.
         if let Some(name) = common::system_upgrades::due_at(&working_state, new_block_height)? {
@@ -1939,7 +2049,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             transactions: valid_transactions,
             prev_block_hash,
             timestamp: new_block_timestamp,
-            reverted,
+            receipts,
             outbound,
         };
 
@@ -1971,6 +2081,60 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     #[must_use]
     pub const fn storage_ref(&self) -> &ActorRef<S> {
         &self.storage_ref
+    }
+
+    /// Verifies a committee member's approval of a `system_upgrader` change against the head's
+    /// committee, and keeps it until a threshold of approvals lets the producer build the change.
+    pub async fn submit_system_approval(
+        &mut self,
+        signed: system_upgrader_core::SignedApproval,
+    ) -> Result<()> {
+        let (committee, next_block) = {
+            let chain = self.chain.lock().await;
+            let committee = committee_discovery::read_config(chain.head_state())
+                .context("the head state has no committee config")?;
+            let next_block = chain
+                .head_tip()
+                .map_or(GENESIS_BLOCK_ID, |tip| tip.block_id.saturating_add(1));
+            (committee, next_block)
+        };
+        self.system_approvals.add(signed, &committee, next_block)?;
+        self.persist_system_approvals().await
+    }
+
+    /// The approvals the head's committee must reach for a change, and every proposal held with
+    /// its approvals.
+    pub async fn system_proposals(&self) -> Result<system_approvals::SystemProposals> {
+        let committee = committee_discovery::read_config(self.chain.lock().await.head_state())
+            .context("the head state has no committee config")?;
+        let threshold = sequencer_stake_core::slash_approval_threshold(
+            committee.accredited_committee_members_count(),
+        );
+        let proposals = self
+            .system_approvals
+            .proposals()
+            .map(|(proposal, approvals)| ProposalApprovals {
+                proposal: *proposal,
+                approvals: approvals.cloned().collect(),
+            })
+            .collect();
+        Ok(system_approvals::SystemProposals {
+            threshold,
+            proposals,
+        })
+    }
+
+    /// Writes the approval pool to storage if it changed, so a restart keeps it.
+    async fn persist_system_approvals(&mut self) -> Result<()> {
+        if self.system_approvals.take_changed() {
+            self.storage_ref
+                .ask(sequencer_storage_actor::protocol::PutSystemApprovalsBytes {
+                    bytes: self.system_approvals.to_bytes(),
+                })
+                .await
+                .context("Failed to persist the system_upgrader approvals")?;
+        }
+        Ok(())
     }
 
     pub async fn chain_height(&self) -> u64 {
@@ -2020,9 +2184,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         timestamp: u64,
     ) -> Result<bool> {
         let alone = HashableBlockData {
-            // A placeholder index: the size if the transaction reverts. Outbound is
-            // unknown here; the post-settlement guard covers it.
-            reverted: vec![0],
+            receipts: reserved_receipts(system_txs).collect(),
+            // Outbound is unknown here; the post-settlement guard covers it.
             outbound: Vec::new(),
             block_id,
             transactions: [std::slice::from_ref(tx), system_txs].concat(),
@@ -2376,9 +2539,13 @@ fn config_target(
         .collect();
     let new_keys = committee_discovery::committee_update(
         final_state,
-        &live_keys,
-        live.required_signatures,
-        live.transfer_threshold,
+        &committee_discovery::LiveChannel {
+            accredited_keys: &live_keys,
+            configuration_threshold: live.required_signatures,
+            transfer_threshold: live.transfer_threshold,
+            posting_timeframe: live.posting_timeframe,
+            posting_timeout: live.posting_timeout,
+        },
     )?;
     let Some(channel_params) = committee_discovery::channel_params(final_state) else {
         warn!("sequencer_stake config carries no channel posting params, no committee update");
@@ -2433,6 +2600,12 @@ pub fn chain_update(chain: &ChainState) -> AtomicUpdate {
         zone_anchor: None,
         events: Vec::new(),
     }
+}
+
+/// Placeholder receipts for a transaction being sized and the `system_upgrader` slot `trailing`
+/// reserves, if any; the trailing fee and clock txs carry none.
+fn reserved_receipts(trailing: &[LeeTransaction]) -> impl Iterator<Item = TransactionReceipt> {
+    std::iter::repeat_n(TransactionReceipt::EXEMPT, trailing.len().saturating_sub(1))
 }
 
 /// The largest transaction a block under `state`'s `max_block_size` can carry, [`None`] if
@@ -2509,13 +2682,10 @@ fn build_due_apply_tx(
     let Some(name) = common::system_upgrades::due_at(state, block_id)? else {
         return Ok(None);
     };
-    Ok(system_upgrader_tx(
-        [system_upgrader_core::loader_actor(&name)],
-        system_upgrader_core::Message::Apply {
-            name,
-            activation_height: block_id,
-        },
-    )
+    Ok(system_upgrader_tx(system_upgrader_core::Message::Apply {
+        name,
+        activation_height: block_id,
+    })
     .map_err(|err| {
         error!(
             program = String::from_utf8_lossy(name.as_bytes()).trim_end_matches('\0'),
@@ -2526,16 +2696,40 @@ fn build_due_apply_tx(
     .ok())
 }
 
-/// An unsigned, fee-exempt `system_upgrader` transaction to its registry, also declaring
-/// `actors`.
-fn system_upgrader_tx(
-    actors: impl IntoIterator<Item = Actor>,
-    message: system_upgrader_core::Message,
-) -> Result<LeeTransaction> {
-    let registry = system_upgrader_core::registry_actor();
+/// The `Schedule`, `Cancel` or `Install` carrying out each approved proposal, with the proposal.
+fn build_approved_txs(
+    approved: Vec<ProposalApprovals>,
+) -> Vec<(
+    TransactionOrigin,
+    LeeTransaction,
+    Option<system_upgrader_core::Proposal>,
+)> {
+    approved
+        .into_iter()
+        .filter_map(|approved| {
+            let proposal = approved.proposal;
+            system_upgrader_tx(system_upgrader_core::Message::approved(
+                proposal,
+                approved.approvals,
+            ))
+            .map_err(|err| {
+                warn!(
+                    error = format_args!("{err:#}"),
+                    "Skipping an approved system_upgrader change"
+                );
+            })
+            .ok()
+            .map(|tx| (TransactionOrigin::Sequencer, tx, Some(proposal)))
+        })
+        .collect()
+}
+
+/// An unsigned, fee-exempt `system_upgrader` transaction to its registry, declaring the actors
+/// its message reaches.
+fn system_upgrader_tx(message: system_upgrader_core::Message) -> Result<LeeTransaction> {
     let message = Message::try_new(
-        registry,
-        std::iter::once(registry).chain(actors),
+        system_upgrader_core::registry_actor(),
+        message.actors(),
         BTreeMap::new(),
         message,
     )
@@ -2547,10 +2741,18 @@ fn system_upgrader_tx(
     )))
 }
 
-/// A `FinalizeUnstake` for every release whose exit delay has passed in `state`.
-fn build_finalize_unstake_txs(state: &lee::V03State) -> VecDeque<LeeTransaction> {
+/// A `FinalizeUnstake` for every partial release in `state` and every full one in `releasable`.
+fn build_finalize_unstake_txs(
+    state: &lee::V03State,
+    releasable: &BTreeSet<sequencer_stake_core::SequencerKey>,
+) -> VecDeque<LeeTransaction> {
+    let fully_pending =
+        full_stake_releases::fully_pending_keys(&full_stake_releases::stake_entries(state));
     committee_discovery::finalize_unstake_candidates(state)
         .into_iter()
+        .filter(|(_, sequencer_key, _)| {
+            !fully_pending.contains(sequencer_key) || releasable.contains(sequencer_key)
+        })
         .filter_map(|(ownership_id, sequencer_key, destination)| {
             build_finalize_unstake_tx(state, ownership_id, sequencer_key, destination)
                 .map_err(|err| {
@@ -2837,6 +3039,15 @@ fn load_or_create_key_bytes(path: &Path) -> Result<[u8; ED25519_SECRET_KEY_SIZE]
             .write_all(&key_bytes)?;
         Ok(key_bytes)
     }
+}
+
+/// Load an existing signing key; fails rather than creating one.
+pub fn load_signing_key(path: &Path) -> Result<Ed25519Key> {
+    let bytes: [u8; ED25519_SECRET_KEY_SIZE] = std::fs::read(path)
+        .with_context(|| format!("Failed to read the signing key at {}", path.display()))?
+        .try_into()
+        .map_err(|_bytes| anyhow!("Found key with incorrect length"))?;
+    Ok(Ed25519Key::from_bytes(&bytes))
 }
 
 /// Load signing key from file or generate a new one if it doesn't exist.

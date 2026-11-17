@@ -1,6 +1,6 @@
 use lee_core::{
-    EphemeralSecretKey, MessageWitness, PrivateAccountKind, Recipient, RecipientEncryption,
-    compute_digest_for_path,
+    EphemeralSecretKey, MessageWitness, PrivateAccountKind, PublicationMode, Recipient,
+    RecipientEncryption, compute_digest_for_path,
     execution_state::Placement,
     program::{MessageBody, Publication},
 };
@@ -104,7 +104,7 @@ fn records(state: &V03State, from_position: u64) -> Vec<Record> {
     state
         .publications_from(from_position)
         .filter_map(|(position, publication)| match publication {
-            Publication::Clear { body, .. } => Some(Record { position, body }),
+            Publication::Clear(body) => Some(Record { position, body }),
             Publication::Sealed(_) => None,
         })
         .collect()
@@ -316,11 +316,16 @@ fn proven_publishing(
         &scripted_programs(),
         |_| SenderPresentation::Canonical,
         |_, _| false,
-        |_| {
-            Ok(RecipientEncryption {
-                recipient: own.clone(),
-                esk: EphemeralSecretKey([0; 32]),
-            })
+        |bodies| {
+            Ok(bodies
+                .iter()
+                .map(|_| {
+                    PublicationMode::Sealed(RecipientEncryption {
+                        recipient: own.clone(),
+                        esk: EphemeralSecretKey([0; 32]),
+                    })
+                })
+                .collect())
         },
     )
     .unwrap();
@@ -342,10 +347,8 @@ fn a_mixed_transaction_publishes_its_live_async_messages_before_its_proven_async
         .transition_from_privacy_preserving_transaction(&tx, 2, 0)
         .unwrap();
 
-    let [
-        (_, Publication::Clear { body, .. }),
-        (_, Publication::Sealed(_)),
-    ] = <[_; 2]>::try_from(state.publications_from(0).collect::<Vec<_>>()).unwrap()
+    let [(_, Publication::Clear(body)), (_, Publication::Sealed(_))] =
+        <[_; 2]>::try_from(state.publications_from(0).collect::<Vec<_>>()).unwrap()
     else {
         panic!("the live async message is published clear before the proven one, which is sealed");
     };

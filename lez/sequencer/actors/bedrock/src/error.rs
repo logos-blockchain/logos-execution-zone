@@ -1,7 +1,7 @@
 use kameo::error::{Infallible, SendError};
 use sequencer_actors_common::{ErasedMessage, SendErrorExt as _};
 
-use crate::protocol::{ChannelSeq, Slot};
+use crate::protocol::{ChannelSeq, MsgId, Slot};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -28,6 +28,21 @@ pub enum Error {
 
     #[error("Node request failed")]
     NodeRequestFailed(#[source] anyhow::Error),
+
+    #[error("The node holds no final block at slot {0}")]
+    FinalBlockMissing(u64),
+
+    #[error("The node holds no block {0}")]
+    BlockMissing(logos_blockchain_zone_sdk::node_types::HeaderId),
+
+    #[error("Slot {0} is not final on the node yet")]
+    SlotNotFinal(u64),
+
+    #[error("No final block at or under slot {descendant_slot} holds inscription {msg:?}")]
+    FinalInscriptionMissing { msg: MsgId, descendant_slot: u64 },
+
+    #[error("Reading L1 for a stake release verdict ran out of time")]
+    VerdictTimedOut,
 
     #[error("Failed to fetch zone messages from blocks {from:?}..={to:?}")]
     ChannelReadFailed {
