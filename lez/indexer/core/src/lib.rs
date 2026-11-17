@@ -584,7 +584,7 @@ impl IndexerCore {
                 }
                 Err(PutSettledError::Store(err)) => {
                     // Infrastructure error (DB read/write), not a bad block.
-                    // will re-poll from the same cursor next cycle.
+                    // The block stays queued for the next cycle.
                     error!(
                         "Store error applying block {}: {err:#}",
                         block.header.block_id
@@ -721,8 +721,9 @@ impl IndexerCore {
                 }
 
                 if had_cycle_error {
-                    // The slot in progress is not finished, so the cursor stays
-                    // below it and the next pass re-reads it whole.
+                    // A failed read, or an undecodable entry whose stall was not recorded, leaves
+                    // its slot for the next pass to read again. A settled block the store has not
+                    // taken stays queued and goes to the store first.
                     tokio::time::sleep(poll_interval).await;
                     continue;
                 }
