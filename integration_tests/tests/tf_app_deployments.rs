@@ -15,10 +15,12 @@ use integration_tests::{
         wait_for_indexer_to_catch_up,
     },
 };
+use logos_blockchain_zone_sdk::{
+    testing_framework_app::{AppHostEnv, AppHostTopology, DeployContext},
+    testing_framework_core::scenario::NodeClients,
+};
 use sequencer_service_rpc::RpcClient as _;
 use tempfile::tempdir;
-use testing_framework_app::{AppHostEnv, AppHostTopology, DeployContext};
-use testing_framework_core::scenario::NodeClients;
 
 #[tokio::test]
 #[ignore = "Blocked until LEZ's Logos revision includes logos-blockchain#3467 (fixes logos-blockchain#3431 port-allocation race)"]

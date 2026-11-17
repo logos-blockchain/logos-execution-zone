@@ -5,16 +5,18 @@
 
 use std::{collections::BTreeSet, future::Future};
 
-use logos_blockchain_core::mantle::{
-    SignedOps,
-    ledger::verification_mode::StandardMode,
-    ops::{
-        OpRef,
-        channel::{ChannelId, MsgId, config::ChannelConfigOp},
+use logos_blockchain_zone_sdk::{
+    core::mantle::{
+        SignedOps,
+        ledger::verification_mode::StandardMode,
+        ops::{
+            OpRef,
+            channel::{ChannelId, MsgId, config::ChannelConfigOp},
+        },
+        transactions::states::Unverified,
     },
-    transactions::states::Unverified,
+    node_types::HeaderId,
 };
-use logos_blockchain_zone_sdk::node_types::HeaderId;
 use sequencer_stake_core::SequencerKey;
 
 pub use self::config_index::ConfigIndex;

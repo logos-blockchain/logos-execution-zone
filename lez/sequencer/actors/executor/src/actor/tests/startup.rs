@@ -9,7 +9,7 @@ use kameo::{
     error::HookError,
 };
 use lee_core::BlockId;
-use logos_blockchain_core::{
+use logos_blockchain_zone_sdk::core::{
     events::DepositRecreatedNotes,
     mantle::{TxHash, ledger::Inputs, ops::channel::deposit::Metadata},
 };

@@ -8,11 +8,11 @@ use common::block::Block;
 use futures::{Stream, StreamExt as _, TryStreamExt as _};
 use kameo::actor::ActorRef;
 use kameo_actors::broker::Broker;
-use logos_blockchain_common_http_client::ProcessedBlockEvent;
-use logos_blockchain_core::mantle::ops::channel::withdraw::ChannelWithdrawOp;
 use logos_blockchain_zone_sdk::{
     Deposit, Withdraw,
     adapter::{Node as _, NodeHttpClient},
+    common_http_client::ProcessedBlockEvent,
+    core::mantle::ops::channel::withdraw::ChannelWithdrawOp,
 };
 use sequencer_actors_common::SendErrorExt as _;
 use sequencer_storage_actor::protocol::ZoneAnchorRecord;
@@ -341,8 +341,9 @@ mod tests {
         message::{Context, Message},
     };
     use kameo_actors::{DeliveryStrategy, broker::Subscribe};
-    use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-    use logos_blockchain_zone_sdk::{ZoneBlock, node_types::Inscription};
+    use logos_blockchain_zone_sdk::{
+        ZoneBlock, key_management_system_service::keys::Ed25519Key, node_types::Inscription,
+    };
     use tokio::sync::mpsc;
 
     use super::*;

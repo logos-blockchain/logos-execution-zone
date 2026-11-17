@@ -816,8 +816,10 @@ mod tests {
     use futures::stream;
     use kameo::{actor::Spawn as _, supervision::RestartPolicy};
     use lee::GENESIS_BLOCK_ID;
-    use logos_blockchain_core::mantle::ops::channel::{MsgId, inscribe::Inscription};
-    use logos_blockchain_zone_sdk::{UnverifiedEd25519PublicKey, ZoneBlock};
+    use logos_blockchain_zone_sdk::{
+        UnverifiedEd25519PublicKey, ZoneBlock,
+        core::mantle::ops::channel::{MsgId, inscribe::Inscription},
+    };
     use sequencer_bedrock_actor::{error::Error as BedrockError, mock::MockBedrockActor};
     use sequencer_storage_actor::{
         StorageActor,

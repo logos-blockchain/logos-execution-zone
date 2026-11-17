@@ -10,7 +10,6 @@ workspace = true
 [features]
 # Adds actor implementation using kameo_actors.
 actor = [
-  "dep:logos-blockchain-common-http-client",
   "dep:kameo_actors",
   "dep:tokio",
   "dep:borsh",
@@ -30,14 +29,10 @@ sequencer_storage_actor.workspace = true
 sharding_pool_actor.workspace = true
 
 logos-blockchain-zone-sdk.workspace = true
-logos-blockchain-core.workspace = true
-logos-blockchain-binary-codec.workspace = true
 kameo.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 futures.workspace = true
-logos-blockchain-key-management-system-service.workspace = true
-logos-blockchain-common-http-client = { workspace = true, optional = true }
 kameo_actors = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["time"], optional = true }
 borsh = { workspace = true, optional = true }

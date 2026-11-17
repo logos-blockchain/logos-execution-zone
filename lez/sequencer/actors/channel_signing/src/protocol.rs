@@ -1,16 +1,18 @@
 use std::num::NonZero;
 
 use kameo::Reply;
-use logos_blockchain_binary_codec::canonical::{BinaryDecodeExt as _, BinaryEncode as _};
-use logos_blockchain_core::{
-    events::DepositNote,
-    mantle::{
-        ops::channel::{ChannelKeyIndex, MsgId},
-        transactions::Ops,
+use logos_blockchain_zone_sdk::{
+    binary_codec::canonical::{BinaryDecodeExt as _, BinaryEncode as _},
+    core::{
+        events::DepositNote,
+        mantle::{
+            ops::channel::{ChannelKeyIndex, MsgId},
+            transactions::Ops,
+        },
+        proofs::channel_multi_sig_proof::{IndexedSignature, IndexedSignatures},
     },
-    proofs::channel_multi_sig_proof::{IndexedSignature, IndexedSignatures},
+    key_management_system_service::keys::{Ed25519PublicKey, Ed25519Signature},
 };
-use logos_blockchain_key_management_system_service::keys::{Ed25519PublicKey, Ed25519Signature};
 
 /// Tags the two message shapes on the wire. A draft is a whole
 /// transaction; a signature is worthless without the one it was signed over,
@@ -176,7 +178,7 @@ impl Wire {
                 // A draft is only signed once it matches this node's own target, so
                 // no op data bound is enforced here beyond the codec's own.
                 tx: Box::new(
-                    <Ops as logos_blockchain_binary_codec::canonical::BinaryDecode>::decode_all(
+                    <Ops as logos_blockchain_zone_sdk::binary_codec::canonical::BinaryDecode>::decode_all(
                         payload,
                         &u32::MAX,
                     )

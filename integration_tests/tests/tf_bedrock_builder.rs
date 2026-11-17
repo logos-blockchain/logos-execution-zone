@@ -5,9 +5,11 @@
 
 use anyhow::Result;
 use integration_tests::testing_framework::BedrockApp;
-use logos_blockchain_testing_framework::{DeploymentBuilder, TopologyConfig};
-use testing_framework_app::{AppHostEnv, AppHostTopology, DeployContext};
-use testing_framework_core::{scenario::NodeClients, topology::DeploymentSeed};
+use logos_blockchain_zone_sdk::{
+    testing_framework::{DeploymentBuilder, TopologyConfig},
+    testing_framework_app::{AppHostEnv, AppHostTopology, DeployContext},
+    testing_framework_core::{scenario::NodeClients, topology::DeploymentSeed},
+};
 
 #[tokio::test]
 async fn bedrock_can_be_deployed_from_a_configured_builder() -> Result<()> {
