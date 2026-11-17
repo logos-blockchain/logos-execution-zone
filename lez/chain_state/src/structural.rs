@@ -20,7 +20,6 @@ pub struct StructuralChain {
 }
 
 impl StructuralChain {
-    /// A fold of a channel whose skip window is `skip_window` slots, settled up to `settled`.
     #[must_use]
     pub fn new(skip_window: u32, settled: Option<Tip>) -> Self {
         Self {
@@ -33,7 +32,8 @@ impl StructuralChain {
         }
     }
 
-    /// Folds `entries`, the channel read through `lib_slot`; returns newly settled blocks in order.
+    /// Returns newly settled blocks in order. All finalized entries through `lib_slot` must have
+    /// been supplied, in this call or earlier ones.
     pub fn apply_finalized(
         &mut self,
         entries: &[ChannelEntry],
@@ -51,7 +51,7 @@ impl StructuralChain {
         self.settled.clone()
     }
 
-    /// The slot of the oldest unsettled entry, which a rebuild from the settled tip re-reads.
+    /// The slot of the oldest unsettled block.
     #[must_use]
     pub fn reread_from(&self) -> Option<Slot> {
         self.blocks.first().map(|&(_, slot)| slot)

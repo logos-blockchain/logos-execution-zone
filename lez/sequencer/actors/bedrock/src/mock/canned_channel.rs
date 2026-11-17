@@ -328,8 +328,7 @@ pub fn checkpoint_at(tip: MsgId) -> SequencerCheckpoint {
     }
 }
 
-/// The entries of `messages` past `after` (exclusive), as `ReadChannel` serves them: one batch
-/// per slot.
+/// The entries of `messages` past `after` (exclusive), as `ReadChannel` serves them.
 fn history_after(messages: &[(ZoneMessage, Slot)], after: Option<Slot>) -> ChannelReadStream {
     let batches: Vec<_> = messages
         .chunk_by(|(_, slot), (_, next)| slot == next)

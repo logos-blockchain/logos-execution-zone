@@ -507,8 +507,6 @@ async fn history_short_of_the_final_entry_leaves_the_lineage_alone() -> Result<(
     Ok(())
 }
 
-/// Garbage before and after genesis in finalized history: the lineage ends on
-/// the last entry, block or not, so the pin does too.
 #[test]
 async fn reconstruction_pins_on_trailing_garbage() -> Result<()> {
     let genesis = genesis();
@@ -630,7 +628,7 @@ async fn replay_cuts_a_block_skipped_in_the_last_slot_of_its_window_as_a_live_no
         .lock()
         .final_snapshot
         .clone()
-        .expect("the replay settles a final tier");
+        .expect("the replay stores a settled snapshot");
     assert_eq!(Some(Tip::from(replayed_tip)), live.final_tip());
     assert!(replayed_state == *live.final_state());
     Ok(())

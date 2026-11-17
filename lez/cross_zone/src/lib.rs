@@ -121,7 +121,7 @@ pub struct CrossZonePeer {
     /// as-is. A production peer should set it.
     #[serde(default)]
     pub genesis_hash: Option<HashType>,
-    /// The peer zone's skip window Δ in slots, as its genesis channel parameters set it.
+    /// The peer zone's genesis skip window Δ, in slots.
     pub skip_window: u32,
 }
 

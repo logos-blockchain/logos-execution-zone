@@ -75,8 +75,7 @@ impl LeeTransaction {
         }
     }
 
-    /// The bytes the transaction's storage is charged for: its size in the digest form its block
-    /// publishes, a privacy-preserving transaction's proof replaced by the proof's digest.
+    /// The storage bytes charged for the transaction: the size of its inscribed digest form.
     pub fn charged_bytes(&self) -> borsh::io::Result<u64> {
         let size = borsh::object_length(&self.digested())?;
         Ok(u64::try_from(size).expect("a transaction's size fits u64"))

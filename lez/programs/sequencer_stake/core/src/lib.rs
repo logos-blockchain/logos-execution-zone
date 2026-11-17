@@ -202,8 +202,7 @@ pub struct ChannelParams {
     /// above `block_create_timeout`, or a healthy sequencer loses its turn
     /// between its own blocks.
     pub posting_timeout: u32,
-    /// Slots after a provisional block within which another writer may skip
-    /// it; zero disables skipping.
+    /// Slots after a private block within which another writer may skip it.
     pub skip_window: u32,
     /// Blocks an unstake waits before `FinalizeUnstake` may release it.
     pub exit_delay: u64,

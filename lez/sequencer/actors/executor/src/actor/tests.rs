@@ -305,8 +305,7 @@ fn prepare_mock_storage_with_stake(
     mock_storage
 }
 
-/// The real genesis state after [`empty_genesis`], so programs are loaded and a transaction can
-/// actually settle; only the stake config is layered on, to name this node.
+/// Genesis state with the supplied stake configuration.
 fn stake_state(
     entries: BTreeMap<SequencerKey, SequencerEntry>,
     channel_params: sequencer_stake_core::ChannelParams,
@@ -1038,7 +1037,7 @@ async fn handle_transaction_rejects_a_transaction_too_large_for_any_block() -> R
         "{refusal:#}"
     );
 
-    // A proof that makes the full form too large, though the digest form fits a block.
+    // A proof that exceeds the full transaction size cap while its digest form fits a block.
     let proof = vec![7; usize::try_from(MAX_TRANSACTION_SIZE)?];
     let proven = LeeTransaction::PrivacyPreserving(lee::PrivacyPreservingTransaction::new(
         lee::privacy_preserving_transaction::Message::default(),

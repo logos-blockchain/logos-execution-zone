@@ -8,12 +8,11 @@ use tokio::time::{Duration, Instant};
 
 use super::turn::Turn;
 
-/// When our turn builds on the head tip past a block the head has not executed, skipping it.
 #[derive(Default)]
 pub struct SkipPolicy {
     /// When each view entry was first seen.
     first_seen: HashMap<MsgId, Instant>,
-    /// The block first found past the head tip in our turn, and when.
+    /// The current blocking entry and when it was first found, possibly in an earlier turn.
     blocked: Option<(MsgId, Instant)>,
     /// The block this turn logged a hold for.
     logged: Option<MsgId>,

@@ -47,10 +47,8 @@ pub const MIN_PRIVATE_REFUND: Balance = 1_000_000;
 /// fixed recursion circuit: its work does not depend on the execution it proves.
 /// Re-pin on a RISC Zero bump.
 pub const PRIVATE_VERIFY_GAS: u64 = 409_764;
-/// The bytes a private transaction's proof is published and charged as: its digest.
 pub const PROOF_DIGEST_BYTES: u64 = 32;
-/// The most bytes a private transaction's proof may carry: a succinct receipt with its claim
-/// pruned to a digest, whatever the transaction proves.
+/// The most bytes a private transaction's proof may carry.
 ///
 /// RISC Zero 3.0.5, measured with `cycle_bench --ppe` (`proof_bytes`); re-pin on a RISC Zero bump.
 pub const PROOF_BYTES: u64 = 223_047;

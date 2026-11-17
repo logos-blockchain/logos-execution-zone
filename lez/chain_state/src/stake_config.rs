@@ -3,9 +3,7 @@ use sequencer_stake_core::{ChannelParams, SequencerStakeConfig};
 
 /// Reads the `sequencer_stake` config account.
 ///
-/// A single account read, not a scan, since every
-/// `Stake`/`UnstakeRequest`/`FinalizeUnstake` keeps its `entries` map current
-/// as it executes. `None` only if the account is absent or undecodable, which
+/// A single account read. `None` only if the account is absent or undecodable, which
 /// genesis rules out.
 #[must_use]
 pub fn read_config(state: &lee::V03State) -> Option<SequencerStakeConfig> {

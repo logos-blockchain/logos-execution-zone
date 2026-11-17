@@ -315,8 +315,8 @@ impl IndexerStore {
         self.set_stall_reason(&Some(stall))
     }
 
-    /// Persists a settled block with the state after it and its events, if it
-    /// extends the stored tip. A block the store already holds is not rewritten.
+    /// Persists a settled block with the state after it and its events, if it extends the stored
+    /// tip. A block the store already holds is `Replayed`, not rewritten.
     pub async fn put_settled_block(
         &self,
         settled: &SettledBlock,

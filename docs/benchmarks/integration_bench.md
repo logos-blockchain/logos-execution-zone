@@ -71,7 +71,6 @@ These figures predate digest-form inscriptions: they count each PPE transaction'
 
 ## Findings
 
-- Public native transfers are small and uniform: 258 to 371 bytes per transaction, under 1.2 KB per block.
 - Before digest-form inscriptions, a PPE transaction dominated its block: even the dev-mode stub took a block from 810 bytes to 25 KB, and real proofs took it to roughly 223 KB. Blocks now publish a 32-byte digest per proof; re-measurement is pending.
 - Wall time in dev mode is set by block cadence, not by the node's work.
 

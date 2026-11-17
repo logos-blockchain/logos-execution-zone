@@ -1,6 +1,5 @@
-//! Two-tier chain state: a `final` tier of settled blocks, and a `head` the
-//! sequencer builds on, derived by folding `final` over the channel's message
-//! lineage above it.
+//! Two-tier chain state: the settled state, and a `head` the sequencer builds
+//! on, derived by folding it over the channel's message lineage above it.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -55,11 +54,9 @@ pub enum PublishRecord {
 
 /// What a fold of finalized entries decided.
 pub struct FoldOutcome {
-    /// One verdict per finalized entry decided: misplaced, late, ignored and
-    /// cut entries as soon as their fold is decided, settled ones as the final
-    /// tier reaches them.
+    /// Verdicts reached for finalized entries carrying blocks.
     pub judged: Vec<Judged>,
-    /// Every block the final tier applied, ancestors a finalized entry pulled in included.
+    /// Blocks newly added to the settled chain prefix.
     pub settled: Vec<SettledBlock>,
     /// The signer of each newly judged finalized skip, once per skip.
     pub skip_signers: Vec<[u8; 32]>,
@@ -76,9 +73,9 @@ pub struct Judged {
 
 #[derive(Clone, Debug)]
 pub enum Verdict {
-    /// The block joined the final tier.
+    /// The block joined the settled chain prefix.
     Settled,
-    /// A re-delivery of the final tip.
+    /// A re-delivery of the settled tip.
     AlreadySettled(Block),
     /// The block was rejected.
     Dropped {
@@ -87,15 +84,15 @@ pub enum Verdict {
         punishable: bool,
     },
     /// Excluded by a valid skip or with a failed ancestor, without an application error of its
-    /// own.
+    /// own. It stays excluded if its proofs arrive later.
     Excluded,
-    /// A skip that came after its window.
+    /// A skip attempted after the candidate's skip window closed.
     LateSkip,
     /// A block whose parent is not known.
     Ignored,
 }
 
-/// A block the final tier settled, with the state after it and its events.
+/// A settled block with its resulting state and transaction events.
 pub struct SettledBlock {
     msg: MsgId,
     slot: Option<Slot>,
@@ -105,7 +102,6 @@ pub struct SettledBlock {
 }
 
 impl SettledBlock {
-    /// A settlement built outside the fold, for other crates' tests.
     #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub const fn new(
@@ -156,7 +152,7 @@ impl SettledBlock {
     }
 }
 
-/// The first block on the head's branch past its tip, which the head has not executed.
+/// The first unexecuted block after the head tip.
 #[derive(Debug)]
 pub struct Blocker {
     /// The entry that placed it.
@@ -176,7 +172,7 @@ pub struct Blocker {
 struct StoredView {
     final_msg: [u8; 32],
     lib_slot: u64,
-    /// The final tier's unconfirmed run.
+    /// The unconfirmed writer run at the settled chain prefix.
     run: Vec<BlockRecord>,
     finalized: Vec<StoredEntry>,
     entries: Vec<StoredEntry>,
@@ -198,13 +194,14 @@ enum StoredBlock {
     Digested(DigestedBlock),
 }
 
-/// The final tier (settled blocks) and the head, which is always `final_state`
-/// folded over `view`.
+/// The settled state and the head, which extends it with newer executed blocks: always
+/// `final_state` folded over `view`.
 ///
-/// `view` is the lineage above the final tier: the finalized entries up to
-/// `final_msg`, then the unfinalized ones. The fold places each entry's block
-/// by the skip rule, reading only the entries before it, their slots and the
-/// validity of blocks, and the pin is the view's last entry.
+/// Bedrock finalizes channel entries, including entries without a decodable block. Settlement
+/// advances through a contiguous prefix of executed blocks, each public, confirmed by another
+/// writer or past its skip window.
+///
+/// `view` holds the retained channel entries in order, finalized entries first.
 ///
 /// Each entry keeps the head it folded to, so a view that changes past an
 /// entry refolds from there rather than from `final_state`. The states share
@@ -215,10 +212,10 @@ pub struct ChainState {
     /// The newest finalized entry on the message lineage, block or not.
     final_msg: MsgId,
     lib_slot: Slot,
-    /// What placement reads at the final tier.
+    /// What placement reads at the settled chain prefix.
     record: Record,
 
-    /// The message lineage above the final tier, oldest first.
+    /// The message lineage above the settled chain prefix, oldest first.
     view: Vec<ChannelEntry>,
     /// How many entries at the front of the view are finalized.
     finalized: usize,
@@ -234,22 +231,20 @@ struct Fold {
     /// The state after the branch's last executed block.
     state: V03State,
     record: Record,
-    /// The events of the entry's block, when the fold executed it.
+    /// The events of the entry's block.
     events: Option<Vec<TxEvents>>,
-    /// The entry's own verdict, when folding it reached one.
     verdict: Option<Verdict>,
     /// Entries excluded while folding this entry, with any known application error.
     excluded_entries: Vec<(MsgId, Option<BlockIngestError>)>,
     /// Placement and judgment wait for the proofs of an earlier block from the same signer.
     deferred: bool,
-    /// Its block was placed as a skip.
     skipped: bool,
 }
 
-/// What placement reads: the selected branch and the unconfirmed run.
+/// The selected branch and the unconfirmed writer run.
 #[derive(Clone, Default)]
 pub(crate) struct Record {
-    /// The branch above the final tier, oldest first.
+    /// The branch above the settled chain prefix, oldest first.
     pub(crate) branch: Vec<Placed>,
     /// One writer's blocks awaiting confirmation by another writer. Settlement leaves them, so
     /// placement does not depend on what has settled.
@@ -313,7 +308,7 @@ impl Placed {
 #[derive(Clone)]
 pub(crate) enum Status {
     Executed,
-    /// Failed to apply, so the blocks placed on it cannot execute.
+    /// Failed to apply.
     Dead(BlockIngestError),
     /// Behind a dead or pending block.
     Unexecutable,
@@ -471,8 +466,7 @@ impl ChainState {
         Arc::new(self.final_state.clone())
     }
 
-    /// Parent the next produced block must chain on: the branch's last
-    /// executed block.
+    /// Parent the next produced block must chain on.
     #[must_use]
     pub fn head_tip(&self) -> Option<Tip> {
         self.head_record()
@@ -505,7 +499,7 @@ impl ChainState {
         missing
     }
 
-    /// The first block on the head's branch past [`Self::head_tip`].
+    /// The next block on the head's branch after [`Self::head_tip`].
     #[must_use]
     pub fn blocker(&self) -> Option<Blocker> {
         let record = self.head_record();
@@ -587,7 +581,7 @@ impl ChainState {
         &self.hydrated.proofs
     }
 
-    /// The view, `final_msg` and what placement reads at the final tier, in
+    /// The view, `final_msg` and what placement reads at the settled chain prefix, in
     /// their persisted form. An entry keeps its full block once hydrated, its
     /// digest form otherwise.
     #[must_use]
@@ -800,10 +794,8 @@ impl ChainState {
         }
     }
 
-    /// Makes `entry` the newest final entry, after the held entries it chains
-    /// on, and returns where the view changed. A finalized entry off the lineage
-    /// is a re-delivery: a held copy leaves the view and its verdict goes to
-    /// `judged`.
+    /// Records L1 finality for `entry` and the held entries it chains on, and returns where the
+    /// view changed. An entry off the lineage is judged as a re-delivery instead.
     fn finalize(&mut self, entry: &ChannelEntry, judged: &mut Vec<Judged>) -> Option<usize> {
         // Finality is prefix-monotone: the held entries this one chains on
         // finalize first, found by parent link since a stale re-report can
@@ -861,8 +853,7 @@ impl ChainState {
         changed.into_iter().chain([final_len]).min()
     }
 
-    /// The verdict on a finalized block off the lineage, judged against the
-    /// final tip and never an offence.
+    /// Judges a finalized entry off the lineage against the settled tip, never as an offence.
     fn redelivery(&self, entry: &ChannelEntry) -> Option<Judged> {
         let block = entry.block.as_ref()?;
         let verdict = if self
@@ -897,9 +888,7 @@ impl ChainState {
         })
     }
 
-    /// The verdicts of the finalized entries decided since the last call:
-    /// each entry's own, and those of the entries whose blocks left the branch
-    /// at it.
+    /// New verdicts for decided finalized entries and the entries they exclude.
     fn judge(&mut self, skip_signers: &mut Vec<[u8; 32]>) -> Vec<Judged> {
         let decided = self.finalized.min(self.folds.len());
         let mut judged = Vec::new();
@@ -939,8 +928,7 @@ impl ChainState {
         judged
     }
 
-    /// Settles the decided, finalized branch from its bottom while its blocks
-    /// settle, then drops the decided entries the final tier has passed.
+    /// Advances the settled prefix through eligible finalized blocks and drops processed entries.
     fn settle(&mut self, newly_final: &mut Vec<SettledBlock>) -> Vec<Judged> {
         let final_len = self.finalized;
         let decided = final_len.min(self.folds.len());
@@ -1016,8 +1004,8 @@ impl ChainState {
         judged
     }
 
-    /// The blocks of `fold`'s branch that settle, from its bottom up: each
-    /// executed, and plain, confirmed or timed out.
+    /// The consecutive executed blocks from the bottom of `fold`'s branch that settle: each
+    /// public, confirmed or past its window.
     fn settling(&self, fold: &Fold, final_len: usize) -> Vec<Placed> {
         let delta = skip_window(&fold.state);
         // A timeout needs every finalized entry up to its window's end folded decided.

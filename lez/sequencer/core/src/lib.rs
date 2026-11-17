@@ -449,7 +449,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     }
                     Verdict::Dropped { error, .. } => {
                         warn!(
-                            "Finalized block {} did not apply, the final tier stays at {:?}: {:#}",
+                            "Finalized block {} did not apply, the settled tip stays at {:?}: {:#}",
                             entry.block.header.block_id,
                             chain.final_tip().map(|tip| tip.block_id),
                             anyhow!(error.clone()),
@@ -2253,7 +2253,7 @@ pub async fn settlement_update<S: StorageActorTrait>(
 
     let update = AtomicUpdate {
         blocks,
-        // Snapshot the advanced final tier so a restart re-anchors on it.
+        // Snapshot the advanced settled state so a restart re-anchors on it.
         final_snapshot: chain
             .final_tip()
             .filter(|_| !newly_final.is_empty())
