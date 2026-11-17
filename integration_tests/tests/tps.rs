@@ -276,7 +276,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
         ProvingInput {
             claims: Vec::new(),
             root: TransactionEntry::Sync(RootCall {
-                to: Actor::native_balance(sender_id),
+                to: Actor::native_balance(sender_id).into(),
                 message: Program::serialize_message(lee_core::native_token::Message::Transfer {
                     to: recipient_id,
                     amount: balance_to_move,
@@ -314,7 +314,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
         &circuit::Simulation::default(),
         &lee::privacy_preserving_transaction::circuit::ProgramCatalog::default(),
         |_| SenderPresentation::Canonical,
-        |_, body| body.to.account_id == recipient_id,
+        |_, body| body.to.actor().account_id == recipient_id,
         no_seal,
     )
     .unwrap();

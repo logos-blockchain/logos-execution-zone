@@ -31,12 +31,12 @@ fn settled_block(
 ) -> Block {
     use common::transaction::{FeePayee, LeeTransaction, clock_invocation, fee_invocation};
     let timestamp = id.saturating_mul(100);
-    let (summary, payout, receipts) = if id == lee::GENESIS_BLOCK_ID {
+    let (summary, payout, receipts, outbound) = if id == lee::GENESIS_BLOCK_ID {
         // Genesis transactions are fee-exempt
         let summary = fee_core::BlockFeeSummary::default();
         let payout = chain_state::apply::opening_fee_state(state).apply_block(&summary);
         let receipts = vec![common::block::TransactionReceipt::EXEMPT; transactions.len()];
-        (summary, payout, receipts)
+        (summary, payout, receipts, Vec::new())
     } else {
         chain_state::apply::derive_block_summary(state, &transactions, id, timestamp)
             .expect("test transactions settle")
@@ -49,6 +49,7 @@ fn settled_block(
     )));
     transactions.push(LeeTransaction::Public(clock_invocation(id, timestamp)));
     common::block::HashableBlockData {
+        outbound,
         block_id: id,
         prev_block_hash: prev_hash,
         timestamp,

@@ -51,7 +51,7 @@ impl<C: WalletSequencerClient> NativeTokenTransfer<'_, C> {
             AsyncDelivery {
                 clear_messages: vec![MessageBody {
                     from: Actor::native_balance(sender.account_id()),
-                    to: credited,
+                    to: credited.into(),
                     message: Program::serialize_message(Message::Credit(amount))
                         .expect("Message should serialize"),
                 }],

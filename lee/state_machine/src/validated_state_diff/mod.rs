@@ -8,10 +8,10 @@ use std::{
 use lee_core::{
     BlockId, Commitment, CommitmentSetDigest, Nullifier, ProgramImageClaim, ProvenExecution,
     RecoveryBinding, RootCall, Timestamp,
-    account::{Account, AccountId, Actor, ActorState, Cycles, Nonce},
+    account::{Account, AccountId, Actor, ActorState, Cycles, Nonce, Target},
     execution_state::{
-        BoundaryStep, PublicExecutionContext, PublicOutcome, PublicPart, TransactionEntry,
-        TransitionView, WholeExecution,
+        BoundaryStep, OutboundMessage, PublicExecutionContext, PublicOutcome, PublicPart,
+        TransactionEntry, TransitionView, WholeExecution,
     },
     program::{PROGRAM_LOADER_ACCOUNT_ID, Publication, ReceiveInput, TransactionEvent, Transition},
 };
@@ -39,6 +39,8 @@ pub struct StateDiff {
     pub events: Vec<TransactionEvent>,
     pub published: Vec<Publication>,
     pub recovery_bindings: Vec<RecoveryBinding>,
+    /// Messages to other zones, in emission order.
+    pub outbound: Vec<OutboundMessage>,
 }
 
 /// The validated output of executing or verifying a transaction, ready to be applied to the state.
@@ -196,7 +198,7 @@ impl ValidatedStateDiff {
     /// not read as a general escape hatch. `authorized` is the guest's
     /// `is_authorized` set — the payer for the reserve, empty for the refund.
     pub fn from_fee_settlement_invocation(
-        to: Actor,
+        to: impl Into<Target>,
         message: &[u8],
         public_actors: &BTreeSet<Actor>,
         authorized: &HashSet<AccountId>,
@@ -207,7 +209,7 @@ impl ValidatedStateDiff {
         let mut cycles_used = 0; // dont care
         Self::execute_authorized(
             RootCall {
-                to,
+                to: to.into(),
                 message: message.to_vec(),
             },
             PublicExecutionContext::new(public_actors.iter().copied(), authorized.iter().copied()),
@@ -264,7 +266,9 @@ impl ValidatedStateDiff {
         cycles_used: &mut u64,
     ) -> Result<Self, LeeError> {
         ensure!(
-            public_context.runs_publicly(root.to),
+            root.to
+                .local()
+                .is_some_and(|to| public_context.runs_publicly(to)),
             LeeError::InvalidInput("Root actor is not declared".into())
         );
         let backend = PublicBackend::new(
@@ -491,6 +495,12 @@ impl ValidatedStateDiff {
         &self.0.public_diff
     }
 
+    /// The messages this transaction sends to other zones, in emission order.
+    #[must_use]
+    pub fn outbound(&self) -> &[OutboundMessage] {
+        &self.0.outbound
+    }
+
     pub(crate) fn into_state_diff(self) -> StateDiff {
         self.0
     }
@@ -573,8 +583,13 @@ fn publish(
     publication: Publication,
 ) -> Result<Publication, LeeError> {
     if let Publication::Clear(body) = &publication {
+        let address = body
+            .to
+            .local()
+            .ok_or(LeeError::UnboundAsyncDestination { actor: body.to })?
+            .account_id;
         ensure!(
-            state.bound_note(introduced, body.to.account_id).is_some(),
+            state.bound_note(introduced, address).is_some(),
             LeeError::UnboundAsyncDestination { actor: body.to }
         );
     }
@@ -593,6 +608,7 @@ fn settle(
         accounts,
         events,
         async_messages,
+        outbound,
     } = execute(&mut backend)?;
     ensure!(
         validity.is_valid_at(block_id, timestamp),
@@ -623,6 +639,7 @@ fn settle(
         .into_iter()
         .map(|body| publish(state, &diff.recovery_bindings, Publication::Clear(body)))
         .collect::<Result<_, _>>()?;
+    diff.outbound = outbound;
     Ok(diff)
 }
 

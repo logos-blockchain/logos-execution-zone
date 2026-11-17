@@ -3,34 +3,20 @@
     reason = "top-level test functions are conventional for integration tests"
 )]
 
-//! A sequencer restart must resume its cross-zone watcher from the persisted
-//! per-peer delivery floor instead of re-reading the peer channel from genesis.
-//!
-//! Re-reading is safe (the dispatch key is content-addressed and the inbox
-//! refuses a replay) so on-chain state cannot tell the two apart. What does tell
-//! them apart is the transactions: a watcher that lost its cursor re-injects
-//! every already-delivered dispatch, which shows up as inbox transactions in
-//! blocks produced after the restart. This is the only test that covers the
-//! wiring from `spawn_watchers` through the store, so a silent regression here
-//! would leave every other test green while the feature does nothing.
+//! A sequencer restart must resume its cross-zone watcher from the persisted per-peer delivery
+//! floor instead of re-reading the peer channel from genesis.
 
 use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
-use cross_zone_outbox_core::{outbox_pda, outbox_pda_seed};
 use integration_tests::{
     config::{self, SequencerPartialConfig},
     setup::{SequencerSetup, sequencer_client, setup_bedrock_node},
 };
-use lee::{
-    AccountId, Actor, PublicAccountEvidence, PublicTransaction, public_transaction::Message,
-};
+use lee::{AccountId, Actor, PublicTransaction, public_transaction::Message};
 use lee_core::account::Nonce;
-use ping_core::{
-    CrossZoneEmission, ReceiverMessage, SenderMessage, ping_record_pda, receiver_config_account_id,
-    sender_config_account_id,
-};
+use ping_core::{ReceiverMessage, SenderMessage, ping_record_pda, receiver_config_account_id};
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use test_fixtures::{config::source_only_cross_zone, init_logger};
@@ -38,9 +24,6 @@ use testnet_initial_state::{PublicAccountPrivateInitialData, initial_pub_account
 use tokio::test;
 
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(480);
-/// Blocks zone B must produce after the restart before we judge the watcher.
-/// A watcher that lost its cursor re-reads the peer channel on its first pass,
-/// so a handful of blocks is ample room for the replay to appear.
 const BLOCKS_AFTER_RESTART: u64 = 5;
 const RESTART_TIMEOUT: Duration = Duration::from_secs(240);
 const PING_PAYLOAD: &[u8] = b"hello-cross-zone";
@@ -49,13 +32,11 @@ const PING_PAYLOAD: &[u8] = b"hello-cross-zone";
 async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Result<()> {
     init_logger();
 
-    // Declared first so it outlives both zones (drops run in reverse order).
     let (_bedrock, bedrock_addr) = setup_bedrock_node()
         .await
         .context("Failed to set up shared Bedrock node")?;
 
     let partial = SequencerPartialConfig {
-        // Covers the storage price doubling at the devnet's first epoch rotations.
         priority_fee_percent: 150,
         ..SequencerPartialConfig::default()
     };
@@ -75,7 +56,6 @@ async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Re
             }],
             min_committee_size: 0,
             genesis_hash: None,
-            emitters: vec![],
         }],
         lock_target_zones: Vec::new(),
         source_authority: None,
@@ -90,7 +70,6 @@ async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Re
         .await
         .context("Failed to set up zone A sequencer")?;
 
-    // Zone B keeps an explicit home so it can be restarted on the same store.
     let home_b = tempfile::tempdir().context("Failed to create zone B home")?;
     let mut seq_b = SequencerSetup::new(partial, bedrock_addr)
         .with_channel_id(channel_b)
@@ -100,7 +79,6 @@ async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Re
         .await
         .context("Failed to set up zone B sequencer")?;
 
-    // Deliver one ping, so the peer channel holds a dispatch worth replaying.
     let seq_client_a = sequencer_client(seq_a.addr())?;
     let payer = &initial_pub_accounts_private_keys()[0];
     let payer_nonce = seq_client_a
@@ -122,12 +100,6 @@ async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Re
 
     let tip_before = sequencer_client(seq_b.addr())?.get_last_block_id().await?;
 
-    // Restart zone B on the same home. Zone A stays quiet from here, so any
-    // inbox transaction after the restart is a replay, not a new delivery.
-    //
-    // `shutdown` rather than `drop`: dropping aborts the main loop without
-    // awaiting it and leaves the watchers and the publisher's drive task holding
-    // the store, so the reopen below would race the `RocksDB` lock.
     seq_b.shutdown().await;
     seq_b = SequencerSetup::new(partial, bedrock_addr)
         .with_channel_id(channel_b)
@@ -155,7 +127,6 @@ async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Re
         tip_before.saturating_add(1)
     );
 
-    // The delivery itself must survive the restart untouched.
     let account = client_b.get_account(record_id).await?.unwrap_or_default();
     assert_eq!(
         account.data.actor_state(receiver_id).to_vec(),
@@ -165,8 +136,6 @@ async fn restarted_watcher_resumes_instead_of_replaying_the_peer_channel() -> Re
     Ok(())
 }
 
-/// Counts inbox transactions across `from..=to`, the signature of a re-injected
-/// dispatch.
 async fn count_inbox_transactions(client: &SequencerClient, from: u64, to: u64) -> Result<usize> {
     let inbox_id = programs::cross_zone_inbox_account_id();
     let mut count = 0_usize;
@@ -176,7 +145,14 @@ async fn count_inbox_transactions(client: &SequencerClient, from: u64, to: u64) 
         };
         for tx in &block.body.transactions {
             if let LeeTransaction::Public(public_tx) = tx
-                && public_tx.message().execution.root.to.program_account_id == inbox_id
+                && public_tx
+                    .message()
+                    .execution
+                    .root
+                    .to
+                    .actor()
+                    .program_account_id
+                    == inbox_id
             {
                 count = count.saturating_add(1);
             }
@@ -185,7 +161,6 @@ async fn count_inbox_transactions(client: &SequencerClient, from: u64, to: u64) 
     Ok(count)
 }
 
-/// Waits until the sequencer's tip reaches `target`, returning the tip.
 async fn wait_for_block_id(
     client: &SequencerClient,
     target: u64,
@@ -205,62 +180,42 @@ async fn wait_for_block_id(
         .context("Zone B did not produce enough blocks after the restart")?
 }
 
-/// Builds a top-level `ping_sender` transaction that chains into the outbox to emit
-/// a message carrying a `ping_receiver::Record` message for the target zone.
 fn build_ping_tx(
     target_zone: [u8; 32],
     receiver_id: AccountId,
     payer: &PublicAccountPrivateInitialData,
     payer_nonce: Nonce,
 ) -> LeeTransaction {
-    let outbox_id = programs::cross_zone_outbox_account_id();
-    let ordinal = 0;
-
     let payload = borsh::to_vec(&ReceiverMessage::Record {
         payload: PING_PAYLOAD.to_vec(),
     })
     .expect("serialize ping message");
 
     let sender_id = programs::ping_sender_account_id();
-    let config = Actor::new(sender_config_account_id(sender_id), sender_id);
-    let outbox = Actor::new(
-        outbox_pda(outbox_id, sender_id, &target_zone, ordinal),
-        outbox_id,
-    );
+    let sender = Actor::new(sender_id, sender_id);
     let send = SenderMessage::Send {
-        outbox,
-        emission: CrossZoneEmission {
-            target_zone,
-            target_account_id: receiver_id,
-            target_accounts: vec![
-                Actor::new(receiver_config_account_id(receiver_id), receiver_id),
-                Actor::new(ping_record_pda(receiver_id), receiver_id),
-            ],
-            payload,
-            ordinal,
-        },
+        target_zone,
+        target: Actor::new(receiver_id, receiver_id),
+        accounts: vec![
+            Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+            Actor::new(ping_record_pda(receiver_id), receiver_id),
+        ],
+        payload,
     };
 
-    let message = Message {
-        admission_evidence: vec![PublicAccountEvidence::Pda {
-            program: outbox_id,
-            seed: outbox_pda_seed(sender_id, &target_zone, ordinal),
-        }],
-        ..Message::try_new_with_fees(
-            config,
-            vec![config, outbox],
-            BTreeMap::from([(payer.account_id, payer_nonce)]),
-            send,
-            common::test_utils::test_fee_declaration(payer.account_id),
-        )
-        .expect("build ping message")
-    };
+    let message = Message::try_new_with_fees(
+        sender,
+        vec![sender],
+        BTreeMap::from([(payer.account_id, payer_nonce)]),
+        send,
+        common::test_utils::test_fee_declaration(payer.account_id),
+    )
+    .expect("build ping message");
     let witness_set =
         lee::public_transaction::WitnessSet::for_message(&message, &[&payer.pub_sign_key]);
     LeeTransaction::Public(PublicTransaction::new(message, witness_set))
 }
 
-/// Polls zone B's sequencer until the ping record PDA holds a payload.
 async fn wait_for_delivery(
     client: SequencerClient,
     record_id: AccountId,

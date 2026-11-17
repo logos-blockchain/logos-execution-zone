@@ -1,7 +1,7 @@
 use std::io;
 
 use lee_core::{
-    account::{AccountId, Actor, Cycles},
+    account::{AccountId, Cycles, Target},
     execution_state::ExecutionError,
     native_token::TransferError,
 };
@@ -89,7 +89,7 @@ pub enum LeeError {
     },
 
     #[error("A durable async message reached {actor:?}, an address without a recovery binding")]
-    UnboundAsyncDestination { actor: Actor },
+    UnboundAsyncDestination { actor: Target },
 }
 
 impl LeeError {
@@ -145,7 +145,12 @@ impl From<ExecutionError> for LeeError {
             | ExecutionError::UndeclaredCrossMessageSender { .. }
             | ExecutionError::BoundaryMismatch { .. }
             | ExecutionError::CrossMessageMismatch { .. }
-            | ExecutionError::IncompleteBoundary => Self::InvalidProgramBehavior(error.into()),
+            | ExecutionError::IncompleteBoundary
+            | ExecutionError::RemoteTargetUnrouted { .. }
+            | ExecutionError::RemoteSendFromPrivateActor { .. }
+            | ExecutionError::AccountsOnLocalSend { .. } => {
+                Self::InvalidProgramBehavior(error.into())
+            }
         }
     }
 }

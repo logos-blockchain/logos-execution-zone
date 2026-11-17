@@ -8,10 +8,13 @@ pub use lee_core::{
     DummyOutput, EncryptedNote, GENESIS_BLOCK_ID, MessageWitness, ProvingInput, PublicationMode,
     Recipient, RecipientEncryption, RecoveryBinding, RootCall, SealedMessage, SenderPresentation,
     SharedSecretKey,
-    account::{Account, AccountData, AccountId, Actor, ActorState, Balance, Cycles, Fee, Gas},
+    account::{
+        Account, AccountData, AccountId, Actor, ActorState, Balance, Cycles, Fee, Gas, Target,
+        ZoneId,
+    },
     encryption::EphemeralPublicKey,
     execution_state::{
-        Boundary, BoundaryStep, Delivery, Placement, PredictedCrossMessages,
+        Boundary, BoundaryStep, Delivery, OutboundMessage, Placement, PredictedCrossMessages,
         PublicExecutionContext, TransactionEntry,
     },
     native_token,

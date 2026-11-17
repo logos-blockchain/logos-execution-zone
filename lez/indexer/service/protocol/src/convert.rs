@@ -9,11 +9,11 @@ use crate::{
     BlockHeader, BlockId, BlockIngestError, BoundaryStep, Ciphertext, Commitment,
     CommitmentSetDigest, CrossZoneHalt, Delivery, EncryptedNote, EphemeralPublicKey, EventRecord,
     FeeDeclaration, FeeFallback, FeeReceipt, HashType, IndexerStatus, IndexerSyncState,
-    MessageEnvelope, Nullifier, PdaSeed, PeerHealth, PeerStatus, PrivacyPreservingMessage,
-    PrivacyPreservingTransaction, PrivateAction, Proof, ProvenFee, PublicAccountEvidence,
-    PublicExecutionContext, PublicKey, PublicMessage, PublicTransaction, Publication,
-    RecoveryBinding, RootCall, SealedMessage, Selector, Signature, StallReason, Transaction,
-    TransactionReceipt, ValidityWindow, WitnessSet,
+    MessageEnvelope, Nullifier, OutboundMessage, PdaSeed, PeerHealth, PeerStatus,
+    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, Proof, ProvenFee,
+    PublicAccountEvidence, PublicExecutionContext, PublicKey, PublicMessage, PublicTransaction,
+    Publication, RecoveryBinding, RootCall, SealedMessage, Selector, Signature, StallReason,
+    Target, Transaction, TransactionReceipt, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -334,6 +334,30 @@ impl TryFrom<PublicMessage> for lee::public_transaction::Message {
                 .map(TryInto::try_into)
                 .collect::<Result<Vec<_>, Self::Error>>()?,
         })
+    }
+}
+
+impl From<lee_core::account::Target> for Target {
+    fn from(value: lee_core::account::Target) -> Self {
+        match value {
+            lee_core::account::Target::Local(actor) => Self::Local(actor.into()),
+            lee_core::account::Target::Remote { zone, actor } => Self::Remote {
+                zone,
+                actor: actor.into(),
+            },
+        }
+    }
+}
+
+impl From<Target> for lee_core::account::Target {
+    fn from(value: Target) -> Self {
+        match value {
+            Target::Local(actor) => Self::Local(actor.into()),
+            Target::Remote { zone, actor } => Self::Remote {
+                zone,
+                actor: actor.into(),
+            },
+        }
     }
 }
 
@@ -970,6 +994,7 @@ impl From<common::block::BlockBody> for BlockBody {
         let common::block::BlockBody {
             transactions,
             receipts,
+            outbound,
         } = value;
 
         let transactions = transactions
@@ -985,6 +1010,45 @@ impl From<common::block::BlockBody> for BlockBody {
         Self {
             transactions,
             receipts: receipts.into_iter().map(Into::into).collect(),
+            outbound: outbound.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<lee_core::execution_state::OutboundMessage> for OutboundMessage {
+    fn from(value: lee_core::execution_state::OutboundMessage) -> Self {
+        let lee_core::execution_state::OutboundMessage {
+            from,
+            zone,
+            to,
+            message,
+            accounts,
+        } = value;
+        Self {
+            from: from.into(),
+            zone,
+            to: to.into(),
+            message,
+            accounts: accounts.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<OutboundMessage> for lee_core::execution_state::OutboundMessage {
+    fn from(value: OutboundMessage) -> Self {
+        let OutboundMessage {
+            from,
+            zone,
+            to,
+            message,
+            accounts,
+        } = value;
+        Self {
+            from: from.into(),
+            zone,
+            to: to.into(),
+            message,
+            accounts: accounts.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -996,6 +1060,7 @@ impl TryFrom<BlockBody> for common::block::BlockBody {
         let BlockBody {
             transactions,
             receipts,
+            outbound,
         } = value;
 
         let transactions = transactions
@@ -1009,6 +1074,7 @@ impl TryFrom<BlockBody> for common::block::BlockBody {
         Ok(Self {
             transactions,
             receipts: receipts.into_iter().map(Into::into).collect(),
+            outbound: outbound.into_iter().map(Into::into).collect(),
         })
     }
 }
@@ -1123,7 +1189,7 @@ impl From<indexer_core::status::CrossZoneHalt> for CrossZoneHalt {
             block_hash,
             src_zone,
             src_block_id,
-            src_tx_index,
+            src_outbound_index,
             verdict,
         } = value;
 
@@ -1132,7 +1198,7 @@ impl From<indexer_core::status::CrossZoneHalt> for CrossZoneHalt {
             block_hash: block_hash.into(),
             src_zone,
             src_block_id,
-            src_tx_index,
+            src_outbound_index,
             verdict,
         }
     }
@@ -1231,6 +1297,18 @@ impl From<indexer_core::BlockIngestError> for BlockIngestError {
             },
             indexer_core::BlockIngestError::UnfinalizedRelease { tx_index, key } => {
                 Self::UnfinalizedRelease { tx_index, key }
+            }
+            indexer_core::BlockIngestError::OutboundMismatch {
+                listed,
+                settled,
+                first_difference,
+            } => Self::OutboundMismatch {
+                listed,
+                settled,
+                first_difference,
+            },
+            indexer_core::BlockIngestError::OutboundToOwnZone { tx_index } => {
+                Self::OutboundToOwnZone { tx_index }
             }
             indexer_core::BlockIngestError::StateTransition { tx_index, reason } => {
                 Self::StateTransition { tx_index, reason }
@@ -1517,7 +1595,7 @@ mod tests {
         let repeated = lee_core::execution_state::Delivery {
             envelope: lee_core::program::MessageEnvelope {
                 from: actor(3, 53),
-                to: actor(4, 5),
+                to: actor(4, 5).into(),
                 message: vec![6],
             },
             inherited_authorizations: BTreeSet::new(),
@@ -1526,7 +1604,7 @@ mod tests {
         };
         let clear = lee_core::program::Publication::Clear(lee_core::program::MessageEnvelope {
             from: actor(44, 94),
-            to: actor(45, 46),
+            to: actor(45, 46).into(),
             message: vec![47],
         });
         let message = lee::privacy_preserving_transaction::message::Message {
@@ -1554,7 +1632,7 @@ mod tests {
                         lee_core::execution_state::Delivery {
                             envelope: lee_core::program::MessageEnvelope {
                                 from: actor(11, 61),
-                                to: actor(8, 9),
+                                to: actor(8, 9).into(),
                                 message: vec![10],
                             },
                             inherited_authorizations: BTreeSet::from([account_id(14)]),
@@ -1566,7 +1644,7 @@ mod tests {
                         lee_core::execution_state::Delivery {
                             envelope: lee_core::program::MessageEnvelope {
                                 from: actor(40, 90),
-                                to: actor(41, 42),
+                                to: actor(41, 42).into(),
                                 message: vec![43],
                             },
                             inherited_authorizations: BTreeSet::new(),
@@ -1579,7 +1657,7 @@ mod tests {
                         lee_core::execution_state::Delivery {
                             envelope: lee_core::program::MessageEnvelope {
                                 from: actor(16, 17),
-                                to: actor(18, 19),
+                                to: actor(18, 19).into(),
                                 message: vec![20],
                             },
                             inherited_authorizations: BTreeSet::new(),
@@ -1606,7 +1684,8 @@ mod tests {
                     to: lee_core::account::Actor::new(
                         lee_core::account::AccountId::new([25; 32]),
                         lee_core::account::AccountId::new([26; 32]),
-                    ),
+                    )
+                    .into(),
                     message: vec![27; 2],
                 }),
                 private_actions: vec![],

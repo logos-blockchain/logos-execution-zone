@@ -149,7 +149,8 @@ impl PendingMessage {
     /// if it is a native credit.
     #[must_use]
     pub fn native_credit(&self) -> Option<u128> {
-        if self.body.to.program_account_id != NATIVE_TOKEN_PROGRAM_ID {
+        let to = self.body.to.local()?;
+        if to.program_account_id != NATIVE_TOKEN_PROGRAM_ID {
             return None;
         }
         match borsh::from_slice(&self.body.message).ok()? {
@@ -1102,7 +1103,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             .await?;
         for (position, publication) in &page.publications {
             if let Publication::Clear(body) = publication {
-                let address = body.to.account_id;
+                let address = body.to.actor().account_id;
                 ensure!(
                     page.recovery_bindings.contains_key(&address),
                     "No recovery binding for {address}, the destination of the publication at \
@@ -1153,7 +1154,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 let (recipient, nsk) = self
                     .storage
                     .key_chain()
-                    .recover(body.to.account_id, recovery?)?;
+                    .recover(body.to.local()?.account_id, recovery?)?;
                 Some((body.clone(), recipient, None, nsk))
             }
             Publication::Sealed(sealed) => {
@@ -1170,7 +1171,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         recovery_bindings: &BTreeMap<AccountId, EncryptedNote>,
     ) -> Option<(PendingMessage, Nullifier)> {
         let recovery = match &publication {
-            Publication::Clear(body) => recovery_bindings.get(&body.to.account_id),
+            Publication::Clear(body) => recovery_bindings.get(&body.to.actor().account_id),
             Publication::Sealed(_) => None,
         };
         let (body, recipient, rho, nsk) = self.private_receipt(&publication, recovery)?;
@@ -1459,7 +1460,10 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         } else {
             self.send_proven(
                 accounts,
-                TransactionEntry::Sync(RootCall { to, message }),
+                TransactionEntry::Sync(RootCall {
+                    to: to.into(),
+                    message,
+                }),
                 async_delivery,
                 programs,
                 cross_messages,
@@ -1492,9 +1496,9 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             }
         }
         for clear in &async_delivery.clear_messages {
-            let to = clear.to.account_id;
+            let to = clear.to.actor().account_id;
             if !unbound.iter().any(|kept| kept.recipient.address() == to) {
-                self.require_binding(clear.to).await?;
+                self.require_binding(clear.to.actor()).await?;
             }
         }
         Ok(AsyncDelivery {
@@ -1512,7 +1516,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             .is_none()
         {
             return Err(ExecutionFailureKind::TransactionBuildError(
-                lee::error::LeeError::UnboundAsyncDestination { actor: to },
+                lee::error::LeeError::UnboundAsyncDestination { actor: to.into() },
             ));
         }
         Ok(())
@@ -1635,7 +1639,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         tx_pre_check: impl FnOnce(&[SelectedActorState]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let root = TransactionEntry::Sync(RootCall {
-            to: root_actor(&accounts, root)?,
+            to: root_actor(&accounts, root)?.into(),
             message,
         });
         self.send_proven(
@@ -1811,8 +1815,13 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 )
             })
             .collect();
-        let select =
-            move |_, body: &MessageBody| !listed_only && witnessed.contains(&body.to.account_id);
+        let select = move |_, body: &MessageBody| {
+            !listed_only
+                && body
+                    .to
+                    .local()
+                    .is_some_and(|to| witnessed.contains(&to.account_id))
+        };
         let programs = programs.clone();
 
         // The in-proof fee: the inbox is a declared public actor so the reserve crosses to it,
@@ -2808,7 +2817,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
         let recovery = match &publication {
             Publication::Clear(body) => {
-                let address = body.to.account_id;
+                let address = body.to.actor().account_id;
                 Some(
                     self.get_recovery_binding(address)
                         .await
@@ -2844,7 +2853,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         let identity = self
             .resolve_private_account(account_id)
             .ok_or(ExecutionFailureKind::KeyNotFoundError)?;
-        let receiver = Actor::new(account_id, body.to.program_account_id);
+        let receiver = Actor::new(account_id, body.to.actor().program_account_id);
         let index = accounts
             .iter()
             .position(|mention| mention.actor() == receiver)
@@ -3336,7 +3345,7 @@ fn choose_publications_with(
             return Err(lee::error::LeeError::InvalidInput(format!(
                 "No durable async message matches the clear message requested to {} ({} \
                  unmatched)",
-                unmatched.to.account_id,
+                unmatched.to.actor().account_id,
                 requested.len()
             )));
         }
@@ -3347,7 +3356,7 @@ fn choose_publications_with(
                 if clear {
                     return Ok(PublicationMode::Clear);
                 }
-                let to = body.to.account_id;
+                let to = body.to.actor().account_id;
                 seals
                     .iter()
                     .find(|recipient| recipient.address() == to)
@@ -3827,7 +3836,7 @@ mod tests {
     fn credit_message(from: Actor, to: Actor, amount: u128) -> MessageBody {
         MessageBody {
             from,
-            to,
+            to: to.into(),
             message: borsh::to_vec(&native_token::Message::Credit(amount)).unwrap(),
         }
     }
@@ -3871,11 +3880,11 @@ mod tests {
                 ..sent.clone()
             },
             MessageBody {
-                to: Actor::native_balance(elsewhere.address()),
+                to: Actor::native_balance(elsewhere.address()).into(),
                 ..sent.clone()
             },
             MessageBody {
-                to: Actor::new(to.account_id, token),
+                to: Actor::new(to.account_id, token).into(),
                 ..sent.clone()
             },
         ];
@@ -4118,7 +4127,7 @@ mod tests {
                 .await,
             Err(ExecutionFailureKind::TransactionBuildError(
                 LeeError::UnboundAsyncDestination { actor }
-            )) if actor == Actor::native_balance(address)
+            )) if actor == Actor::native_balance(address).into()
         ));
         assert!(reached.lock().unwrap().is_empty());
     }
@@ -4180,7 +4189,7 @@ mod tests {
                 .await,
             Err(ExecutionFailureKind::TransactionBuildError(
                 LeeError::UnboundAsyncDestination { actor }
-            )) if actor == Actor::native_balance(recipient.address())
+            )) if actor == Actor::native_balance(recipient.address()).into()
         ));
     }
 
@@ -4250,7 +4259,7 @@ mod tests {
                 .await,
             Err(ExecutionFailureKind::TransactionBuildError(
                 LeeError::UnboundAsyncDestination { actor }
-            )) if actor == Actor::native_balance(absent)
+            )) if actor == Actor::native_balance(absent).into()
         ));
         assert!(submitted.lock().unwrap().is_empty());
     }
@@ -4397,7 +4406,7 @@ mod tests {
             .map(|position| {
                 let body = MessageBody {
                     from: Actor::native_balance(AccountId::new([1; 32])),
-                    to: Actor::native_balance(address),
+                    to: Actor::native_balance(address).into(),
                     message: borsh::to_vec(&native_token::Message::Credit(u128::from(position)))
                         .unwrap(),
                 };
@@ -4560,7 +4569,7 @@ mod tests {
         };
         *body = MessageBody {
             from,
-            to: Actor::new(body.to.account_id, program),
+            to: Actor::new(body.to.actor().account_id, program).into(),
             message: borsh::to_vec(message).unwrap(),
         };
     }
@@ -4781,7 +4790,8 @@ mod tests {
                 .any(|step| matches!(
                     step,
                     BoundaryStep::PrivateToPublic(delivery)
-                        if delivery.envelope.to == listener && delivery.envelope.message == [7]
+                        if delivery.envelope.to == listener.into()
+                            && delivery.envelope.message == [7]
                 ))
         );
     }
@@ -4819,7 +4829,7 @@ mod tests {
                 )
                 .await,
             Err(ExecutionFailureKind::TransactionBuildError(LeeError::InvalidInput(message)))
-                if message == unmatched(to.account_id, 1)
+                if message == unmatched(to.actor().account_id, 1)
         ));
         assert!(served.lock().unwrap().submitted.is_empty());
     }
@@ -4851,7 +4861,7 @@ mod tests {
         let pending = wallet.find_pending_message(1).await.unwrap().unwrap();
         let request = MessageBody {
             from: Actor::new(pending.recipient.account_id(), scripted),
-            to: listener,
+            to: listener.into(),
             message: borsh::to_vec(&7_u8).unwrap(),
         };
 
@@ -4899,7 +4909,7 @@ mod tests {
         };
         assert!(matches!(
             receipt.message.execution.async_messages.as_slice(),
-            [Publication::Clear(body)] if body.to == listener && body.message == [7]
+            [Publication::Clear(body)] if body.to == listener.into() && body.message == [7]
         ));
     }
 

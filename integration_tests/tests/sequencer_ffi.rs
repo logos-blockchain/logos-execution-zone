@@ -571,7 +571,7 @@ fn public_call(tx: &FfiTransaction) -> Option<(Actor, &[FfiActor], &[u8])> {
     let (actors, root) = (&message.public_context.actors, &message.root);
 
     Some((
-        root.to.into(),
+        lee::Target::from(root.to).actor(),
         // SAFETY: the FFI builds its vectors from `Vec`s, so `entries` holds `len` values.
         unsafe { std::slice::from_raw_parts(actors.entries, actors.len) },
         // SAFETY: as above.

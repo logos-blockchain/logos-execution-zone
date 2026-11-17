@@ -1,6 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::BlockId;
 pub use lee_core::Timestamp;
+use lee_core::{BlockId, execution_state::OutboundMessage};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256, digest::FixedOutput as _};
 
@@ -102,6 +102,8 @@ pub struct BlockBody {
     /// One per user transaction, parallel to `transactions`; the trailing fee and clock
     /// transactions have none.
     pub receipts: Vec<TransactionReceipt>,
+    /// Messages to other zones, in settlement order; hash-covered for peers to read off the block.
+    pub outbound: Vec<OutboundMessage>,
 }
 
 impl BlockBody {
@@ -139,6 +141,7 @@ impl Block {
             timestamp: self.header.timestamp,
             transactions: self.body.transactions.clone(),
             receipts: self.body.receipts.clone(),
+            outbound: self.body.outbound.clone(),
         }
         .compute_hash()
     }
@@ -162,8 +165,11 @@ pub struct HashableBlockData {
     pub prev_block_hash: BlockHash,
     pub timestamp: Timestamp,
     pub transactions: Vec<LeeTransaction>,
-    /// See [`BlockBody::receipts`].
+    /// One per user transaction, parallel to `transactions`; the trailing fee and clock
+    /// transactions have none.
     pub receipts: Vec<TransactionReceipt>,
+    /// Messages to other zones, in settlement order; hash-covered for peers to read off the block.
+    pub outbound: Vec<OutboundMessage>,
 }
 
 impl HashableBlockData {
@@ -199,6 +205,7 @@ impl HashableBlockData {
             body: BlockBody {
                 transactions: self.transactions,
                 receipts: self.receipts,
+                outbound: self.outbound,
             },
             bedrock_status: BedrockStatus::Pending,
         }
@@ -213,6 +220,7 @@ impl From<Block> for HashableBlockData {
             timestamp: value.header.timestamp,
             transactions: value.body.transactions,
             receipts: value.body.receipts,
+            outbound: value.body.outbound,
         }
     }
 }
@@ -235,6 +243,7 @@ mod tests {
     #[test]
     fn recompute_hash_matches_header_for_well_formed_block() {
         let block = HashableBlockData {
+            outbound: Vec::new(),
             receipts: Vec::new(),
             block_id: 5,
             prev_block_hash: HashType([9_u8; 32]),
@@ -248,6 +257,7 @@ mod tests {
     #[test]
     fn recompute_hash_covers_the_receipts() {
         let block = HashableBlockData {
+            outbound: Vec::new(),
             block_id: 5,
             prev_block_hash: HashType([9_u8; 32]),
             timestamp: 42,
@@ -269,6 +279,7 @@ mod tests {
     #[test]
     fn recompute_hash_detects_tampering() {
         let block = HashableBlockData {
+            outbound: Vec::new(),
             receipts: Vec::new(),
             block_id: 5,
             prev_block_hash: HashType([9_u8; 32]),

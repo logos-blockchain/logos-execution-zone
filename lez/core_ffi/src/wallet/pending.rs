@@ -80,7 +80,7 @@ pub unsafe extern "C" fn wallet_ffi_list_pending_messages(
                 receiving_account: pending.recipient.account_id().into(),
                 from_account: pending.body.from.account_id.into(),
                 from_program: pending.body.from.program_account_id.into(),
-                to_program: pending.body.to.program_account_id.into(),
+                to_program: pending.body.to.actor().program_account_id.into(),
                 message: Box::into_raw(message).cast::<u8>(),
                 message_len,
             }

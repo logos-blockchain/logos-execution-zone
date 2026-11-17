@@ -165,6 +165,34 @@ pub struct Actor {
     pub program_account_id: AccountId,
 }
 
+/// A message destination or source: an actor in this zone, or one in another zone.
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum Target {
+    Local(Actor),
+    Remote {
+        #[serde(with = "base64::arr")]
+        #[schemars(with = "String", description = "base64-encoded zone id")]
+        zone: [u8; 32],
+        actor: Actor,
+    },
+}
+
+impl From<Actor> for Target {
+    fn from(actor: Actor) -> Self {
+        Self::Local(actor)
+    }
+}
+
+impl Target {
+    /// The actor regardless of zone; never an authorization input.
+    #[must_use]
+    pub const fn actor(self) -> Actor {
+        match self {
+            Self::Local(actor) | Self::Remote { actor, .. } => actor,
+        }
+    }
+}
+
 pub type BlockId = u64;
 pub type Timestamp = u64;
 
@@ -210,6 +238,9 @@ pub struct BlockBody {
     /// One per user transaction, parallel to `transactions`; the trailing fee and clock
     /// transactions have none.
     pub receipts: Vec<TransactionReceipt>,
+    /// Messages to other zones, in settlement order.
+    #[serde(default)]
+    pub outbound: Vec<OutboundMessage>,
 }
 
 /// See `common::block::FeeReceipt`.
@@ -249,6 +280,20 @@ impl TransactionReceipt {
     pub const fn fee_paid(&self) -> u128 {
         self.fee.fee_base.saturating_add(self.fee.tip)
     }
+}
+
+/// A message to another zone, declared on the block that settled it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct OutboundMessage {
+    pub from: Actor,
+    #[serde(with = "base64::arr")]
+    #[schemars(with = "String", description = "base64-encoded zone id")]
+    pub zone: [u8; 32],
+    pub to: Actor,
+    pub message: MessageData,
+    /// Actors the destination zone declares on delivery.
+    #[serde(default)]
+    pub accounts: Vec<Actor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -318,13 +363,13 @@ pub struct PdaSeed(
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct MessageEnvelope<S> {
     pub from: S,
-    pub to: Actor,
+    pub to: Target,
     pub message: MessageData,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct RootCall {
-    pub to: Actor,
+    pub to: Target,
     pub message: MessageData,
 }
 
@@ -572,7 +617,7 @@ pub struct CrossZoneHalt {
     /// Hex id of the dispatch's source zone.
     pub src_zone: String,
     pub src_block_id: u64,
-    pub src_tx_index: u32,
+    pub src_outbound_index: u32,
     pub verdict: String,
 }
 
@@ -665,6 +710,14 @@ pub enum BlockIngestError {
         tx_index: u64,
         /// The released sequencer key, hex.
         key: String,
+    },
+    OutboundMismatch {
+        listed: usize,
+        settled: usize,
+        first_difference: Option<usize>,
+    },
+    OutboundToOwnZone {
+        tx_index: u64,
     },
     StateTransition {
         /// Index of the failing transaction within the block body.
@@ -847,7 +900,7 @@ mod tests {
                 block_hash: HashType([0xAB; 32]),
                 src_zone: hex::encode([2_u8; 32]),
                 src_block_id: 5,
-                src_tx_index: 1,
+                src_outbound_index: 1,
                 verdict: "re-derivation mismatch".to_owned(),
             }),
             cross_zone_peers: vec![PeerStatus {

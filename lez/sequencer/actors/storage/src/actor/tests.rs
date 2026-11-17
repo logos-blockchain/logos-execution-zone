@@ -147,7 +147,7 @@ fn dispatch_origin(seed: u8) -> DispatchOrigin {
     DispatchOrigin {
         src_zone: [seed; 32],
         src_block_id: u64::from(seed),
-        src_tx_index: u32::from(seed),
+        src_outbound_index: u32::from(seed),
     }
 }
 
@@ -587,7 +587,13 @@ async fn net_shortening_reorg_drops_acc_maps() {
     let block_2_clock_tx = clock_invocation(2, 2_u64.saturating_mul(100));
     let block_1b_clock_tx = clock_invocation(1, 1_u64.saturating_mul(100));
 
-    let clock_acc = genesis_clock_tx.message.execution.root.to.account_id;
+    let clock_acc = genesis_clock_tx
+        .message
+        .execution
+        .root
+        .to
+        .actor()
+        .account_id;
 
     assert_eq!(
         storage_ref
@@ -883,7 +889,7 @@ async fn settled_dispatch_reconciles_its_dead_letter_but_not_the_count() {
             origin: DispatchOrigin {
                 src_zone: [7; 32],
                 src_block_id: 3,
-                src_tx_index: 0,
+                src_outbound_index: 0,
             },
         })
         .await
@@ -1289,7 +1295,13 @@ async fn the_first_block_written_starts_the_chain() {
     let block_1_clock_tx = clock_invocation(1, 1_u64.saturating_mul(100));
     let block_2_clock_tx = clock_invocation(2, 2_u64.saturating_mul(100));
 
-    let clock_acc = block_1_clock_tx.message.execution.root.to.account_id;
+    let clock_acc = block_1_clock_tx
+        .message
+        .execution
+        .root
+        .to
+        .actor()
+        .account_id;
 
     assert_eq!(
         storage_ref
@@ -1385,7 +1397,13 @@ async fn acc_id_to_tx_map_corectness() {
     let block_3_clock_tx = clock_invocation(3, 3_u64.saturating_mul(100));
     let block_4_clock_tx = clock_invocation(4, 4_u64.saturating_mul(100));
 
-    let clock_acc = block_1_clock_tx.message.execution.root.to.account_id;
+    let clock_acc = block_1_clock_tx
+        .message
+        .execution
+        .root
+        .to
+        .actor()
+        .account_id;
 
     // A later block extends the chain rather than restarting it.
     let block_2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);

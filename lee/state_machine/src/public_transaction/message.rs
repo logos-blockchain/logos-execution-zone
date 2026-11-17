@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     RootCall,
-    account::{Actor, Nonce},
+    account::{Actor, Nonce, Target},
     execution_state::PublicExecutionContext,
     program::MessageData,
 };
@@ -25,7 +25,7 @@ pub type Message = TransactionMessage<PublicExecution>;
 impl Message {
     #[must_use]
     pub fn new(
-        to: Actor,
+        to: impl Into<Target>,
         message: MessageData,
         public_actors: impl IntoIterator<Item = Actor>,
         nonces: BTreeMap<AccountId, Nonce>,
@@ -35,7 +35,10 @@ impl Message {
         Self {
             public_context: PublicExecutionContext::new(public_actors, nonces.keys().copied()),
             execution: PublicExecution {
-                root: RootCall { to, message },
+                root: RootCall {
+                    to: to.into(),
+                    message,
+                },
             },
             nonces,
             fee,
@@ -47,7 +50,7 @@ impl Message {
     /// transactions (clock, deposits, dispatches); charged transactions use
     /// [`Self::try_new_with_fees`].
     pub fn try_new(
-        to: Actor,
+        to: impl Into<Target>,
         public_actors: impl IntoIterator<Item = Actor>,
         nonces: BTreeMap<AccountId, Nonce>,
         message: impl BorshSerialize,
@@ -62,7 +65,7 @@ impl Message {
     }
 
     pub fn try_new_with_fees(
-        to: Actor,
+        to: impl Into<Target>,
         public_actors: impl IntoIterator<Item = Actor>,
         nonces: BTreeMap<AccountId, Nonce>,
         message: impl BorshSerialize,
@@ -79,7 +82,7 @@ impl Message {
 
     #[must_use]
     pub fn new_preserialized(
-        to: Actor,
+        to: impl Into<Target>,
         message: MessageData,
         public_actors: impl IntoIterator<Item = Actor>,
         nonces: BTreeMap<AccountId, Nonce>,
@@ -121,6 +124,7 @@ mod tests {
             &[1, 0, 0, 0], // public_context.authorized_accounts: the account naming a nonce
             &[42; 32],
             &[0, 0, 0, 0], // public_context.promotions: none
+            &[0],          // execution.root.to: the local variant
             &[42; 32],     // execution.root.to.account_id
             &[0; 32],      // execution.root.to.program_account_id: the native token program
             &[1, 0, 0, 0], // execution.root.message

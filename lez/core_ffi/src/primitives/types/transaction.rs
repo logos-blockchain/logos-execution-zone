@@ -761,7 +761,7 @@ mod tests {
 
     use super::*;
     use crate::primitives::types::actor::{
-        FfiActor, FfiBoundaryStep, FfiBoundaryStepKind, FfiDelivery,
+        FfiActor, FfiBoundaryStep, FfiBoundaryStepKind, FfiDelivery, FfiTarget,
     };
 
     thread_local! {
@@ -830,7 +830,7 @@ mod tests {
         Delivery {
             envelope: MessageEnvelope {
                 from,
-                to,
+                to: to.into(),
                 message: vec![message],
             },
             inherited_authorizations: BTreeSet::new(),
@@ -861,7 +861,7 @@ mod tests {
         let repeated = delivery(actor(3, 53), actor(4, 5), 6);
         let clear = Publication::Clear(MessageEnvelope {
             from: actor(44, 94),
-            to: actor(45, 46),
+            to: actor(45, 46).into(),
             message: vec![47],
         });
         PrivacyPreservingTransaction {
@@ -900,7 +900,7 @@ mod tests {
                     ],
                     recovery_bindings: Vec::new(),
                     public_root: Some(RootCall {
-                        to: actor(25, 26),
+                        to: actor(25, 26).into(),
                         message: vec![27; 2],
                     }),
                     private_actions: vec![],
@@ -996,10 +996,7 @@ mod tests {
 
     fn zero_root_call() -> FfiRootCall {
         FfiRootCall {
-            to: FfiActor {
-                account_id: FfiBytes32::default(),
-                program_account_id: FfiBytes32::default(),
-            },
+            to: FfiTarget::default(),
             message: FfiVec::default(),
         }
     }
@@ -1010,10 +1007,7 @@ mod tests {
                 account_id: FfiBytes32::default(),
                 program_account_id: FfiBytes32::default(),
             },
-            to: FfiActor {
-                account_id: FfiBytes32::default(),
-                program_account_id: FfiBytes32::default(),
-            },
+            to: FfiTarget::default(),
             message: FfiVec::default(),
             inherited_authorizations: FfiVec::default(),
             inherits_entry_authorizations: false,

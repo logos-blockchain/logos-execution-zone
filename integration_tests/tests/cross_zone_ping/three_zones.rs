@@ -4,27 +4,19 @@
 )]
 
 //! Non-transitivity pin: delivery follows the watch topology, never a relay.
-//! A watches B, B watches A and C, C watches B. C's ping reaches B, but C's
-//! ping aimed at A reaches nobody, even though A trusts B and B delivers C.
 
 use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
-use cross_zone_outbox_core::{outbox_pda, outbox_pda_seed};
 use integration_tests::{
     config::{self, SequencerPartialConfig},
     utils::wait_until,
 };
-use lee::{
-    AccountId, Actor, PublicAccountEvidence, PublicTransaction, public_transaction::Message,
-};
+use lee::{AccountId, Actor, PublicTransaction, public_transaction::Message};
 use lee_core::account::Nonce;
 use logos_blockchain_core::mantle::ops::channel::ChannelId;
-use ping_core::{
-    CrossZoneEmission, ReceiverMessage, SenderMessage, ping_record_pda, receiver_config_account_id,
-    sender_config_account_id,
-};
+use ping_core::{ReceiverMessage, SenderMessage, ping_record_pda, receiver_config_account_id};
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use test_fixtures::{
@@ -33,13 +25,11 @@ use test_fixtures::{
 use testnet_initial_state::{PublicAccountPrivateInitialData, initial_pub_accounts_private_keys};
 use tokio::test;
 
-/// 600s like the other finality-bound cross-zone suites.
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(600);
 const C_TO_B_PAYLOAD: &[u8] = b"hello-from-c";
 const C_TO_A_PAYLOAD: &[u8] = b"undeliverable";
 const B_TO_A_PAYLOAD: &[u8] = b"hello-from-b";
 
-/// A peer entry watching `channel` with the plain ping route.
 fn ping_route_peer(channel: [u8; 32]) -> CrossZonePeer {
     CrossZonePeer {
         channel_id: channel,
@@ -50,7 +40,6 @@ fn ping_route_peer(channel: [u8; 32]) -> CrossZonePeer {
         }],
         min_committee_size: 0,
         genesis_hash: None,
-        emitters: vec![],
     }
 }
 
@@ -79,8 +68,6 @@ fn zone(
     .with_cross_zone(Some(cross_zone))
 }
 
-/// Builds a top-level `ping_sender` transaction carrying `payload` to
-/// `ping_receiver` on `target_zone`, as `cross_zone_ping.rs` does.
 fn build_ping_tx(
     target_zone: [u8; 32],
     payload: &[u8],
@@ -88,8 +75,6 @@ fn build_ping_tx(
     payer_nonce: Nonce,
 ) -> LeeTransaction {
     let receiver_id = programs::ping_receiver_account_id();
-    let outbox_id = programs::cross_zone_outbox_account_id();
-    let ordinal = 0;
 
     let payload = borsh::to_vec(&ReceiverMessage::Record {
         payload: payload.to_vec(),
@@ -97,50 +82,34 @@ fn build_ping_tx(
     .expect("serialize ping instruction");
 
     let sender_id = programs::ping_sender_account_id();
-    let config = Actor::new(sender_config_account_id(sender_id), sender_id);
-    let outbox = Actor::new(
-        outbox_pda(outbox_id, sender_id, &target_zone, ordinal),
-        outbox_id,
-    );
+    let sender = Actor::new(sender_id, sender_id);
     let send = SenderMessage::Send {
-        outbox,
-        emission: CrossZoneEmission {
-            target_zone,
-            target_account_id: receiver_id,
-            target_accounts: vec![
-                Actor::new(receiver_config_account_id(receiver_id), receiver_id),
-                Actor::new(ping_record_pda(receiver_id), receiver_id),
-            ],
-            payload,
-            ordinal,
-        },
+        target_zone,
+        target: Actor::new(receiver_id, receiver_id),
+        accounts: vec![
+            Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+            Actor::new(ping_record_pda(receiver_id), receiver_id),
+        ],
+        payload,
     };
 
-    let message = Message {
-        admission_evidence: vec![PublicAccountEvidence::Pda {
-            program: outbox_id,
-            seed: outbox_pda_seed(sender_id, &target_zone, ordinal),
-        }],
-        ..Message::try_new_with_fees(
-            config,
-            vec![config, outbox],
-            BTreeMap::from([(payer.account_id, payer_nonce)]),
-            send,
-            common::test_utils::test_fee_declaration(payer.account_id),
-        )
-        .expect("build ping message")
-    };
+    let message = Message::try_new_with_fees(
+        sender,
+        vec![sender],
+        BTreeMap::from([(payer.account_id, payer_nonce)]),
+        send,
+        common::test_utils::test_fee_declaration(payer.account_id),
+    )
+    .expect("build ping message");
     let witness_set =
         lee::public_transaction::WitnessSet::for_message(&message, &[&payer.pub_sign_key]);
     LeeTransaction::Public(PublicTransaction::new(message, witness_set))
 }
 
-/// The payer's next nonce on `client`'s zone; every send is charged there.
 async fn payer_nonce(client: &SequencerClient, payer: AccountId) -> Result<Nonce> {
     Ok(client.get_account(payer).await?.unwrap_or_default().nonce)
 }
 
-/// Submits `tx` and waits for inclusion, so the next send cannot precede it.
 async fn submit_and_wait(client: &SequencerClient, what: &str, tx: LeeTransaction) -> Result<()> {
     let tx_hash = client
         .send_transaction(tx)
@@ -151,8 +120,6 @@ async fn submit_and_wait(client: &SequencerClient, what: &str, tx: LeeTransactio
     })
     .await?;
 
-    // A reverted transaction is still included and never delivered, so say so
-    // here rather than time out on the delivery.
     let (_tx, block_id) = client
         .get_transaction(tx_hash)
         .await?
@@ -174,7 +141,6 @@ async fn submit_and_wait(client: &SequencerClient, what: &str, tx: LeeTransactio
     Ok(())
 }
 
-/// The zone's current ping record payload, empty while nothing was delivered.
 async fn record_payload(client: &SequencerClient) -> Result<Vec<u8>> {
     let receiver_id = programs::ping_receiver_account_id();
     let account = client
@@ -184,7 +150,6 @@ async fn record_payload(client: &SequencerClient) -> Result<Vec<u8>> {
     Ok(account.data.actor_state(receiver_id).to_vec())
 }
 
-/// Polls the zone's sequencer until the ping record holds `expected`.
 async fn wait_for_payload(client: &SequencerClient, what: &str, expected: &[u8]) -> Result<()> {
     let wait = async {
         loop {
@@ -199,9 +164,6 @@ async fn wait_for_payload(client: &SequencerClient, what: &str, expected: &[u8])
         .with_context(|| format!("Timed out waiting for {what}"))?
 }
 
-/// Ignored: the heaviest test in the suite, and it times out on a loaded
-/// machine while finality stays healthy. Non-transitivity is structural, so
-/// this is a topology demonstration run by hand with `--run-ignored all`.
 #[ignore = "heaviest cross-zone test, run by hand on a quiet machine"]
 #[test]
 async fn a_message_does_not_transit_through_an_intermediate_zone() -> Result<()> {
@@ -244,8 +206,6 @@ async fn a_message_does_not_transit_through_an_intermediate_zone() -> Result<()>
 
     let payer = &initial_pub_accounts_private_keys()[0];
 
-    // Included before the C to B ping, so that delivery proves B's watcher
-    // scanned past this one.
     let dead_end_nonce = payer_nonce(seq_c, payer.account_id).await?;
     submit_and_wait(
         seq_c,
@@ -267,9 +227,6 @@ async fn a_message_does_not_transit_through_an_intermediate_zone() -> Result<()>
         "zone A must not receive a zone C emission relayed through zone B"
     );
 
-    // A recording B's own ping proves its watcher scanned past B's dispatch of
-    // C's message; without this leg the assertions above would also hold for an
-    // A that had read nothing.
     let b_to_a_nonce = payer_nonce(seq_b, payer.account_id).await?;
     submit_and_wait(
         seq_b,

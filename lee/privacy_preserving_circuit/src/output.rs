@@ -173,7 +173,7 @@ fn fee_fallback(
     // rejects a transaction crediting the inbox twice anyway.
     let crossing = boundary.iter().rev().find_map(|step| match step {
         BoundaryStep::PrivateToPublic(delivery)
-            if delivery.envelope.to == Actor::native_balance(fee.recipient)
+            if delivery.envelope.to == Actor::native_balance(fee.recipient).into()
                 && delivery.envelope.message == credit =>
         {
             Some(delivery.clone())
@@ -470,7 +470,7 @@ mod tests {
             BoundaryStep::PrivateToPublic(lee_core::execution_state::Delivery {
                 envelope: lee_core::program::MessageEnvelope {
                     from: Actor::native_balance(AccountId::new([9; 32])),
-                    to: Actor::native_balance(inbox),
+                    to: Actor::native_balance(inbox).into(),
                     message: borsh::to_vec(&native_token::Message::Credit(amount)).unwrap(),
                 },
                 inherited_authorizations: BTreeSet::new(),

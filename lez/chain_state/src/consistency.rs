@@ -338,6 +338,7 @@ mod tests {
 
     fn test_block(block_id: BlockId, timestamp: u64) -> Block {
         HashableBlockData {
+            outbound: Vec::new(),
             block_id,
             prev_block_hash: HashType([0; 32]),
             timestamp,

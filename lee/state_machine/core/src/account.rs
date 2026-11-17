@@ -211,6 +211,55 @@ impl Actor {
     }
 }
 
+/// Raw 32-byte zone (channel) id; the host maps it to the zone-sdk `ChannelId`.
+pub type ZoneId = [u8; 32];
+
+/// A message destination or source. `Local` carries no zone, so "this zone" has one
+/// spelling and a guest needs no knowledge of its own; equality decides whether a
+/// message leaves the zone.
+#[derive(
+    Debug,
+    Copy,
+    Clone,
+    Eq,
+    PartialEq,
+    Ord,
+    PartialOrd,
+    Hash,
+    Serialize,
+    Deserialize,
+    BorshSerialize,
+    BorshDeserialize,
+)]
+pub enum Target {
+    Local(Actor),
+    Remote { zone: ZoneId, actor: Actor },
+}
+
+impl From<Actor> for Target {
+    fn from(actor: Actor) -> Self {
+        Self::Local(actor)
+    }
+}
+
+impl Target {
+    #[must_use]
+    pub const fn local(self) -> Option<Actor> {
+        match self {
+            Self::Local(actor) => Some(actor),
+            Self::Remote { .. } => None,
+        }
+    }
+
+    /// The actor regardless of zone; never an authorization input.
+    #[must_use]
+    pub const fn actor(self) -> Actor {
+        match self {
+            Self::Local(actor) | Self::Remote { actor, .. } => actor,
+        }
+    }
+}
+
 #[derive(
     Default,
     Copy,

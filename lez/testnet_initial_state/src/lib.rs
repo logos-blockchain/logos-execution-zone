@@ -223,7 +223,7 @@ fn system_registry(cross_zone: bool) -> (AccountId, Account) {
 
 /// The pre-genesis state.
 ///
-/// `cross_zone` selects whether the six cross-zone system programs are registered, each at a
+/// `cross_zone` selects whether the five cross-zone system programs are registered, each at a
 /// name-derived, `image_id`-independent address. Not defaulted: every caller states the choice.
 #[must_use]
 pub fn initial_state(cross_zone: bool) -> V03State {
@@ -440,7 +440,6 @@ mod tests {
     fn cross_zone_builtins_register_only_when_declared() {
         let cross_zone_ids = [
             programs::cross_zone_inbox_account_id(),
-            programs::cross_zone_outbox_account_id(),
             programs::ping_sender_account_id(),
             programs::ping_receiver_account_id(),
             programs::bridge_lock_account_id(),

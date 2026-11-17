@@ -23,7 +23,10 @@ use fee_core::{
     validity::{FeeError, accumulate_exec_gas, accumulate_stor_gas, validate_static_tx},
 };
 use lee::{GENESIS_BLOCK_ID, V03State};
-use lee_core::{BlockId, Timestamp, program::TransactionEvent};
+use lee_core::{
+    BlockId, Timestamp, account::ZoneId, execution_state::OutboundMessage,
+    program::TransactionEvent,
+};
 use sequencer_stake_core::SequencerKey;
 
 use crate::{
@@ -193,9 +196,11 @@ pub fn apply_judged_block_to_state(
     }
 
     let opening = opening_fee_state(state);
+    let self_zone = self_zone(state);
     let mut summary = BlockFeeSummary::default();
     let mut block_events = Vec::new();
     let mut receipts = Vec::with_capacity(user_txs.len());
+    let mut outbound = Vec::new();
 
     let is_genesis = block.header.block_id == GENESIS_BLOCK_ID;
     for (tx_index, transaction) in user_txs.iter().enumerate() {
@@ -211,22 +216,29 @@ pub fn apply_judged_block_to_state(
             let LeeTransaction::Public(public_tx) = transaction else {
                 return Err(BlockIngestError::NonPublicGenesisTransaction);
             };
+            let diff = lee::ValidatedStateDiff::from_public_transaction(
+                public_tx,
+                state,
+                block.header.block_id,
+                block.header.timestamp,
+            )
+            .map_err(|err| state_transition(err.into()))?;
+            // A genesis transaction's outbound surfaces like any other, so a
+            // declared list cannot silently drop what genesis emitted.
+            outbound.extend(diff.outbound().iter().cloned());
             let events = state
-                .transition_from_public_transaction(
-                    public_tx,
-                    block.header.block_id,
-                    block.header.timestamp,
-                )
+                .apply_state_diff(diff)
                 .map_err(|err| state_transition(err.into()))?;
             (events, TransactionReceipt::EXEMPT)
         } else {
             let entries_before = finally_absent_keys
                 .filter(|_| !full_stake_releases::releases_no_stake(transaction))
                 .map(|_| full_stake_releases::stake_entries(state));
-            let (events, receipt) = settle_transaction(
+            let (events, receipt, tx_outbound) = settle_transaction(
                 transaction,
                 state,
                 &opening,
+                self_zone,
                 block.header.block_id,
                 block.header.timestamp,
                 tx_index_u64,
@@ -242,6 +254,7 @@ pub fn apply_judged_block_to_state(
                     });
                 }
             }
+            outbound.extend(tx_outbound);
             (events, receipt)
         };
         receipts.push(receipt);
@@ -255,6 +268,22 @@ pub fn apply_judged_block_to_state(
             tx_index: u64::try_from(tx_index).expect("tx index fits in u64"),
             listed: listed.get(tx_index).copied().map(Box::new),
             settled: receipts.get(tx_index).copied().map(Box::new),
+        });
+    }
+    if block.body.outbound != outbound {
+        return Err(BlockIngestError::OutboundMismatch {
+            listed: block.body.outbound.len(),
+            settled: outbound.len(),
+            first_difference: block
+                .body
+                .outbound
+                .iter()
+                .zip(&outbound)
+                .position(|(declared, settled)| declared != settled)
+                .or_else(|| {
+                    (block.body.outbound.len() != outbound.len())
+                        .then(|| block.body.outbound.len().min(outbound.len()))
+                }),
         });
     }
 
@@ -328,6 +357,22 @@ fn collect_tx_events(
     });
 }
 
+/// The zone this chain settles for; `None` while genesis is still applying it.
+/// A present but undecodable config is consensus-critical corruption, as for the fee state below.
+#[must_use]
+pub fn self_zone(state: &V03State) -> Option<ZoneId> {
+    let account =
+        state.get_account_by_id_ref(system_accounts::sequencer_stake_config_account_id())?;
+    sequencer_stake_core::SequencerStakeConfig::from_bytes(
+        account
+            .data
+            .actor_state(system_accounts::sequencer_stake_program_id())
+            .as_ref(),
+    )
+    .expect("only the sequencer-stake guest writes its config")
+    .channel_id
+}
+
 /// Reads the fee state a block opening on `state` prices against.
 ///
 /// A malformed fee-state account is consensus-critical corruption (only the
@@ -360,26 +405,38 @@ pub fn derive_block_summary(
     transactions: &[LeeTransaction],
     block_id: BlockId,
     timestamp: Timestamp,
-) -> Result<(BlockFeeSummary, u128, Vec<TransactionReceipt>), BlockIngestError> {
+) -> Result<
+    (
+        BlockFeeSummary,
+        u128,
+        Vec<TransactionReceipt>,
+        Vec<OutboundMessage>,
+    ),
+    BlockIngestError,
+> {
     let mut scratch = state.clone();
     let opening = opening_fee_state(&scratch);
+    let self_zone = self_zone(&scratch);
     let mut summary = BlockFeeSummary::default();
     let mut receipts = Vec::with_capacity(transactions.len());
+    let mut outbound = Vec::new();
     for (tx_index, transaction) in transactions.iter().enumerate() {
         let tx_index = u64::try_from(tx_index).expect("tx index fits in u64");
-        let (_events, receipt) = settle_transaction(
+        let (_events, receipt, tx_outbound) = settle_transaction(
             transaction,
             &mut scratch,
             &opening,
+            self_zone,
             block_id,
             timestamp,
             tx_index,
             &mut summary,
         )?;
         receipts.push(receipt);
+        outbound.extend(tx_outbound);
     }
     let payout = block_payout(&opening, &summary);
-    Ok((summary, payout, receipts))
+    Ok((summary, payout, receipts, outbound))
 }
 
 /// Classifies and applies one user transaction at its turn, accumulating the
@@ -388,15 +445,27 @@ pub fn derive_block_summary(
 /// Shared by the apply path (any `Err` invalidates the block), the sequencer's
 /// builder (which runs it on a scratch clone and drops the transaction on
 /// `Err`), and block-building test helpers.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the settlement threads exactly the block-transition context"
+)]
 pub fn settle_transaction(
     transaction: &LeeTransaction,
     state: &mut V03State,
     opening: &FeeState,
+    self_zone: Option<ZoneId>,
     block_id: BlockId,
     timestamp: Timestamp,
     tx_index: u64,
     summary: &mut BlockFeeSummary,
-) -> Result<(Vec<TransactionEvent>, TransactionReceipt), BlockIngestError> {
+) -> Result<
+    (
+        Vec<TransactionEvent>,
+        TransactionReceipt,
+        Vec<OutboundMessage>,
+    ),
+    BlockIngestError,
+> {
     let class = classify(transaction, false).map_err(|err| match err {
         ClassifyError::Unserializable(err) => BlockIngestError::InvalidFeeClass {
             tx_index,
@@ -434,6 +503,7 @@ pub fn settle_transaction(
                 }
             })?;
 
+            let outbound = diff.outbound().to_vec();
             let events =
                 state
                     .apply_state_diff(diff)
@@ -441,7 +511,7 @@ pub fn settle_transaction(
                         tx_index,
                         reason: format!("{:#}", anyhow::Error::from(err)),
                     })?;
-            (events, TransactionReceipt::EXEMPT)
+            (events, TransactionReceipt::EXEMPT, outbound)
         }
         FeeClass::Charged(view @ FeeTxView::Private { .. }) => settle_private_transaction(
             transaction,
@@ -464,6 +534,12 @@ pub fn settle_transaction(
             summary,
         )?,
     };
+    // A correct proposer never includes such a transaction, so the block is invalid, not a revert.
+    if let Some(self_zone) = self_zone
+        && settled.2.iter().any(|message| message.zone == self_zone)
+    {
+        return Err(BlockIngestError::OutboundToOwnZone { tx_index });
+    }
     Ok(settled)
 }
 
@@ -491,7 +567,14 @@ fn settle_private_transaction(
     timestamp: Timestamp,
     tx_index: u64,
     summary: &mut BlockFeeSummary,
-) -> Result<(Vec<TransactionEvent>, TransactionReceipt), BlockIngestError> {
+) -> Result<
+    (
+        Vec<TransactionEvent>,
+        TransactionReceipt,
+        Vec<OutboundMessage>,
+    ),
+    BlockIngestError,
+> {
     let fee_validity = |reason: String| BlockIngestError::InvalidFeeClass { tx_index, reason };
     let gas_cap = |err: FeeError| BlockIngestError::GasCapExceeded {
         tx_index,
@@ -564,6 +647,7 @@ fn settle_private_transaction(
             tx_index,
             reason: err.to_string(),
         })?;
+    let outbound = diff.outbound().to_vec();
     let events = state
         .apply_state_diff(diff)
         .map_err(|err| fee_validity(format!("private action failed: {err}")))?;
@@ -625,7 +709,7 @@ fn settle_private_transaction(
             refund,
         },
     };
-    Ok((events, receipt))
+    Ok((events, receipt, outbound))
 }
 
 /// The reserve → action → refund cycle for one charged transaction.
@@ -652,7 +736,14 @@ fn settle_charged_transaction(
     timestamp: Timestamp,
     tx_index: u64,
     summary: &mut BlockFeeSummary,
-) -> Result<(Vec<TransactionEvent>, TransactionReceipt), BlockIngestError> {
+) -> Result<
+    (
+        Vec<TransactionEvent>,
+        TransactionReceipt,
+        Vec<OutboundMessage>,
+    ),
+    BlockIngestError,
+> {
     let fee_validity = |reason: String| BlockIngestError::InvalidFeeClass { tx_index, reason };
     let FeeTxView::Public { payer, .. } = view else {
         unreachable!("only a declared fee classifies as a public fee view");
@@ -746,6 +837,7 @@ fn settle_charged_transaction(
             reason: err.to_string(),
         }
     })?;
+    let outbound = action_diff.outbound().to_vec();
     // The action's events are the transaction's user-facing events.
     let action_events = state
         .apply_state_diff(action_diff)
@@ -798,7 +890,7 @@ fn settle_charged_transaction(
             refund,
         },
     };
-    Ok((action_events, receipt))
+    Ok((action_events, receipt, outbound))
 }
 
 #[cfg(test)]
@@ -926,6 +1018,7 @@ mod tests {
         // A block with no transactions at all (not even the mandatory clock tx).
         let block = HashableBlockData {
             receipts: Vec::new(),
+            outbound: Vec::new(),
             block_id: 1,
             prev_block_hash: HashType([0_u8; 32]),
             timestamp: 0,
@@ -984,6 +1077,7 @@ mod tests {
         // Correct clock tail but no fee tx before it.
         let block = HashableBlockData {
             receipts: Vec::new(),
+            outbound: Vec::new(),
             block_id: 1,
             prev_block_hash: HashType([0_u8; 32]),
             timestamp: 100,
@@ -1006,6 +1100,7 @@ mod tests {
         };
         let block = HashableBlockData {
             receipts: Vec::new(),
+            outbound: Vec::new(),
             block_id: 1,
             prev_block_hash: HashType([0_u8; 32]),
             timestamp: 100,
@@ -1044,6 +1139,7 @@ mod tests {
         ));
         let receipts = vec![TransactionReceipt::EXEMPT; transactions.len()];
         HashableBlockData {
+            outbound: Vec::new(),
             block_id: 1,
             prev_block_hash: HashType([0_u8; 32]),
             timestamp: 100,
@@ -1197,6 +1293,7 @@ mod tests {
         // Last tx is not the expected clock invocation for the timestamp.
         let block = HashableBlockData {
             receipts: Vec::new(),
+            outbound: Vec::new(),
             block_id: 1,
             prev_block_hash: HashType([0_u8; 32]),
             timestamp: 50,
@@ -1302,8 +1399,17 @@ mod tests {
         let mut summary = BlockFeeSummary::default();
         let transfer =
             create_transaction_native_token_transfer(attacker, 0, recipient, 10, &attacker_key);
-        settle_transaction(&transfer, &mut state, &opening, 2, 200, 0, &mut summary)
-            .expect("the legitimate transfer settles");
+        settle_transaction(
+            &transfer,
+            &mut state,
+            &opening,
+            None,
+            2,
+            200,
+            0,
+            &mut summary,
+        )
+        .expect("the legitimate transfer settles");
         let inbox_revenue = state
             .get_account_by_id(system_accounts::fee_inbox_account_id())
             .data
@@ -1319,7 +1425,9 @@ mod tests {
             .message()
             .execution
             .root
-            .to;
+            .to
+            .local()
+            .expect("the fee invocation targets a local actor");
         let message = lee::public_transaction::Message::try_new_with_fees(
             fee_state,
             vec![
@@ -1339,8 +1447,17 @@ mod tests {
         let drain = LeeTransaction::Public(lee::PublicTransaction::new(message, witness));
 
         let mut drain_acc = BlockFeeSummary::default();
-        let err = settle_transaction(&drain, &mut state, &opening, 3, 200, 1, &mut drain_acc)
-            .expect_err("a user-section fee-program invocation must be rejected");
+        let err = settle_transaction(
+            &drain,
+            &mut state,
+            &opening,
+            None,
+            3,
+            200,
+            1,
+            &mut drain_acc,
+        )
+        .expect_err("a user-section fee-program invocation must be rejected");
         assert!(
             matches!(err, BlockIngestError::RestrictedAccountModification { .. }),
             "expected RestrictedAccountModification, got {err:?}",
@@ -1429,7 +1546,7 @@ mod tests {
             &sender_key,
         );
         let mut summary = BlockFeeSummary::default();
-        let err = settle_transaction(&free, &mut state, &opening, 2, 200, 0, &mut summary)
+        let err = settle_transaction(&free, &mut state, &opening, None, 2, 200, 0, &mut summary)
             .expect_err("a fee-less public transfer must be rejected");
         assert!(
             matches!(err, BlockIngestError::MissingFeeDeclaration { .. }),
@@ -1496,8 +1613,8 @@ mod tests {
         );
 
         let mut summary = BlockFeeSummary::default();
-        let (events, receipt) =
-            settle_transaction(&tx, &mut state, &opening, 2, 200, 0, &mut summary)
+        let (events, receipt, _outbound) =
+            settle_transaction(&tx, &mut state, &opening, None, 2, 200, 0, &mut summary)
                 .expect("a reverted action is charged, not block-rejected");
         assert!(events.is_empty(), "a reverted action emits no user events");
         assert!(
@@ -1653,6 +1770,115 @@ mod tests {
         assert_eq!(events[0].events[0].event.selector, [5; 8]);
     }
 
+    #[test]
+    fn outbound_messages_surface_on_the_block_and_a_misdeclared_list_is_rejected() {
+        let mut state = initial_state(true)
+            .with_public_accounts([common::test_utils::producer_seed()])
+            .with_programs(vec![event_emitter()]);
+        let genesis = produce_dummy_block(1, None, vec![]);
+        apply_block(None, &genesis, &mut state).expect("genesis applies");
+        let tip = tip_of(&genesis);
+
+        let zone = [0xAB; 32];
+        let target = Actor::new(AccountId::new([6; 32]), AccountId::new([7; 32]));
+        let (tx, emitter) = remote_send(zone, target);
+        let block = settled_block(2, tip.hash, vec![tx], &state);
+        assert_eq!(
+            block.body.outbound,
+            vec![lee::OutboundMessage {
+                accounts: Vec::new(),
+                from: emitter,
+                zone,
+                to: target,
+                message: b"ping".to_vec(),
+            }]
+        );
+
+        let mut misdeclared = common::block::HashableBlockData::from(block.clone());
+        misdeclared.outbound.clear();
+        let misdeclared = misdeclared.into_pending_block();
+        assert!(matches!(
+            apply_block(Some(&tip), &misdeclared, &mut state.clone()),
+            Err(BlockIngestError::OutboundMismatch {
+                listed: 0,
+                settled: 1,
+                ..
+            })
+        ));
+
+        apply_block(Some(&tip), &block, &mut state).expect("the declared list applies");
+    }
+
+    #[test]
+    fn a_transaction_sending_to_this_zone_itself_is_not_includable() {
+        let mut state = initial_state(true)
+            .with_public_accounts([common::test_utils::producer_seed()])
+            .with_programs(vec![event_emitter()]);
+        let genesis = produce_dummy_block(1, None, vec![]);
+        apply_block(None, &genesis, &mut state).expect("genesis applies");
+
+        let zone = [0xAB; 32];
+        let target = Actor::new(AccountId::new([6; 32]), AccountId::new([7; 32]));
+        let (tx, _) = remote_send(zone, target);
+        let opening = opening_fee_state(&state);
+        let mut summary = BlockFeeSummary::default();
+        let result = settle_transaction(
+            &tx,
+            &mut state,
+            &opening,
+            Some(zone),
+            2,
+            200,
+            0,
+            &mut summary,
+        );
+        assert!(matches!(
+            result,
+            Err(BlockIngestError::OutboundToOwnZone { tx_index: 0 })
+        ));
+    }
+
+    #[test]
+    fn self_zone_reads_the_genesis_channel_id() {
+        let mut state = initial_state(true);
+        assert_eq!(self_zone(&state), None);
+
+        let diff = lee::test_utils::validated_state_diff_from_public_diff(HashMap::from([(
+            system_accounts::sequencer_stake_config_account_id(),
+            system_accounts::sequencer_stake_config_account(None, Some([9; 32])),
+        )]));
+        state.apply_state_diff(diff).expect("the config seeds");
+        assert_eq!(self_zone(&state), Some([9; 32]));
+    }
+
+    /// A charged transaction sending `b"ping"` to `target` in `zone`, and its acting actor.
+    fn remote_send(zone: lee::ZoneId, target: Actor) -> (LeeTransaction, Actor) {
+        let accounts = initial_pub_accounts_private_keys();
+        let from = accounts[0].account_id;
+        let sign_key = accounts[0].pub_sign_key.clone();
+        let emitter = Actor::new(from, AccountId::from_builtin_program(event_emitter().id()));
+        let message = public_transaction::Message::try_new_with_fees(
+            emitter,
+            vec![emitter],
+            BTreeMap::from([(from, Nonce(0))]),
+            Script {
+                response: Response::keep_state().send(lee_core::program::AsyncMessage {
+                    accounts: Vec::new(),
+                    to: lee::Target::Remote {
+                        zone,
+                        actor: target,
+                    },
+                    message: b"ping".to_vec(),
+                }),
+                ..Script::default()
+            },
+            test_fee_declaration(from),
+        )
+        .expect("test instruction must serialize");
+        let witness_set = public_transaction::WitnessSet::for_message(&message, &[&sign_key]);
+        (PublicTransaction::new(message, witness_set).into(), emitter)
+    }
+
     /// A funded private sender next to the initial state, for in-proof fee tests.
     fn private_sender_state(seeds: &[u8]) -> (V03State, Vec<(TestPrivateKeys, lee::Account)>) {
         let senders: Vec<_> = seeds
@@ -1730,7 +1956,7 @@ mod tests {
             lee::ProvingInput {
                 claims: Vec::new(),
                 root: TransactionEntry::Sync(RootCall {
-                    to: Actor::native_balance(keys.account_id()),
+                    to: Actor::native_balance(keys.account_id()).into(),
                     message: borsh::to_vec(&native_token::Message::Transfer {
                         to: recipient,
                         amount,
@@ -1814,7 +2040,7 @@ mod tests {
             lee::ProvingInput {
                 claims: Vec::new(),
                 root: TransactionEntry::Sync(RootCall {
-                    to: Actor::native_balance(keys.account_id()),
+                    to: Actor::native_balance(keys.account_id()).into(),
                     message: borsh::to_vec(&native_token::Message::Transfer { to, amount })
                         .unwrap(),
                 }),
@@ -1917,7 +2143,7 @@ mod tests {
     /// A call of the scripted program at `scripted` that keeps its state.
     fn scripted_call(scripted: Actor) -> RootCall {
         RootCall {
-            to: scripted,
+            to: scripted.into(),
             message: borsh::to_vec(&Script::default()).unwrap(),
         }
     }
@@ -1933,7 +2159,7 @@ mod tests {
             declared.map(|_| initial_pub_accounts_private_keys()[1].pub_sign_key.clone());
         let signer = declared.map(|_| public_payer());
         let public_actors = vec![
-            root.to,
+            root.to.actor(),
             Actor::native_balance(system_accounts::fee_inbox_account_id()),
         ];
         let public_actor_states = public_actors
@@ -2024,7 +2250,7 @@ mod tests {
         state
             .publications_from(0)
             .find_map(|(_, publication)| match publication {
-                Publication::Clear(body) if body.to == Actor::native_balance(alias) => {
+                Publication::Clear(body) if body.to == Actor::native_balance(alias).into() => {
                     match borsh::from_slice(&body.message).unwrap() {
                         native_token::Message::Credit(amount) => Some(amount),
                         native_token::Message::Transfer { .. }
@@ -2061,6 +2287,7 @@ mod tests {
             &tx,
             &mut settled,
             &FeeState::genesis(),
+            None,
             1,
             100,
             0,
@@ -2105,6 +2332,7 @@ mod tests {
             &tx,
             &mut settled,
             &FeeState::genesis(),
+            None,
             1,
             100,
             0,
@@ -2137,10 +2365,11 @@ mod tests {
 
         let mut settled = state;
         let mut summary = BlockFeeSummary::default();
-        let (_, receipt) = settle_transaction(
+        let (_, receipt, _) = settle_transaction(
             &tx,
             &mut settled,
             &FeeState::genesis(),
+            None,
             1,
             100,
             0,
@@ -2194,10 +2423,11 @@ mod tests {
 
         let mut settled = state;
         let mut summary = BlockFeeSummary::default();
-        let (_, receipt) = settle_transaction(
+        let (_, receipt, _) = settle_transaction(
             &tx,
             &mut settled,
             &FeeState::genesis(),
+            None,
             1,
             100,
             0,
@@ -2273,10 +2503,11 @@ mod tests {
                 - budget,
             ..BlockFeeSummary::default()
         };
-        let (events, receipt) = settle_transaction(
+        let (events, receipt, _) = settle_transaction(
             &tx,
             &mut settled,
             &FeeState::genesis(),
+            None,
             1,
             100,
             0,
@@ -2346,10 +2577,11 @@ mod tests {
 
         let mut settled = state;
         let mut summary = BlockFeeSummary::default();
-        let (_, receipt) = settle_transaction(
+        let (_, receipt, _) = settle_transaction(
             &tx,
             &mut settled,
             &FeeState::genesis(),
+            None,
             1,
             100,
             0,
@@ -2387,10 +2619,11 @@ mod tests {
 
         let mut settled = state;
         let mut summary = BlockFeeSummary::default();
-        let (_, receipt) = settle_transaction(
+        let (_, receipt, _) = settle_transaction(
             &tx,
             &mut settled,
             &FeeState::genesis(),
+            None,
             1,
             100,
             0,
@@ -2446,10 +2679,11 @@ mod tests {
 
         let mut settled = state;
         let mut summary = BlockFeeSummary::default();
-        let (events, receipt) = settle_transaction(
+        let (events, receipt, _) = settle_transaction(
             &tx,
             &mut settled,
             &FeeState::genesis(),
+            None,
             1,
             100,
             0,
@@ -2480,6 +2714,7 @@ mod tests {
             &tx,
             &mut settled,
             &FeeState::genesis(),
+            None,
             2,
             200,
             0,
@@ -2515,6 +2750,7 @@ mod tests {
                 &tx,
                 &mut settled,
                 &FeeState::genesis(),
+                None,
                 1,
                 100,
                 0,
@@ -2534,7 +2770,7 @@ mod tests {
             &state,
             &sender,
             RootCall {
-                to: Actor::native_balance(payer),
+                to: Actor::native_balance(payer).into(),
                 message: borsh::to_vec(&native_token::Message::Transfer {
                     to: inbox,
                     amount: 1,
@@ -2557,6 +2793,7 @@ mod tests {
                 &tx,
                 &mut settled,
                 &FeeState::genesis(),
+                None,
                 1,
                 100,
                 0,
@@ -2602,10 +2839,11 @@ mod tests {
 
         let mut settled = state;
         let mut summary = BlockFeeSummary::default();
-        let (_, receipt) = settle_transaction(
+        let (_, receipt, _) = settle_transaction(
             &tx,
             &mut settled,
             &FeeState::genesis(),
+            None,
             1,
             100,
             0,
@@ -2726,6 +2964,7 @@ mod tests {
                 &tx,
                 &mut state.clone(),
                 &FeeState::genesis(),
+                None,
                 1,
                 100,
                 0,
@@ -2818,7 +3057,7 @@ mod tests {
         reward: FeePayee,
     ) -> common::block::Block {
         let timestamp = id.saturating_mul(100);
-        let (summary, payout, receipts) =
+        let (summary, payout, receipts, outbound) =
             super::derive_block_summary(state, &transactions, id, timestamp)
                 .expect("test transactions settle");
         transactions.push(LeeTransaction::Public(fee_invocation(
@@ -2826,6 +3065,7 @@ mod tests {
         )));
         transactions.push(LeeTransaction::Public(clock_invocation(id, timestamp)));
         HashableBlockData {
+            outbound,
             block_id: id,
             prev_block_hash: prev_hash,
             timestamp,

@@ -53,7 +53,6 @@ pub(in crate::actor) fn cross_zone_genesis_store() -> CannedStore {
             }],
             min_committee_size: 0,
             genesis_hash: None,
-            emitters: vec![],
         }],
         lock_target_zones: Vec::new(),
         source_authority: None,
@@ -63,7 +62,6 @@ pub(in crate::actor) fn cross_zone_genesis_store() -> CannedStore {
         testnet_initial_state::initial_state(true).with_public_accounts([producer_seed()]);
     for tx in [
         cross_zone::build_wrapped_token_init_config_tx(&cross_zone),
-        cross_zone::build_ping_sender_init_config_tx(),
         cross_zone::build_ping_receiver_init_config_tx(&cross_zone),
         cross_zone::build_bridge_lock_init_config_tx(&cross_zone),
         cross_zone::build_inbox_init_config_tx([0; 32]),
@@ -142,6 +140,7 @@ pub(in crate::actor) fn genesis() -> Block {
 pub(in crate::actor) fn block_at(id: u64, prev: HashType, timestamp: u64) -> Block {
     HashableBlockData {
         receipts: Vec::new(),
+        outbound: Vec::new(),
         block_id: id,
         prev_block_hash: prev,
         timestamp,

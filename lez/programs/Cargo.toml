@@ -25,11 +25,6 @@ path = "fee/src/main.rs"
 required-features = ["programs"]
 
 [[bin]]
-name = "cross_zone_outbox"
-path = "cross_zone_outbox/src/main.rs"
-required-features = ["programs"]
-
-[[bin]]
 name = "cross_zone_inbox"
 path = "cross_zone_inbox/src/main.rs"
 required-features = ["programs"]
@@ -73,7 +68,6 @@ artifacts = [
   "dep:bridge_core",
   "dep:fee_core",
   "dep:cross_zone_inbox_core",
-  "dep:cross_zone_outbox_core",
   "dep:bridge_lock_core",
   "dep:wrapped_token_core",
   "dep:ping_core",
@@ -91,7 +85,6 @@ programs = [
   "dep:fee_core",
   "dep:cross_zone_inbox_core",
   "dep:cross_zone_marker_core",
-  "dep:cross_zone_outbox_core",
   "dep:bridge_lock_core",
   "dep:wrapped_token_core",
   "dep:ping_core",
@@ -109,7 +102,6 @@ system_upgrader_core = { workspace = true, optional = true }
 fee_core = { workspace = true, optional = true }
 cross_zone_inbox_core = { workspace = true, optional = true }
 cross_zone_marker_core = { workspace = true, optional = true }
-cross_zone_outbox_core = { workspace = true, optional = true }
 bridge_lock_core = { workspace = true, optional = true }
 wrapped_token_core = { workspace = true, optional = true }
 ping_core = { workspace = true, optional = true }

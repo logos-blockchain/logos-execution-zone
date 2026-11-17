@@ -1,6 +1,6 @@
 use cross_zone_marker_core::{Delivery, inbox_source_marker_account_id};
 use lee_core::{
-    account::{AccountId, Actor},
+    account::{AccountId, Actor, Target},
     program::{ReceiveInput, Response, SyncMessage, write_once},
 };
 use wrapped_token_core::{
@@ -84,7 +84,10 @@ fn handle_message(input: &ReceiveInput) -> Response {
                     input,
                     &Message::RenounceAuthority {
                         authority: input.receiver.account_id,
-                        via: input.from.map(|from| from.program_account_id),
+                        via: input
+                            .from
+                            .and_then(Target::local)
+                            .map(|from| from.program_account_id),
                     },
                     "the configured authority must authorize renouncing it",
                 );
@@ -110,7 +113,10 @@ fn handle_message(input: &ReceiveInput) -> Response {
                     input,
                     &Message::UpdateSources {
                         authority: input.receiver.account_id,
-                        via: input.from.map(|from| from.program_account_id),
+                        via: input
+                            .from
+                            .and_then(Target::local)
+                            .map(|from| from.program_account_id),
                         sources,
                     },
                     "the configured authority must authorize a source change",
@@ -178,6 +184,7 @@ fn deliver(input: &ReceiveInput, delivery: Delivery) -> Response {
             deliverer: input
                 .from
                 .expect("a delivery has a sender")
+                .actor()
                 .program_account_id,
             src_zone,
             src_account_id,
@@ -361,7 +368,7 @@ mod tests {
     ) -> Transition {
         let input = ReceiveInput {
             receiver,
-            from: origin.map(|sender| Actor::new(sender, sender)),
+            from: origin.map(|sender| Actor::new(sender, sender).into()),
             is_authorized,
             pre_state: ActorState::from(pre),
             message: borsh::to_vec(message).unwrap(),
@@ -439,7 +446,7 @@ mod tests {
             },
         ] = <[SyncMessage; 1]>::try_from(entry.response.sync_messages)
             .expect("one forwarded change");
-        assert_eq!(to, config_actor());
+        assert_eq!(to, config_actor().into());
         at_config(
             Some(WRAPPED_ID),
             &config(),

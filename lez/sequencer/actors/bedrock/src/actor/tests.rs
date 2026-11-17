@@ -59,6 +59,7 @@ fn a_custom_tx_yields_its_block() {
     let channel = ChannelId::from([1; 32]);
     let block = HashableBlockData {
         receipts: Vec::new(),
+        outbound: Vec::new(),
         block_id: 7,
         prev_block_hash: HashType([0; 32]),
         timestamp: 700,

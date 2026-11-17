@@ -20,7 +20,7 @@ pub struct CrossZoneHalt {
     /// Hex id of the dispatch's source zone.
     pub src_zone: String,
     pub src_block_id: u64,
-    pub src_tx_index: u32,
+    pub src_outbound_index: u32,
     pub verdict: String,
 }
 
@@ -33,7 +33,7 @@ impl Display for CrossZoneHalt {
             self.block_hash,
             self.src_zone,
             self.src_block_id,
-            self.src_tx_index,
+            self.src_outbound_index,
             self.verdict
         )
     }
@@ -201,7 +201,7 @@ mod tests {
             block_hash: HashType([0xAB; 32]),
             src_zone: hex::encode([2_u8; 32]),
             src_block_id: 5,
-            src_tx_index: 1,
+            src_outbound_index: 1,
             verdict: "re-derivation mismatch".to_owned(),
         };
         let bytes = serde_json::to_vec(&halt).expect("serialize");
@@ -216,7 +216,7 @@ mod tests {
             block_hash: HashType([0xAB; 32]),
             src_zone: hex::encode([2_u8; 32]),
             src_block_id: 5,
-            src_tx_index: 1,
+            src_outbound_index: 1,
             verdict: "re-derivation mismatch".to_owned(),
         };
         let status = IndexerStatus {

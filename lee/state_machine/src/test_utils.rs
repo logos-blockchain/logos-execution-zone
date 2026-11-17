@@ -73,6 +73,7 @@ pub const fn validated_state_diff_from_public_diff(
         events: Vec::new(),
         published: Vec::new(),
         recovery_bindings: Vec::new(),
+        outbound: Vec::new(),
     })
 }
 

@@ -41,7 +41,7 @@ lee_core::actor_entrypoint!(raw handle_message);
 
 fn handle_message(input: &ReceiveInput) -> Response {
     let clock = clock_core::clock_actor();
-    if input.from != Some(clock) {
+    if input.from != Some(clock.into()) {
         return Response::keep_state().send_sync(
             clock,
             &clock_core::Message::ReadTimestamp { granularity: 1 },

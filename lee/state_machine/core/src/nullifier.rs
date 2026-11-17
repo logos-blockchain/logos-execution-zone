@@ -244,7 +244,7 @@ mod tests {
     fn message_commitment() -> Commitment {
         Commitment::for_message(&MessageBody {
             from: Actor::new(AccountId::new([0; 32]), AccountId::new([1; 32])),
-            to: Actor::new(AccountId::new([2; 32]), AccountId::new([3; 32])),
+            to: Actor::new(AccountId::new([2; 32]), AccountId::new([3; 32])).into(),
             message: vec![4; 2],
         })
     }
@@ -257,8 +257,8 @@ mod tests {
     #[test]
     fn for_message_matches_pinned_value() {
         let expected_nullifier = Nullifier([
-            116, 37, 191, 177, 130, 173, 46, 17, 130, 92, 95, 98, 44, 77, 72, 166, 240, 45, 213,
-            115, 155, 113, 177, 212, 80, 215, 245, 216, 42, 143, 71, 95,
+            106, 203, 139, 5, 145, 216, 186, 73, 195, 217, 24, 196, 163, 235, 63, 211, 63, 175, 45,
+            32, 252, 148, 140, 66, 52, 239, 74, 235, 227, 222, 75, 137,
         ]);
         assert_eq!(
             Nullifier::for_message(&[5; 32], &message_commitment(), message_position()),

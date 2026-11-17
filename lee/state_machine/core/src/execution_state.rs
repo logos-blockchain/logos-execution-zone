@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     FeeTransfer, PrivateWitness, RootCall, SenderPresentation,
-    account::{AccountData, AccountId, Actor, ActorState},
+    account::{AccountData, AccountId, Actor, ActorState, Target, ZoneId},
     native_token,
     program::{
         AsyncMessage, InvalidWindow, MessageBody, MessageData, MessageEnvelope,
@@ -33,7 +33,7 @@ impl<R> TransactionEntry<R> {
 
 impl TransactionEntry<MessageBody> {
     #[must_use]
-    pub const fn destination(&self) -> Actor {
+    pub const fn destination(&self) -> Target {
         match self {
             Self::Sync(call) => call.to,
             Self::Async(body) => body.to,
@@ -98,6 +98,8 @@ pub struct PublicOutcome {
     pub events: Vec<(Actor, ProgramEvent)>,
     /// Emitted async messages in the course of execution.
     pub async_messages: Vec<MessageBody>,
+    /// Messages to other zones, in emission order.
+    pub outbound: Vec<OutboundMessage>,
 }
 
 /// Outcome for proving a private or hybrid transaction.
@@ -139,6 +141,17 @@ pub enum BoundaryStep {
 pub type Boundary = Vec<BoundaryStep>;
 
 pub type PredictedCrossMessages = Vec<Vec<Delivery<Actor>>>;
+
+/// A message to another zone, recorded as a block-level effect instead of being dispatched.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct OutboundMessage {
+    pub from: Actor,
+    pub zone: ZoneId,
+    pub to: Actor,
+    pub message: MessageData,
+    /// Actors the destination zone declares on delivery.
+    pub accounts: Vec<Actor>,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Placement {
@@ -284,6 +297,21 @@ pub enum ExecutionError {
     #[error("The cross message at boundary step {index} does not match the executed delivery")]
     CrossMessageMismatch { index: usize },
 
+    #[error("A delivery targets {actor:?} in zone {zone:?}, which this executor does not route")]
+    RemoteTargetUnrouted { zone: ZoneId, actor: Actor },
+
+    #[error(
+        "A private actor sent to {actor:?} in zone {zone:?}, and a private sender has no public \
+         outbound surface"
+    )]
+    RemoteSendFromPrivateActor { zone: ZoneId, actor: Actor },
+
+    #[error(
+        "A local async message to {actor:?} carries delivery accounts, which only a remote send \
+         declares"
+    )]
+    AccountsOnLocalSend { actor: Actor },
+
     #[error("Boundary was not consumed exactly by the execution")]
     IncompleteBoundary,
 }
@@ -343,10 +371,10 @@ impl Sender {
         }
     }
 
-    const fn source(self) -> Option<Actor> {
+    const fn source(self) -> Option<Target> {
         match self {
-            Self::Root { from } => from,
-            Self::Call(actor) => Some(actor),
+            Self::Root { from: Some(actor) } | Self::Call(actor) => Some(Target::Local(actor)),
+            Self::Root { from: None } => None,
         }
     }
 
@@ -385,7 +413,7 @@ impl Delivery<Sender> {
 
     const fn sent(
         from: Actor,
-        to: Actor,
+        to: Target,
         message: MessageData,
         inherited_authorizations: BTreeSet<AccountId>,
         inherits_entry_authorizations: bool,
@@ -419,6 +447,8 @@ struct Executor<'witnesses, M: Mode> {
     events: Vec<(Actor, ProgramEvent)>,
     /// Asynchronous messages to be stored in the global mailbox.
     async_messages: Vec<MessageBody>,
+    /// Messages to other zones, surfaced as block-level effects.
+    outbound: Vec<OutboundMessage>,
     /// Numbers each async message offered for promotion, per sender placement.
     candidates: PromotionCounters,
     /// Public accounts admitted so far in this transaction.
@@ -922,7 +952,7 @@ impl Mode for PublicMode {
         delivery: Delivery<Sender>,
         _environment: &mut E,
     ) -> Result<(), E::Error> {
-        let to = delivery.envelope.to;
+        let to = local_target(delivery.envelope.to)?;
         if executor.accounts.contains_key(&to.account_id) {
             return Err(ExecutionError::UndeclaredActor { actor: to }.into());
         }
@@ -1044,7 +1074,11 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         }
 
         let root = root.filter(|root| {
-            M::executes_transaction_root(public_context.runs_publicly(root.destination()))
+            M::executes_transaction_root(
+                root.destination()
+                    .local()
+                    .is_some_and(|to| public_context.runs_publicly(to)),
+            )
         });
 
         let mut executor = Self {
@@ -1057,6 +1091,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
             validity: ValidityWindows::new_unbounded(),
             events: Vec::new(),
             async_messages: Vec::new(),
+            outbound: Vec::new(),
             candidates: PromotionCounters::default(),
             admitted_public_accounts: HashSet::new(),
         };
@@ -1106,7 +1141,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         Ok(executor)
     }
 
-    fn queue_entry(&mut self, from: Option<Actor>, to: Actor, message: MessageData) {
+    fn queue_entry(&mut self, from: Option<Actor>, to: Target, message: MessageData) {
         self.work_stack
             .push(WorkItem::Deliver(Box::new(Delivery::entry(
                 MessageEnvelope {
@@ -1136,7 +1171,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         // not otherwise authorize is debited by it alone.
         let mut delivery = Delivery::entry(MessageEnvelope {
             from: Sender::Root { from: None },
-            to: Actor::native_balance(payer),
+            to: Target::Local(Actor::native_balance(payer)),
             message,
         });
         delivery.inherited_authorizations.insert(payer);
@@ -1168,7 +1203,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         mut delivery: Delivery<Sender>,
         environment: &mut E,
     ) -> Result<(), E::Error> {
-        let to = delivery.envelope.to;
+        let to = local_target(delivery.envelope.to)?;
         // No code upgrade may land between a proof's image claims and the transitions it covers.
         if to.program_account_id == PROGRAM_LOADER_ACCOUNT_ID && !M::admits_loader(self) {
             return Err(ExecutionError::LoaderOutsidePublicExecution { actor: to }.into());
@@ -1192,7 +1227,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         delivery: &Delivery<Sender>,
         environment: &mut E,
     ) -> Result<(), E::Error> {
-        let to = delivery.envelope.to;
+        let to = local_target(delivery.envelope.to)?;
         let seeded = delivery.envelope.from.issuer().is_some_and(|issuer| {
             delivery
                 .pda_seeds
@@ -1253,7 +1288,8 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         Ok(())
     }
 
-    fn require_private(&self, actor: Actor) -> Result<(), ExecutionError> {
+    fn require_private(&self, target: Target) -> Result<(), ExecutionError> {
+        let actor = local_target(target)?;
         if self.is_private(&self.resolve(actor).account_id) {
             Ok(())
         } else {
@@ -1288,7 +1324,8 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         delivery: Delivery<Sender>,
         environment: &mut E,
     ) -> Result<(), E::Error> {
-        let actor = self.resolve(delivery.envelope.to);
+        let reached = local_target(delivery.envelope.to)?;
+        let actor = self.resolve(reached);
         let (is_authorized, authorizations) = self.authorize(actor, &delivery)?;
         let entry = self
             .accounts
@@ -1346,8 +1383,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
                     .map(|event| (actor, event)),
             );
         }
-        let reached = delivery.envelope.to;
-        let call_reply = |to: Actor| (input.from == Some(to)).then_some(reached);
+        let call_reply = |to: Target| (input.from == Some(to)).then_some(reached);
         let mut sent = transition
             .response
             .sync_messages
@@ -1369,13 +1405,41 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
                 },
             )
             .collect::<Result<Vec<_>, E::Error>>()?;
-        for AsyncMessage { to, message } in transition.response.async_messages {
+        for AsyncMessage {
+            to,
+            message,
+            accounts,
+        } in transition.response.async_messages
+        {
+            let destination = match to {
+                Target::Local(destination) => destination,
+                // Surfaces on the block in the clear, so only a public sender; its
+                // presented actor is canonical.
+                Target::Remote { zone, actor: to } => {
+                    if self.is_private(&actor.account_id) {
+                        return Err(
+                            ExecutionError::RemoteSendFromPrivateActor { zone, actor: to }.into(),
+                        );
+                    }
+                    self.outbound.push(OutboundMessage {
+                        from: actor,
+                        zone,
+                        to,
+                        message,
+                        accounts,
+                    });
+                    continue;
+                }
+            };
+            if !accounts.is_empty() {
+                return Err(ExecutionError::AccountsOnLocalSend { actor: destination }.into());
+            }
             let body = MessageBody {
                 from: self.sender(actor, None, environment)?,
                 to,
                 message,
             };
-            let promoted = self.public_context.runs_publicly(to) || {
+            let promoted = self.public_context.runs_publicly(destination) || {
                 let placement = if self.is_private(&actor.account_id) {
                     Placement::Private
                 } else {
@@ -1487,6 +1551,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
                 .collect(),
             events: self.events,
             async_messages: self.async_messages,
+            outbound: self.outbound,
         }
     }
 
@@ -1504,6 +1569,14 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
             boundary,
             async_messages: self.async_messages,
         }
+    }
+}
+
+// A proof can supply a remote target, so refusing is an error, not a panic.
+const fn local_target(target: Target) -> Result<Actor, ExecutionError> {
+    match target {
+        Target::Local(actor) => Ok(actor),
+        Target::Remote { zone, actor } => Err(ExecutionError::RemoteTargetUnrouted { zone, actor }),
     }
 }
 

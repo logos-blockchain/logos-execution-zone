@@ -103,6 +103,7 @@ pub fn genesis_block_and_state(spec: &GenesisSpec) -> (Block, lee::V03State, Vec
     // Every genesis transaction but the trailing fee and clock ones is exempt.
     let receipts = vec![TransactionReceipt::EXEMPT; genesis_txs.len().saturating_sub(2)];
     let genesis_block = HashableBlockData {
+        outbound: Vec::new(),
         receipts,
         block_id: GENESIS_BLOCK_ID,
         transactions: genesis_txs,
@@ -153,7 +154,6 @@ pub fn build_genesis_state(
         .map(|cross_zone| {
             [
                 cross_zone::build_wrapped_token_init_config_tx(cross_zone),
-                cross_zone::build_ping_sender_init_config_tx(),
                 cross_zone::build_ping_receiver_init_config_tx(cross_zone),
                 cross_zone::build_bridge_lock_init_config_tx(cross_zone),
             ]

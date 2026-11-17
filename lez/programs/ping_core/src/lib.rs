@@ -1,15 +1,14 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-pub use cross_zone_emission_core::{CrossZoneEmission, ZoneId};
 pub use cross_zone_receiver_core::{
     ReceiverConfig, receiver_config_account_id, receiver_config_seed,
 };
+pub use lee_core::account::ZoneId;
 use lee_core::{
     account::{AccountId, Actor},
     program::PdaSeed,
 };
 
 const PING_RECORD_SEED: [u8; 32] = *b"/LEZ/v0.3/PingRecord/0000000000/";
-const SENDER_CONFIG_SEED: [u8; 32] = *b"/LEZ/v0.3/PingSenderCfg/0000000/";
 
 pub const PING_SENDER_NAME: lee_core::program::SystemProgramName =
     lee_core::program::SystemProgramName::new(b"ping_sender");
@@ -67,23 +66,17 @@ pub enum ReceiverMessage {
     WriteRecord(Vec<u8>),
 }
 
-/// Message to `ping_sender`'s config PDA. `Send`'s emission is forwarded
-/// verbatim into `cross_zone_outbox_core::Message::Emit`.
-///
-/// Variants are append-only. Borsh encodes the variant as a leading tag byte,
-/// so inserting one ahead of `Send` shifts every existing encoding.
+/// Message to `ping_sender`'s own program actor.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum SenderMessage {
-    /// Emit a cross-zone message through `outbox`, which must run the pinned
-    /// outbox program.
+    /// Send `payload` to `target` in `target_zone`, declaring `accounts` for its
+    /// delivery. Callers name any target, which is why routes pin the pair.
     Send {
-        outbox: Actor,
-        emission: CrossZoneEmission,
+        target_zone: ZoneId,
+        target: Actor,
+        accounts: Vec<Actor>,
+        payload: Vec<u8>,
     },
-    /// Pins the outbox program, written once into an empty config actor state at
-    /// genesis. A re-run naming a different outbox is refused; an identical one
-    /// is a no-op, which is what genesis replay does.
-    InitConfig { outbox_account_id: AccountId },
 }
 
 #[must_use]
@@ -108,65 +101,9 @@ pub const fn ping_record_seed() -> PdaSeed {
     PdaSeed::new(PING_RECORD_SEED)
 }
 
-/// PDA holding the outbox program id, seeded at genesis so the guest can pin the
-/// program it sends to without importing the outbox image id.
-#[must_use]
-pub fn sender_config_account_id(sender_id: AccountId) -> AccountId {
-    AccountId::for_public_pda(&sender_id, &sender_config_seed())
-}
-
-#[must_use]
-pub const fn sender_config_seed() -> PdaSeed {
-    PdaSeed::new(SENDER_CONFIG_SEED)
-}
-
-/// Encodes the pinned outbox account id for the config account's data.
-#[must_use]
-pub const fn outbox_bytes(outbox_account_id: AccountId) -> [u8; 32] {
-    outbox_account_id.to_bytes()
-}
-
-/// Decodes the pinned outbox account id from the config account's data.
-#[must_use]
-pub fn read_outbox(data: &[u8]) -> Option<AccountId> {
-    if data.len() < 32 {
-        return None;
-    }
-    let bytes: [u8; 32] = data[..32].try_into().unwrap_or_else(|_| unreachable!());
-    Some(AccountId::new(bytes))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// `extract_emission` decodes `Send` off peer transactions, so its tag byte is
-    /// wire format: a variant inserted ahead of it would silently shift every
-    /// existing encoding.
-    #[test]
-    fn send_is_the_first_variant() {
-        let outbox = Actor::new(AccountId::new([2; 32]), AccountId::new([3; 32]));
-        let emission = CrossZoneEmission {
-            target_zone: [7; 32],
-            target_account_id: AccountId::new([1; 32]),
-            target_accounts: vec![],
-            payload: vec![],
-            ordinal: 0,
-        };
-        let send = SenderMessage::Send {
-            outbox,
-            emission: emission.clone(),
-        };
-        let bytes = borsh::to_vec(&send).expect("Send serializes");
-
-        let mut expected = vec![0];
-        expected.extend(borsh::to_vec(&outbox).expect("outbox serializes"));
-        expected.extend(borsh::to_vec(&emission).expect("emission serializes"));
-        assert_eq!(
-            bytes, expected,
-            "Send is the tag, the outbox actor, then the emission wire fields"
-        );
-    }
 
     /// `Record` is serialized by the source zone into the emission payload and
     /// decoded by the destination, so its tag byte is wire format.
@@ -208,11 +145,5 @@ mod tests {
             sources: vec![([7; 32], AccountId::new([9; 32]))],
         };
         assert_eq!(ReceiverConfig::from_bytes(&config.to_bytes()), Some(config));
-    }
-
-    #[test]
-    fn outbox_id_round_trips() {
-        let outbox = AccountId::new([9; 32]);
-        assert_eq!(read_outbox(&outbox_bytes(outbox)), Some(outbox));
     }
 }

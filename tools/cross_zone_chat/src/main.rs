@@ -1,26 +1,4 @@
 //! Interactive cross-zone chat demo.
-//!
-//! Boots one Bedrock node hosting two zones (A and B), each running a sequencer
-//! whose cross-zone watcher points at the other zone, then serves a local
-//! two-column web UI. Type a message in one column and watch it cross Bedrock
-//! and appear in the other; two people can chat across the zones.
-//!
-//! This is the `cross_zone_ping` integration-test topology made interactive:
-//! a send builds a `ping_sender::Send` on the sender zone targeting the other
-//! zone's `ping_receiver`, the other zone's watcher reads the finalized source
-//! block and injects the inbox dispatch, and a per-zone block tailer decodes the
-//! delivered `cross_zone_inbox::Dispatch` payloads back into chat text.
-//!
-//! To make the cross-zone machinery visible, each message is tracked through its
-//! pipeline stages and surfaced to the page: submitted into a source block on the
-//! sender zone, that block's Bedrock finality (pending -> finalized), and final
-//! delivery into a block on the receiver zone. The Bedrock-finality wait is what
-//! dominates the latency, so it is shown live.
-//!
-//! Prerequisite: a working local Docker daemon (Bedrock comes up via
-//! `bedrock/docker-compose.yml`). Run with `RISC0_DEV_MODE=1` for fast,
-//! proving-free latency; on macOS run under the `just cross-zone-chat` recipe so
-//! the DYLD framework shim is set.
 
 #![allow(
     clippy::arithmetic_side_effects,
@@ -40,7 +18,7 @@ use std::{
     net::SocketAddr,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU32, AtomicU64, Ordering},
+        atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -56,16 +34,12 @@ use axum::{
 use common::{block::BedrockStatus, transaction::LeeTransaction};
 use cross_zone::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use cross_zone_inbox_core::{Message as InboxMessage, ZoneId};
-use cross_zone_outbox_core::{outbox_pda, outbox_pda_seed};
 use lee::{
-    AccountId, Actor, PublicAccountEvidence, PublicTransaction,
+    AccountId, Actor, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
 use lee_core::account::Nonce;
-use ping_core::{
-    CrossZoneEmission, ReceiverMessage, SenderMessage, ping_record_pda, receiver_config_account_id,
-    sender_config_account_id,
-};
+use ping_core::{ReceiverMessage, SenderMessage, ping_record_pda, receiver_config_account_id};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use serde::{Deserialize, Serialize};
 use test_fixtures::{
@@ -77,83 +51,51 @@ use tracing::{info, warn};
 
 const HTTP_PORT: u16 = 8088;
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
-/// Ordinals probed for a free outbox slot before giving up.
-const ORDINAL_PROBE_LIMIT: u32 = 1_024;
-/// Transient RPC failures tolerated per probed slot.
-const RPC_RETRY_LIMIT: u32 = 5;
 
-/// One chat message tracked through its cross-zone pipeline. Displayed in the
-/// receiving zone's column; the stage fields drive the on-page timeline.
 struct TrackedMessage {
     id: u64,
-    /// Label ("A" / "B") of the sender zone.
     source_label: &'static str,
-    /// Label of the receiver zone; the column this message shows in.
     dest_label: &'static str,
     text: String,
-    /// Outbox ordinal of this send, used to match the source-zone block.
-    ordinal: u32,
-    /// Block on the sender zone that included the `ping_sender` tx.
     source_block: Option<u64>,
-    /// Whether `source_block` has reached Bedrock finality.
     finalized: bool,
-    /// Block on the receiver zone that delivered the inbox dispatch.
     delivered_block: Option<u64>,
     created: Instant,
-    /// Wall-clock seconds from submit to delivery, set once delivered.
     delivered_secs: Option<u64>,
 }
 
-/// A single send to perform.
 #[derive(Deserialize)]
 struct SendRequest {
     zone: String,
     text: String,
 }
 
-/// The id assigned to a freshly submitted message.
 #[derive(Serialize)]
 struct SendResponse {
     id: u64,
 }
 
-/// One message's current pipeline state, as served to the page.
 #[derive(Serialize)]
 struct TimelineEntry {
     id: u64,
-    /// Receiver column the message belongs to.
     zone: &'static str,
     source_zone: &'static str,
     text: String,
     source_block: Option<u64>,
     finalized: bool,
     delivered_block: Option<u64>,
-    /// Seconds elapsed (live until delivered, then frozen at delivery time).
     elapsed: u64,
 }
 
-/// Everything one zone needs to send to its peer.
 struct ZoneRuntime {
-    /// The peer zone's channel id; the target of sends from this zone.
     other_zone: ZoneId,
     client: SequencerClient,
-    /// Next outbox ordinal to try for (this zone -> peer).
-    ///
-    /// An outbox slot is written once and the ordinal names a slot in a space
-    /// every user of `ping_sender` shares, so a fixed starting point collides
-    /// with whatever the chain already holds. Seeded from a free slot found by
-    /// [`next_free_ordinal`], then incremented per send.
-    ordinal: AtomicU32,
-    /// Next payer nonce, seeded from the chain at startup and advanced only on
-    /// a successful submit. Held across the submit, so two sends in one block
-    /// interval cannot take the same nonce.
     payer_nonce: tokio::sync::Mutex<u64>,
 }
 
 struct AppState {
     zone_a: ZoneRuntime,
     zone_b: ZoneRuntime,
-    /// Monotonic id assigned to every message.
     next_id: AtomicU64,
     messages: Mutex<Vec<TrackedMessage>>,
 }
@@ -167,12 +109,10 @@ impl AppState {
         }
     }
 
-    /// Records a freshly submitted outbound message and returns its id.
     fn record_outbound(
         &self,
         source_label: &'static str,
         dest_label: &'static str,
-        ordinal: u32,
         text: String,
     ) -> u64 {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
@@ -184,7 +124,6 @@ impl AppState {
                 source_label,
                 dest_label,
                 text,
-                ordinal,
                 source_block: None,
                 finalized: false,
                 delivered_block: None,
@@ -200,12 +139,12 @@ impl AppState {
         id
     }
 
-    /// Marks the source-zone block that included a send, matched by ordinal.
-    fn mark_source_block(&self, source_label: &'static str, ordinal: u32, block_id: u64) {
+    fn mark_source_block(&self, source_label: &'static str, text: &str, block_id: u64) {
         let mut messages = self.messages.lock().expect("messages mutex poisoned");
-        if let Some(message) = messages.iter_mut().find(|m| {
-            m.source_label == source_label && m.ordinal == ordinal && m.source_block.is_none()
-        }) {
+        if let Some(message) = messages
+            .iter_mut()
+            .find(|m| m.source_label == source_label && m.text == text && m.source_block.is_none())
+        {
             message.source_block = Some(block_id);
             info!(
                 msg = message.id,
@@ -217,9 +156,6 @@ impl AppState {
         }
     }
 
-    /// Marks delivery on the receiver zone. Prefers the oldest undelivered
-    /// message whose text matches; falls back to the oldest undelivered for the
-    /// zone (delivery order is preserved end to end).
     fn mark_delivered(&self, dest_label: &'static str, text: &str, block_id: u64) {
         let mut messages = self.messages.lock().expect("messages mutex poisoned");
         let undelivered =
@@ -243,7 +179,6 @@ impl AppState {
         }
     }
 
-    /// Snapshot of (source zone, block) pairs whose finality is still unknown.
     fn pending_finality(&self) -> BTreeSet<(&'static str, u64)> {
         self.messages
             .lock()
@@ -254,7 +189,6 @@ impl AppState {
             .collect()
     }
 
-    /// Marks every message whose source block has reached Bedrock finality.
     fn mark_finalized(&self, source_label: &'static str, block_id: u64) {
         for message in self
             .messages
@@ -303,7 +237,6 @@ impl AppState {
 async fn main() -> Result<()> {
     logging::init();
 
-    // Declared first so Bedrock outlives both zones (drops run in reverse order).
     let (_bedrock, bedrock_addr) = setup_bedrock_node()
         .await
         .context("Failed to set up shared Bedrock node")?;
@@ -314,7 +247,6 @@ async fn main() -> Result<()> {
     let zone_b: ZoneId = *channel_b.as_ref();
     let receiver_id = programs::ping_receiver_account_id();
 
-    // Each zone watches the other and may deliver only to ping_receiver.
     let cross_zone_a = watch_peer(zone_b, receiver_id);
     let cross_zone_b = watch_peer(zone_a, receiver_id);
 
@@ -336,13 +268,6 @@ async fn main() -> Result<()> {
 
     let client_a = sequencer_client(seq_a.addr())?;
     let client_b = sequencer_client(seq_b.addr())?;
-    let ordinal_a = next_free_ordinal(&client_a, &zone_b)
-        .await
-        .context("Failed to find a free outbox ordinal for zone A")?;
-    let ordinal_b = next_free_ordinal(&client_b, &zone_a)
-        .await
-        .context("Failed to find a free outbox ordinal for zone B")?;
-    info!(ordinal_a, ordinal_b, "Outbox ordinals found");
 
     let payer_id = initial_pub_accounts_private_keys()[0].account_id;
     let payer_nonce_a = payer_nonce(&client_a, payer_id).await?;
@@ -352,13 +277,11 @@ async fn main() -> Result<()> {
         zone_a: ZoneRuntime {
             other_zone: zone_b,
             client: client_a,
-            ordinal: AtomicU32::new(ordinal_a),
             payer_nonce: tokio::sync::Mutex::new(payer_nonce_a),
         },
         zone_b: ZoneRuntime {
             other_zone: zone_a,
             client: client_b,
-            ordinal: AtomicU32::new(ordinal_b),
             payer_nonce: tokio::sync::Mutex::new(payer_nonce_b),
         },
         next_id: AtomicU64::new(1),
@@ -388,8 +311,6 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// A cross-zone config whose single peer is `peer`, allowed to deliver only to
-/// `receiver_id`.
 fn watch_peer(peer: ZoneId, receiver_id: AccountId) -> CrossZoneConfig {
     CrossZoneConfig {
         peers: vec![CrossZonePeer {
@@ -401,7 +322,6 @@ fn watch_peer(peer: ZoneId, receiver_id: AccountId) -> CrossZoneConfig {
             }],
             min_committee_size: 0,
             genesis_hash: None,
-            emitters: vec![],
         }],
         lock_target_zones: Vec::new(),
         source_authority: None,
@@ -417,7 +337,6 @@ fn sequencer_client(addr: SocketAddr) -> Result<SequencerClient> {
         .context("Failed to build sequencer client")
 }
 
-/// The payer's current nonce on this zone, the seed for the local counter.
 async fn payer_nonce(client: &SequencerClient, payer_id: AccountId) -> Result<u64> {
     let nonce = client
         .get_account(payer_id)
@@ -428,74 +347,11 @@ async fn payer_nonce(client: &SequencerClient, payer_id: AccountId) -> Result<u6
     u64::try_from(nonce.0).context("payer nonce exceeds u64")
 }
 
-/// A free outbox slot for this zone's `ping_sender` to start counting from: the
-/// first unwritten one at or after a random ordinal.
-///
-/// An outbox slot is written once, so a send into an occupied one fails at block
-/// production, and `send_transaction` checks a transaction only statelessly, so
-/// nothing tells the sender. The predicate here is the one the guest asserts,
-/// asked before submitting instead of after.
-///
-/// Random rather than zero because the ordinal space is shared by every user of
-/// `ping_sender` and a slot costs one unsigned transaction to occupy, so any
-/// fixed starting point can be squatted. On a chain this process owns, which is
-/// what `just cross-zone-chat` boots, nothing is occupied and this returns on
-/// its first try; it earns its keep against a chain the tool did not create.
-///
-/// It only places the first send. Later ordinals come from incrementing, so a
-/// slot taken after this returns still collides, at a probability of the
-/// occupied count over 2^32.
-async fn next_free_ordinal(client: &SequencerClient, target_zone: &ZoneId) -> Result<u32> {
-    let outbox_id = programs::cross_zone_outbox_account_id();
-    let emitter = programs::ping_sender_account_id();
-    let start: u32 = rand::random();
-
-    for offset in 0..ORDINAL_PROBE_LIMIT {
-        let ordinal = start.wrapping_add(offset);
-        let slot = outbox_pda(outbox_id, emitter, target_zone, ordinal);
-        // Retried rather than propagated: by here the run has already paid for a
-        // Bedrock bring-up and two sequencer boots, and every other RPC caller
-        // in this tool rides out a transient error rather than ending the run.
-        let mut attempt = 0_u32;
-        let account = loop {
-            match client.get_account_view(Actor::new(slot, outbox_id)).await {
-                Ok(account) => break account,
-                Err(err) if attempt < RPC_RETRY_LIMIT => {
-                    attempt += 1;
-                    warn!(
-                        attempt,
-                        max_attempts = RPC_RETRY_LIMIT,
-                        error = %err,
-                        "Outbox probe failed, retrying"
-                    );
-                    tokio::time::sleep(POLL_INTERVAL).await;
-                }
-                Err(err) => {
-                    return Err(err).context("Failed to read an outbox slot while probing");
-                }
-            }
-        };
-        if account
-            .unwrap_or_default()
-            .data
-            .actor_state(outbox_id)
-            .is_empty()
-        {
-            return Ok(ordinal);
-        }
-    }
-    anyhow::bail!("No free outbox ordinal in {ORDINAL_PROBE_LIMIT} tried from {start}")
-}
-
-/// Scans one zone's new blocks. A `ping_sender` tx marks the message's source
-/// block (its outbound leg); an inbox dispatch marks delivery on this zone.
-/// Runs forever; transient RPC errors are logged and retried.
 async fn scan_zone(state: Arc<AppState>, label: &'static str) {
     let inbox_id = programs::cross_zone_inbox_account_id();
     let sender_id = programs::ping_sender_account_id();
     let client = &state.zone(label).expect("zone runtime exists").client;
 
-    // Start from the current tip so genesis/boot blocks are skipped.
     let mut cursor = client.get_last_block_id().await.unwrap_or(0);
 
     loop {
@@ -522,17 +378,15 @@ async fn scan_zone(state: Arc<AppState>, label: &'static str) {
                             continue;
                         };
                         let program_id = to.program_account_id;
-                        // A tx targets at most one of these programs; check both
-                        // independently rather than chaining (avoids an empty else).
                         if program_id == inbox_id
                             && let Some(text) = decode_inbox_text(data)
                         {
                             state.mark_delivered(label, &text, next);
                         }
                         if program_id == sender_id
-                            && let Some(ordinal) = decode_send_ordinal(data)
+                            && let Some(text) = decode_send_text(data)
                         {
-                            state.mark_source_block(label, ordinal, next);
+                            state.mark_source_block(label, &text, next);
                         }
                     }
                 }
@@ -552,7 +406,6 @@ async fn scan_zone(state: Arc<AppState>, label: &'static str) {
     }
 }
 
-/// Polls each tracked source block's Bedrock finality until it is finalized.
 async fn poll_finality(state: Arc<AppState>) {
     loop {
         tokio::time::sleep(POLL_INTERVAL).await;
@@ -576,7 +429,6 @@ async fn poll_finality(state: Arc<AppState>) {
     }
 }
 
-/// Recovers the chat text from an inbox dispatch tx's message.
 fn decode_inbox_text(message: &[u8]) -> Option<String> {
     let InboxMessage::Dispatch(delivery) = borsh::from_slice::<InboxMessage>(message).ok()? else {
         return None;
@@ -584,16 +436,11 @@ fn decode_inbox_text(message: &[u8]) -> Option<String> {
     decode_payload(&delivery.payload)
 }
 
-/// Recovers the outbox ordinal from a `ping_sender::Send` tx's message.
-fn decode_send_ordinal(message: &[u8]) -> Option<u32> {
-    let SenderMessage::Send { emission, .. } = borsh::from_slice::<SenderMessage>(message).ok()?
-    else {
-        return None;
-    };
-    Some(emission.ordinal)
+fn decode_send_text(message: &[u8]) -> Option<String> {
+    let SenderMessage::Send { payload, .. } = borsh::from_slice::<SenderMessage>(message).ok()?;
+    decode_payload(&payload)
 }
 
-/// Decodes a `ping_receiver::Record` payload (borsh bytes) to text.
 fn decode_payload(payload: &[u8]) -> Option<String> {
     let ReceiverMessage::Record { payload: bytes } =
         borsh::from_slice::<ReceiverMessage>(payload).ok()?
@@ -603,55 +450,39 @@ fn decode_payload(payload: &[u8]) -> Option<String> {
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// Builds the fee-paying `ping_sender::Send` that carries `text` to
-/// `other_zone`, mirroring `integration_tests/tests/cross_zone_ping.rs`.
 fn build_send_tx(
     other_zone: ZoneId,
-    ordinal: u32,
     text: &str,
     payer: &PublicAccountPrivateInitialData,
     payer_nonce: Nonce,
 ) -> LeeTransaction {
     let receiver_id = programs::ping_receiver_account_id();
-    let outbox_id = programs::cross_zone_outbox_account_id();
+    let sender_id = programs::ping_sender_account_id();
 
     let payload = borsh::to_vec(&ReceiverMessage::Record {
         payload: text.as_bytes().to_vec(),
     })
     .expect("serialize record message");
 
-    let sender_id = programs::ping_sender_account_id();
-    let config = Actor::new(sender_config_account_id(sender_id), sender_id);
-    let slot = PublicAccountEvidence::Pda {
-        program: outbox_id,
-        seed: outbox_pda_seed(sender_id, &other_zone, ordinal),
-    };
-    let outbox = Actor::new(slot.account_id(), outbox_id);
+    let sender = Actor::new(sender_id, sender_id);
     let send = SenderMessage::Send {
-        outbox,
-        emission: CrossZoneEmission {
-            target_zone: other_zone,
-            target_account_id: receiver_id,
-            target_accounts: vec![
-                Actor::new(receiver_config_account_id(receiver_id), receiver_id),
-                Actor::new(ping_record_pda(receiver_id), receiver_id),
-            ],
-            payload,
-            ordinal,
-        },
+        target_zone: other_zone,
+        target: Actor::new(receiver_id, receiver_id),
+        accounts: vec![
+            Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+            Actor::new(ping_record_pda(receiver_id), receiver_id),
+        ],
+        payload,
     };
 
-    let message = Message {
-        admission_evidence: vec![slot],
-        ..Message::try_new_with_fees(
-            config,
-            vec![config, outbox],
-            BTreeMap::from([(payer.account_id, payer_nonce)]),
-            send,
-            common::test_utils::test_fee_declaration(payer.account_id),
-        )
-        .expect("build ping_sender message")
-    };
+    let message = Message::try_new_with_fees(
+        sender,
+        vec![sender],
+        BTreeMap::from([(payer.account_id, payer_nonce)]),
+        send,
+        common::test_utils::test_fee_declaration(payer.account_id),
+    )
+    .expect("build ping_sender message");
 
     let witness_set = WitnessSet::for_message(&message, &[&payer.pub_sign_key]);
     LeeTransaction::Public(PublicTransaction::new(message, witness_set))
@@ -677,21 +508,14 @@ async fn send_handler(
     let zone = state.zone(source_label).expect("zone runtime exists");
 
     let mut next_nonce = zone.payer_nonce.lock().await;
-    let ordinal = zone.ordinal.fetch_add(1, Ordering::SeqCst);
     let payer = &initial_pub_accounts_private_keys()[0];
-    let tx = build_send_tx(
-        zone.other_zone,
-        ordinal,
-        text,
-        payer,
-        Nonce(u128::from(*next_nonce)),
-    );
+    let tx = build_send_tx(zone.other_zone, text, payer, Nonce(u128::from(*next_nonce)));
     zone.client
         .send_transaction(tx)
         .await
         .map_err(|err| (StatusCode::BAD_GATEWAY, format!("submit failed: {err:#}")))?;
     *next_nonce += 1;
-    let id = state.record_outbound(source_label, dest_label, ordinal, text.to_owned());
+    let id = state.record_outbound(source_label, dest_label, text.to_owned());
     Ok(Json(SendResponse { id }))
 }
 

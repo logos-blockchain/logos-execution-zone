@@ -4,7 +4,7 @@ use fee_core::{
     state::{FeeState, PendingDistribution},
 };
 use lee_core::{
-    account::Actor,
+    account::{Actor, Target},
     native_token::{
         Message as NativeMessage, NATIVE_TOKEN_PROGRAM_ID, custody_transfer, decode_balance,
     },
@@ -21,6 +21,7 @@ fn handle_message(input: &ReceiveInput) -> Response {
     );
     if input
         .from
+        .and_then(Target::local)
         .is_some_and(|from| from.program_account_id == NATIVE_TOKEN_PROGRAM_ID)
     {
         let reply: StateReply =
@@ -72,7 +73,7 @@ fn pay_out(input: &ReceiveInput, reply: &StateReply) -> Response {
     let inbox = compute_fee_inbox_account_id(fee_account_id);
     assert_eq!(
         input.from,
-        Some(Actor::native_balance(inbox)),
+        Some(Actor::native_balance(inbox).into()),
         "The reply must read the fee inbox"
     );
     let mut fee_state = FeeState::from_bytes(&input.pre_state);
@@ -155,7 +156,7 @@ mod tests {
         let receiver = Actor::new(account_id, FEE);
         let input = ReceiveInput {
             receiver,
-            from,
+            from: from.map(Into::into),
             is_authorized: false,
             pre_state: ActorState::from(pre),
             message: borsh::to_vec(message).unwrap(),

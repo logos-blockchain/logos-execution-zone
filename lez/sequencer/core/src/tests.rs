@@ -393,9 +393,6 @@ fn only_the_cross_zone_inbox_fee_and_system_upgrader_are_sequencer_only() {
         programs::system_upgrader_account_id()
     ));
     assert!(!is_sequencer_only_program(
-        programs::cross_zone_outbox_account_id()
-    ));
-    assert!(!is_sequencer_only_program(
         programs::wrapped_token_account_id()
     ));
     assert!(!is_sequencer_only_program(
@@ -434,7 +431,7 @@ fn settled_peer_block(
     producer: lee::AccountId,
 ) -> common::block::Block {
     let timestamp = id.saturating_mul(100);
-    let (summary, payout, receipts) =
+    let (summary, payout, receipts, outbound) =
         chain_state::apply::derive_block_summary(state, &txs, id, timestamp)
             .expect("test transactions settle");
     let mut transactions = txs;
@@ -450,6 +447,7 @@ fn settled_peer_block(
         timestamp,
         transactions,
         receipts,
+        outbound,
     }
     .into_pending_block()
 }
@@ -466,7 +464,13 @@ fn assert_block_tail(block: &common::block::Block, user_txs: &[LeeTransaction]) 
         panic!("fee tx must be public");
     };
     assert_eq!(
-        fee_tx.message().execution.root.to.program_account_id,
+        fee_tx
+            .message()
+            .execution
+            .root
+            .to
+            .actor()
+            .program_account_id,
         programs::fee_account_id()
     );
     assert_eq!(
@@ -523,7 +527,7 @@ fn tx_is_bridge_deposit(
     };
 
     let lee::RootCall { to, message } = &public_tx.message.execution.root;
-    if to.program_account_id != programs::bridge_account_id() {
+    if to.actor().program_account_id != programs::bridge_account_id() {
         return false;
     }
 
@@ -605,6 +609,7 @@ async fn a_charged_bridge_deposit_is_dropped_by_the_builder_bridge_guard() {
         &forged,
         &mut state,
         &opening,
+        None,
         2,
         0,
         0,
@@ -751,7 +756,6 @@ fn cross_zone_test_config() -> SequencerConfig {
                 }],
                 min_committee_size: 0,
                 genesis_hash: None,
-                emitters: vec![],
             }],
             lock_target_zones: Vec::new(),
             source_authority: None,
@@ -775,20 +779,24 @@ fn ping_payload(payload: &[u8]) -> Vec<u8> {
 /// to the encoding shows up here rather than passing silently.
 fn dispatch_tx(src_block_id: u64, payload: Vec<u8>) -> LeeTransaction {
     let receiver_id = programs::ping_receiver_account_id();
-    LeeTransaction::Public(cross_zone::build_dispatch_from_emission(
-        &cross_zone::EmissionSource {
+    let sender_id = programs::ping_sender_account_id();
+    LeeTransaction::Public(cross_zone::build_dispatch(
+        &cross_zone::OutboundSource {
             src_zone: PEER_ZONE,
             src_block_id,
             src_block_hash: peer_block_hash(src_block_id),
-            src_tx_index: 0,
-            src_account_id: programs::ping_sender_account_id(),
+            src_outbound_index: 0,
         },
-        receiver_id,
-        &[
-            Actor::new(receiver_config_account_id(receiver_id), receiver_id),
-            Actor::new(ping_record_pda(receiver_id), receiver_id),
-        ],
-        payload,
+        &lee::OutboundMessage {
+            from: Actor::new(sender_id, sender_id),
+            zone: PEER_ZONE,
+            to: Actor::new(receiver_id, receiver_id),
+            message: payload,
+            accounts: vec![
+                Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+                Actor::new(ping_record_pda(receiver_id), receiver_id),
+            ],
+        },
     ))
 }
 
@@ -951,6 +959,7 @@ async fn settlement_rejects_a_dispatch_a_user_signed() {
             tx,
             &mut state.clone(),
             &opening,
+            None,
             2,
             0,
             0,
@@ -1071,7 +1080,7 @@ async fn a_dispatch_that_never_executes_is_given_up_on_after_repeated_failures()
         DispatchOrigin {
             src_zone: PEER_ZONE,
             src_block_id: 13,
-            src_tx_index: 0,
+            src_outbound_index: 0,
         }
     );
     assert_eq!(
@@ -1200,7 +1209,7 @@ async fn a_delivery_still_reversible_keeps_its_record() {
 
 #[test]
 fn a_settled_delivery_that_is_not_the_one_we_recorded_is_reported() {
-    // The message key covers (src_zone, src_block_id, src_tx_index) and nothing
+    // The message key covers (src_zone, src_block_id, src_outbound_index) and nothing
     // about the payload, and so does the inbox's own replay check. So a peer's
     // sequencer can publish a delivery under a key we hold with a payload we
     // never saw, and it settles our correct record along with it. The indexer
@@ -2562,6 +2571,7 @@ fn resubmittable_txs_of_blocks_without_user_txs_is_empty() {
     // No transactions at all (not even the mandatory clock tx).
     let empty = HashableBlockData {
         receipts: Vec::new(),
+        outbound: Vec::new(),
         block_id: 1,
         prev_block_hash: HashType([0; 32]),
         timestamp: 0,
@@ -4789,7 +4799,7 @@ fn pending_payouts(
         })
         .filter(|(_, body)| {
             body.from.program_account_id == lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID
-                && body.to == Actor::native_balance(destination)
+                && body.to == Actor::native_balance(destination).into()
         })
         .map(|(position, body)| (position, borsh::from_slice(&body.message).unwrap()))
         .collect()
@@ -5934,7 +5944,7 @@ fn privately_staked_state(
     prove_and_settle(
         &mut state,
         TransactionEntry::Sync(RootCall {
-            to: Actor::new(ownership.account_id(), program_id),
+            to: Actor::new(ownership.account_id(), program_id).into(),
             message: borsh::to_vec(&sequencer_stake_core::Message::Stake {
                 sequencer_key,
                 amount,
@@ -6118,7 +6128,7 @@ fn a_private_withdrawal_to_a_private_destination_is_received_only_by_proof() {
     prove_and_settle(
         &mut state,
         TransactionEntry::Sync(RootCall {
-            to: Actor::new(ownership.account_id(), program_id),
+            to: Actor::new(ownership.account_id(), program_id).into(),
             message: borsh::to_vec(&sequencer_stake_core::Message::UnstakeRequest {
                 sequencer_key,
                 amount,
@@ -6367,7 +6377,7 @@ async fn a_slash_lands_over_a_pending_partial_unstake() {
             return None;
         };
         let lee::RootCall { to, message } = &tx.message().execution.root;
-        (to.program_account_id == stake_program_id)
+        (to.actor().program_account_id == stake_program_id)
             .then(|| borsh::from_slice(message).ok())
             .flatten()
     };
@@ -6893,19 +6903,26 @@ fn a_misspelled_mint_cap_key_fails_route_parse() {
 }
 
 /// Gating is atomic: no `cross_zone`, no cross-zone genesis transaction;
-/// empty-peers carries exactly the four `InitConfig`s, in order.
+/// empty-peers carries exactly the three `InitConfig`s and the inbox's, in order.
 #[test]
 fn genesis_cross_zone_transactions_follow_the_declaration() {
-    let cross_zone_ids: [AccountId; 6] = [
+    let cross_zone_ids: [AccountId; 5] = [
         programs::cross_zone_inbox_account_id(),
-        programs::cross_zone_outbox_account_id(),
         programs::ping_sender_account_id(),
         programs::ping_receiver_account_id(),
         programs::bridge_lock_account_id(),
         programs::wrapped_token_account_id(),
     ];
     let tx_program = |tx: &LeeTransaction| match tx {
-        LeeTransaction::Public(public) => public.message().execution.root.to.program_account_id,
+        LeeTransaction::Public(public) => {
+            public
+                .message()
+                .execution
+                .root
+                .to
+                .actor()
+                .program_account_id
+        }
         LeeTransaction::PrivacyPreserving(_) => {
             unreachable!("genesis holds only public transactions")
         }
@@ -6947,12 +6964,11 @@ fn genesis_cross_zone_transactions_follow_the_declaration() {
         cross_zone_txs,
         vec![
             programs::wrapped_token_account_id(),
-            programs::ping_sender_account_id(),
             programs::ping_receiver_account_id(),
             programs::bridge_lock_account_id(),
             programs::cross_zone_inbox_account_id(),
         ],
-        "the four InitConfigs then the inbox config, in the fixed order"
+        "the three InitConfigs then the inbox config, in the fixed order"
     );
     for account_id in cross_zone_ids {
         assert!(state.get_builtin_program(account_id).is_some());
@@ -7156,7 +7172,7 @@ fn a_bridge_deposit_carries_its_receipts_and_its_recipients_evidence() {
         .unwrap();
 
         for tx in [event, genesis] {
-            let receipt = tx.message.execution.root.to.account_id;
+            let receipt = tx.message.execution.root.to.actor().account_id;
             assert_eq!(
                 tx.message
                     .admission_evidence

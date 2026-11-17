@@ -157,7 +157,7 @@ fn a_public_root_publishes_its_live_async_message_with_the_recovery_note_its_pro
         publication,
         Publication::Clear(MessageBody {
             from: sender(),
-            to: payout(),
+            to: payout().into(),
             message: borsh::to_vec(&credit(7)).unwrap(),
         })
     );
@@ -189,8 +189,8 @@ fn the_recipient_recovers_and_receives_an_async_message_at_an_alias_it_never_rec
         panic!("the async message to a private alias is published clear");
     };
 
-    let note = &page.recovery_bindings[&body.to.account_id];
-    let recovered = Recipient::recover(body.to.account_id, note, &keys.d, &keys.z).unwrap();
+    let note = &page.recovery_bindings[&body.to.actor().account_id];
+    let recovered = Recipient::recover(body.to.actor().account_id, note, &keys.d, &keys.z).unwrap();
     assert_eq!(recovered, bob());
     let commitment = Commitment::for_message(&body);
     let membership_proof = state.get_proof_for_position(position).unwrap();
@@ -317,7 +317,7 @@ fn a_durable_async_message_to_an_unbound_address_is_charged_and_publishes_nothin
             panic!("an async message to {to:?} must not publish");
         };
         assert!(
-            matches!(error, LeeError::UnboundAsyncDestination { actor } if actor == to),
+            matches!(error, LeeError::UnboundAsyncDestination { actor } if actor == to.into()),
             "{error:?}"
         );
         assert!(error.is_chargeable());
@@ -383,7 +383,7 @@ fn a_private_sender_pays_a_bound_alias_in_clear_and_the_alias_holder_receives_it
         body,
         MessageBody {
             from: Actor::native_balance(alice()),
-            to: Actor::native_balance(bob().address()),
+            to: Actor::native_balance(bob().address()).into(),
             message: borsh::to_vec(&NativeMessage::Credit(PAID)).unwrap(),
         }
     );
@@ -396,7 +396,8 @@ fn a_private_sender_pays_a_bound_alias_in_clear_and_the_alias_holder_receives_it
         Ok(FEE)
     );
 
-    let recovered = Recipient::recover(body.to.account_id, &note, &keys.d, &keys.z).unwrap();
+    let recovered =
+        Recipient::recover(body.to.actor().account_id, &note, &keys.d, &keys.z).unwrap();
     assert_eq!(recovered, bob());
     let membership_proof = state.get_proof_for_position(position).unwrap();
     let proven = execute_and_prove(
@@ -454,7 +455,7 @@ fn a_clear_credit_to_an_unbound_alias_reverts_its_transaction_to_the_fee_fallbac
         charge.revert,
         Some(
             LeeError::UnboundAsyncDestination {
-                actor: Actor::native_balance(bob().address()),
+                actor: Actor::native_balance(bob().address()).into(),
             }
             .to_string()
         )
@@ -514,7 +515,12 @@ fn a_proofs_public_root_publishing_to_an_unbound_address_is_charged_the_cycles_i
     assert!(bound_charge.cycles > 0 && bound_charge.cycles < budget);
     assert_eq!(
         charge.revert,
-        Some(LeeError::UnboundAsyncDestination { actor: payout() }.to_string())
+        Some(
+            LeeError::UnboundAsyncDestination {
+                actor: payout().into()
+            }
+            .to_string()
+        )
     );
     assert_eq!(charge.cycles, bound_charge.cycles);
     assert!(!diff.public_diff().contains_key(&sender().account_id));

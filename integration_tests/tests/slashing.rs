@@ -65,7 +65,7 @@ fn slash_approvals_in(block: &Block) -> Option<Vec<sequencer_stake_core::SlashAp
             return None;
         };
         let lee::RootCall { to, message } = &public.message().execution.root;
-        if to.program_account_id != programs::sequencer_stake_account_id() {
+        if to.actor().program_account_id != programs::sequencer_stake_account_id() {
             return None;
         }
         match borsh::from_slice(message) {

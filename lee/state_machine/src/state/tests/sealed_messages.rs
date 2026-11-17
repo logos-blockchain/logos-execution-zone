@@ -129,7 +129,7 @@ fn a_private_async_message_to_a_private_account_is_sealed_and_received_by_its_re
             .is_none()
     );
     let (body, opened, rho) = sealed.open(keys.npk(), &keys.d, &keys.z).unwrap();
-    assert_eq!((body.to, opened), (destination(), recipient()));
+    assert_eq!((body.to, opened), (destination().into(), recipient()));
 
     let membership_proof = state.get_proof_for_position(position).unwrap();
     let receive = |rho| {
@@ -218,7 +218,7 @@ fn a_proof_asks_once_how_to_publish_its_durable_async_messages_even_when_it_send
     let received = Script::write(b"received".to_vec());
     let sent = MessageBody {
         from: sender(),
-        to: destination(),
+        to: destination().into(),
         message: borsh::to_vec(&received).unwrap(),
     };
     for given_cross_messages in [false, true] {

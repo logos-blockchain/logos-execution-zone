@@ -576,7 +576,7 @@ mod tests {
         Delivery {
             envelope: MessageEnvelope {
                 from,
-                to,
+                to: to.into(),
                 message: vec![message],
             },
             inherited_authorizations: vec![],
@@ -605,7 +605,7 @@ mod tests {
                         promotions: vec![],
                     },
                     root: RootCall {
-                        to: actor(5, 8),
+                        to: actor(5, 8).into(),
                         message: vec![9],
                     },
                     fee,
@@ -631,7 +631,7 @@ mod tests {
         let repeated = delivery(actor(3, 53), actor(5, 6), 7);
         let clear = Publication::Clear(MessageEnvelope {
             from: actor(44, 94),
-            to: actor(45, 46),
+            to: actor(45, 46).into(),
             message: vec![47],
         });
         PrivacyPreservingTransaction {
@@ -670,7 +670,7 @@ mod tests {
                 ],
                 recovery_bindings: vec![],
                 public_root: Some(RootCall {
-                    to: actor(27, 28),
+                    to: actor(27, 28).into(),
                     message: vec![29; 2],
                 }),
                 nonces: vec![],

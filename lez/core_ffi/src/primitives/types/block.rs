@@ -19,10 +19,12 @@ impl From<Block> for FfiBlock {
     fn from(value: Block) -> Self {
         let Block {
             header,
-            body: BlockBody {
-                transactions,
-                receipts,
-            },
+            body:
+                BlockBody {
+                    transactions,
+                    receipts,
+                    outbound: _,
+                },
             bedrock_status,
         } = value;
 

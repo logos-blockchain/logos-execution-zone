@@ -160,6 +160,7 @@ fn empty_genesis() -> Block {
         body: BlockBody {
             transactions: vec![],
             receipts: Vec::new(),
+            outbound: Vec::new(),
         },
         bedrock_status: BedrockStatus::Pending,
     }

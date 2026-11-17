@@ -498,7 +498,7 @@ mod stall_reason_tests {
             block_hash: HashType([0xAB_u8; 32]),
             src_zone: hex::encode([2_u8; 32]),
             src_block_id: 5,
-            src_tx_index: 1,
+            src_outbound_index: 1,
             verdict: "re-derivation mismatch".to_owned(),
         };
         store
@@ -526,7 +526,7 @@ fn settled_test_block(
         transaction::{FeePayee, LeeTransaction, clock_invocation, fee_invocation},
     };
     let timestamp = id.saturating_mul(100);
-    let (summary, payout, receipts) =
+    let (summary, payout, receipts, outbound) =
         chain_state::apply::derive_block_summary(state, &txs, id, timestamp)
             .expect("test transactions settle");
     let producer = producer_account_for_testing();
@@ -539,6 +539,7 @@ fn settled_test_block(
     transactions.push(LeeTransaction::Public(clock_invocation(id, timestamp)));
     let block = HashableBlockData {
         receipts,
+        outbound,
         block_id: id,
         prev_block_hash: prev_hash.unwrap_or_default(),
         timestamp,
@@ -1387,6 +1388,7 @@ mod accept_tests {
     // acceptance checks (id/link/hash), which run before any state application.
     fn valid_hash_block(block_id: u64, prev: HashType) -> common::block::Block {
         HashableBlockData {
+            outbound: Vec::new(),
             block_id,
             prev_block_hash: prev,
             timestamp: 0,

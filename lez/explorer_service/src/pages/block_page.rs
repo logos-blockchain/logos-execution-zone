@@ -62,6 +62,7 @@ pub fn BlockPage() -> impl IntoView {
                                     body: BlockBody {
                                         transactions,
                                         receipts,
+                                        outbound: _,
                                     },
                                     bedrock_status,
                                 } = blk;

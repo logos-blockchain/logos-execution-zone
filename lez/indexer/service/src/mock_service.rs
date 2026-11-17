@@ -538,7 +538,7 @@ fn mock_public_tx(
                 promotions: vec![],
             },
             root: RootCall {
-                to,
+                to: to.into(),
                 message: vec![1, 2, 3, 4],
             },
             // Every other public transaction declares a fee; the rest are exempt.
@@ -580,7 +580,7 @@ fn mock_privacy_preserving_tx(
             async_messages: vec![],
             recovery_bindings: vec![],
             public_root: Some(RootCall {
-                to,
+                to: to.into(),
                 message: vec![0xdd, 0xee],
             }),
             nonces: vec![],
@@ -649,6 +649,7 @@ fn build_mock_block(
             timestamp,
         },
         body: BlockBody {
+            outbound: Vec::new(),
             transactions: block_transactions,
             receipts,
         },

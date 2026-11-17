@@ -283,7 +283,10 @@ impl Case {
         };
         WholeExecution::new(
             public_context,
-            TransactionEntry::Sync(RootCall { to: root, message }),
+            TransactionEntry::Sync(RootCall {
+                to: root.into(),
+                message,
+            }),
             Vec::new(),
             None,
             &[],

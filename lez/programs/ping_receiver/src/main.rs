@@ -1,6 +1,6 @@
 use cross_zone_marker_core::Delivery;
 use lee_core::{
-    account::{AccountId, Actor},
+    account::{AccountId, Actor, Target},
     program::{ReceiveInput, Response, SyncMessage, write_once},
 };
 use ping_core::{
@@ -64,7 +64,10 @@ fn handle_message(input: &ReceiveInput) -> Response {
                     input,
                     &ReceiverMessage::RenounceAuthority {
                         authority: input.receiver.account_id,
-                        via: input.from.map(|from| from.program_account_id),
+                        via: input
+                            .from
+                            .and_then(Target::local)
+                            .map(|from| from.program_account_id),
                     },
                 );
             }
@@ -89,7 +92,10 @@ fn handle_message(input: &ReceiveInput) -> Response {
                     input,
                     &ReceiverMessage::UpdateSources {
                         authority: input.receiver.account_id,
-                        via: input.from.map(|from| from.program_account_id),
+                        via: input
+                            .from
+                            .and_then(Target::local)
+                            .map(|from| from.program_account_id),
                         sources,
                     },
                 );
@@ -141,6 +147,7 @@ fn deliver(input: &ReceiveInput, delivery: Delivery) -> Response {
             deliverer: input
                 .from
                 .expect("a delivery has a sender")
+                .actor()
                 .program_account_id,
             src_zone,
             src_account_id,
@@ -244,7 +251,7 @@ mod tests {
     ) -> Transition {
         let input = ReceiveInput {
             receiver,
-            from: origin.map(|sender| Actor::new(sender, sender)),
+            from: origin.map(|sender| Actor::new(sender, sender).into()),
             is_authorized,
             pre_state: ActorState::from(pre),
             message: borsh::to_vec(message).unwrap(),
@@ -291,7 +298,7 @@ mod tests {
             },
         ] = <[SyncMessage; 1]>::try_from(entry.response.sync_messages)
             .expect("one forwarded change");
-        assert_eq!(to, config_actor());
+        assert_eq!(to, config_actor().into());
         at_config(
             Some(RECEIVER),
             &config(),

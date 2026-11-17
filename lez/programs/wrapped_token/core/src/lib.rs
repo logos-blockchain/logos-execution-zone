@@ -4,7 +4,7 @@
 //! config account.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-pub use cross_zone_emission_core::ZoneId;
+pub use lee_core::account::ZoneId;
 use lee_core::{
     account::{AccountId, Balance},
     program::PdaSeed,

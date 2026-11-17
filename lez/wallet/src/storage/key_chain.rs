@@ -1232,7 +1232,7 @@ pub(crate) mod tests {
         let seal = |recipient: Recipient| {
             let body = MessageBody {
                 from: Actor::new(AccountId::new([5; 32]), AccountId::new([6; 32])),
-                to: Actor::new(recipient.address(), AccountId::new([7; 32])),
+                to: Actor::new(recipient.address(), AccountId::new([7; 32])).into(),
                 message: vec![8; 2],
             };
             RecipientEncryption {

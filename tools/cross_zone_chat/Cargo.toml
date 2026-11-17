@@ -13,7 +13,6 @@ test_fixtures.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }
 programs.workspace = true
 ping_core.workspace = true
-cross_zone_outbox_core.workspace = true
 cross_zone_inbox_core.workspace = true
 cross_zone.workspace = true
 lee.workspace = true
@@ -24,6 +23,5 @@ serde = { workspace = true, features = ["derive"] }
 axum.workspace = true
 tracing.workspace = true
 logging.workspace = true
-rand.workspace = true
 lee_core.workspace = true
 testnet_initial_state.workspace = true

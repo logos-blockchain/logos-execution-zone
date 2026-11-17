@@ -198,12 +198,12 @@ mod tests {
     fn for_message_matches_pinned_value() {
         let body = MessageBody {
             from: Actor::new(AccountId::new([0; 32]), AccountId::new([1; 32])),
-            to: Actor::new(AccountId::new([2; 32]), AccountId::new([3; 32])),
+            to: Actor::new(AccountId::new([2; 32]), AccountId::new([3; 32])).into(),
             message: vec![4; 2],
         };
         let expected_commitment = Commitment([
-            248, 122, 210, 52, 126, 63, 67, 22, 28, 199, 160, 42, 148, 4, 125, 247, 103, 212, 163,
-            190, 161, 40, 29, 242, 185, 161, 201, 58, 132, 138, 137, 73,
+            84, 123, 69, 95, 103, 230, 78, 87, 221, 168, 65, 193, 148, 39, 69, 75, 156, 23, 91, 17,
+            154, 41, 210, 146, 109, 48, 165, 38, 150, 18, 130, 45,
         ]);
         assert_eq!(Commitment::for_message(&body), expected_commitment);
     }
@@ -212,12 +212,12 @@ mod tests {
     fn for_sealed_message_matches_pinned_value() {
         let body = MessageBody {
             from: Actor::new(AccountId::new([0; 32]), AccountId::new([1; 32])),
-            to: Actor::new(AccountId::new([2; 32]), AccountId::new([3; 32])),
+            to: Actor::new(AccountId::new([2; 32]), AccountId::new([3; 32])).into(),
             message: vec![4; 2],
         };
         let expected_commitment = Commitment([
-            221, 93, 126, 70, 3, 114, 233, 26, 112, 113, 77, 28, 215, 195, 86, 118, 92, 171, 13,
-            197, 95, 183, 45, 111, 97, 74, 95, 6, 108, 250, 76, 70,
+            34, 146, 152, 147, 43, 65, 44, 238, 125, 215, 56, 206, 111, 230, 86, 4, 194, 28, 38,
+            252, 12, 191, 11, 81, 50, 162, 126, 232, 169, 212, 45, 121,
         ]);
         assert_eq!(
             Commitment::for_sealed_message(&body, &[5; 32]),

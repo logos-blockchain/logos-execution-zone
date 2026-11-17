@@ -2,7 +2,7 @@
 //! between them. Each crate still ships its own binary, and so its own image id.
 
 use lee_core::{
-    account::{Actor, ActorState},
+    account::{Actor, ActorState, Target},
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID, custody_transfer},
     program::{ReceiveInput, Response, StateReply, read_input_frame},
 };
@@ -20,7 +20,7 @@ pub fn scripted(input: &ReceiveInput, script: Script) -> Response {
     }
     if let Some(program) = script.require_sender_program {
         assert_eq!(
-            input.from.map(|from| from.program_account_id),
+            input.from.map(|from| from.actor().program_account_id),
             Some(program),
             "scripted: unexpected sender program"
         );
@@ -38,7 +38,7 @@ pub fn forges_echo() -> ! {
             ..input
         },
         ForgeField::Sender => ReceiveInput {
-            from: Some(input.receiver),
+            from: Some(input.receiver.into()),
             ..input
         },
         ForgeField::IsAuthorized => ReceiveInput {
@@ -64,6 +64,7 @@ pub fn live_payout(input: &ReceiveInput) -> Response {
     let custody = input.receiver.account_id;
     if input
         .from
+        .and_then(Target::local)
         .is_some_and(|from| from.program_account_id == NATIVE_TOKEN_PROGRAM_ID)
     {
         let reply: StateReply = borsh::from_slice(&input.message).expect("a native state reply");

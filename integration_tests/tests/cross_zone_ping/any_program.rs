@@ -3,15 +3,9 @@
     reason = "top-level test functions are conventional for integration tests"
 )]
 
-//! End-to-end proof that a program which is not a builtin can emit across
-//! zones: `zone_chat` is deployed at runtime on zone A, zone B registers it as
-//! an emitter, and a top-level `Post` on A is delivered on B.
-//!
-//! One deployment and one finality wait, with the builtin `ping_receiver`
-//! receiving: the guest's own receiving half and the registry's negative half
-//! are covered faster elsewhere. It needs minutes of healthy finality, so a
-//! stalling node fails it; the error reports zone B's dead letters to tell that
-//! apart from a cross-zone defect.
+//! End-to-end proof that a program which is not a builtin can emit across zones: `zone_chat` is
+//! deployed at runtime on zone A, zone B registers it as an emitter, and a top-level `Post` on A is
+//! delivered on B.
 
 use std::{collections::BTreeMap, time::Duration};
 
@@ -34,17 +28,14 @@ use test_fixtures::{
     MultiZoneTestContextBuilder, TestContext, ZoneTestContextBuilder,
     config::{MultiNodeTestContextConfig, source_only_cross_zone},
 };
-use test_guest_core::chat::{ChatMessage, CrossZoneEmission};
+use test_guest_core::chat::ChatMessage;
 use testnet_initial_state::initial_pub_accounts_private_keys;
 use tokio::test;
 use wallet::{WalletCore, program_facades::program_loader::ProgramLoader};
 
-/// 600s like the other finality-bound cross-zone suites, plus a deployment.
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(600);
 const CHAT_PAYLOAD: &[u8] = b"hello-any-program";
 
-/// A deterministic deploy-header seed, so zone B's config can name zone A's
-/// emitter before either zone exists; segment seeds offset its last byte.
 const fn header_seed(tag: u8) -> [u8; 32] {
     let mut seed = [tag; 32];
     seed[31] = 0;
@@ -59,7 +50,6 @@ fn account_of(seed: [u8; 32]) -> AccountId {
     AccountId::from(&PublicKey::new_from_private_key(&key_of(seed)))
 }
 
-/// Imports `seed`'s key so the loader can sign for the account.
 fn imported_account(wallet: &mut WalletCore<SequencerClient>, seed: [u8; 32]) -> AccountId {
     let account_id = account_of(seed);
     wallet
@@ -69,8 +59,6 @@ fn imported_account(wallet: &mut WalletCore<SequencerClient>, seed: [u8; 32]) ->
     account_id
 }
 
-/// Deploys the chat guest under `header_seed`'s account, fees paid by the
-/// zone's funded account.
 async fn deploy_chat(
     ctx: &mut TestContext,
     channel: ChannelId,
@@ -79,7 +67,6 @@ async fn deploy_chat(
     let payer = initial_pub_accounts_private_keys().swap_remove(0);
     let payer_id = payer.account_id;
     let program = test_programs::zone_chat();
-    // Segments hold `user_elf` alone, the kernel is re-attached on read.
     let segment_count = program
         .user_elf()
         .expect("a test program decodes")
@@ -110,8 +97,6 @@ async fn deploy_chat(
         .await
 }
 
-/// A top-level `Post` to `ping_receiver` on `target_zone`. Declaring it is the
-/// whole send: the watcher reads the emission off this instruction.
 fn post_tx(
     emitter: AccountId,
     target_zone: [u8; 32],
@@ -125,10 +110,10 @@ fn post_tx(
         root,
         vec![root],
         BTreeMap::from([(payer.account_id, nonce)]),
-        ChatMessage::post(CrossZoneEmission {
+        ChatMessage::Post {
             target_zone,
-            target_account_id: receiver,
-            target_accounts: vec![
+            target: Actor::new(receiver, receiver),
+            accounts: vec![
                 Actor::new(receiver_config_account_id(receiver), receiver),
                 Actor::new(ping_record_pda(receiver), receiver),
             ],
@@ -136,8 +121,7 @@ fn post_tx(
                 payload: text.to_vec(),
             })
             .expect("a Record payload serializes"),
-            ordinal: 0,
-        }),
+        },
         common::test_utils::test_fee_declaration(payer.account_id),
     )
     .expect("build Post message");
@@ -145,7 +129,6 @@ fn post_tx(
     LeeTransaction::Public(PublicTransaction::new(message, witness))
 }
 
-/// `account`'s next nonce on `client`'s zone.
 async fn account_nonce(
     client: &SequencerClient,
     account: AccountId,
@@ -153,7 +136,6 @@ async fn account_nonce(
     Ok(client.get_accounts_nonces(vec![account]).await?[0])
 }
 
-/// Submits `tx` and waits until the sequencer reports it in a block.
 async fn submit_and_wait(client: &SequencerClient, what: &str, tx: LeeTransaction) -> Result<()> {
     let tx_hash = client
         .send_transaction(tx)
@@ -165,7 +147,6 @@ async fn submit_and_wait(client: &SequencerClient, what: &str, tx: LeeTransactio
     .await
 }
 
-/// Polls zone B until the builtin receiver's record holds the posted text.
 async fn wait_for_delivery(client: &SequencerClient) -> Result<()> {
     let receiver = programs::ping_receiver_account_id();
     let record = ping_record_pda(receiver);
@@ -179,8 +160,6 @@ async fn wait_for_delivery(client: &SequencerClient) -> Result<()> {
         }
     };
     if tokio::time::timeout(DELIVERY_TIMEOUT, wait).await.is_err() {
-        // A dead letter means the receiver refused it; none means nothing was
-        // ever recognized.
         let dead_letters = client.get_cross_zone_dead_letters().await?;
         anyhow::bail!(
             "zone B did not record the registered emitter's message in time; dead letters retired {} retained {}",
@@ -202,8 +181,6 @@ async fn a_registered_program_sends_and_receives_across_zones() -> Result<()> {
 
     let chat_a = account_of(header_seed(0xA1));
 
-    // The route seeds (zone_a, chat_a) into the receiver's sources at genesis,
-    // exactly as it would for a builtin emitter.
     let cross_zone_b = CrossZoneConfig {
         lock_target_zones: Vec::new(),
         peers: vec![CrossZonePeer {
@@ -215,10 +192,6 @@ async fn a_registered_program_sends_and_receives_across_zones() -> Result<()> {
             }],
             min_committee_size: 0,
             genesis_hash: None,
-            emitters: vec![cross_zone::RegisteredEmitter {
-                account_id: chat_a,
-                until_src_block: None,
-            }],
         }],
         source_authority: None,
         source_governance: None,
@@ -248,7 +221,6 @@ async fn a_registered_program_sends_and_receives_across_zones() -> Result<()> {
         .build()
         .await?;
 
-    // Host the emitter: one runtime deployment through the program loader.
     assert_eq!(
         deploy_chat(&mut ctx, channel_a, header_seed(0xA1)).await?,
         chat_a
@@ -272,46 +244,4 @@ async fn a_registered_program_sends_and_receives_across_zones() -> Result<()> {
 
     wait_for_delivery(seq_b).await?;
     Ok(())
-}
-
-/// The bytes `post_tx` builds must be what `extract_emission` recognizes, from
-/// the real transaction rather than hand-written instruction bytes.
-#[tokio::test]
-async fn the_real_post_transaction_is_recognized_as_an_emission() {
-    let chat_id = account_of(header_seed(0xA1));
-    let payer = initial_pub_accounts_private_keys().swap_remove(0);
-    let zone_b = [7_u8; 32];
-
-    let LeeTransaction::Public(tx) = post_tx(chat_id, zone_b, CHAT_PAYLOAD, &payer, 0_u128.into())
-    else {
-        panic!("post_tx builds a public transaction");
-    };
-
-    let registered = std::collections::BTreeMap::from([(
-        chat_id,
-        cross_zone::RegisteredEmitter {
-            account_id: chat_id,
-            until_src_block: None,
-        },
-    )]);
-    let emission = cross_zone::extract_emission(&tx, &registered, 0)
-        .expect("a registered emitter's Post is an emission");
-    assert_eq!(emission.source, chat_id);
-    assert_eq!(emission.target_zone, zone_b);
-    assert_eq!(
-        emission.target_account_id,
-        programs::ping_receiver_account_id()
-    );
-    assert_eq!(
-        borsh::from_slice::<ReceiverMessage>(&emission.payload).expect("the payload decodes"),
-        ReceiverMessage::Record {
-            payload: CHAT_PAYLOAD.to_vec()
-        },
-        "the emission carries the instruction the builtin receiver expects"
-    );
-
-    assert!(
-        cross_zone::extract_emission(&tx, &std::collections::BTreeMap::new(), 0).is_none(),
-        "the same transaction is nothing to a zone that did not register the emitter"
-    );
 }

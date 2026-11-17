@@ -259,6 +259,8 @@ impl V03State {
             events,
             published,
             recovery_bindings,
+            // Outbound messages are a block-level effect, not state.
+            outbound: _,
         } = diff.into_state_diff();
         // A diff validated against an earlier or another branch's state must still spend each
         // nullifier once, under a root this state knows.
@@ -274,7 +276,13 @@ impl V03State {
         self.check_recovery_bindings_are_new(&recovery_bindings)?;
         for publication in &published {
             if let Publication::Clear(body) = publication {
-                let address = body.to.account_id;
+                let address = body
+                    .to
+                    .local()
+                    .ok_or_else(|| {
+                        LeeError::InvalidInput("A clear publication addresses a remote zone".into())
+                    })?
+                    .account_id;
                 ensure!(
                     self.bound_note(&recovery_bindings, address).is_some(),
                     LeeError::InvalidInput(format!(
@@ -389,7 +397,12 @@ impl V03State {
         let recovery_bindings = publications
             .iter()
             .filter_map(|(_, publication)| match publication {
-                Publication::Clear(body) => Some(body.to.account_id),
+                Publication::Clear(body) => Some(
+                    body.to
+                        .local()
+                        .expect("a stored clear publication addresses a local account")
+                        .account_id,
+                ),
                 Publication::Sealed(_) => None,
             })
             .map(|address| {

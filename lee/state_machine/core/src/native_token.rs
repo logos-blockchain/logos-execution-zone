@@ -118,7 +118,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::program::AsyncMessage;
+    use crate::{account::Target, program::AsyncMessage};
 
     fn native(tag: u8) -> Actor {
         Actor::native_balance(AccountId::new([tag; 32]))
@@ -140,7 +140,7 @@ mod tests {
         from: Option<Actor>,
     ) -> Result<Transition, TransferError> {
         handle_message(&ReceiveInput {
-            from,
+            from: from.map(Target::Local),
             ..input(2, false, pre, &Message::Credit(amount))
         })
     }
@@ -203,7 +203,7 @@ mod tests {
     #[test]
     fn a_public_origin_debits_an_account_only_with_its_authorization() {
         let from_public = |authorized| ReceiveInput {
-            from: Some(native(3)),
+            from: Some(native(3).into()),
             ..input(1, authorized, 100, &transfer(30))
         };
 
@@ -270,7 +270,7 @@ mod tests {
         assert_eq!(
             custody_transfer(AccountId::new([1; 32]), seed, AccountId::new([2; 32]), 7),
             SyncMessage {
-                to: native(1),
+                to: native(1).into(),
                 message: borsh::to_vec(&transfer(7)).unwrap(),
                 pda_seeds: BTreeSet::from([seed]),
             }
@@ -282,7 +282,7 @@ mod tests {
         let reader = Actor::new(AccountId::new([9; 32]), AccountId::new([8; 32]));
 
         let transition = handle_message(&ReceiveInput {
-            from: Some(reader),
+            from: Some(reader.into()),
             ..input(1, false, 100, &Message::ReadState)
         })
         .unwrap();

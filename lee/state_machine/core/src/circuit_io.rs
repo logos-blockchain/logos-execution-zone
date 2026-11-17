@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, InvalidMembershipProof,
     MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey,
-    account::{Account, AccountId, Actor, Balance, Nonce},
+    account::{Account, AccountId, Balance, Nonce, Target},
     compute_digest_for_path,
     encryption::{EncryptedNote, ViewingPublicKey},
     execution_state::{Boundary, PredictedCrossMessages, PublicExecutionContext, TransactionEntry},
@@ -126,7 +126,7 @@ pub struct MessageWitness {
 /// Struct corresponding to a top-level message initiating a transaction.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct RootCall {
-    pub to: Actor,
+    pub to: Target,
     pub message: MessageData,
 }
 
@@ -206,9 +206,10 @@ impl ProvingInput {
     #[must_use]
     pub fn public_root(&self) -> Option<RootCall> {
         match &self.root {
-            TransactionEntry::Sync(call) => self
-                .public_context
-                .runs_publicly(call.to)
+            TransactionEntry::Sync(call) => call
+                .to
+                .local()
+                .is_some_and(|to| self.public_context.runs_publicly(to))
                 .then(|| call.clone()),
             TransactionEntry::Async(_) => None,
         }
@@ -222,7 +223,11 @@ impl MessageWitness {
         &self,
         witnesses: &[PrivateWitness],
     ) -> Result<(Nullifier, CommitmentSetDigest), InvalidMessageEvidence> {
-        let to = self.body.to;
+        let to = self
+            .body
+            .to
+            .local()
+            .ok_or(InvalidMessageEvidence::UnwitnessedDestination)?;
         let commitment = self.rho.as_ref().map_or_else(
             || Commitment::for_message(&self.body),
             |rho| Commitment::for_sealed_message(&self.body, rho),
@@ -580,7 +585,7 @@ mod tests {
     fn body(to: Actor) -> MessageBody {
         MessageBody {
             from: Actor::new(AccountId::new([9; 32]), AccountId::new([10; 32])),
-            to,
+            to: to.into(),
             message: b"m".to_vec(),
         }
     }
@@ -630,7 +635,7 @@ mod tests {
                     BoundaryStep::PrivateToPublic(Delivery {
                         envelope: MessageEnvelope {
                             from: private,
-                            to: public,
+                            to: public.into(),
                             message: vec![6],
                         },
                         inherited_authorizations: BTreeSet::from([AccountId::new([7; 32])]),
@@ -640,7 +645,7 @@ mod tests {
                     BoundaryStep::PublicToPrivate(Delivery {
                         envelope: MessageEnvelope {
                             from: public,
-                            to: private,
+                            to: private.into(),
                             message: vec![9],
                         },
                         inherited_authorizations: BTreeSet::new(),
@@ -653,7 +658,7 @@ mod tests {
                 async_messages: vec![
                     Publication::Clear(MessageEnvelope {
                         from: private,
-                        to: Actor::new(AccountId::new([27; 32]), AccountId::new([28; 32])),
+                        to: Actor::new(AccountId::new([27; 32]), AccountId::new([28; 32])).into(),
                         message: vec![29],
                     }),
                     Publication::Sealed(SealedMessage {
@@ -672,7 +677,7 @@ mod tests {
                     },
                 }],
                 public_root: Some(RootCall {
-                    to: public,
+                    to: public.into(),
                     message: vec![16; 2],
                 }),
                 private_actions: vec![PrivateAction {
@@ -700,7 +705,7 @@ mod tests {
         };
 
         let expected: Vec<u8> = [
-            &[244, 3, 0, 0][..], // frame length: the 1012 bytes below
+            &[248, 3, 0, 0][..], // frame length: the 1016 bytes below
             &[1, 0, 0, 0],       // public_context.actors: one actor
             &[0; 32],
             &[1; 32],
@@ -712,7 +717,8 @@ mod tests {
             &[0],          // BoundaryStep::PrivateToPublic
             &[2; 32],      // from
             &[3; 32],
-            &[0; 32], // to
+            &[0], // to: the local variant
+            &[0; 32],
             &[1; 32],
             &[1, 0, 0, 0], // message
             &[6],
@@ -724,7 +730,8 @@ mod tests {
             &[1],     // BoundaryStep::PublicToPrivate
             &[0; 32], // from
             &[1; 32],
-            &[2; 32], // to
+            &[0], // to: the local variant
+            &[2; 32],
             &[3; 32],
             &[1, 0, 0, 0], // message
             &[9],
@@ -737,7 +744,8 @@ mod tests {
             &[0],          // Publication::Clear
             &[2; 32],      // from
             &[3; 32],
-            &[27; 32], // to
+            &[0], // to: Target::Local
+            &[27; 32],
             &[28; 32],
             &[1, 0, 0, 0], // message
             &[29],
@@ -753,8 +761,9 @@ mod tests {
             &[14; 3],
             &[2, 0, 0, 0], // note.epk
             &[15; 2],
-            &[1],     // public_root: Some
-            &[0; 32], // to
+            &[1], // public_root: Some
+            &[0], // to: the local variant
+            &[0; 32],
             &[1; 32],
             &[2, 0, 0, 0], // message
             &[16; 2],
@@ -965,9 +974,9 @@ mod tests {
             private.program_account_id,
         );
         let public_context = PublicExecutionContext::new(vec![public], []);
-        let call = |to| {
+        let call = |to: Actor| {
             TransactionEntry::Sync(RootCall {
-                to,
+                to: to.into(),
                 message: b"m".to_vec(),
             })
         };
@@ -975,7 +984,7 @@ mod tests {
         assert_eq!(
             proving(call(public), public_context.clone()).public_root(),
             Some(RootCall {
-                to: public,
+                to: public.into(),
                 message: b"m".to_vec(),
             })
         );

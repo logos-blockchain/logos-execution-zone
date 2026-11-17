@@ -534,7 +534,7 @@ fn prove_init_with_commitment_root(
         ProvingInput {
             claims: Vec::new(),
             root: TransactionEntry::Sync(RootCall {
-                to: sender,
+                to: sender.into(),
                 message: Program::serialize_message(native_token::Message::Transfer {
                     to: recipient_account_id,
                     amount: 1,

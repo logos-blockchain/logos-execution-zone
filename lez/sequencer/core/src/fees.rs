@@ -167,9 +167,18 @@ mod tests {
         let mut scratch = state.clone();
         let opening = opening_fee_state(state);
         let mut summary = BlockFeeSummary::default();
-        chain_state::apply::settle_transaction(tx, &mut scratch, &opening, 2, 200, 0, &mut summary)
-            .map(drop)
-            .map_err(|err| err.to_string())
+        chain_state::apply::settle_transaction(
+            tx,
+            &mut scratch,
+            &opening,
+            None,
+            2,
+            200,
+            0,
+            &mut summary,
+        )
+        .map(drop)
+        .map_err(|err| err.to_string())
     }
 
     #[test]
@@ -336,7 +345,8 @@ mod tests {
                     BoundaryStep::PrivateToPublic(Delivery {
                         envelope: MessageEnvelope {
                             from: Actor::native_balance(recipient()),
-                            to: Actor::native_balance(system_accounts::fee_inbox_account_id()),
+                            to: Actor::native_balance(system_accounts::fee_inbox_account_id())
+                                .into(),
                             message: borsh::to_vec(&native_token::Message::Credit(reserve))
                                 .expect("serializes"),
                         },

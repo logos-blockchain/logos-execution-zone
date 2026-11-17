@@ -3,29 +3,19 @@
     reason = "top-level test functions are conventional for integration tests"
 )]
 
-//! Cross-zone round trip with the indexer in the loop (Option B). A ping on zone
-//! A is delivered to zone B, and zone B's indexer independently re-derives the
-//! injected dispatch from zone A's finalized blocks before applying it. The
-//! payload landing in the indexer's state proves verification passed; a forgery
-//! would have halted the indexer instead.
+//! Cross-zone round trip with the indexer in the loop (Option B).
 
 use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
-use cross_zone_outbox_core::{outbox_pda, outbox_pda_seed};
 use integration_tests::{
     config::{self, SequencerPartialConfig},
     indexer_client::IndexerClient,
 };
-use lee::{
-    AccountId, Actor, PublicAccountEvidence, PublicTransaction, public_transaction::Message,
-};
+use lee::{AccountId, Actor, PublicTransaction, public_transaction::Message};
 use lee_core::account::Nonce;
-use ping_core::{
-    CrossZoneEmission, ReceiverMessage, SenderMessage, ping_record_pda, receiver_config_account_id,
-    sender_config_account_id,
-};
+use ping_core::{ReceiverMessage, SenderMessage, ping_record_pda, receiver_config_account_id};
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
@@ -41,7 +31,6 @@ const PING_PAYLOAD: &[u8] = b"hello-verified-zone";
 #[test]
 async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
     let partial = SequencerPartialConfig {
-        // Covers the storage price doubling at the devnet's first epoch rotations.
         priority_fee_percent: 150,
         ..SequencerPartialConfig::default()
     };
@@ -61,7 +50,6 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
             }],
             min_committee_size: 0,
             genesis_hash: None,
-            emitters: vec![],
         }],
         lock_target_zones: Vec::new(),
         source_authority: None,
@@ -92,15 +80,12 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
         .build()
         .await?;
 
-    // Zone A: source. Zone B: destination, with the watcher on its sequencer and
-    // the verifier on its indexer.
     let ind_client_b = ctx.indexer_client_zone(channel_b).unwrap();
 
     let seq_client_a = &ctx
         .zone_default_sequencer_component(channel_a)
         .sequencer_client;
 
-    // Submit the ping on zone A, addressed to ping_receiver on zone B.
     let payer = &initial_pub_accounts_private_keys()[0];
     let payer_nonce = seq_client_a
         .get_account(payer.account_id)
@@ -113,8 +98,6 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
         .await
         .context("Failed to submit ping on zone A")?;
 
-    // Wait until zone B's indexer records the delivered payload. The indexer only
-    // applies the dispatch after re-deriving and verifying it.
     let record_id = ping_record_pda(receiver_id);
 
     let delivered = wait_for_indexer_delivery(ind_client_b, record_id, receiver_id).await?;
@@ -131,54 +114,36 @@ fn build_ping_tx(
     payer: &PublicAccountPrivateInitialData,
     payer_nonce: Nonce,
 ) -> LeeTransaction {
-    let outbox_id = programs::cross_zone_outbox_account_id();
-    let ordinal = 0;
-
     let payload = borsh::to_vec(&ReceiverMessage::Record {
         payload: PING_PAYLOAD.to_vec(),
     })
     .expect("serialize ping message");
 
     let sender_id = programs::ping_sender_account_id();
-    let config = Actor::new(sender_config_account_id(sender_id), sender_id);
-    let outbox = Actor::new(
-        outbox_pda(outbox_id, sender_id, &target_zone, ordinal),
-        outbox_id,
-    );
+    let sender = Actor::new(sender_id, sender_id);
     let send = SenderMessage::Send {
-        outbox,
-        emission: CrossZoneEmission {
-            target_zone,
-            target_account_id: receiver_id,
-            target_accounts: vec![
-                Actor::new(receiver_config_account_id(receiver_id), receiver_id),
-                Actor::new(ping_record_pda(receiver_id), receiver_id),
-            ],
-            payload,
-            ordinal,
-        },
+        target_zone,
+        target: Actor::new(receiver_id, receiver_id),
+        accounts: vec![
+            Actor::new(receiver_config_account_id(receiver_id), receiver_id),
+            Actor::new(ping_record_pda(receiver_id), receiver_id),
+        ],
+        payload,
     };
 
-    let message = Message {
-        admission_evidence: vec![PublicAccountEvidence::Pda {
-            program: outbox_id,
-            seed: outbox_pda_seed(sender_id, &target_zone, ordinal),
-        }],
-        ..Message::try_new_with_fees(
-            config,
-            vec![config, outbox],
-            BTreeMap::from([(payer.account_id, payer_nonce)]),
-            send,
-            common::test_utils::test_fee_declaration(payer.account_id),
-        )
-        .expect("build ping message")
-    };
+    let message = Message::try_new_with_fees(
+        sender,
+        vec![sender],
+        BTreeMap::from([(payer.account_id, payer_nonce)]),
+        send,
+        common::test_utils::test_fee_declaration(payer.account_id),
+    )
+    .expect("build ping message");
     let witness_set =
         lee::public_transaction::WitnessSet::for_message(&message, &[&payer.pub_sign_key]);
     LeeTransaction::Public(PublicTransaction::new(message, witness_set))
 }
 
-/// Polls zone B's indexer until the ping record PDA holds a payload.
 async fn wait_for_indexer_delivery(
     indexer: &IndexerClient,
     record_id: AccountId,

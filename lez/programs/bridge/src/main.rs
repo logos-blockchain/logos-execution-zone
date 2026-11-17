@@ -83,7 +83,7 @@ mod tests {
         );
         let input = ReceiveInput {
             receiver,
-            from: origin.map(|sender| Actor::new(sender, sender)),
+            from: origin.map(|sender| Actor::new(sender, sender).into()),
             is_authorized: false,
             pre_state: ActorState::from(pre.to_vec()),
             message: borsh::to_vec(&deposit()).unwrap(),
