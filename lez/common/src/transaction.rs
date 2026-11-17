@@ -73,6 +73,19 @@ impl LeeTransaction {
         }
     }
 
+    /// Whether `account_id` is among the signers. Their signatures are not checked here:
+    /// execution verifies every one.
+    #[must_use]
+    pub fn is_signed_by(&self, account_id: AccountId) -> bool {
+        let signatures_and_public_keys = match self {
+            Self::Public(tx) => tx.witness_set().signatures_and_public_keys(),
+            Self::PrivacyPreserving(tx) => tx.witness_set().signatures_and_public_keys(),
+        };
+        signatures_and_public_keys
+            .iter()
+            .any(|(_, public_key)| AccountId::from(public_key) == account_id)
+    }
+
     #[must_use]
     pub const fn public_call(&self) -> Option<(Actor, &[u8])> {
         let Self::Public(tx) = self else {
@@ -440,26 +453,6 @@ pub fn validate_reward_target(target: AccountId) -> Result<(), String> {
     } else {
         Ok(())
     }
-}
-
-/// The fee reserve: hold `amount` from `payer` in the fee inbox.
-///
-/// Runs the native token program as a fee-settlement invocation authorized by
-/// the payer's fee declaration; the returned message carries only the program,
-/// accounts, and instruction the invocation needs.
-#[must_use]
-pub fn fee_reserve_invocation(payer: AccountId, amount: u128) -> lee::public_transaction::Message {
-    let inbox = Actor::native_balance(system_accounts::fee_inbox_account_id());
-    lee::public_transaction::Message::try_new(
-        Actor::native_balance(payer),
-        vec![Actor::native_balance(payer), inbox],
-        BTreeMap::new(),
-        lee_core::native_token::Message::Transfer {
-            to: inbox.account_id,
-            amount,
-        },
-    )
-    .expect("Fee reserve message should always be constructable")
 }
 
 /// The fee refund: return `amount` from the fee inbox to `payer`.

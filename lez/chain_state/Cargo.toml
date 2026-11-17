@@ -8,6 +8,7 @@ license = { workspace = true }
 workspace = true
 
 [dependencies]
+clock_core.workspace = true
 common.workspace = true
 fee_core.workspace = true
 lee.workspace = true
@@ -36,7 +37,6 @@ prove = ["lee/prove"]
 test-utils = []
 
 [dev-dependencies]
-clock_core.workspace = true
 program_loader_core.workspace = true
 system_upgrader_core.workspace = true
 lee = { workspace = true, features = ["test-utils"] }

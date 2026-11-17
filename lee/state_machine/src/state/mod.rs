@@ -4,7 +4,8 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     BlockId, Commitment, CommitmentPosition, CommitmentSetDigest, DUMMY_COMMITMENT, EncryptedNote,
     MembershipProof, Nullifier, RecoveryBinding, Timestamp,
-    account::{Account, AccountId, ActorState},
+    account::{Account, AccountId, Actor, ActorState, Balance},
+    native_token::{TransferError, encode_balance},
     program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramId, Publication, TransactionEvent},
 };
 use program_loader_core::get_program_via;
@@ -14,7 +15,7 @@ pub use self::genesis::GenesisBuilder;
 use crate::{
     encoding::persistent::{serialize_map, serialize_ordered_map},
     ensure,
-    error::LeeError,
+    error::{InvalidProgramBehaviorError, LeeError},
     merkle_tree::MerkleTree,
     privacy_preserving_transaction::PrivacyPreservingTransaction,
     public_transaction::PublicTransaction,
@@ -328,6 +329,48 @@ impl V03State {
             ValidatedStateDiff::from_privacy_preserving_transaction(tx, self, block_id, timestamp)?;
         self.apply_state_diff(diff)?;
         Ok(())
+    }
+
+    /// Moves `amount` of native balance from `from` to `to` with no execution: the caller is the
+    /// authority. `to` must already exist.
+    pub fn transfer_native(
+        &mut self,
+        from: AccountId,
+        to: AccountId,
+        amount: Balance,
+    ) -> Result<(), LeeError> {
+        ensure!(
+            self.get_account_by_id_ref(to).is_some(),
+            LeeError::InvalidInput(format!("Native transfer recipient {to} is not admitted"))
+        );
+        let failed = InvalidProgramBehaviorError::NativeTransferFailed;
+        let debited = self
+            .native_balance(from)
+            .map_err(failed)?
+            .checked_sub(amount)
+            .ok_or_else(|| failed(TransferError::InsufficientBalance { account_id: from }))?;
+        self.set_actor_state(Actor::native_balance(from), encode_balance(debited));
+        // Read after the debit, so a transfer to itself nets to nothing.
+        let credited = self
+            .native_balance(to)
+            .map_err(failed)?
+            .checked_add(amount)
+            .ok_or_else(|| failed(TransferError::BalanceOverflow { account_id: to }))?;
+        self.set_actor_state(Actor::native_balance(to), encode_balance(credited));
+        Ok(())
+    }
+
+    /// Overwrites one actor's state with no execution: the caller is the authority.
+    pub fn set_actor_state(&mut self, actor: Actor, data: ActorState) {
+        self.get_account_by_id_mut(actor.account_id)
+            .data
+            .set_actor_state(actor.program_account_id, data);
+    }
+
+    fn native_balance(&self, account_id: AccountId) -> Result<Balance, TransferError> {
+        self.get_account_by_id_ref(account_id)
+            .map_or(Ok(0), |account| account.data.native_balance())
+            .map_err(TransferError::from)
     }
 
     fn get_account_by_id_mut(&mut self, account_id: AccountId) -> &mut Account {

@@ -1550,8 +1550,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             0,
             payee,
         ));
-        let clock_tx = clock_invocation(new_block_height, new_block_timestamp);
-        let clock_lee_tx = LeeTransaction::Public(clock_tx.clone());
+        let clock_lee_tx =
+            LeeTransaction::Public(clock_invocation(new_block_height, new_block_timestamp));
         // The slot before the fee takes one `system_upgrader` transaction: the due `Apply`, which
         // its block must carry, else the first approved change. Its room is held from the start,
         // with the fee's and the clock's; the slot itself is filled after the mempool.
@@ -1910,13 +1910,17 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             chain_state::apply::block_payout(&opening, &summary),
             payee,
         );
-        working_state
-            .transition_from_public_transaction(&fee_tx, new_block_height, new_block_timestamp)
-            .context("Fee transaction failed. Aborting block production.")?;
+        chain_state::apply::distribute_fees(
+            &mut working_state,
+            &summary,
+            payee,
+            new_block_height,
+            new_block_timestamp,
+        )
+        .context("Fee transaction failed. Aborting block production.")?;
         valid_transactions.push(LeeTransaction::Public(fee_tx));
 
-        working_state
-            .transition_from_public_transaction(&clock_tx, new_block_height, new_block_timestamp)
+        chain_state::apply::tick_clock(&mut working_state, new_block_height, new_block_timestamp)
             .context("Clock transaction failed. Aborting block production.")?;
         valid_transactions.push(clock_lee_tx);
         sequencer_core_metrics::record_transactions_per_block(valid_transactions.len());

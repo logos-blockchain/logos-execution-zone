@@ -230,17 +230,33 @@ pub fn build_genesis_state(
     ])
     .collect();
 
+    // The closing fee and clock transactions are applied directly, as in every block.
+    let tail_start = genesis_txs.len().saturating_sub(2);
     let events = genesis_txs
         .iter()
         .enumerate()
         .map(|(index, tx)| TxEvents {
             tx_index: index.try_into().expect("genesis tx count fits"),
             tx_hash: tx.hash().into(),
-            events: state
-                .transition_from_public_transaction(tx, GENESIS_BLOCK_ID, 0)
-                .expect("Failed to execute genesis transaction"),
+            events: if index < tail_start {
+                state
+                    .transition_from_public_transaction(tx, GENESIS_BLOCK_ID, 0)
+                    .expect("Failed to execute genesis transaction")
+            } else {
+                Vec::new()
+            },
         })
         .collect();
+    chain_state::apply::distribute_fees(
+        &mut state,
+        &genesis_summary,
+        FeePayee::Present(producer),
+        GENESIS_BLOCK_ID,
+        0,
+    )
+    .expect("Failed to distribute the genesis fees");
+    chain_state::apply::tick_clock(&mut state, GENESIS_BLOCK_ID, 0)
+        .expect("Failed to tick the genesis clock");
     let genesis_txs = genesis_txs
         .into_iter()
         .map(LeeTransaction::Public)
