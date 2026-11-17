@@ -2270,7 +2270,7 @@ mod tests {
     }
 
     #[test]
-    fn a_held_misplaced_block_on_the_final_tier_is_still_next() {
+    fn a_misplaced_block_on_the_settled_tip_is_punishable() {
         let mut chain = ChainState::new(claimed_initial_state(), ProofStore::new(usize::MAX));
         let blocks = chain_of(1);
         finalize_all(&mut chain, &blocks);
@@ -2284,7 +2284,7 @@ mod tests {
                 .verdict,
             Verdict::Dropped {
                 error: BlockIngestError::UnexpectedBlockId { .. },
-                ..
+                punishable: true,
             }
         ));
 
