@@ -21,17 +21,18 @@ const SKIP_WINDOW: u32 = 10;
 struct PlainFixture {
     initial: V03State,
     genesis: Block,
-    plain_x: Block,
-    y_on_genesis: Block,
+    public_candidate: Block,
+    skip_candidate: Block,
     on_genesis: V03State,
 }
 
 struct Fixture {
     plain: PlainFixture,
-    x: Block,
+    private_candidate: Block,
     proof: Proof,
-    y_on_x: Block,
-    on_x: V03State,
+    // Confirms the private candidate when published by another signer.
+    confirming_successor: Block,
+    after_private_candidate: V03State,
 }
 
 impl std::ops::Deref for Fixture {
@@ -64,18 +65,27 @@ impl PlainFixture {
         ChainState::new(initial, proofs)
     }
 
-    fn on_y(&self) -> V03State {
-        let mut on_y = self.on_genesis.clone();
-        apply_block(Some(&tip_of(&self.genesis)), &self.y_on_genesis, &mut on_y)
-            .expect("y applies");
-        on_y
+    fn after_skip_candidate(&self) -> V03State {
+        let mut after_skip_candidate = self.on_genesis.clone();
+        apply_block(
+            Some(&tip_of(&self.genesis)),
+            &self.skip_candidate,
+            &mut after_skip_candidate,
+        )
+        .expect("skip candidate applies");
+        after_skip_candidate
     }
 
-    fn z_on_y(&self) -> (Block, Proof) {
-        let on_y = self.on_y();
-        let (z, proof) = deshield(&on_y, 13);
+    fn private_successor_of_skip(&self) -> (Block, Proof) {
+        let after_skip_candidate = self.after_skip_candidate();
+        let (transaction, proof) = deshield(&after_skip_candidate, 13);
         (
-            settled_block(3, self.y_on_genesis.header.hash, vec![z], &on_y),
+            settled_block(
+                3,
+                self.skip_candidate.header.hash,
+                vec![transaction],
+                &after_skip_candidate,
+            ),
             proof,
         )
     }
@@ -88,17 +98,26 @@ impl PlainFixture {
 }
 
 impl Fixture {
-    fn z_on_x(&self) -> (Block, Proof) {
-        let (z, proof) = deshield(&self.on_x, 10);
+    fn private_successor(&self) -> (Block, Proof) {
+        let (transaction, proof) = deshield(&self.after_private_candidate, 10);
         (
-            settled_block(3, self.x.header.hash, vec![z], &self.on_x),
+            settled_block(
+                3,
+                self.private_candidate.header.hash,
+                vec![transaction],
+                &self.after_private_candidate,
+            ),
             proof,
         )
     }
 
-    fn plain_on_x(&self) -> Block {
+    fn public_successor(&self) -> Block {
         let accounts = initial_pub_accounts_private_keys();
-        let nonce = self.on_x.get_account_by_id(accounts[0].account_id).nonce.0;
+        let nonce = self
+            .after_private_candidate
+            .get_account_by_id(accounts[0].account_id)
+            .nonce
+            .0;
         let transfer = create_transaction_native_token_transfer(
             accounts[0].account_id,
             nonce,
@@ -106,12 +125,22 @@ impl Fixture {
             1,
             &accounts[0].pub_sign_key,
         );
-        settled_block(3, self.x.header.hash, vec![transfer], &self.on_x)
+        settled_block(
+            3,
+            self.private_candidate.header.hash,
+            vec![transfer],
+            &self.after_private_candidate,
+        )
     }
 
-    fn failing_on_x(&self) -> (Block, Proof) {
-        let (failing, proof) = deshield(&self.on_x, 11);
-        let block = settled_block(3, self.x.header.hash, vec![failing], &self.on_x);
+    fn failing_successor(&self) -> (Block, Proof) {
+        let (failing, proof) = deshield(&self.after_private_candidate, 11);
+        let block = settled_block(
+            3,
+            self.private_candidate.header.hash,
+            vec![failing],
+            &self.after_private_candidate,
+        );
         (without_clock_tail(block), proof)
     }
 }
@@ -130,13 +159,13 @@ fn plain_fixture() -> PlainFixture {
         1,
         &accounts[0].pub_sign_key,
     );
-    let plain_x = settled_block(2, genesis.header.hash, vec![transfer], &on_genesis);
-    let y_on_genesis = settled_block(2, genesis.header.hash, vec![], &on_genesis);
+    let public_candidate = settled_block(2, genesis.header.hash, vec![transfer], &on_genesis);
+    let skip_candidate = settled_block(2, genesis.header.hash, vec![], &on_genesis);
     PlainFixture {
         initial,
         genesis,
-        plain_x,
-        y_on_genesis,
+        public_candidate,
+        skip_candidate,
         on_genesis,
     }
 }
@@ -152,16 +181,26 @@ fn fixture() -> Fixture {
     };
     let private = paying(required_for(0, paying));
     let proof = private.proof().cloned().expect("a private transaction");
-    let x = settled_block(2, genesis.header.hash, vec![private], state);
-    let mut on_x = state.clone();
-    apply_block(Some(&tip_of(genesis)), &x, &mut on_x).expect("x applies");
-    let y_on_x = settled_block(3, x.header.hash, vec![], &on_x);
+    let private_candidate = settled_block(2, genesis.header.hash, vec![private], state);
+    let mut after_private_candidate = state.clone();
+    apply_block(
+        Some(&tip_of(genesis)),
+        &private_candidate,
+        &mut after_private_candidate,
+    )
+    .expect("private candidate applies");
+    let confirming_successor = settled_block(
+        3,
+        private_candidate.header.hash,
+        vec![],
+        &after_private_candidate,
+    );
     Fixture {
         plain,
-        x,
+        private_candidate,
         proof,
-        y_on_x,
-        on_x,
+        confirming_successor,
+        after_private_candidate,
     }
 }
 
@@ -263,8 +302,8 @@ fn nodes_with_and_without_the_proof_take_a_skip_that_only_an_l1_reorg_undoes() {
     let fixture = fixture();
     let entries = lineage(&[
         (&fixture.genesis, [1; 32]),
-        (&fixture.x, [1; 32]),
-        (&fixture.y_on_genesis, [2; 32]),
+        (&fixture.private_candidate, [1; 32]),
+        (&fixture.skip_candidate, [2; 32]),
     ]);
     let mut holding = fixture.node(SKIP_WINDOW);
     holding.proofs().insert(&fixture.proof);
@@ -272,12 +311,12 @@ fn nodes_with_and_without_the_proof_take_a_skip_that_only_an_l1_reorg_undoes() {
 
     for node in [&mut holding, &mut lacking] {
         node.apply_extension(entries.clone());
-        assert_eq!(node.head_tip(), Some(tip_of(&fixture.y_on_genesis)));
+        assert_eq!(node.head_tip(), Some(tip_of(&fixture.skip_candidate)));
     }
     assert!(holding.head_state() == lacking.head_state());
 
     holding.apply_conflict(entries[..2].to_vec());
-    assert_eq!(holding.head_tip(), Some(tip_of(&fixture.x)));
+    assert_eq!(holding.head_tip(), Some(tip_of(&fixture.private_candidate)));
 
     lacking.proofs().insert(&fixture.proof);
     lacking.hydrate();
@@ -287,7 +326,7 @@ fn nodes_with_and_without_the_proof_take_a_skip_that_only_an_l1_reorg_undoes() {
             .apply_finalized(&at_slots(&entries, &[1, 2, 3]), Slot::from(3))
             .judged;
 
-        assert_eq!(node.head_tip(), Some(tip_of(&fixture.y_on_genesis)));
+        assert_eq!(node.head_tip(), Some(tip_of(&fixture.skip_candidate)));
         assert!(!dropped(&outcomes, &entries[1]));
     }
 }
@@ -297,8 +336,8 @@ fn a_node_without_a_confirmed_blocks_proof_stalls_instead_of_diverging_until_the
     let fixture = fixture();
     let entries = lineage(&[
         (&fixture.genesis, [1; 32]),
-        (&fixture.x, [1; 32]),
-        (&fixture.y_on_x, [2; 32]),
+        (&fixture.private_candidate, [1; 32]),
+        (&fixture.confirming_successor, [2; 32]),
     ]);
     let mut following = fixture.node(SKIP_WINDOW);
     let mut stalled = fixture.node(SKIP_WINDOW);
@@ -310,7 +349,10 @@ fn a_node_without_a_confirmed_blocks_proof_stalls_instead_of_diverging_until_the
 
     following.proofs().insert(&fixture.proof);
     following.hydrate();
-    assert_eq!(following.head_tip(), Some(tip_of(&fixture.y_on_x)));
+    assert_eq!(
+        following.head_tip(),
+        Some(tip_of(&fixture.confirming_successor))
+    );
 
     let outcomes = stalled
         .apply_finalized(&at_slots(&entries, &[1, 2, 3]), Slot::from(100))
@@ -327,8 +369,8 @@ fn a_final_skip_is_counted_once_for_its_signer() {
     let fixture = fixture();
     let entries = lineage(&[
         (&fixture.genesis, [1; 32]),
-        (&fixture.x, [1; 32]),
-        (&fixture.y_on_genesis, [2; 32]),
+        (&fixture.private_candidate, [1; 32]),
+        (&fixture.skip_candidate, [2; 32]),
     ]);
     let mut node = fixture.node(SKIP_WINDOW);
     node.proofs().insert(&fixture.proof);
@@ -352,14 +394,14 @@ fn a_skip_of_a_plain_block_is_misplaced() {
     let fixture = plain_fixture();
     let entries = lineage(&[
         (&fixture.genesis, [1; 32]),
-        (&fixture.plain_x, [1; 32]),
-        (&fixture.y_on_genesis, [2; 32]),
+        (&fixture.public_candidate, [1; 32]),
+        (&fixture.skip_candidate, [2; 32]),
     ]);
     let finalized = at_slots(&entries, &[1, 2, 3]);
     let mut node = fixture.node(SKIP_WINDOW);
 
     node.apply_extension(entries.clone());
-    assert_eq!(node.head_tip(), Some(tip_of(&fixture.plain_x)));
+    assert_eq!(node.head_tip(), Some(tip_of(&fixture.public_candidate)));
 
     let outcomes = node.apply_finalized(&finalized, Slot::from(3)).judged;
     assert!(reported(&outcomes, &entries[2]));
@@ -370,8 +412,8 @@ fn a_writer_cannot_skip_its_own_run() {
     let fixture = fixture();
     let entries = lineage(&[
         (&fixture.genesis, [1; 32]),
-        (&fixture.x, [1; 32]),
-        (&fixture.y_on_genesis, [1; 32]),
+        (&fixture.private_candidate, [1; 32]),
+        (&fixture.skip_candidate, [1; 32]),
     ]);
     let mut holding = fixture.node(SKIP_WINDOW);
     holding.proofs().insert(&fixture.proof);
@@ -379,14 +421,17 @@ fn a_writer_cannot_skip_its_own_run() {
 
     holding.apply_extension(entries.clone());
     lacking.apply_extension(entries);
-    assert_eq!(holding.head_tip(), Some(tip_of(&fixture.x)));
+    assert_eq!(holding.head_tip(), Some(tip_of(&fixture.private_candidate)));
     assert_eq!(lacking.head_tip(), Some(tip_of(&fixture.genesis)));
 }
 
 #[test]
 fn a_provisional_block_settles_once_the_window_passes_and_at_l1_finality_with_a_zero_window() {
     let fixture = fixture();
-    let entries = lineage(&[(&fixture.genesis, [1; 32]), (&fixture.x, [1; 32])]);
+    let entries = lineage(&[
+        (&fixture.genesis, [1; 32]),
+        (&fixture.private_candidate, [1; 32]),
+    ]);
     let mut windowed = fixture.node(SKIP_WINDOW);
     let mut zero_window = fixture.node(0);
     for node in [&mut windowed, &mut zero_window] {
@@ -395,10 +440,16 @@ fn a_provisional_block_settles_once_the_window_passes_and_at_l1_finality_with_a_
         node.apply_finalized(&at_slots(&entries, &[1, 10]), Slot::from(19));
     }
     assert_eq!(windowed.final_tip(), Some(tip_of(&fixture.genesis)));
-    assert_eq!(zero_window.final_tip(), Some(tip_of(&fixture.x)));
+    assert_eq!(
+        zero_window.final_tip(),
+        Some(tip_of(&fixture.private_candidate))
+    );
 
     windowed.apply_finalized(&[], Slot::from(20));
-    assert_eq!(windowed.final_tip(), Some(tip_of(&fixture.x)));
+    assert_eq!(
+        windowed.final_tip(),
+        Some(tip_of(&fixture.private_candidate))
+    );
 }
 
 #[test]
@@ -406,8 +457,8 @@ fn the_settled_chain_does_not_depend_on_how_far_each_update_moves_the_lib() {
     let fixture = fixture();
     let entries = lineage(&[
         (&fixture.genesis, [1; 32]),
-        (&fixture.x, [1; 32]),
-        (&fixture.y_on_x, [2; 32]),
+        (&fixture.private_candidate, [1; 32]),
+        (&fixture.confirming_successor, [2; 32]),
     ]);
 
     let [(at_once, _), (stepwise, _)] = at_once_and_stepwise(
@@ -418,7 +469,10 @@ fn the_settled_chain_does_not_depend_on_how_far_each_update_moves_the_lib() {
         &[(1, 1), (2, 12), (3, 40)],
     );
 
-    assert_eq!(at_once.final_tip(), Some(tip_of(&fixture.y_on_x)));
+    assert_eq!(
+        at_once.final_tip(),
+        Some(tip_of(&fixture.confirming_successor))
+    );
     assert_eq!(stepwise.final_tip(), at_once.final_tip());
     assert!(stepwise.final_state() == at_once.final_state());
 }
@@ -426,24 +480,27 @@ fn the_settled_chain_does_not_depend_on_how_far_each_update_moves_the_lib() {
 #[test]
 fn a_confirmation_outlives_the_cut_of_the_block_that_gave_it() {
     let fixture = fixture();
-    let (z_on_x, z_proof) = fixture.z_on_x();
+    let (private_successor, successor_proof) = fixture.private_successor();
     let entries = lineage(&[
         (&fixture.genesis, [1; 32]),
-        (&fixture.x, [2; 32]),
-        (&z_on_x, [3; 32]),
-        (&fixture.y_on_x, [2; 32]),
-        (&fixture.y_on_genesis, [4; 32]),
+        (&fixture.private_candidate, [2; 32]),
+        (&private_successor, [3; 32]),
+        (&fixture.confirming_successor, [2; 32]),
+        (&fixture.skip_candidate, [4; 32]),
     ]);
 
     let [(at_once, at_once_outcomes), (stepwise, stepwise_outcomes)] = at_once_and_stepwise(
         &fixture,
-        &[&fixture.proof, &z_proof],
+        &[&fixture.proof, &successor_proof],
         &entries,
         &[1, 2, 3, 4, 5],
         &[(3, 3), (5, 5)],
     );
 
-    assert_eq!(at_once.final_tip(), Some(tip_of(&fixture.y_on_x)));
+    assert_eq!(
+        at_once.final_tip(),
+        Some(tip_of(&fixture.confirming_successor))
+    );
     assert_eq!(stepwise.final_tip(), at_once.final_tip());
     assert!(stepwise.final_state() == at_once.final_state());
     assert!(!reported(&at_once_outcomes, &entries[4]));
@@ -453,12 +510,12 @@ fn a_confirmation_outlives_the_cut_of_the_block_that_gave_it() {
 #[test]
 fn a_plain_block_above_an_unsettled_private_block_cannot_be_skipped() {
     let fixture = fixture();
-    let plain_on_x = fixture.plain_on_x();
+    let public_successor = fixture.public_successor();
     let entries = lineage(&[
         (&fixture.genesis, [1; 32]),
-        (&fixture.x, [1; 32]),
-        (&fixture.y_on_x, [1; 32]),
-        (&plain_on_x, [2; 32]),
+        (&fixture.private_candidate, [1; 32]),
+        (&fixture.confirming_successor, [1; 32]),
+        (&public_successor, [2; 32]),
     ]);
 
     for (node, outcomes) in at_once_and_stepwise(
@@ -468,7 +525,10 @@ fn a_plain_block_above_an_unsettled_private_block_cannot_be_skipped() {
         &[1, 2, 3, 13],
         &[(3, 12), (4, 13)],
     ) {
-        assert_eq!(node.final_tip(), Some(tip_of(&fixture.y_on_x)));
+        assert_eq!(
+            node.final_tip(),
+            Some(tip_of(&fixture.confirming_successor))
+        );
         assert!(reported(&outcomes, &entries[3]));
     }
 }
@@ -476,12 +536,17 @@ fn a_plain_block_above_an_unsettled_private_block_cannot_be_skipped() {
 #[test]
 fn a_late_skip_and_the_blocks_on_it_are_ignored_without_an_offence_however_the_lib_moves() {
     let fixture = fixture();
-    let y2 = settled_block(3, fixture.y_on_genesis.header.hash, vec![], &fixture.on_y());
+    let skip_successor = settled_block(
+        3,
+        fixture.skip_candidate.header.hash,
+        vec![],
+        &fixture.after_skip_candidate(),
+    );
     let entries = lineage(&[
         (&fixture.genesis, [1; 32]),
-        (&fixture.x, [1; 32]),
-        (&fixture.y_on_genesis, [2; 32]),
-        (&y2, [2; 32]),
+        (&fixture.private_candidate, [1; 32]),
+        (&fixture.skip_candidate, [2; 32]),
+        (&skip_successor, [2; 32]),
     ]);
 
     for (node, outcomes) in at_once_and_stepwise(
@@ -491,8 +556,8 @@ fn a_late_skip_and_the_blocks_on_it_are_ignored_without_an_offence_however_the_l
         &[1, 10, 21, 22],
         &[(2, 20), (4, 22)],
     ) {
-        assert_eq!(node.head_tip(), Some(tip_of(&fixture.x)));
-        assert_eq!(node.final_tip(), Some(tip_of(&fixture.x)));
+        assert_eq!(node.head_tip(), Some(tip_of(&fixture.private_candidate)));
+        assert_eq!(node.final_tip(), Some(tip_of(&fixture.private_candidate)));
         for late in &entries[2..] {
             assert!(!dropped(&outcomes, late));
         }
@@ -506,8 +571,8 @@ fn a_failed_private_block_is_skipped_like_a_missing_one() {
     let entries = lineage(&[
         (&fixture.genesis, [1; 32]),
         (&failing_on_genesis, [1; 32]),
-        (&fixture.plain_x, [1; 32]),
-        (&fixture.y_on_genesis, [2; 32]),
+        (&fixture.public_candidate, [1; 32]),
+        (&fixture.skip_candidate, [2; 32]),
     ]);
     let finalized = at_slots(&entries, &[1, 2, 3, 4]);
     let mut holding = fixture.node(SKIP_WINDOW);
@@ -520,7 +585,7 @@ fn a_failed_private_block_is_skipped_like_a_missing_one() {
     let lacking_outcomes = lacking.apply_finalized(&finalized, Slot::from(4)).judged;
 
     for (node, outcomes) in [(&holding, &holding_outcomes), (&lacking, &lacking_outcomes)] {
-        assert_eq!(node.final_tip(), Some(tip_of(&fixture.y_on_genesis)));
+        assert_eq!(node.final_tip(), Some(tip_of(&fixture.skip_candidate)));
         assert!(!reported(outcomes, &entries[3]));
     }
     assert!(holding.final_state() == lacking.final_state());
@@ -536,18 +601,23 @@ fn a_failed_private_block_is_skipped_like_a_missing_one() {
 #[test]
 fn a_node_without_the_proof_of_a_confirmed_failed_block_stalls_then_converges() {
     let fixture = fixture();
-    let (failing_on_x, failing_on_x_proof) = fixture.failing_on_x();
-    let on_failing = settled_block(4, failing_on_x.header.hash, vec![], &fixture.on_x);
+    let (failing_successor, failing_successor_proof) = fixture.failing_successor();
+    let on_failing = settled_block(
+        4,
+        failing_successor.header.hash,
+        vec![],
+        &fixture.after_private_candidate,
+    );
     let entries = lineage(&[
         (&fixture.genesis, [1; 32]),
-        (&fixture.x, [1; 32]),
-        (&failing_on_x, [1; 32]),
+        (&fixture.private_candidate, [1; 32]),
+        (&failing_successor, [1; 32]),
         (&on_failing, [2; 32]),
-        (&fixture.y_on_genesis, [2; 32]),
+        (&fixture.skip_candidate, [2; 32]),
     ]);
     let finalized = at_slots(&entries, &[1, 2, 3, 4, 5]);
     let mut holding = fixture.node(SKIP_WINDOW);
-    holding.proofs().insert(&failing_on_x_proof);
+    holding.proofs().insert(&failing_successor_proof);
     let mut lacking = fixture.node(SKIP_WINDOW);
     for node in [&mut holding, &mut lacking] {
         node.proofs().insert(&fixture.proof);
@@ -555,7 +625,10 @@ fn a_node_without_the_proof_of_a_confirmed_failed_block_stalls_then_converges() 
         node.apply_finalized(&finalized, Slot::from(20));
     }
 
-    assert_eq!(holding.final_tip(), Some(tip_of(&fixture.x)));
+    assert_eq!(
+        holding.final_tip(),
+        Some(tip_of(&fixture.private_candidate))
+    );
     assert_eq!(lacking.final_tip(), Some(tip_of(&fixture.genesis)));
     let blocked = |node: &ChainState| {
         node.blocker()
@@ -564,10 +637,13 @@ fn a_node_without_the_proof_of_a_confirmed_failed_block_stalls_then_converges() 
     assert_eq!(blocked(&holding), Some((entries[2].msg, true, false)));
     assert_eq!(blocked(&lacking), Some((entries[2].msg, true, true)));
 
-    lacking.proofs().insert(&failing_on_x_proof);
+    lacking.proofs().insert(&failing_successor_proof);
     lacking.hydrate();
     lacking.apply_finalized(&[], Slot::from(20));
-    assert_eq!(lacking.final_tip(), Some(tip_of(&fixture.x)));
+    assert_eq!(
+        lacking.final_tip(),
+        Some(tip_of(&fixture.private_candidate))
+    );
     assert!(lacking.final_state() == holding.final_state());
 }
 
@@ -578,7 +654,7 @@ fn a_failed_private_block_nobody_skips_leaves_when_its_window_closes() {
     let entries = lineage(&[
         (&fixture.genesis, [1; 32]),
         (&failing_on_genesis, [1; 32]),
-        (&fixture.plain_x, [1; 32]),
+        (&fixture.public_candidate, [1; 32]),
     ]);
     let finalized = at_slots(&entries, &[1, 2, 13]);
     let mut holding = fixture.node(SKIP_WINDOW);
@@ -589,29 +665,29 @@ fn a_failed_private_block_nobody_skips_leaves_when_its_window_closes() {
         node.apply_finalized(&finalized, Slot::from(13));
     }
 
-    assert_eq!(holding.final_tip(), Some(tip_of(&fixture.plain_x)));
+    assert_eq!(holding.final_tip(), Some(tip_of(&fixture.public_candidate)));
     assert_eq!(lacking.final_tip(), Some(tip_of(&fixture.genesis)));
 
     lacking.proofs().insert(&failing_on_genesis_proof);
     lacking.hydrate();
     lacking.apply_finalized(&[], Slot::from(13));
-    assert_eq!(lacking.final_tip(), Some(tip_of(&fixture.plain_x)));
+    assert_eq!(lacking.final_tip(), Some(tip_of(&fixture.public_candidate)));
     assert!(lacking.final_state() == holding.final_state());
 }
 
 #[test]
 fn a_node_without_the_proof_cuts_the_blocks_held_behind_a_skipped_block() {
     let fixture = fixture();
-    let (z_on_y, z_on_y_proof) = fixture.z_on_y();
+    let (private_successor_of_skip, skip_successor_proof) = fixture.private_successor_of_skip();
     let entries = lineage(&[
         (&fixture.genesis, [1; 32]),
-        (&fixture.x, [1; 32]),
-        (&fixture.y_on_x, [1; 32]),
-        (&fixture.y_on_genesis, [2; 32]),
-        (&z_on_y, [2; 32]),
+        (&fixture.private_candidate, [1; 32]),
+        (&fixture.confirming_successor, [1; 32]),
+        (&fixture.skip_candidate, [2; 32]),
+        (&private_successor_of_skip, [2; 32]),
     ]);
     let mut lacking = fixture.node(SKIP_WINDOW);
-    lacking.proofs().insert(&z_on_y_proof);
+    lacking.proofs().insert(&skip_successor_proof);
 
     lacking.apply_extension(entries.clone());
     let outcomes = lacking
@@ -625,23 +701,26 @@ fn a_node_without_the_proof_cuts_the_blocks_held_behind_a_skipped_block() {
     };
     assert!(judged_cut(&entries[1]));
     assert!(judged_cut(&entries[2]));
-    assert_eq!(lacking.final_tip(), Some(tip_of(&fixture.y_on_genesis)));
+    assert_eq!(lacking.final_tip(), Some(tip_of(&fixture.skip_candidate)));
     let view: Vec<MsgId> = lacking.view().iter().map(|entry| entry.msg).collect();
     assert_eq!(view, vec![entries[4].msg]);
 
     lacking.apply_finalized(&[], Slot::from(23));
-    assert_eq!(lacking.final_tip(), Some(tip_of(&z_on_y)));
+    assert_eq!(
+        lacking.final_tip(),
+        Some(tip_of(&private_successor_of_skip))
+    );
 }
 
 #[test]
 fn a_held_misplaced_block_is_still_reported_after_an_unfinalized_skip_turns_late() {
     let fixture = fixture();
-    let misplaced = produce_dummy_block(4, Some(fixture.x.header.hash), vec![]);
+    let misplaced = produce_dummy_block(4, Some(fixture.private_candidate.header.hash), vec![]);
     let entries = lineage(&[
         (&fixture.genesis, [1; 32]),
-        (&fixture.x, [1; 32]),
+        (&fixture.private_candidate, [1; 32]),
         (&misplaced, [1; 32]),
-        (&fixture.y_on_genesis, [2; 32]),
+        (&fixture.skip_candidate, [2; 32]),
     ]);
     let mut lacking = fixture.node(SKIP_WINDOW);
 
@@ -665,17 +744,20 @@ fn a_held_misplaced_block_is_still_reported_after_an_unfinalized_skip_turns_late
 #[test]
 fn a_blocks_proof_survives_eviction_until_its_entry_leaves_the_view() {
     let fixture = fixture();
-    let held = lineage(&[(&fixture.genesis, [1; 32]), (&fixture.x, [1; 32])]);
+    let held = lineage(&[
+        (&fixture.genesis, [1; 32]),
+        (&fixture.private_candidate, [1; 32]),
+    ]);
     let cut = lineage(&[
         (&fixture.genesis, [1; 32]),
-        (&fixture.x, [1; 32]),
-        (&fixture.y_on_genesis, [2; 32]),
+        (&fixture.private_candidate, [1; 32]),
+        (&fixture.skip_candidate, [2; 32]),
     ]);
     let size = fixture.proof.clone().into_inner().len();
     let filler = |fill| Proof::from_inner(vec![fill; size]);
     for (entries, slots, lib, tip) in [
-        (held, &[1, 10][..], 20, &fixture.x),
-        (cut, &[1, 2, 3][..], 3, &fixture.y_on_genesis),
+        (held, &[1, 10][..], 20, &fixture.private_candidate),
+        (cut, &[1, 2, 3][..], 3, &fixture.skip_candidate),
     ] {
         let store = ProofStore::new(size);
         store.insert(&fixture.proof);
