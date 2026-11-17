@@ -7,7 +7,6 @@ use std::{
 };
 
 use lee_core::account::{Account, AccountId};
-use rpds::HashTrieMapSync;
 
 use super::V03State;
 
@@ -54,7 +53,7 @@ impl V03State {
     #[must_use]
     pub fn stf_without_public(&self) -> Self {
         Self {
-            public_state: HashTrieMapSync::new_sync(),
+            public_state: super::digest_keyed_map(),
             ..self.clone()
         }
     }

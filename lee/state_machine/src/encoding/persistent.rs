@@ -10,22 +10,24 @@ use std::{
 use borsh::{BorshDeserialize, BorshSerialize};
 use rpds::{HashTrieMapSync, HashTrieSetSync, RedBlackTreeMapSync, VectorSync};
 
-pub fn serialize_map<K, V, W>(map: &HashTrieMapSync<K, V>, writer: &mut W) -> Result<()>
+pub fn serialize_map<K, V, W, H>(map: &HashTrieMapSync<K, V, H>, writer: &mut W) -> Result<()>
 where
     K: BorshSerialize + Eq + Hash + Ord,
     V: BorshSerialize,
     W: Write,
+    H: std::hash::BuildHasher + Clone,
 {
     let mut entries: Vec<(&K, &V)> = map.iter().collect();
     entries.sort_unstable_by_key(|&(key, _)| key);
     entries.serialize(writer)
 }
 
-pub fn deserialize_map<K, V, R>(reader: &mut R) -> Result<HashTrieMapSync<K, V>>
+pub fn deserialize_map<K, V, R, H>(reader: &mut R) -> Result<HashTrieMapSync<K, V, H>>
 where
     K: BorshDeserialize + Eq + Hash + Ord,
     V: BorshDeserialize,
     R: Read,
+    H: std::hash::BuildHasher + Clone + Default,
 {
     Ok(HashMap::<K, V>::deserialize_reader(reader)?
         .into_iter()
@@ -106,7 +108,7 @@ mod tests {
         let bytes = encoded(|writer| serialize_map(&map, writer));
         assert_eq!(bytes, borsh::to_vec(&std).unwrap());
         assert_eq!(
-            deserialize_map::<u32, u64, _>(&mut bytes.as_slice()).unwrap(),
+            deserialize_map::<u32, u64, _, _>(&mut bytes.as_slice()).unwrap(),
             map
         );
     }

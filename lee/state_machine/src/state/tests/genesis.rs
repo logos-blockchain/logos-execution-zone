@@ -6,7 +6,7 @@ fn new_works() {
     let key2 = PrivateKey::try_new([2; 32]).unwrap();
     let addr1 = AccountId::from(&PublicKey::new_from_private_key(&key1));
     let addr2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
-    let expected_public_state: rpds::HashTrieMapSync<_, _> =
+    let expected_public_state: crate::state::DigestKeyedMap<_, _> =
         [(addr1, Account::funded(100)), (addr2, Account::funded(151))]
             .into_iter()
             .collect();
