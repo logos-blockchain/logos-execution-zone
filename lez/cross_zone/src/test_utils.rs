@@ -1,5 +1,5 @@
-//! Chain-builder helpers shared by the watcher's and verifier's tests, so both
-//! sides exercise the acceptance policy against identically built peer chains.
+//! Chain-builder helpers shared by the watcher's and verifier's tests, so both sides exercise the
+//! acceptance policy against identically built peer chains.
 
 use common::{
     block::Block,
@@ -11,9 +11,8 @@ use lee::GENESIS_BLOCK_ID;
 use lee_core::account::Actor;
 use ping_core::{ping_record_pda, receiver_config_account_id};
 
-/// The peer's hash-linked chain from its genesis up to and including `last`,
-/// each block carrying the transactions `txs_at(block_id)` returns. Empty when
-/// `last` is below [`GENESIS_BLOCK_ID`].
+/// The peer's hash-linked chain from its genesis up to and including `last`, each block carrying
+/// the transactions `txs_at(block_id)` returns.
 pub fn linked_chain_to(last: u64, txs_at: impl Fn(u64) -> Vec<LeeTransaction>) -> Vec<Block> {
     let mut blocks: Vec<Block> = Vec::new();
     for block_id in GENESIS_BLOCK_ID..=last {
@@ -23,8 +22,8 @@ pub fn linked_chain_to(last: u64, txs_at: impl Fn(u64) -> Vec<LeeTransaction>) -
     blocks
 }
 
-/// The outbound message of a ping aimed at this zone's `ping_receiver`,
-/// declaring the actors its delivery reaches.
+/// The outbound message of a ping aimed at this zone's `ping_receiver`, declaring the actors its
+/// delivery reaches.
 #[must_use]
 pub fn ping_outbound(target_zone: ZoneId, payload: &[u8]) -> lee::OutboundMessage {
     let receiver_id = programs::ping_receiver_account_id();

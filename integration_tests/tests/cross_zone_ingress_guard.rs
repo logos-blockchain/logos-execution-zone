@@ -3,11 +3,7 @@
     reason = "We don't care about these in tests"
 )]
 
-//! M6 ingress guard: the cross-zone inbox is sequencer-only. Only the watcher
-//! injects inbox dispatches; a user must not be able to invoke the inbox through
-//! the public RPC, or anyone could forge an inbound cross-zone delivery. The
-//! inbox guest's caller-is-none assertion passes for a top-level user tx, so the
-//! sequencer ingress guard is the only thing that stops this.
+//! M6 ingress guard: the cross-zone inbox is sequencer-only.
 
 use std::collections::BTreeMap;
 
@@ -30,7 +26,6 @@ use tokio::test;
 #[test]
 async fn user_origin_inbox_call_rejected() -> Result<()> {
     let partial = SequencerPartialConfig {
-        // Covers the storage price doubling at the devnet's first epoch rotations.
         priority_fee_percent: 150,
         ..SequencerPartialConfig::default()
     };
@@ -49,7 +44,6 @@ async fn user_origin_inbox_call_rejected() -> Result<()> {
         .build()
         .await?;
 
-    // A user hand-builds a top-level inbox Dispatch and submits it via RPC.
     let inbox_id = programs::cross_zone_inbox_account_id();
     let msg = CrossZoneMessage {
         src_zone: [2; 32],

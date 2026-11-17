@@ -1,19 +1,5 @@
-//! The cross-zone receiver contract: the config shape, seed, and source check a
-//! program needs to accept deliveries from the inbox.
-//!
-//! The inbox delivers to any program a peer names, so being reachable is not
-//! opt-in; authorizing sources is. A receiver opts in by holding a
-//! [`ReceiverConfig`] at [`receiver_config_seed`] and checking the deliverer
-//! and source with [`ReceiverConfig::authorizes`] on each delivery.
-//! `ping_receiver` is the reference implementation.
-//!
-//! WHO MAY CLAIM THE CONFIG IS PART OF THE CONTRACT. Genesis writes a builtin's
-//! PDA before any user transaction exists, but a runtime-deployed receiver is
-//! claimed after deployment, and a bare first write needs only the PDA's own
-//! evidence, which anyone can produce. So a receiver MUST bind its claim to its
-//! program account's key, as `zone_chat` does. Without that, an observer
-//! front-runs the deployer and names its own `deliverer`, permanently: the
-//! write happens once, so the only remedy is redeploying at a fresh account.
+//! The cross-zone receiver contract: the config shape, seed, and source check a program needs to
+//! accept deliveries from the inbox.
 
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use cross_zone_marker_core::{Delivery, ZoneId};
@@ -22,26 +8,17 @@ use lee_core::{account::AccountId, program::PdaSeed};
 const RECEIVER_CONFIG_SEED: [u8; 32] = *b"/LEZ/v0.3/XZoneReceiverCfg/0000/";
 
 /// The borsh enum tag a conforming receiver gives its `InitConfig` variant.
-///
-/// Tag 0 stays free for the receiver's own first variant (`ping_receiver`'s
-/// `Record`, whose tag is wire format on the emitting side), so the contract
-/// pins `InitConfig` at 1.
 pub const INIT_CONFIG_TAG: u8 = 1;
 
 /// Who may deliver to a receiver, and which peer sources they may deliver from.
-///
-/// Shared so every receiver authorizes the same way and the host can seed or
-/// read any receiver's config through one shape. A receiver with richer needs
-/// (`wrapped_token`'s caps and counters) keeps its own type instead.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ReceiverConfig {
     /// The program allowed to deliver: the cross-zone inbox.
     pub deliverer: AccountId,
-    /// The program allowed to send authority messages on the authority's
-    /// behalf, or `None` for top-level only.
+    /// The program allowed to send authority messages on the authority's behalf, or `None` for
+    /// top-level only.
     pub governance: Option<AccountId>,
-    /// The account allowed to change `sources`, or `None` for a list fixed at
-    /// initialization.
+    /// The account allowed to change `sources`, or `None` for a list fixed at initialization.
     pub authority: Option<AccountId>,
     /// The `(src_zone, src_account_id)` pairs a delivery may originate from.
     pub sources: Vec<(ZoneId, AccountId)>,
@@ -58,11 +35,7 @@ impl ReceiverConfig {
         borsh::from_slice(bytes).ok()
     }
 
-    /// Whether a delivery from `(src_zone, src_account_id)` is one this config
-    /// authorizes.
-    ///
-    /// The caller must already have pinned the delivery's origin to
-    /// `self.deliverer`; this only answers the source half.
+    /// Whether a delivery from `(src_zone, src_account_id)` is one this config authorizes.
     #[must_use]
     pub fn authorizes(&self, src_zone: &ZoneId, src_account_id: AccountId) -> bool {
         self.sources.contains(&(*src_zone, src_account_id))
@@ -81,12 +54,8 @@ pub const fn receiver_config_seed() -> PdaSeed {
     PdaSeed::new(RECEIVER_CONFIG_SEED)
 }
 
-/// The instruction bytes that initialize a conforming receiver's config:
-/// [`INIT_CONFIG_TAG`], then the config.
-///
-/// A builtin's genesis sends these straight to the config PDA. A
-/// runtime-deployed receiver must take them at its program account and forward
-/// them, per the claim rule above.
+/// The instruction bytes that initialize a conforming receiver's config: [`INIT_CONFIG_TAG`], then
+/// the config.
 #[must_use]
 pub fn init_config_instruction_bytes(config: &ReceiverConfig) -> Vec<u8> {
     let mut bytes = vec![INIT_CONFIG_TAG];

@@ -3,11 +3,7 @@
     reason = "top-level test functions are conventional for integration tests"
 )]
 
-//! Cross-zone round trip with the indexer in the loop (Option B). A ping on zone
-//! A is delivered to zone B, and zone B's indexer independently re-derives the
-//! injected dispatch from zone A's finalized blocks before applying it. The
-//! payload landing in the indexer's state proves verification passed; a forgery
-//! would have halted the indexer instead.
+//! Cross-zone round trip with the indexer in the loop (Option B).
 
 use std::{collections::BTreeMap, time::Duration};
 
@@ -35,7 +31,6 @@ const PING_PAYLOAD: &[u8] = b"hello-verified-zone";
 #[test]
 async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
     let partial = SequencerPartialConfig {
-        // Covers the storage price doubling at the devnet's first epoch rotations.
         priority_fee_percent: 150,
         ..SequencerPartialConfig::default()
     };
@@ -85,15 +80,12 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
         .build()
         .await?;
 
-    // Zone A: source. Zone B: destination, with the watcher on its sequencer and
-    // the verifier on its indexer.
     let ind_client_b = ctx.indexer_client_zone(channel_b).unwrap();
 
     let seq_client_a = &ctx
         .zone_default_sequencer_component(channel_a)
         .sequencer_client;
 
-    // Submit the ping on zone A, addressed to ping_receiver on zone B.
     let payer = &initial_pub_accounts_private_keys()[0];
     let payer_nonce = seq_client_a
         .get_account(payer.account_id)
@@ -106,8 +98,6 @@ async fn indexer_verifies_and_delivers_cross_zone_ping() -> Result<()> {
         .await
         .context("Failed to submit ping on zone A")?;
 
-    // Wait until zone B's indexer records the delivered payload. The indexer only
-    // applies the dispatch after re-deriving and verifying it.
     let record_id = ping_record_pda(receiver_id);
 
     let delivered = wait_for_indexer_delivery(ind_client_b, record_id, receiver_id).await?;
@@ -154,7 +144,6 @@ fn build_ping_tx(
     LeeTransaction::Public(PublicTransaction::new(message, witness_set))
 }
 
-/// Polls zone B's indexer until the ping record PDA holds a payload.
 async fn wait_for_indexer_delivery(
     indexer: &IndexerClient,
     record_id: AccountId,

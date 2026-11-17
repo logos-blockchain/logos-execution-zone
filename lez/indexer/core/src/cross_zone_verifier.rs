@@ -41,33 +41,18 @@ use crate::{
     status::{PeerHealth, PeerStatus},
 };
 
-/// How often the verifier logs that it is still waiting on a lagging peer reader,
-/// so a stuck wait is observable without rejecting a legitimate message.
 const LAG_LOG_INTERVAL: Duration = Duration::from_secs(30);
 
-/// How long to wait for a referenced peer block before giving up on this pass.
-/// Generous, since ordinary L1 finality lag delays a peer block by minutes.
-/// Expiry is not a rejection: the caller retries the same block, so the cost of a
-/// premature expiry is one repeated pass.
 const PEER_BLOCK_WAIT_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// How long each wait iteration sleeps. Also the unit the elapsed counter is
-/// advanced by, so `waited` counts sleeps rather than wall time and, since a
-/// sleep can overshoot, understates it.
 const PEER_BLOCK_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Why a cross-zone dispatch could not be verified.
-///
-/// A forgery is terminal and must stop the block applying; an unavailable peer
-/// block is transient and must be retried, or a lagging peer reader would
-/// permanently halt ingestion.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum CrossZoneVerifyError {
-    /// The dispatch does not match the peer's finalized chain.
     #[error("{0}")]
     Forged(ForgedDispatch),
-    /// The referenced peer block has not been read yet.
     #[error(
         "peer zone {} block {block_id} still unavailable after {waited:?}",
         hex::encode(zone)
@@ -79,8 +64,8 @@ pub enum CrossZoneVerifyError {
     },
 }
 
-/// A dispatch judged permanently invalid: its source coordinates plus the
-/// verdict, which is what the caller's halt record persists.
+/// A dispatch judged permanently invalid: its source coordinates plus the verdict, which is what
+/// the caller's halt record persists.
 #[derive(Debug)]
 pub struct ForgedDispatch {
     pub src_zone: ZoneId,
@@ -102,64 +87,22 @@ impl Display for ForgedDispatch {
     }
 }
 
-/// Why [`CrossZoneVerifier::wait_for_peer_block`] could not produce the
-/// referenced peer block.
 #[derive(Debug)]
 enum PeerBlockError {
-    /// Judged permanently: the id is not on the peer's chain. The caller maps
-    /// this onto the dispatch's coordinates as [`CrossZoneVerifyError::Forged`].
     NotOnPeerChain(String),
-    /// Not judged either way yet; the caller retries.
     Unavailable { waited: Duration },
 }
 
 /// The replay key plus the source block: what the inbox treats as one delivery.
-///
-/// Skipping re-derivation on the key alone would wave through a dispatch the
-/// guest refuses, parking the block and holding ingestion.
 pub type SeenKey = (MessageKey, [u8; 32]);
 
-/// One peer zone's cached blocks, plus how far this reader has read them as an
-/// unbroken hash-linked run from the peer's genesis.
 struct PeerChain {
-    /// Full bodies, each with the slot the reader took it from: every block
-    /// ahead of the verified prefix (the displacement buffer), plus the
-    /// `window` most recent ids behind its tip.
     blocks: HashMap<u64, (Block, Slot)>,
-    /// Where each evicted body was read and what it hashed to. Append-only and
-    /// itself never evicted: at 48 bytes per block plus map overhead it grows
-    /// for the life of the process, deliberately, because an id inside the run
-    /// that is in neither map is the forgery signal, and forgetting an entry
-    /// would turn an evicted honest block into a forgery verdict. The bound
-    /// this buys is on bodies, which is where the memory was.
     evicted: HashMap<u64, (Slot, HashType)>,
-    /// The id [`Self::evict_behind_window`] considers next. Ids below it are
-    /// already evicted, so each id is visited exactly once.
     next_to_evict: u64,
-    /// Bodies kept behind the tip.
     window: u64,
-    /// The head of the run: the highest id such that every block from
-    /// [`GENESIS_BLOCK_ID`] up to it has been read and each links to its
-    /// predecessor, plus that block's hash, pinned when [`Self::extend_prefix`]
-    /// walked it. `None` until genesis is read.
-    ///
-    /// The id, not `max(blocks.keys())`, is what the forgery test gates on: a
-    /// peer picks its own `block_id`s, and an id that does not continue the run
-    /// cannot advance the run.
-    ///
-    /// The hash is stored rather than re-read from `blocks`, so the tip
-    /// survives the tip block leaving the map; re-deriving it there would make
-    /// eviction misclassify the next honest block as
-    /// [`OffChain::NotTheGenesis`] and freeze the run.
-    ///
-    /// The link it walks means something only because [`accept_peer_block`]
-    /// recomputes `header.hash` before anything is cached. Without that it compared two fields the
-    /// peer wrote.
     verified_prefix: Option<PeerChainTip>,
-    /// Pin for the peer's genesis hash; `None` anchors on the first read.
     genesis_hash: Option<HashType>,
-    /// A genesis read was refused by the pin. Meaningful only while nothing
-    /// has anchored; see [`PeerBlocks::pin_refused`].
     pin_refused: bool,
 }
 
@@ -176,17 +119,12 @@ impl PeerChain {
         }
     }
 
-    /// Demotes bodies deeper than `window` ids behind the run tip to their
-    /// [`Self::evicted`] entry. Blocks ahead of the prefix all sit above the
-    /// floor, so the displacement buffer is untouched.
     fn evict_behind_window(&mut self) {
         let Some(tip) = self.verified_prefix else {
             return;
         };
         let floor = tip.block_id.saturating_sub(self.window);
         while self.next_to_evict < floor {
-            // An id already missing from `blocks` stays out of the index too,
-            // keeping its absent-inside-the-run classification.
             if let Some((block, read_at)) = self.blocks.remove(&self.next_to_evict) {
                 self.evicted
                     .insert(self.next_to_evict, (read_at, block.header.hash));
@@ -195,7 +133,6 @@ impl PeerChain {
         }
     }
 
-    /// The id that would extend the verified run.
     const fn next_expected(&self) -> u64 {
         match self.verified_prefix {
             Some(tip) => tip.block_id.saturating_add(1),
@@ -203,9 +140,6 @@ impl PeerChain {
         }
     }
 
-    /// Extends the verified run as far as the cached blocks allow, off the same
-    /// [`link_to_tip`] the watcher follows. The tip is pinned off [`Link::Next`],
-    /// whose hash [`accept_peer_block`] proved is the recomputed one.
     fn extend_prefix(&mut self) {
         while let Some((next, _)) = self.blocks.get(&self.next_expected()) {
             match link_to_tip(
@@ -226,35 +160,22 @@ impl PeerChain {
         self.evict_behind_window();
     }
 
-    /// The tip pinning the verified run. `None` before the peer's genesis is
-    /// held.
     const fn tip(&self) -> Option<PeerChainTip> {
         self.verified_prefix
     }
 }
 
-/// What one consistent look at the peer cache says about a referenced block.
 enum PeerLookup {
-    /// Held, and inside the run verified from the peer's genesis.
     Cached(Box<Block>),
-    /// Inside the run, body evicted: the slot it was read at and the hash the
-    /// walk certified, which is everything a refetch needs.
     Evicted { read_at: Slot, block_hash: HashType },
-    /// Inside the verified run but in neither map, so it is not on the peer
-    /// chain.
     InsideRun,
-    /// The reader has not verified this far yet.
     Behind,
 }
 
-/// Cache of finalized peer-zone blocks, filled by per-peer reader tasks and read
-/// by the verifier to re-derive cross-zone dispatch transactions.
 #[derive(Clone)]
 struct PeerBlocks {
     chains: Arc<RwLock<HashMap<ZoneId, PeerChain>>>,
-    /// Bodies kept behind each peer's run tip.
     window: u64,
-    /// Per-peer genesis pins; an absent entry anchors on the first read.
     genesis_pins: Arc<HashMap<ZoneId, HashType>>,
 }
 
@@ -265,8 +186,6 @@ impl Default for PeerBlocks {
 }
 
 impl PeerBlocks {
-    /// `configured` is [`IndexerConfig::peer_block_cache_window`]; zero is
-    /// unrepresentable there.
     fn new(configured: NonZeroU32) -> Self {
         Self {
             chains: Arc::default(),
@@ -280,42 +199,12 @@ impl PeerBlocks {
         self
     }
 
-    /// Caches `block` if it is the next one this reader needs, and says whether
-    /// it was newly cached.
-    ///
-    /// Sequential, exactly like the watcher on the sequencer side. Caching ahead
-    /// of the run looks harmless, since an id that does not continue the run
-    /// cannot advance it, but it is not: when the predecessor later arrives the
-    /// prefix walks straight through the block held ahead, while the watcher,
-    /// which reads strictly in order and never reconsiders what it passed over,
-    /// has already discarded it. The two then hold different blocks at one id,
-    /// and the next dispatch naming it re-derives against the wrong one and
-    /// halts ingestion. Refusing to look ahead is what keeps the two in step.
-    ///
-    /// First write wins at every id but one. An identical re-read is a no-op,
-    /// which the reader does on every slot retry. A differing block inside the
-    /// run is equivocation, and replacing it is the remote halt from #648: the
-    /// prefix certified the old value, so the next dispatch naming that id
-    /// re-derives against the new one and reads as forged.
-    ///
-    /// The exception is the one id that would extend the run. Holding the first
-    /// arrival there is its own trap: a peer inscribing a block that claims that
-    /// id and does not continue the chain locks it out for good, since the
-    /// honest block is refused when it lands and the run can never walk past it,
-    /// and the channel is append-only so a restart replays the same order and
-    /// holds the same block. There, and only there, a block that continues the
-    /// run displaces one that does not.
-    ///
-    /// `read_at` is the slot the reader took the block from, recorded so an
-    /// evicted body can be refetched.
     async fn insert(&self, zone: ZoneId, block: Block, read_at: Slot) -> bool {
         let mut chains = self.chains.write().await;
         let chain = chains
             .entry(zone)
             .or_insert_with(|| PeerChain::new(self.window, self.genesis_pins.get(&zone).copied()));
 
-        // `block` was screened on the way in, so `header.hash` is its
-        // recomputed hash and is what the synthesized tip pins.
         let link = link_to_tip(
             chain.tip().as_ref(),
             &block,
@@ -326,7 +215,6 @@ impl PeerBlocks {
         match link {
             Link::OffChain(off @ OffChain::WrongGenesis { .. }) => {
                 chain.pin_refused = true;
-                // Error, not debug: this peer verifies nothing until it is fixed.
                 error!(
                     peer_zone = %hex::encode(zone),
                     reason = %off,
@@ -334,7 +222,6 @@ impl PeerBlocks {
                 );
                 false
             }
-            // Ahead of the run, or a first read that is not the peer's genesis.
             Link::OffChain(OffChain::NotTheGenesis { .. } | OffChain::SkipsAhead { .. }) => {
                 debug!(
                     peer_zone = %hex::encode(zone),
@@ -346,10 +233,6 @@ impl PeerBlocks {
                 false
             }
             Link::AlreadySeen { .. } => {
-                // Every id the run has walked is in the body map or the evicted
-                // index; below the peer's genesis nothing is, and an id on no
-                // chain the run can ever walk must not be cached, or it would
-                // resolve as the peer's own block for ever after.
                 let held_hash = chain
                     .blocks
                     .get(&block.header.block_id)
@@ -377,9 +260,6 @@ impl PeerBlocks {
                     }
                 }
             }
-            // The one id that would extend the run. A block linking to the tip
-            // continues it; one that does not is cached only while the id is
-            // free, first write wins.
             Link::Next(_) | Link::OffChain(OffChain::DoesNotLink { .. }) => {
                 if let Some((held, _)) = chain.blocks.get(&block.header.block_id) {
                     if held.header.hash == block.header.hash {
@@ -410,22 +290,6 @@ impl PeerBlocks {
         }
     }
 
-    /// Resolves `block_id` under a single read lock.
-    ///
-    /// Cached is not the same as verified, and only the second may be delivered
-    /// from. A peer writes its own block ids, and a block enters the cache on
-    /// its own hash and signature alone, so one claiming an id its chain never
-    /// reached is cached like any other. The run walked from the peer's genesis
-    /// is what says the peer built it. A block outside that run therefore reads
-    /// as one the reader has not got to, which stalls the dispatch naming it
-    /// rather than certifying it, and a peer inscribing a block ahead of its
-    /// chain cannot get a message delivered under an id it has not reached.
-    ///
-    /// One lock, because answering "is it cached?" and "is it inside the run?"
-    /// separately races with the peer reader: an insert landing between them
-    /// reads as absent-and-inside-the-run, which is the forgery signal, for a
-    /// block that is in fact cached. That is the normal steady state, a waiting
-    /// verifier and the block it waits for arriving.
     async fn resolve(&self, zone: ZoneId, block_id: u64) -> PeerLookup {
         let chains = self.chains.read().await;
         let Some(chain) = chains.get(&zone) else {
@@ -460,8 +324,6 @@ impl PeerBlocks {
             .and_then(|chain| chain.blocks.get(&block_id).map(|(block, _)| block.clone()))
     }
 
-    /// How far this reader has read `zone` as an unbroken run from genesis, or
-    /// `None` if it has not read the peer's genesis block yet.
     async fn verified_prefix(&self, zone: ZoneId) -> Option<u64> {
         self.chains
             .read()
@@ -471,7 +333,6 @@ impl PeerBlocks {
             .map(|tip| tip.block_id)
     }
 
-    /// False again once a genesis matching the pin anchors the run.
     async fn pin_refused(&self, zone: ZoneId) -> bool {
         self.chains
             .read()
@@ -481,7 +342,6 @@ impl PeerBlocks {
     }
 }
 
-/// The evidence backing a verified-absence verdict.
 #[derive(Clone, Copy, Debug)]
 struct AbsenceEvidence {
     channel_tip_slot: u64,
@@ -490,33 +350,24 @@ struct AbsenceEvidence {
     lib_slot: u64,
 }
 
-/// One reader pass, as folded into [`PeerWatch`].
 struct PassReport {
     cursor_slot: Option<u64>,
     verified_tip: Option<u64>,
     stuck: Option<(u64, u32)>,
     drained: bool,
-    /// The channel tip slot, present only when the pass drained with the
-    /// cursor at it.
     drained_at_tip: Option<u64>,
-    /// The endpoint's LIB slot, read only on an at-tip pass.
     lib_slot: Option<u64>,
-    /// The genesis pin refused the only anchor offered so far.
     pin_refused: bool,
 }
 
-/// Why a reader's last pass extended no trust. Always one pass fresh: exactly
-/// one report call happens per pass.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum ReaderHold {
     #[default]
     None,
-    /// Skipped on the committee floor.
     Suspended,
     PinRefused,
 }
 
-/// One peer reader's live diagnostics.
 #[derive(Clone, Copy, Debug, Default)]
 struct PeerDiagnostics {
     cursor_slot: Option<u64>,
@@ -529,9 +380,6 @@ struct PeerDiagnostics {
 }
 
 impl PeerDiagnostics {
-    /// Halted outranks a hold: an issued verdict is the graver, sticky fact.
-    /// A hold outranks Holed: a stall observed before it is stale information
-    /// about a channel no longer being read, or not anchorable.
     const fn health(&self) -> PeerHealth {
         if self.halted {
             return PeerHealth::Halted;
@@ -552,19 +400,12 @@ impl PeerDiagnostics {
     }
 }
 
-/// Per-peer diagnostics shared between the reader tasks (writers), the
-/// verifier's escalation check, and status snapshots (readers).
 #[derive(Clone, Default)]
 struct PeerWatch {
     peers: Arc<Mutex<HashMap<ZoneId, PeerDiagnostics>>>,
 }
 
 impl PeerWatch {
-    /// Positive evidence that the peer chain holds nothing past what the
-    /// reader verified: an at-tip run intact since before `wait_started`, with
-    /// at least one pass after it (a reader that died before the wait proves
-    /// nothing about it), from a view at least as fresh as `local_slot`, the
-    /// halting local block's inscription slot. `None` says keep waiting.
     fn confirmed_absence(
         &self,
         zone: ZoneId,
@@ -573,12 +414,6 @@ impl PeerWatch {
     ) -> Option<AbsenceEvidence> {
         let peers = self.lock();
         let entry = peers.get(&zone)?;
-        // A held reader proves nothing. Suspended: a pass admitted just before
-        // the committee dipped can extend the run with post-dip reads, so the
-        // hold, not only the evidence reset, is what keeps a verdict off it.
-        // Pin refused: the reader drains at the tip of a chain it refuses to
-        // verify, and a verdict off that would blame the peer for a local
-        // config mismatch.
         if entry.hold != ReaderHold::None {
             return None;
         }
@@ -586,10 +421,6 @@ impl PeerWatch {
         if evidence.since? > wait_started || evidence.latest? < wait_started {
             return None;
         }
-        // The referenced peer block predates the local block's inscription, so
-        // a view at least that fresh refutes it; a staler view (e.g. a lagging
-        // Bedrock replica serving both this check and the reader) proves
-        // nothing.
         let lib_slot = evidence.lib_slot?;
         if lib_slot < local_slot {
             return None;
@@ -602,8 +433,6 @@ impl PeerWatch {
         })
     }
 
-    /// Whether the peer's reader last skipped its pass on the committee
-    /// floor, so waiters can say why a block is not arriving.
     fn is_suspended(&self, zone: ZoneId) -> bool {
         self.lock()
             .get(&zone)
@@ -614,8 +443,6 @@ impl PeerWatch {
         self.peers.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Unsticks a halted mark once the peer serves again: the next successful
-    /// rederive for the zone, or an accept-list acceptance.
     fn clear_halted(&self, zone: ZoneId) {
         self.lock().entry(zone).or_default().halted = false;
     }
@@ -624,14 +451,10 @@ impl PeerWatch {
         self.lock().entry(zone).or_default().halted = true;
     }
 
-    /// Registers a configured peer so it appears in snapshots before its
-    /// first pass.
     fn register(&self, zone: ZoneId) {
         self.lock().entry(zone).or_default();
     }
 
-    /// Folds in a pass that never produced a stream. It read nothing, so it
-    /// says nothing about the channel tip and breaks the evidence run.
     fn report_failed_pass(&self, zone: ZoneId) {
         let mut peers = self.lock();
         let entry = peers.entry(zone).or_default();
@@ -640,10 +463,6 @@ impl PeerWatch {
         entry.evidence = TipEvidence::default();
     }
 
-    /// Folds in a pass skipped on the committee floor. It read nothing, so
-    /// besides marking the suspension it breaks the caught-up evidence run:
-    /// an absence verdict must never escalate off evidence gathered before
-    /// the committee dipped.
     fn report_suspended(&self, zone: ZoneId) {
         let mut peers = self.lock();
         let entry = peers.entry(zone).or_default();
@@ -665,8 +484,6 @@ impl PeerWatch {
         entry.stuck = report.stuck;
         entry.last_pass_drained = report.drained;
         if let Some(tip_slot) = report.drained_at_tip {
-            // A pass under a refused pin drains a chain it verifies nothing of,
-            // so like a suspension it breaks the run rather than extending it.
             if report.pin_refused {
                 entry.evidence = TipEvidence::default();
                 return;
@@ -684,7 +501,6 @@ impl PeerWatch {
         }
     }
 
-    /// Snapshots every registered peer, ordered by zone id.
     fn statuses(&self) -> Vec<PeerStatus> {
         let peers = self.lock();
         let mut all: Vec<PeerStatus> = peers
@@ -702,37 +518,22 @@ impl PeerWatch {
     }
 }
 
-/// The reader's caught-up evidence: an unbroken run of passes that drained
-/// with the cursor at the peer channel's tip. Any stall, failed pass, lag
-/// behind the tip, or tip-read failure clears it, so a run intact across a
-/// whole wait window is positive evidence the channel holds nothing the reader
-/// has not verified.
 #[derive(Clone, Copy, Debug, Default)]
 struct TipEvidence {
     since: Option<Instant>,
     latest: Option<Instant>,
     drained_passes: u64,
     channel_tip_slot: Option<u64>,
-    /// Highest LIB slot observed on the run's at-tip passes: how fresh the
-    /// endpoint's view is, gating escalation against a stale replica.
     lib_slot: Option<u64>,
 }
 
-/// The indexer-side Option B verifier.
-///
-/// For every cross-zone dispatch in a block it re-derives the transaction from
-/// the peer's finalized block and rejects it if the bytes differ (a forgery), so
-/// delivery no longer relies on trusting the sequencer. A replay of an
-/// already-delivered message is left to the inbox, which refuses it on chain.
+/// Re-derives every cross-zone dispatch from the peer's finalized block and rejects it if the
+/// bytes differ, so delivery does not rely on trusting the sequencer.
 #[derive(Clone)]
 pub struct CrossZoneVerifier {
     self_zone: ZoneId,
     peers: PeerBlocks,
-    /// One channel client per peer, used only for the one-shot refetch of an
-    /// evicted body. Built exactly like the reader's own client.
     refetch_clients: HashMap<ZoneId, Arc<ZoneIndexer<TimeoutNode<NodeHttpClient>>>>,
-    /// One-shot refetches attempted, successful or not. The retry cadence
-    /// line in [`Self::wait_for_peer_block`] reports the running total.
     refetch_attempts: Arc<AtomicU64>,
     seen: Arc<RwLock<HashSet<SeenKey>>>,
     watch: PeerWatch,
@@ -740,7 +541,6 @@ pub struct CrossZoneVerifier {
 
 impl CrossZoneVerifier {
     /// Builds the verifier and spawns one peer reader per configured peer.
-    /// Returns `None` when cross-zone messaging is disabled.
     pub fn start(config: &IndexerConfig) -> Option<Self> {
         let cross_zone = config.cross_zone.as_ref()?;
         let self_zone: ZoneId = *config.channel_id.as_ref();
@@ -758,8 +558,6 @@ impl CrossZoneVerifier {
                 CommonHttpClient::new(config.bedrock_config.auth.clone().map(Into::into)),
                 config.bedrock_config.addr.clone(),
             ));
-            // The reader moves `node` into its `ZoneIndexer`; this clone is its
-            // own handle for the channel-tip reads behind the evidence run.
             let tip_node = node.clone();
             refetch_clients.insert(
                 peer.channel_id,
@@ -808,9 +606,7 @@ impl CrossZoneVerifier {
         self.watch.statuses()
     }
 
-    /// The seen keys of every dispatch in `block`, decoded without any
-    /// verification. Only for the operator accept-list: recording them makes a
-    /// later replay short-circuit exactly as a verified delivery's would.
+    /// The seen keys of every dispatch in `block`, decoded without any verification.
     #[must_use]
     pub fn unverified_dispatch_keys(block: &Block) -> Vec<SeenKey> {
         block
@@ -821,10 +617,8 @@ impl CrossZoneVerifier {
             .collect()
     }
 
-    /// [`Self::unverified_dispatch_keys`] plus unsticking each dispatch's
-    /// source zone from a halted mark: an operator acceptance supersedes the
-    /// verdict that marked the zone. The caller records the keys only once
-    /// the block applies.
+    /// [`Self::unverified_dispatch_keys`] plus unsticking each dispatch's source zone from a halted
+    /// mark: an operator acceptance supersedes the verdict that marked the zone.
     #[must_use]
     pub fn accept_unverified(&self, block: &Block) -> Vec<SeenKey> {
         block
@@ -839,21 +633,9 @@ impl CrossZoneVerifier {
             .collect()
     }
 
-    /// Verifies every cross-zone dispatch in a block, returning the keys to mark
-    /// seen, or the reason verification could not complete. `inscription_slot`
-    /// is the L1 slot the block was inscribed at, bounding how fresh a peer
-    /// view must be before a verified-absence verdict may fire.
-    ///
-    /// [`CrossZoneVerifyError::Forged`] means the caller must halt ingestion;
-    /// [`CrossZoneVerifyError::PeerUnavailable`] means the caller must hold its
-    /// read cursor and retry, since the block is not yet judged either way.
-    ///
-    /// The caller MUST record the returned keys via [`Self::record_seen`] only
-    /// after the block applies, so the seen-set mirrors the inbox's on-chain
-    /// seen-shard. Marking a key from a block that never applies would let a later
-    /// forged dispatch reuse it to skip re-derivation while the inbox delivers the
-    /// forgery. A key already seen is a replay the inbox refuses, so it is left to
-    /// the inbox without re-derivation.
+    /// Verifies every cross-zone dispatch in a block, returning the keys to mark seen, or the
+    /// reason verification could not complete. Forged means the caller must halt ingestion;
+    /// PeerUnavailable means it must hold its read cursor and retry.
     pub async fn verify_block(
         &self,
         block: &Block,
@@ -892,9 +674,9 @@ impl CrossZoneVerifier {
         Ok(verified)
     }
 
-    /// Marks the given dispatch keys seen, so a later replay of them is accepted
-    /// without re-derivation. Call only after the block that carried them has been
-    /// applied on chain (see [`Self::verify_block`]).
+    /// Marks the given dispatch keys seen, so a later replay of them is accepted without
+    /// re-derivation. Call only after the carrying block applies, or a later forged dispatch
+    /// could reuse the key to skip re-derivation.
     pub async fn record_seen(&self, keys: Vec<SeenKey>) {
         if keys.is_empty() {
             return;
@@ -902,8 +684,6 @@ impl CrossZoneVerifier {
         self.seen.write().await.extend(keys);
     }
 
-    /// Decodes a transaction into the cross-zone message it dispatches, or `None`
-    /// if it is not an inbox dispatch.
     fn decode_dispatch(tx: &LeeTransaction) -> Option<CrossZoneMessage> {
         let (to, message) = tx.public_call()?;
         if to.program_account_id != programs::cross_zone_inbox_account_id() {
@@ -911,15 +691,10 @@ impl CrossZoneVerifier {
         }
         match borsh::from_slice::<InboxMessage>(message) {
             Ok(InboxMessage::Dispatch(msg)) => Some(msg),
-            // Only a dispatch carries a cross-zone message to re-derive; a genesis
-            // `InitConfig` is not verifier-relevant, and a `Mark` never reaches this
-            // decode (it targets the seen actor, not the inbox's config actor).
             Ok(InboxMessage::Mark(_) | InboxMessage::InitConfig(_)) | Err(_) => None,
         }
     }
 
-    /// Re-derives the dispatch transaction the watcher should have injected for
-    /// `msg`, reading the source message from the peer block's outbound list.
     async fn rederive(
         &self,
         msg: &CrossZoneMessage,
@@ -937,8 +712,6 @@ impl CrossZoneVerifier {
                 },
             })?;
 
-        // Everything below is a property of the peer block just read, so a
-        // mismatch is the dispatch lying about it, not a transient condition.
         let src_outbound_index =
             usize::try_from(msg.src_outbound_index).expect("u32 index fits in usize");
         let message = peer_block
@@ -959,12 +732,8 @@ impl CrossZoneVerifier {
             ));
         }
 
-        // The peer chain served this rederivation, so a halted mark against
-        // the zone no longer holds.
         self.watch.clear_halted(msg.src_zone);
 
-        // Recomputed rather than read from `msg`, which would make the field
-        // attest to itself.
         Ok(build_dispatch(
             &OutboundSource {
                 src_zone: msg.src_zone,
@@ -976,23 +745,6 @@ impl CrossZoneVerifier {
         ))
     }
 
-    /// Resolves the referenced peer block, distinguishing forgery from lag.
-    ///
-    /// A `block_id` inside the run verified from the peer's genesis (see
-    /// [`PeerChain::verified_prefix`]) that we do not hold does not exist on the
-    /// peer chain, so reject it. Otherwise the reader has not reached it, so
-    /// wait, and give up after [`PEER_BLOCK_WAIT_TIMEOUT`] rather than block
-    /// ingestion forever. A reference to a block the peer never produced
-    /// ordinarily stalls rather than being rejected, since it is
-    /// indistinguishable from a block the peer has not produced yet; either way
-    /// it is never applied. The one exception is evidence-backed: a reader
-    /// whose at-tip run (see [`TipEvidence`]) covered this whole wait read
-    /// everything the channel holds, so an id still beyond the verified tip is
-    /// on no chain the peer inscribed, and the wait ends in a permanent
-    /// verdict instead of another retry. `local_slot`, the halting local
-    /// block's inscription slot, bounds how fresh that evidence must be (see
-    /// [`PeerWatch::confirmed_absence`]). Escalation applies to Behind lookups
-    /// only; the gate in the loop body says why.
     async fn wait_for_peer_block(
         &self,
         zone: ZoneId,
@@ -1001,17 +753,8 @@ impl CrossZoneVerifier {
     ) -> Result<Block, PeerBlockError> {
         let wait_started = Instant::now();
         let mut waited = Duration::ZERO;
-        // Consecutive refetch failures for this block, logged on the shared
-        // [`alerts_at`] cadence rather than once per 1s poll.
         let mut refetch_failures: u32 = 0;
         loop {
-            // Only a Behind lookup may escalate on the tip evidence below: the
-            // claimed id sits above everything the reader verified, so a
-            // provably drained channel refutes the block itself. The walk
-            // certified an evicted block exists, so a failing refetch is an
-            // endpoint fault that stays retriable however much evidence
-            // accumulates, or absence of the body would read as absence of the
-            // block.
             let may_escalate = match self.peers.resolve(zone, block_id).await {
                 PeerLookup::Cached(block) => return Ok(*block),
                 PeerLookup::Evicted {
@@ -1039,8 +782,6 @@ impl CrossZoneVerifier {
                     }
                     false
                 }
-                // A backstop, not the live path: [`PeerChain::evicted`] says
-                // why absence from both maps means a forgery.
                 PeerLookup::InsideRun => {
                     return Err(PeerBlockError::NotOnPeerChain(format!(
                         "peer zone {} chain is verified past block {block_id} but it is absent",
@@ -1082,9 +823,6 @@ impl CrossZoneVerifier {
         }
     }
 
-    /// One-shot fetch of an evicted body from the peer's channel, verified
-    /// against the hash the walk recorded. The result is returned without
-    /// re-entering the cache: re-caching would regrow what eviction bounded.
     async fn refetch_evicted(
         &self,
         zone: ZoneId,
@@ -1097,15 +835,11 @@ impl CrossZoneVerifier {
             .refetch_clients
             .get(&zone)
             .ok_or_else(|| anyhow!("no channel client for peer zone {}", hex::encode(zone)))?;
-        // `next_messages` resumes after its cursor, so the cursor one below
-        // `read_at` serves the recorded slot first.
         let cursor = read_at.into_inner().checked_sub(1).map(Slot::from);
         let stream = indexer
             .next_messages(cursor)
             .await
             .map_err(|err| anyhow!("channel read failed: {err}"))?;
-        // Truncation would read as "no longer served"; safe only because the evicted
-        // path never escalates to Forged.
         let stream = stop_at_read_error(
             stream,
             tracing::error_span!("peer_block_refetch", peer_zone = %hex::encode(zone), block_id),
@@ -1114,17 +848,12 @@ impl CrossZoneVerifier {
     }
 }
 
-/// The outcome of one pass over a peer's message stream.
 #[derive(Debug, PartialEq, Eq)]
 struct PeerPass {
-    /// Where the next pass resumes from.
     cursor: Option<Slot>,
-    /// Set when the pass ended early on a message that would not decode.
     stalled_at: Option<Slot>,
 }
 
-/// The verdict text for an id refuted by an at-tip reader: what the reader saw
-/// against what the dispatch claimed.
 fn absence_verdict(zone: ZoneId, block_id: u64, evidence: &AbsenceEvidence) -> String {
     format!(
         "peer zone {} holds no block {block_id}: its reader drained at channel tip slot {} on {} straight passes covering the full wait, the verified tip is {}, and the view's LIB slot {} covers the halting block's inscription",
@@ -1138,9 +867,6 @@ fn absence_verdict(zone: ZoneId, block_id: u64, evidence: &AbsenceEvidence) -> S
     )
 }
 
-/// The channel tip slot, only when `cursor` has reached it. `None` on a read
-/// failure, an absent channel, or a cursor behind the tip, all of which break
-/// the caught-up evidence run rather than count toward it.
 async fn channel_tip_reached(
     node: &TimeoutNode<NodeHttpClient>,
     peer_zone: ZoneId,
@@ -1154,13 +880,6 @@ async fn channel_tip_reached(
     (cursor?.into_inner() >= tip_slot).then_some(tip_slot)
 }
 
-/// The peer channel's live committee size and tip slot, or `None` on a read
-/// failure or an absent channel, both unknown rather than zero. The
-/// sequencer's watcher holds the twin of this helper; the policy folding it is
-/// [`CommitteeFloorState`]. A sibling of [`channel_tip_reached`] rather than a
-/// widening of it: that read runs after a drained pass, and its freshness is
-/// what makes [`PeerWatch::confirmed_absence`] sound, so the pre-pass floor
-/// read must not stand in for it.
 async fn peer_committee(
     node: &TimeoutNode<NodeHttpClient>,
     peer_zone: ZoneId,
@@ -1172,7 +891,6 @@ async fn peer_committee(
     Some((state.accredited_keys.len(), state.tip_slot.into_inner()))
 }
 
-/// The committee behind a floor verdict, for the suspension report.
 fn describe_committee(last_read: Option<(usize, u64)>) -> String {
     match last_read {
         Some((size, tip_slot)) => {
@@ -1182,16 +900,11 @@ fn describe_committee(last_read: Option<(usize, u64)>) -> String {
     }
 }
 
-/// The endpoint's LIB slot, or `None` on a read failure. Read on at-tip
-/// passes as freshness evidence for the escalation guard in
-/// [`PeerWatch::confirmed_absence`].
 async fn observed_lib_slot(node: &TimeoutNode<NodeHttpClient>) -> Option<u64> {
     let info = node.consensus_info().await.ok()?;
     Some(info.cryptarchia_info.lib_slot.into_inner())
 }
 
-/// A permanent verdict against `msg`, carrying its coordinates for the halt
-/// record.
 const fn forged(msg: &CrossZoneMessage, verdict: String) -> CrossZoneVerifyError {
     CrossZoneVerifyError::Forged(ForgedDispatch {
         src_zone: msg.src_zone,
@@ -1208,11 +921,6 @@ fn seen_key(msg: &CrossZoneMessage) -> SeenKey {
     )
 }
 
-/// Whether a block read off a peer's channel may enter the cache, screened by
-/// the same [`screen_peer_block`] policy the watcher applies. [`ScreenRefusal`]
-/// says why each check exists.
-///
-/// [`ScreenRefusal`]: cross_zone::ScreenRefusal
 fn accept_peer_block(block: &Block) -> bool {
     match screen_peer_block(block) {
         Ok(_) => true,
@@ -1223,8 +931,6 @@ fn accept_peer_block(block: &Block) -> bool {
     }
 }
 
-/// Reads a peer zone's finalized blocks from Bedrock into the shared cache,
-/// reporting each pass into `watch`.
 #[expect(
     clippy::infinite_loop,
     reason = "the peer reader runs for the lifetime of the indexer process"
@@ -1241,16 +947,9 @@ async fn read_peer(
     info!("Cross-zone peer reader started");
 
     let mut cursor = None;
-    // In memory only: it says how loud to be about a slot this reader is stuck
-    // on.
     let mut stall = StallState::default();
     let mut floor = CommitteeFloorState::new(min_committee_size);
     loop {
-        // Above `next_messages`, so a suspended reader extends no new trust:
-        // nothing is verified or cached off blocks published under a
-        // sub-floor committee. Blocks verified before the dip still serve,
-        // and a dispatch naming an unverified one waits as `Unavailable`
-        // rather than escalating, because suspension cleared the evidence.
         if floor.enforced() {
             match floor.after_read(peer_committee(&tip_node, peer_zone).await) {
                 FloorVerdict::Suspended { passes, last_read } => {
@@ -1329,21 +1028,6 @@ async fn read_peer(
     }
 }
 
-/// Caches the finalized peer blocks carried by `stream`.
-///
-/// A block that fails to deserialize ends the pass and holds the cursor at the
-/// last fully-consumed slot, so the next poll re-reads it and a transient
-/// failure heals itself. It is never read past, however long it stays stuck:
-/// a hole stops [`PeerChain::verified_prefix`] below it, and since only blocks
-/// inside that run may be delivered from, reading on would cache blocks that can
-/// never be used while the reader claimed to have caught up. The watcher on the
-/// sequencer side stops at the same hole for the same reason.
-///
-/// The cursor advances only on a slot boundary, since one slot can carry several
-/// messages and resuming mid-slot would skip the ones after the failure. This
-/// relies on the stream never truncating mid-slot, which holds because the
-/// zone-sdk materializes a whole batch before yielding and batches end on slot
-/// boundaries.
 async fn consume_peer_stream<S>(
     stream: S,
     peer_zone: ZoneId,
@@ -1355,7 +1039,6 @@ where
 {
     let mut stream = std::pin::pin!(stream);
     let mut cursor = resume_from;
-    // The slot being consumed: cached so far, but there may be more to come.
     let mut in_progress: Option<Slot> = None;
 
     while let Some((msg, slot)) = stream.next().await {
@@ -1369,8 +1052,6 @@ where
         };
         match borsh::from_slice::<Block>(&zone_block.data) {
             Ok(block) => {
-                // Before caching, not when a dispatch names it: an unchecked
-                // block steers the prefix, and by then the damage is a halt.
                 if accept_peer_block(&block) {
                     peers.insert(peer_zone, block, slot).await;
                 }
@@ -1395,15 +1076,6 @@ where
     }
 }
 
-/// Finds an evicted block among `read_at`'s messages: the one whose recomputed
-/// hash equals `block_hash`, the hash the verified walk pinned. The claimed
-/// `header.hash` is never consulted, and the returned copy carries the
-/// recomputed value, restoring the invariant screening gives cached blocks.
-///
-/// A message that no longer decodes is passed over and surfaces as the
-/// missing-block error; the next attempt re-reads the slot. A same-id block
-/// hashing differently is reported by name, an endpoint fault per the gate in
-/// [`CrossZoneVerifier::wait_for_peer_block`].
 async fn refetched_block<S>(
     stream: S,
     read_at: Slot,
@@ -1466,10 +1138,7 @@ mod tests {
     const SELF_ZONE: ZoneId = [1; 32];
     const PEER_ZONE: ZoneId = [2; 32];
     const PEER_BLOCK_ID: u64 = 5;
-    /// The peer's run has to start at its genesis, or every test built on
-    /// [`peer_chain`] stalls for the full peer-block timeout before failing.
     const _: () = assert!(PEER_BLOCK_ID >= GENESIS_BLOCK_ID);
-    /// The slot tests record blocks under when its value does not matter.
     const READ_SLOT: Slot = Slot::new(0);
     fn verifier() -> CrossZoneVerifier {
         CrossZoneVerifier {
@@ -1482,12 +1151,10 @@ mod tests {
         }
     }
 
-    /// `n` as a test cache window.
     fn window(n: u32) -> NonZeroU32 {
         NonZeroU32::new(n).expect("test windows are nonzero")
     }
 
-    /// A verifier whose peer cache keeps `n` bodies behind the run tip.
     fn verifier_with_window(n: u32) -> CrossZoneVerifier {
         CrossZoneVerifier {
             peers: PeerBlocks::new(window(n)),
@@ -1495,8 +1162,6 @@ mod tests {
         }
     }
 
-    /// Caches `chain` recording each block at a slot equal to its id, the
-    /// shape a one-block-per-slot reader would produce.
     async fn cache_chain_with_slots(peers: &PeerBlocks, chain: Vec<Block>) {
         for block in chain {
             let read_at = Slot::from(block.header.block_id);
@@ -1504,12 +1169,10 @@ mod tests {
         }
     }
 
-    /// A ping outbound message addressed to `SELF_ZONE` carrying `payload`.
     fn outbound(payload: &[u8]) -> lee::OutboundMessage {
         ping_outbound(SELF_ZONE, payload)
     }
 
-    /// A peer-stream item inscribing `data` at `slot`.
     fn peer_msg(data: Vec<u8>, slot: u64) -> (ZoneMessage, Slot) {
         (
             ZoneMessage::Block(ZoneBlock {
@@ -1521,8 +1184,6 @@ mod tests {
         )
     }
 
-    /// A hash-linked chain of `len` blocks from genesis, each declaring a `b"hi"`
-    /// outbound message. Only a chain built this way advances the verified prefix.
     fn linked_chain(len: u64) -> Vec<Block> {
         linked_chain_with_outbound(
             GENESIS_BLOCK_ID.saturating_add(len).saturating_sub(1),
@@ -1530,14 +1191,10 @@ mod tests {
         )
     }
 
-    /// A peer-stream item carrying `block`.
     fn peer_block_msg(block: &Block, slot: u64) -> (ZoneMessage, Slot) {
         peer_msg(borsh::to_vec(block).expect("block serializes"), slot)
     }
 
-    /// A hash-linked run from the peer's genesis whose last block,
-    /// `PEER_BLOCK_ID`, declares a `payload` outbound message. The run is what
-    /// makes that block deliverable.
     fn peer_chain(payload: &[u8]) -> Vec<Block> {
         linked_chain_with_outbound(PEER_BLOCK_ID, |block_id| {
             vec![if block_id == PEER_BLOCK_ID {
@@ -1548,25 +1205,20 @@ mod tests {
         })
     }
 
-    /// Caches a run so its last block sits inside the verified prefix.
     async fn cache_chain(verifier: &CrossZoneVerifier, chain: Vec<Block>) {
         for block in chain {
             verifier.peers.insert(PEER_ZONE, block, READ_SLOT).await;
         }
     }
 
-    /// A peer-stream item whose inscription is not a decodable block.
     fn undecodable_msg(slot: u64) -> (ZoneMessage, Slot) {
         peer_msg(b"not a block".to_vec(), slot)
     }
 
-    /// The dispatch a watcher would inject for a `PEER_BLOCK_ID` emission of `payload`.
     fn dispatch(payload: &[u8]) -> LeeTransaction {
         dispatch_naming_block_hash(payload, source_block_hash(payload))
     }
 
-    /// The recomputed hash of the `PEER_BLOCK_ID` block carrying `payload`,
-    /// which is what an honest watcher puts in the dispatch.
     fn source_block_hash(payload: &[u8]) -> [u8; 32] {
         peer_chain(payload)
             .last()
@@ -1604,8 +1256,6 @@ mod tests {
         let verifier = verifier();
         cache_chain(&verifier, peer_chain(b"hi")).await;
 
-        // Only the claimed source hash is wrong. Detectable because the verifier
-        // recomputes it from the resolved block instead of reading the field.
         let block =
             produce_dummy_block(9, None, vec![dispatch_naming_block_hash(b"hi", [0xab; 32])]);
         assert!(
@@ -1620,8 +1270,6 @@ mod tests {
     #[tokio::test]
     async fn rejects_dispatch_with_no_matching_emission() {
         let verifier = verifier();
-        // The peer block carries the real emission, but the block claims a
-        // different payload, so re-derivation does not reproduce it.
         cache_chain(&verifier, peer_chain(b"real")).await;
 
         let block = produce_dummy_block(9, None, vec![dispatch(b"forged")]);
@@ -1645,15 +1293,8 @@ mod tests {
             .verify_block(&first, Slot::from(0))
             .await
             .expect("first delivery verifies");
-        // Mark the delivery seen, as the ingest loop does once the block applies.
         verifier.record_seen(keys).await;
 
-        // A payload that cannot re-derive, under the key just recorded, which
-        // now names the source block as well as the coordinates. Accepted only
-        // by the seen-key short circuit, since the inbox refuses it on chain;
-        // `unaccepted_dispatch_does_not_poison_seen` asserts the same input is
-        // rejected when the key was never recorded, which is what makes this one
-        // about the short circuit rather than re-derivation.
         let replay = produce_dummy_block(
             10,
             None,
@@ -1680,9 +1321,6 @@ mod tests {
             .expect("first verifies");
         verifier.record_seen(keys).await;
 
-        // Same coordinates as the delivery just seen, different source block.
-        // The inbox refuses rather than no-ops it, so skipping re-derivation
-        // would wave through a dispatch that parks the block.
         let other = produce_dummy_block(
             10,
             None,
@@ -1699,24 +1337,15 @@ mod tests {
 
     #[tokio::test]
     async fn unaccepted_dispatch_does_not_poison_seen() {
-        // A dispatch verified in a block that never applies (e.g. one that parks)
-        // must not be marked seen. Otherwise a later forged dispatch could reuse
-        // its key to skip re-derivation, while the inbox, never having recorded
-        // the key on chain, would deliver the forgery.
         let verifier = verifier();
         cache_chain(&verifier, peer_chain(b"hi")).await;
 
-        // The dispatch verifies, but the block is not applied, so record_seen is
-        // not called (the ingest loop records only after an Applied outcome).
         let first = produce_dummy_block(9, None, vec![dispatch(b"hi")]);
         verifier
             .verify_block(&first, Slot::from(0))
             .await
             .expect("dispatch verifies");
 
-        // A forged dispatch reusing the same key (same src zone, block, tx index)
-        // with a different payload must still be re-derived and rejected, since
-        // its key was never recorded as seen.
         let forged = produce_dummy_block(10, None, vec![dispatch(b"forged")]);
         let err = verifier
             .verify_block(&forged, Slot::from(0))
@@ -1749,7 +1378,6 @@ mod tests {
         let peers = PeerBlocks::default();
         let genesis = linked_chain(1);
         peers.insert(PEER_ZONE, genesis[0].clone(), READ_SLOT).await;
-        // Claims the next id, but not the predecessor it would have to follow.
         peers
             .insert(
                 PEER_ZONE,
@@ -1770,9 +1398,6 @@ mod tests {
 
     #[tokio::test]
     async fn a_block_arriving_between_the_two_halves_of_a_lookup_is_not_forged() {
-        // `resolve` answers "cached?" and "inside the verified run?" under one
-        // lock. Split across two, an insert landing between them reads as
-        // absent-and-inside-the-run, the forgery signal, for a cached block.
         let peers = PeerBlocks::default();
         for block in linked_chain(2) {
             peers.insert(PEER_ZONE, block, READ_SLOT).await;
@@ -1790,10 +1415,6 @@ mod tests {
 
     #[tokio::test]
     async fn the_tip_survives_the_tip_block_leaving_the_cache() {
-        // The tip is pinned at walk time, not re-derived from the blocks map:
-        // re-derived, evicting the tip block (any future cache bounding) would
-        // read as no tip at all, and the next honest block would misclassify as
-        // NotTheGenesis and freeze the run for good.
         let peers = PeerBlocks::default();
         let chain = linked_chain(3);
         for block in chain.iter().take(2).cloned() {
@@ -1813,7 +1434,6 @@ mod tests {
             "the next block still extends the run off the pinned tip"
         );
         assert_eq!(peers.verified_prefix(PEER_ZONE).await, Some(3));
-        // The evicted id keeps its classification: inside the run and absent.
         assert!(matches!(
             peers.resolve(PEER_ZONE, 2).await,
             PeerLookup::InsideRun
@@ -1846,20 +1466,15 @@ mod tests {
     async fn peer_reader_does_not_resume_inside_a_partially_failed_slot() {
         let peers = PeerBlocks::default();
         let chain = linked_chain(1);
-        // One slot can carry several messages; the second one fails.
         let stream = stream::iter(vec![peer_block_msg(&chain[0], 7), undecodable_msg(7)]);
 
         let pass = consume_peer_stream(stream, PEER_ZONE, &peers, Some(Slot::from(6))).await;
 
-        // Slot 7 is re-read whole next pass, not resumed past the failure.
         assert_eq!(pass.cursor, Some(Slot::from(6)));
     }
 
     #[tokio::test]
     async fn peer_reader_never_reads_past_a_slot_it_cannot_decode() {
-        // It used to give up after DECODE_RETRY_LIMIT attempts and read on,
-        // caching blocks the stalled run could never use. The watcher stops at
-        // the same hole, so neither side delivers across it.
         let peers = PeerBlocks::default();
         let chain = linked_chain(3);
         let stream = stream::iter(vec![
@@ -1890,10 +1505,6 @@ mod tests {
         ]);
         consume_peer_stream(stream, PEER_ZONE, &verifier.peers, None).await;
 
-        // Regression: block 2 used to be reported as forged, halting ingestion
-        // permanently, because a `max(cached ids)` high-water mark counted
-        // blocks read past the undecodable slot. The reader now stops at that
-        // slot, so block 2 is simply unread, which is lag.
         let err = verifier
             .wait_for_peer_block(PEER_ZONE, 2, 0)
             .await
@@ -1906,11 +1517,6 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_block_ahead_of_the_run_is_not_cached_and_not_delivered_from() {
-        // The other half of #677. A peer inscribes a block claiming an id its
-        // chain has not reached; it is well formed and correctly signed, so
-        // nothing about the block itself refuses it. Delivered, its message
-        // would burn the replay key the honest block at that id would later
-        // need, and the inbox would refuse the real message.
         let verifier = verifier();
         cache_chain(&verifier, linked_chain(2)).await;
         let claimed = produce_dummy_block_with_outbound(9, None, vec![outbound(b"hi")]);
@@ -1932,10 +1538,6 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_high_block_id_cannot_poison_the_forgery_test() {
-        // A peer picks its own block ids, so one inscribed block claiming a huge
-        // id would drive a `max(cached ids)` high-water mark past every real id
-        // and make each later dispatch look forged. It is not the block that
-        // would continue the run, so it is not cached at all.
         let verifier = verifier();
         let chain = linked_chain(2);
         verifier
@@ -1981,7 +1583,6 @@ mod tests {
         assert_eq!(pass.cursor, None, "the failed slot is not skipped");
         assert_eq!(pass.stalled_at, Some(Slot::from(0)));
 
-        // The next pass re-reads the same slot, which now decodes.
         let pass = consume_peer_stream(
             stream::iter(chain.iter().enumerate().map(|(index, block)| {
                 peer_block_msg(block, u64::try_from(index).expect("test index fits in u64"))
@@ -2000,9 +1601,6 @@ mod tests {
             .expect("the dispatch verifies once the peer block has been read");
     }
 
-    /// The live brick from #648: a second, differing block at a used id replaced
-    /// the entry, so the next dispatch naming that id re-derived against the
-    /// wrong block and halted ingestion. One inscription, remote halt.
     #[tokio::test]
     async fn an_equivocating_peer_cannot_replace_a_cached_block() {
         let verifier = verifier();
@@ -2041,7 +1639,6 @@ mod tests {
             "the block held first stays"
         );
 
-        // And the dispatch that would have been rejected as forged still verifies.
         let block = produce_dummy_block(9, None, vec![dispatch(b"hi")]);
         verifier
             .verify_block(&block, Slot::from(0))
@@ -2051,9 +1648,6 @@ mod tests {
 
     #[tokio::test]
     async fn a_non_linking_block_at_the_run_head_does_not_lock_that_id_out() {
-        // The other side of first-write-wins: refusing the honest block 3 when
-        // it lands behind a claimed one would pin the run at 2 for the life of
-        // the store, and every later message from that peer would stall.
         let peers = PeerBlocks::default();
         let chain = linked_chain(3);
         for block in chain.iter().take(2).cloned() {
@@ -2085,17 +1679,6 @@ mod tests {
 
     #[tokio::test]
     async fn a_block_ahead_of_the_run_cannot_win_an_id_the_watcher_gave_to_another() {
-        // The two sides tie-break differently unless this reader stays strictly
-        // sequential. The peer is its own sequencer, so it knows block 3's hash
-        // before publishing it: it inscribes a block claiming id 4 and linking
-        // to 3, then 3, then its honest 4.
-        //
-        // Caching ahead, the prefix would walk 3 and then straight through the
-        // block held at 4, and the honest 4 would be refused when it landed.
-        // The watcher reads in order, so at tip 2 it passes over the block
-        // claiming 4 and never reconsiders it, then delivers from the honest 4.
-        // Two different blocks at one id, and the dispatch naming it re-derives
-        // against the wrong one and halts ingestion for good.
         let peers = PeerBlocks::default();
         let chain = linked_chain(4);
         for block in chain.iter().take(2).cloned() {
@@ -2121,9 +1704,6 @@ mod tests {
 
     #[tokio::test]
     async fn a_block_below_the_peers_genesis_is_not_cached() {
-        // It is on no chain the run can walk, so nothing would ever certify it,
-        // and cached it would answer every later lookup at that id as though
-        // the peer had built it.
         let peers = PeerBlocks::default();
         let below = produce_dummy_block_with_outbound(0, None, vec![outbound(b"below")]);
         assert!(!peers.insert(PEER_ZONE, below, READ_SLOT).await);
@@ -2133,9 +1713,6 @@ mod tests {
         }
         assert_eq!(peers.verified_prefix(PEER_ZONE).await, Some(3));
         assert!(peers.get(PEER_ZONE, 0).await.is_none());
-        // Under the run and unheld, which is the forgery signal, and the right
-        // one: the peer's chain starts at its genesis, so only a dispatch that
-        // invented the coordinate could name a block below it.
         assert!(matches!(
             peers.resolve(PEER_ZONE, 0).await,
             PeerLookup::InsideRun
@@ -2144,10 +1721,6 @@ mod tests {
 
     #[tokio::test]
     async fn a_peer_whose_genesis_is_unread_resolves_to_behind() {
-        // Before the run has a first block there is nothing to place anything
-        // against, so every id is lag rather than forgery. Reading it the other
-        // way round is the original hole: any inscribed block would resolve as
-        // the peer's own, and any absent one as a forgery that halts.
         let peers = PeerBlocks::default();
         assert_eq!(peers.verified_prefix(PEER_ZONE).await, None);
         assert!(matches!(
@@ -2162,9 +1735,6 @@ mod tests {
 
     #[tokio::test]
     async fn a_block_inside_the_verified_run_is_never_displaced() {
-        // #648 in the other direction: once the run has walked a block, a later
-        // arrival at that id must not replace it, whatever it links to, or a
-        // dispatch naming it re-derives against the new one and halts ingestion.
         let peers = PeerBlocks::default();
         let chain = linked_chain(2);
         for block in chain.iter().cloned() {
@@ -2182,9 +1752,6 @@ mod tests {
             "it links to block 1 just as the held block does, and the run has certified the held one"
         );
 
-        // The one that would slip through if displacement were allowed anywhere
-        // below the id that extends the run: it links to the run's own head, so
-        // every test but the id guard says take it.
         let plausible = produce_dummy_block_with_outbound(
             2,
             Some(chain[1].header.hash),
@@ -2200,8 +1767,6 @@ mod tests {
         );
     }
 
-    /// The reader re-reads a slot on every retry, so caching the same block
-    /// twice must be a quiet no-op rather than equivocation.
     #[tokio::test]
     async fn re_reading_the_same_block_is_not_equivocation() {
         let verifier = verifier();
@@ -2232,8 +1797,6 @@ mod tests {
         );
     }
 
-    /// Recomputing `header.hash` on the way in is what stops a peer asserting
-    /// links it never built.
     #[tokio::test]
     async fn a_block_whose_hash_does_not_match_its_contents_is_not_cached() {
         let verifier = verifier();
@@ -2259,14 +1822,10 @@ mod tests {
         );
     }
 
-    /// An at-tip pass over a peer verified to `verified_tip`, with the channel
-    /// tip at `tip_slot` and the endpoint's LIB there too.
     fn at_tip_report(verified_tip: u64, tip_slot: u64) -> PassReport {
         at_tip_report_with_lib(verified_tip, tip_slot, Some(tip_slot))
     }
 
-    /// [`at_tip_report`] with the endpoint's LIB pinned separately, to model a
-    /// stale replica whose channel view drains below the real chain.
     fn at_tip_report_with_lib(
         verified_tip: u64,
         tip_slot: u64,
@@ -2311,9 +1870,6 @@ mod tests {
         );
     }
 
-    /// Suspension breaks the caught-up run, so an absence verdict can never
-    /// escalate off evidence gathered before the committee dipped, and a run
-    /// after resumption starts from scratch.
     #[tokio::test(start_paused = true)]
     async fn suspension_clears_the_evidence_run_and_it_rebuilds_from_scratch() {
         let watch = PeerWatch::default();
@@ -2384,9 +1940,6 @@ mod tests {
         assert_eq!(watch.statuses()[0].health, PeerHealth::Live);
     }
 
-    /// The precedence pairs the classification test cannot show one at a
-    /// time: a verdict outranks a suspension, a suspension outranks a stall,
-    /// and an ordinary pass clears the suspension again.
     #[test]
     fn suspension_precedence_and_recovery() {
         let watch = PeerWatch::default();
@@ -2429,7 +1982,6 @@ mod tests {
         let start = Instant::now();
 
         watch.report_pass(PEER_ZONE, &at_tip_report(2, 7));
-        // Drained, but behind the channel tip: says nothing about later blocks.
         watch.report_pass(
             PEER_ZONE,
             &PassReport {
@@ -2445,7 +1997,6 @@ mod tests {
         assert!(watch.confirmed_absence(PEER_ZONE, start, 0).is_none());
 
         watch.report_pass(PEER_ZONE, &at_tip_report(2, 7));
-        // A stalled pass never reached the tip either.
         watch.report_pass(
             PEER_ZONE,
             &PassReport {
@@ -2468,11 +2019,8 @@ mod tests {
         verifier.watch.register(PEER_ZONE);
         verifier.watch.report_pass(PEER_ZONE, &at_tip_report(2, 7));
 
-        // The halting block was inscribed at slot 7, exactly the view's LIB:
-        // the freshness bound holds at its boundary.
         let wait = verifier.wait_for_peer_block(PEER_ZONE, 9, 7);
         let keep_reporting = async {
-            // One at-tip pass every 10s across the whole wait window.
             for _ in 0_u32..40 {
                 tokio::time::sleep(Duration::from_secs(10)).await;
                 verifier.watch.report_pass(PEER_ZONE, &at_tip_report(2, 7));
@@ -2504,10 +2052,6 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_stale_replica_view_cannot_refute_a_dispatch() {
-        // The reader and this check share one Bedrock endpoint. A consistently
-        // stale replica drains at its own channel tip, but its LIB sits below
-        // the halting block's inscription slot, so its at-tip run says nothing
-        // about a dispatch that block carries.
         let verifier = verifier();
         cache_chain(&verifier, linked_chain(2)).await;
         verifier.watch.register(PEER_ZONE);
@@ -2565,7 +2109,6 @@ mod tests {
         cache_chain_with_slots(&peers, chain.clone()).await;
 
         assert_eq!(peers.verified_prefix(PEER_ZONE).await, Some(4));
-        // Tip 4, window 1: ids 1 and 2 are demoted, 3 and 4 keep their bodies.
         let PeerLookup::Evicted {
             read_at,
             block_hash,
@@ -2588,7 +2131,6 @@ mod tests {
             PeerLookup::Cached(_)
         ));
         assert!(peers.get(PEER_ZONE, 1).await.is_none(), "the body is gone");
-        // An id the walk never certified still forges.
         assert!(matches!(
             peers.resolve(PEER_ZONE, 0).await,
             PeerLookup::InsideRun
@@ -2600,8 +2142,6 @@ mod tests {
         let peers = PeerBlocks::new(window(2));
         cache_chain_with_slots(&peers, linked_chain(5)).await;
 
-        // Tip 5, window 2: the floor is 3, so ids 3 and 4 are the two bodies
-        // behind the tip and 2 is the deepest demoted id.
         assert!(matches!(
             peers.resolve(PEER_ZONE, 2).await,
             PeerLookup::Evicted { .. }
@@ -2636,8 +2176,6 @@ mod tests {
         }
     }
 
-    /// Zero is unrepresentable in the config type, so a zero window dies at
-    /// parse, and an omitted field takes the 1024 default.
     #[test]
     fn a_zero_window_is_rejected_at_config_parse() {
         assert!(
@@ -2655,17 +2193,14 @@ mod tests {
         let peers = PeerBlocks::new(window(1));
         let chain = linked_chain(4);
         cache_chain_with_slots(&peers, chain.iter().take(3).cloned().collect()).await;
-        // Tip 3, window 1: id 1 is demoted.
         assert!(matches!(
             peers.resolve(PEER_ZONE, 1).await,
             PeerLookup::Evicted { .. }
         ));
 
-        // The run still extends past the eviction.
         assert!(peers.insert(PEER_ZONE, chain[3].clone(), READ_SLOT).await);
         assert_eq!(peers.verified_prefix(PEER_ZONE).await, Some(4));
 
-        // An equivocating block at an evicted id is refused off the index hash.
         let impostor = produce_dummy_block_with_outbound(1, None, vec![outbound(b"forged")]);
         assert!(!peers.insert(PEER_ZONE, impostor, READ_SLOT).await);
         let PeerLookup::Evicted { block_hash, .. } = peers.resolve(PEER_ZONE, 1).await else {
@@ -2691,8 +2226,6 @@ mod tests {
 
     #[tokio::test]
     async fn refetch_recomputes_the_hash_rather_than_trusting_the_header() {
-        // The signature does not cover `header.hash`, so a served copy may
-        // claim any value there.
         let mut tampered = linked_chain(1).pop().expect("genesis block");
         let certified = tampered.recompute_hash();
         tampered.header.hash = HashType([0xAB; 32]);
@@ -2731,8 +2264,6 @@ mod tests {
         let wait = verifier.wait_for_peer_block(PEER_ZONE, 9, 0);
         let reports = async {
             tokio::time::sleep(Duration::from_secs(50)).await;
-            // An undecodable slot breaks the run; the at-tip passes after it
-            // start a new one that does not cover the wait.
             verifier.watch.report_pass(
                 PEER_ZONE,
                 &PassReport {
@@ -2760,8 +2291,6 @@ mod tests {
         );
     }
 
-    /// Suspension holds new trust, not old: blocks verified before the dip
-    /// still serve waiters from the cache.
     #[tokio::test]
     async fn a_suspended_peer_still_serves_previously_verified_blocks() {
         let verifier = verifier();
@@ -2775,9 +2304,6 @@ mod tests {
             .expect("a block verified before the dip still serves");
     }
 
-    /// A dispatch naming a block past the suspension point waits out as
-    /// retryable, never as a verdict: the suspended flag refuses to prove
-    /// absence even while at-tip passes admitted around the dip report in.
     #[tokio::test(start_paused = true)]
     async fn suspension_mid_wait_stays_unavailable_at_timeout() {
         let verifier = verifier();
@@ -2848,8 +2374,6 @@ mod tests {
         verifier.watch.report_pass(PEER_ZONE, &at_tip_report(2, 7));
         tokio::time::sleep(Duration::from_secs(1)).await;
 
-        // No passes at all during the wait: the reader may be dead, and a dead
-        // reader proves nothing about the channel.
         let err = verifier
             .wait_for_peer_block(PEER_ZONE, 9, 0)
             .await
@@ -2926,9 +2450,6 @@ mod tests {
 
     #[tokio::test]
     async fn accept_listed_keys_short_circuit_replays_without_peer_data() {
-        // No peer chain is cached at all, so nothing could verify. Recording
-        // the keys is what the accept-list does, and the replay must then pass
-        // exactly as a verified delivery's would.
         let verifier = verifier();
         let block = produce_dummy_block(9, None, vec![dispatch(b"hi")]);
         verifier
@@ -2949,7 +2470,6 @@ mod tests {
             PeerLookup::Evicted { .. }
         ));
 
-        // No refetch client is configured here, so every attempt fails.
         let err = verifier
             .wait_for_peer_block(PEER_ZONE, 1, 0)
             .await
@@ -2975,8 +2495,6 @@ mod tests {
         verifier.watch.register(PEER_ZONE);
         verifier.watch.report_pass(PEER_ZONE, &at_tip_report(4, 7));
 
-        // Full at-tip evidence across the whole wait: exactly the setup that
-        // escalates a Behind id to a permanent verdict.
         let wait = verifier.wait_for_peer_block(PEER_ZONE, 1, 7);
         let keep_reporting = async {
             for _ in 0_u32..40 {
@@ -3004,15 +2522,12 @@ mod tests {
         let verifier = verifier_with_window(1);
         cache_chain_with_slots(&verifier.peers, linked_chain(4)).await;
 
-        // Cached: the tip body is still held and served from the cache.
         let block = verifier
             .wait_for_peer_block(PEER_ZONE, 4, 0)
             .await
             .expect("a cached body is served");
         assert_eq!(block.header.block_id, 4);
 
-        // Evicted: the refetch path is taken; with no channel client it
-        // fails and stays retriable.
         let before = verifier.refetch_attempts.load(Ordering::Relaxed);
         let evicted_err = verifier
             .wait_for_peer_block(PEER_ZONE, 1, 0)
@@ -3024,15 +2539,12 @@ mod tests {
             "an evicted id goes to the refetch path"
         );
 
-        // InsideRun: below the peer's genesis, returned without waiting out
-        // the timeout.
         let inside_run_err = verifier
             .wait_for_peer_block(PEER_ZONE, 0, 0)
             .await
             .expect_err("an id the walk never certified");
         assert!(matches!(inside_run_err, PeerBlockError::NotOnPeerChain(_)));
 
-        // Behind: above the verified tip, waits and expires retriable.
         let behind_err = verifier
             .wait_for_peer_block(PEER_ZONE, 9, 0)
             .await

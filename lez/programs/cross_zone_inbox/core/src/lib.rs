@@ -11,10 +11,6 @@ use serde::{Deserialize, Serialize};
 
 const MESSAGE_KEY_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneMsgKey/00001/";
 const INBOX_CONFIG_SEED: [u8; 32] = *b"/LEZ/v0.3/CrossZoneInboxCfg/000/";
-/// Bumped whenever the coordinate's meaning changes (`/00/` keyed shards by
-/// epoch, `/01/` by transaction index, `/02/` by outbound index): two meanings
-/// are indistinguishable under one domain. Belt and braces, since the image id
-/// already relocates every PDA in this crate whenever the crate changes.
 const INBOX_SEEN_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/CrossZoneInboxSeen/02/";
 
 pub const CROSS_ZONE_INBOX_NAME: lee_core::program::SystemProgramName =
@@ -23,19 +19,12 @@ pub const CROSS_ZONE_INBOX_NAME: lee_core::program::SystemProgramName =
 /// Content-addressed replay key for a delivered message.
 pub type MessageKey = [u8; 32];
 
-/// A finalized outbound message observed on a peer zone, addressed to a program
-/// on this zone. The watcher fills it from the peer's block; it is never
-/// self-reported by a user.
+/// A finalized outbound message observed on a peer zone, addressed to a program on this zone.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct CrossZoneMessage {
     pub src_zone: ZoneId,
     pub src_block_id: u64,
     /// The source block's recomputed hash, never the `header.hash` it declares.
-    ///
-    /// The signature does not cover that field, so a correctly signed block can
-    /// carry a bogus one. Both the watcher and the verifier hash the block's
-    /// contents themselves and fill this from that, so the two agree on it
-    /// without either trusting what the peer wrote.
     pub src_block_hash: [u8; 32],
     pub src_outbound_index: u32,
     pub src_account_id: AccountId,
@@ -45,12 +34,6 @@ pub struct CrossZoneMessage {
     pub l1_inclusion_witness: Option<Vec<u8>>,
 }
 
-/// This inbox's own zone id.
-///
-/// It no longer decides who may deliver what. Each target program authorizes its
-/// own sources against the marker it derives from the delivery, so the only thing the inbox
-/// still needs to know is which zone it is, to refuse a message addressed to
-/// itself.
 #[derive(
     Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize,
 )]
@@ -72,13 +55,9 @@ impl InboxConfig {
 }
 
 /// What one peer block has already delivered.
-///
-/// Indices, not message keys: the shard's address already binds
-/// `(src_zone, src_block_id)`, so a key stored inside it adds nothing.
 #[derive(Clone, Debug, Default, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct SeenShard {
     /// Recomputed hash of the peer block this shard records deliveries from.
-    /// All-zero until the first delivery claims it.
     pub src_block_hash: [u8; 32],
     /// Indices into that block's outbound list already delivered.
     pub delivered: BTreeSet<u32>,
@@ -99,10 +78,6 @@ impl SeenShard {
     }
 
     /// Whether a delivery from the block with this hash may be recorded here.
-    ///
-    /// An unclaimed shard binds to its first claimant. Unclaimed is the whole
-    /// value being default, not the hash being zero, so a shard holding any
-    /// delivery can never read as unclaimed.
     #[must_use]
     pub fn binds(&self, src_block_hash: &[u8; 32]) -> bool {
         *self == Self::default() || self.src_block_hash == *src_block_hash
@@ -114,10 +89,6 @@ impl SeenShard {
     }
 
     /// Binds the shard if unclaimed and records the delivery; true if new.
-    ///
-    /// A non-binding hash records nothing. The guest already asserts
-    /// [`Self::binds`], so this is a backstop against a future caller rebinding
-    /// a claimed shard and erasing which peer block delivered what.
     pub fn insert(&mut self, src_block_hash: [u8; 32], src_outbound_index: u32) -> bool {
         if !self.binds(&src_block_hash) {
             return false;
@@ -129,10 +100,8 @@ impl SeenShard {
 
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Message {
-    /// Delivers a finalized peer message to its target program.
     Dispatch(CrossZoneMessage),
     Mark(CrossZoneMessage),
-    /// Initializes the inbox config account at genesis.
     InitConfig(InboxConfig),
 }
 
@@ -142,10 +111,6 @@ pub fn cross_zone_inbox_account_id() -> AccountId {
 }
 
 /// Content-addressed replay key for a delivered message.
-///
-/// Hashes `(src_zone, src_block_id, src_outbound_index)` under a domain separator.
-/// Watcher-independent and immune to proof malleability, since it keys on block
-/// id plus outbound index rather than a tx hash.
 #[must_use]
 pub fn message_key(src_zone: &ZoneId, src_block_id: u64, src_outbound_index: u32) -> MessageKey {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
@@ -185,9 +150,6 @@ pub fn inbox_seen_shard_account_id(
 }
 
 /// Seed of the seen-shard PDA.
-///
-/// One shard per peer block, so a peer cannot accumulate deliveries from many
-/// blocks into one account.
 #[must_use]
 pub fn inbox_seen_shard_seed(src_zone: &ZoneId, src_block_id: u64) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256 as _};

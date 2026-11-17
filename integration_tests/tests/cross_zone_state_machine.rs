@@ -3,12 +3,8 @@
     reason = "top-level test functions are conventional for integration tests"
 )]
 
-//! Single-zone state-machine tests for cross-zone delivery (ping demo) and the
-//! wrapped-token bridge (Demo 2). They drive the guests in isolation, no watcher
-//! or Bedrock: a hand-built `cross_zone_inbox::Dispatch` (as the watcher would
-//! inject) and the source `bridge_lock::Lock` (which escrows and chains
-//! `outbox::Emit`). Fast, so they pin guest logic before the e2e exercises the
-//! plumbing. Run with `RISC0_DEV_MODE=1`.
+//! Single-zone state-machine tests for cross-zone delivery (ping demo) and the wrapped-token bridge
+//! (Demo 2).
 
 use std::collections::BTreeMap;
 
@@ -31,7 +27,6 @@ use test_guest_core::{
     chat::{ChatLog, ChatMessage, chat_log_account_id, chat_log_seed},
 };
 
-/// Serializes a message to the borsh bytes the guests read.
 macro_rules! bytes_of {
     ($message:expr) => {
         borsh::to_vec($message).expect("serialize message")
@@ -41,12 +36,9 @@ macro_rules! bytes_of {
 const INITIAL_BALANCE: u128 = 100;
 const LOCK_AMOUNT: u128 = 30;
 const RECIPIENT: [u8; 32] = [9; 32];
-/// The peer source the mint tests authorize.
 const MINT_SRC_ZONE: [u8; 32] = [2; 32];
 const MINT_SRC_PROGRAM_ID: lee_core::program::ProgramId = [9_u32; 8];
-/// These tests drive the guest directly, so any fixed source-block hash does.
 const SRC_BLOCK_HASH: [u8; 32] = [7; 32];
-/// Every zone the lock tests name, so a refusal is never just an unpinned zone.
 const LOCK_TARGET_ZONES: [[u8; 32]; 2] = [[2; 32], [9; 32]];
 
 fn wrapped_token_config(
@@ -76,7 +68,6 @@ fn receiver_config(state: &V03State, config_id: AccountId) -> ping_core::Receive
     .expect("config decodes")
 }
 
-/// State registering the cross-zone builtins these tests exercise.
 fn base_state() -> V03State {
     V03State::new().with_programs_at([
         (
@@ -107,7 +98,6 @@ fn base_state() -> V03State {
     ])
 }
 
-/// Seeds the inbox config (inbox-owned), which is now just this zone's id.
 fn seed_inbox_config(state: &mut V03State, self_zone: [u8; 32]) {
     let inbox_id = programs::cross_zone_inbox_account_id();
     let config = InboxConfig { self_zone };
@@ -117,7 +107,6 @@ fn seed_inbox_config(state: &mut V03State, self_zone: [u8; 32]) {
     )]);
 }
 
-/// Uncapped policies from peer pairs, the shape most tests still exercise.
 fn uncapped_policies(pairs: &[([u8; 32], AccountId)]) -> Vec<wrapped_token_core::SourcePolicy> {
     pairs
         .iter()
@@ -131,7 +120,6 @@ fn uncapped_policies(pairs: &[([u8; 32], AccountId)]) -> Vec<wrapped_token_core:
         .collect()
 }
 
-/// The entries the guest writes for `uncapped_policies` applied to a fresh list.
 fn uncapped_entries(pairs: &[([u8; 32], AccountId)]) -> Vec<wrapped_token_core::SourceEntry> {
     uncapped_policies(pairs)
         .into_iter()
@@ -139,8 +127,6 @@ fn uncapped_entries(pairs: &[([u8; 32], AccountId)]) -> Vec<wrapped_token_core::
         .collect()
 }
 
-/// Seeds the wrapped-token config pinning the inbox as minter and `sources` as the
-/// peer pairs it will mint for, matching what genesis seeds for a real zone.
 fn seed_wrapped_config(
     state: &mut V03State,
     authority: Option<AccountId>,
@@ -149,7 +135,6 @@ fn seed_wrapped_config(
     seed_wrapped_config_with_governance(state, None, authority, sources);
 }
 
-/// The same, naming a program allowed to act for the authority through a chain.
 fn seed_wrapped_config_with_governance(
     state: &mut V03State,
     governance: Option<AccountId>,
@@ -159,8 +144,6 @@ fn seed_wrapped_config_with_governance(
     seed_wrapped_config_entries(state, governance, authority, uncapped_entries(sources));
 }
 
-/// The same, with full entries: caps and counters exactly as the config holds
-/// them.
 fn seed_wrapped_config_entries(
     state: &mut V03State,
     governance: Option<AccountId>,
@@ -180,8 +163,6 @@ fn seed_wrapped_config_entries(
     )]);
 }
 
-/// Seeds the ping-receiver config pinning the inbox as deliverer and `sources` as
-/// the peer pairs it accepts a delivery from.
 fn seed_receiver_config(
     state: &mut V03State,
     authority: Option<AccountId>,
@@ -190,7 +171,6 @@ fn seed_receiver_config(
     seed_receiver_config_with_governance(state, None, authority, sources);
 }
 
-/// The same, naming a program allowed to act for the authority through a chain.
 fn seed_receiver_config_with_governance(
     state: &mut V03State,
     governance: Option<AccountId>,
@@ -210,7 +190,6 @@ fn seed_receiver_config_with_governance(
     )]);
 }
 
-/// The holding PDA a holder's bridgeable balance lives in.
 fn holding_id_of(holder_id: AccountId) -> AccountId {
     bridge_lock_core::holding_account_id(
         programs::bridge_lock_account_id(),
@@ -218,13 +197,11 @@ fn holding_id_of(holder_id: AccountId) -> AccountId {
     )
 }
 
-/// Seeds a funded holding PDA for `holder_id`, matching genesis.
 fn seed_holding(state: &mut V03State, holder_id: AccountId, balance: u128) {
     *state = std::mem::replace(state, V03State::new())
         .with_public_accounts([(holding_id_of(holder_id), Account::funded(balance))]);
 }
 
-/// Matches what genesis seeds for a real zone.
 fn seed_bridge_lock_config(state: &mut V03State) {
     let bridge_lock_id = programs::bridge_lock_account_id();
     *state = std::mem::replace(state, V03State::new()).with_public_accounts([(
@@ -240,14 +217,10 @@ fn seed_bridge_lock_config(state: &mut V03State) {
     )]);
 }
 
-/// The inbox's config actor, which every dispatch is delivered to.
 fn inbox_config_actor(inbox_id: AccountId) -> Actor {
     Actor::new(inbox_config_account_id(inbox_id), inbox_id)
 }
 
-/// A dispatch as `cross_zone::build_inbox_dispatch_tx` builds it: declaring the inbox's config
-/// and seen shard, the target's program account the delivery lands on, then the target's own
-/// actors, with the seen shard's evidence.
 fn dispatch_tx(
     inbox_id: AccountId,
     msg: CrossZoneMessage,
@@ -278,8 +251,6 @@ fn dispatch_tx(
     PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
 }
 
-/// Asserts the transaction fails at `block` with an error mentioning `expected`,
-/// so a refusal for an unrelated reason cannot keep a guard test green.
 fn rejects_at(state: &V03State, tx: &PublicTransaction, block: u64, expected: &str) {
     let Err(err) = ValidatedStateDiff::from_public_transaction(tx, state, block, 0) else {
         panic!("expected a rejection mentioning {expected}");
@@ -290,8 +261,6 @@ fn rejects_at(state: &V03State, tx: &PublicTransaction, block: u64, expected: &s
     );
 }
 
-/// A top-level authority transaction: the message bytes delivered to `account`'s own actor under
-/// `target`, which forwards them to the target's config, signed by `key` at `nonce`.
 fn signed_tx(
     target: AccountId,
     account: AccountId,
@@ -315,9 +284,6 @@ fn signed_tx(
     PublicTransaction::new(message, witness)
 }
 
-/// An unsigned call through the governance proxy: the proxy sends `forwarded` to the authority's
-/// own actor under `target`, delegating `delegated` (or nothing), and that actor forwards it to
-/// `target`'s config.
 fn via_proxy(
     proxy_id: AccountId,
     target: AccountId,
@@ -346,8 +312,6 @@ fn via_proxy(
     PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
 }
 
-/// An authority message delivered through the inbox, as a peer would have to
-/// send it: the dispatch shape over the target's config and the authority's actor.
 fn chained_via_inbox(
     target: AccountId,
     config_id: AccountId,
@@ -372,7 +336,6 @@ fn chained_via_inbox(
     )
 }
 
-/// A `ping_sender::Send` carrying `b"ping"` to `ping_receiver` on `target_zone`.
 fn send_tx(target_zone: [u8; 32]) -> PublicTransaction {
     let receiver_id = programs::ping_receiver_account_id();
     let sender_id = programs::ping_sender_account_id();
@@ -395,7 +358,6 @@ fn send_tx(target_zone: [u8; 32]) -> PublicTransaction {
     PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
 }
 
-/// The send's whole effect is the outbound message the block declares.
 #[test]
 fn a_top_level_send_surfaces_an_outbound_message() {
     let receiver_id = programs::ping_receiver_account_id();
@@ -423,8 +385,6 @@ fn a_top_level_send_surfaces_an_outbound_message() {
     );
 }
 
-/// The wrapped-token `Mint` the bridge forwards, serialized as the cross-zone
-/// payload (borsh bytes).
 fn mint_payload() -> Vec<u8> {
     mint_payload_of(LOCK_AMOUNT)
 }
@@ -437,8 +397,6 @@ fn mint_payload_of(amount: u128) -> Vec<u8> {
     borsh::to_vec(&mint).expect("serialize mint")
 }
 
-/// A state authorizing [`MINT_SRC_ZONE`]/[`MINT_SRC_PROGRAM_ID`] as the one
-/// wrapped-token source, with the given mint policy and counter.
 fn capped_mint_state(
     mint_cap: Option<u128>,
     minted: u128,
@@ -462,8 +420,6 @@ fn capped_mint_state(
     state
 }
 
-/// The inbox dispatch a watcher would build for a mint of `amount` emitted at
-/// `src_outbound_index` on the canonical peer source.
 fn mint_dispatch_tx(amount: u128, src_outbound_index: u32) -> PublicTransaction {
     let inbox_id = programs::cross_zone_inbox_account_id();
     let wrapped_token_id = programs::wrapped_token_account_id();
@@ -494,7 +450,6 @@ fn mint_dispatch_tx(amount: u128, src_outbound_index: u32) -> PublicTransaction 
     )
 }
 
-/// Runs one mint dispatch against `state` at `block`.
 fn dispatch_mint_on(
     state: &V03State,
     amount: u128,
@@ -509,12 +464,10 @@ fn dispatch_mint_on(
     )
 }
 
-/// Runs a bridge mint of `amount` through the inbox, as the watcher would.
 fn dispatch_mint(amount: u128) -> Result<ValidatedStateDiff, lee::error::LeeError> {
     dispatch_mint_on(&capped_mint_state(None, 0, None), amount, 0, 1)
 }
 
-/// The lifetime counter the config holds for the canonical source.
 fn source_minted(state: &V03State) -> u128 {
     let wrapped_token_id = programs::wrapped_token_account_id();
     let config_id = wrapped_token_core::config_account_id(wrapped_token_id);
@@ -530,8 +483,6 @@ fn source_minted(state: &V03State) -> u128 {
         .minted
 }
 
-/// One message must not be able to pin a holding near `u128::MAX`, which would
-/// make every later honest mint to that recipient overflow and fail for good.
 #[test]
 fn a_mint_above_the_cap_is_rejected() {
     assert!(
@@ -555,7 +506,6 @@ fn a_mint_at_the_cap_is_accepted() {
     assert_eq!(minted, wrapped_token_core::MAX_MINT_AMOUNT);
 }
 
-/// A policy the update tests hand the guest for the canonical source.
 fn mint_src_policy(mint_cap: Option<u128>) -> wrapped_token_core::SourcePolicy {
     wrapped_token_core::SourcePolicy {
         src_zone: MINT_SRC_ZONE,
@@ -564,7 +514,6 @@ fn mint_src_policy(mint_cap: Option<u128>) -> wrapped_token_core::SourcePolicy {
     }
 }
 
-/// The signed `UpdateSources` the configured authority sends at `nonce`.
 fn update_sources_tx(
     key: &PrivateKey,
     authority: AccountId,
@@ -586,8 +535,6 @@ fn update_sources_tx(
     )
 }
 
-/// Asserts a mint dispatch is refused by the lifetime cap itself, not by an
-/// unrelated guard.
 fn rejects_on_cap(state: &V03State, amount: u128, src_outbound_index: u32, block: u64) {
     let Err(err) = dispatch_mint_on(state, amount, src_outbound_index, block) else {
         panic!("expected the lifetime cap to refuse the mint");
@@ -598,8 +545,6 @@ fn rejects_on_cap(state: &V03State, amount: u128, src_outbound_index: u32, block
     );
 }
 
-/// The cap itself is spendable: a mint landing exactly on it executes, and the
-/// counter records the whole allowance as spent.
 #[test]
 fn a_mint_that_reaches_the_lifetime_cap_is_accepted() {
     let mut state = capped_mint_state(Some(LOCK_AMOUNT), 0, None);
@@ -610,17 +555,12 @@ fn a_mint_that_reaches_the_lifetime_cap_is_accepted() {
     assert_eq!(source_minted(&state), LOCK_AMOUNT);
 }
 
-/// The refusal is the cap's own, pinned to its message so an unrelated guard
-/// cannot keep this green.
 #[test]
 fn a_mint_over_the_lifetime_cap_is_rejected() {
     let state = capped_mint_state(Some(LOCK_AMOUNT), 0, None);
     rejects_on_cap(&state, LOCK_AMOUNT + 1, 0, 1);
 }
 
-/// The cap bounds the counter, not any single amount: mints that are each fine
-/// alone refuse once their sum would cross it, and the remainder stays
-/// spendable.
 #[test]
 fn mints_accumulate_into_the_lifetime_cap() {
     let mut state = capped_mint_state(Some(100), 0, None);
@@ -636,8 +576,6 @@ fn mints_accumulate_into_the_lifetime_cap() {
     assert_eq!(source_minted(&state), 100);
 }
 
-/// `None` is uncapped: the counter still advances, so a cap added later starts
-/// from the true total, but nothing is ever refused.
 #[test]
 fn an_uncapped_source_counts_but_never_refuses() {
     let mut state = capped_mint_state(None, 0, None);
@@ -659,8 +597,6 @@ fn an_uncapped_source_counts_but_never_refuses() {
     );
 }
 
-/// An update keeps a surviving source's spent allowance: the new cap applies to
-/// the old counter, so an update cannot re-arm a spent source.
 #[test]
 fn the_counter_survives_a_source_update() {
     let key = PrivateKey::try_new([7; 32]).expect("valid key");
@@ -691,8 +627,6 @@ fn the_counter_survives_a_source_update() {
     assert_eq!(source_minted(&state), 70);
 }
 
-/// Removing a source forgets its counter: whoever re-adds one grants a fresh
-/// allowance, which is the authority's call to make.
 #[test]
 fn a_source_removed_and_re_added_restarts_its_counter() {
     let key = PrivateKey::try_new([7; 32]).expect("valid key");
@@ -725,9 +659,6 @@ fn a_source_removed_and_re_added_restarts_its_counter() {
     assert_eq!(source_minted(&state), 100);
 }
 
-/// Mint advances the first matching entry, so a source listed twice would
-/// split one policy across entries an auditor reads as two; the guest refuses
-/// the update outright.
 #[test]
 fn an_update_listing_a_source_twice_is_refused() {
     let key = PrivateKey::try_new([7; 32]).expect("valid key");
@@ -743,8 +674,6 @@ fn an_update_listing_a_source_twice_is_refused() {
     rejects_at(&state, &duplicated, 1, "same source twice");
 }
 
-/// A cap breach fails the whole delivery, so nothing marks the message seen:
-/// after the authority raises the cap, the very same message delivers.
 #[test]
 fn a_refused_mint_leaves_the_message_deliverable() {
     let key = PrivateKey::try_new([7; 32]).expect("valid key");
@@ -767,12 +696,8 @@ fn a_refused_mint_leaves_the_message_deliverable() {
     assert_eq!(source_minted(&state), 60);
 }
 
-/// A source list of realistic breadth, all capped with live counters, still
-/// fits the config account and still mints for its last entry.
 #[test]
 fn a_many_source_config_still_fits_and_mints() {
-    // Entry 0 shares the canonical zone under another program, so a mint that
-    // matched on zone alone would draw down the wrong counter.
     let mut entries: Vec<_> = (0..16_u8)
         .map(|index| wrapped_token_core::SourceEntry {
             policy: wrapped_token_core::SourcePolicy {
@@ -807,8 +732,6 @@ fn a_many_source_config_still_fits_and_mints() {
         .expect("the validated diff applies");
     assert_eq!(source_minted(&state), 100);
 
-    // Only the (zone, program) pair that emitted spends; every other entry,
-    // the shared-zone one included, is untouched.
     let wrapped_token_id = programs::wrapped_token_account_id();
     let config_id = wrapped_token_core::config_account_id(wrapped_token_id);
     let cfg = wrapped_token_config(&state, config_id);
@@ -823,9 +746,6 @@ fn a_many_source_config_still_fits_and_mints() {
     }
 }
 
-/// Drives `cross_zone_inbox::Dispatch` directly through the state machine
-/// (no watcher) and asserts the message is delivered to `ping_receiver`, which
-/// records the payload into its own PDA.
 #[test]
 fn inbox_dispatch_delivers_payload_to_ping_receiver() {
     let inbox_id = programs::cross_zone_inbox_account_id();
@@ -843,7 +763,6 @@ fn inbox_dispatch_delivers_payload_to_ping_receiver() {
         vec![(src_zone, AccountId::from_builtin_program([9_u32; 8]))],
     );
 
-    // The payload is the ping_receiver message, borsh-serialized.
     let inner = b"hello-cross-zone".to_vec();
     let payload = borsh::to_vec(&ReceiverMessage::Record {
         payload: inner.clone(),
@@ -886,8 +805,6 @@ fn inbox_dispatch_delivers_payload_to_ping_receiver() {
     );
 }
 
-/// Drives `bridge_lock::Lock` and asserts it debits the holder, credits the
-/// escrow, and surfaces the mint as the transaction's outbound message.
 #[test]
 fn lock_escrows_balance_and_sends_the_mint() {
     let bridge_lock_id = programs::bridge_lock_account_id();
@@ -934,8 +851,6 @@ fn lock_escrows_balance_and_sends_the_mint() {
     );
 }
 
-/// Two identical locks both execute: each debits the holder, and each leaves
-/// as its own outbound message (dedup is by block coordinates, not content).
 #[test]
 fn a_second_identical_lock_escrows_and_sends_again() {
     let bridge_lock_id = programs::bridge_lock_account_id();
@@ -988,7 +903,6 @@ fn a_second_identical_lock_escrows_and_sends_again() {
     );
 }
 
-/// A `bridge_lock::Lock` to `zone_b`, ready to run twice.
 fn lock_tx(
     holder_key: &PrivateKey,
     holder_id: AccountId,
@@ -1004,8 +918,6 @@ fn lock_tx(
     )
 }
 
-/// The mint's own account list: the wrapped-token config, then the recipient's
-/// holding. What `wrapped_token::Mint` requires on the destination zone.
 fn mint_target_accounts(wrapped_token_id: AccountId) -> Vec<Actor> {
     vec![
         Actor::new(
@@ -1019,7 +931,6 @@ fn mint_target_accounts(wrapped_token_id: AccountId) -> Vec<Actor> {
     ]
 }
 
-/// The same lock aimed at `target_account_id`, to vary the destination's instruction.
 fn lock_tx_to(
     holder_key: &PrivateKey,
     holder_id: AccountId,
@@ -1040,9 +951,6 @@ fn lock_tx_to(
     )
 }
 
-/// `lock` received at `holder_id`'s own bridge-lock actor, signed by `key` at `nonce`. It declares
-/// what a lock reaches: the config it checks its route at and the holding it moves into the
-/// escrow.
 fn signed_lock(
     key: &PrivateKey,
     holder_id: AccountId,
@@ -1085,9 +993,6 @@ fn signed_lock(
     PublicTransaction::new(message, witness)
 }
 
-/// Nothing releases an escrow, so a message the destination will refuse is a
-/// burn: debited here, never minted there. The refusal has to come before the
-/// debit.
 #[test]
 fn a_lock_naming_another_target_program_is_rejected() {
     let zone_b = [2_u8; 32];
@@ -1173,7 +1078,6 @@ fn a_direct_transfer_from_the_holding_is_refused() {
     );
 }
 
-/// The debit lands on the holding PDA; the holder only signs.
 #[test]
 fn lock_debits_the_holding_not_the_holder() {
     let zone_b = [9_u8; 32];
@@ -1210,7 +1114,6 @@ fn lock_debits_the_holding_not_the_holder() {
     );
 }
 
-/// A zero lock costs nothing yet would emit a real dispatch.
 #[test]
 fn a_zero_amount_lock_is_refused() {
     let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
@@ -1235,10 +1138,6 @@ fn a_zero_amount_lock_is_refused() {
     rejects_at(&state, &tx, 1, "locked amount must be positive");
 }
 
-/// A lock naming any account but the signer's derived holding is refused. The
-/// holding is derived from the actor the lock is received at, so naming the
-/// victim's holding means addressing the victim's actor, which the attacker's
-/// signature does not authorize.
 #[test]
 fn a_lock_naming_someone_elses_holding_is_refused() {
     let attacker_key = PrivateKey::try_new([7; 32]).expect("valid key");
@@ -1273,7 +1172,6 @@ fn a_lock_naming_someone_elses_holding_is_refused() {
     );
 }
 
-/// A bridge with no pin cannot fall back to caller-named programs: it stops locking.
 #[test]
 fn a_lock_before_the_pins_are_set_is_rejected() {
     let zone_b = [2_u8; 32];
@@ -1293,8 +1191,6 @@ fn a_lock_before_the_pins_are_set_is_rejected() {
     );
 }
 
-/// Written once, on the same terms as the sender's: an identical re-init is the
-/// genesis replay, a different one would redirect every lock on the zone.
 #[test]
 fn the_bridge_pins_are_written_once_and_replayable() {
     let bridge_lock_id = programs::bridge_lock_account_id();
@@ -1346,7 +1242,6 @@ fn the_bridge_pins_are_written_once_and_replayable() {
     ValidatedStateDiff::from_public_transaction(&init(wrapped_token_id, zones()), &state, 2, 0)
         .expect("replaying the identical init is a no-op, not a failure");
 
-    // Either one moving is a redirect.
     for (target, pinned, what) in [
         (
             AccountId::from_builtin_program([3; 8]),
@@ -1367,8 +1262,6 @@ fn the_bridge_pins_are_written_once_and_replayable() {
     }
 }
 
-/// The token's authority path, end to end: each guard refuses for its own
-/// reason.
 #[test]
 fn the_token_authority_path_holds() {
     let wrapped_token_id = programs::wrapped_token_account_id();
@@ -1412,7 +1305,6 @@ fn the_token_authority_path_holds() {
     };
     let bridge_source = vec![(src_zone, programs::bridge_lock_account_id())];
 
-    // With no authority configured, nothing moves in either direction.
     let mut unset = base_state();
     seed_wrapped_config(&mut unset, None, &[]);
     rejects_at(
@@ -1428,8 +1320,6 @@ fn the_token_authority_path_holds() {
         "already renounced",
     );
 
-    // With one configured: the wrong account, and the right account without its
-    // own signature, are refused for their own reasons.
     let mut state = base_state().with_public_accounts([(authority, Account::default())]);
     seed_wrapped_config(&mut state, Some(authority), &[]);
     rejects_at(
@@ -1482,7 +1372,6 @@ fn the_token_authority_path_holds() {
         "acting as the authority must not hand the account to wrapped_token"
     );
 
-    // Acting again with a different list must replace it, not accumulate.
     let sender_source = vec![(src_zone, programs::ping_sender_account_id())];
     let second = ValidatedStateDiff::from_public_transaction(
         &update(authority, &key, 1, sender_source.clone()),
@@ -1506,8 +1395,6 @@ fn the_token_authority_path_holds() {
         "the authority is unchanged"
     );
 
-    // Renouncing is one-way: the sources freeze at their last value and nothing
-    // moves afterwards, in either direction.
     let renounced =
         ValidatedStateDiff::from_public_transaction(&renounce(authority, &key, 2), &state, 3, 0)
             .expect("the authority renounces itself");
@@ -1540,9 +1427,6 @@ fn the_token_authority_path_holds() {
     );
 }
 
-/// `ping_receiver` authorizes its own sources too. It holds nothing worth
-/// stealing, but without this any program on any configured peer could overwrite
-/// the record, and a delivery would prove only that some peer sent it.
 #[test]
 fn a_delivery_from_an_unauthorized_source_does_not_reach_ping_receiver() {
     let inbox_id = programs::cross_zone_inbox_account_id();
@@ -1552,7 +1436,6 @@ fn a_delivery_from_an_unauthorized_source_does_not_reach_ping_receiver() {
 
     let mut state = base_state();
     seed_inbox_config(&mut state, self_zone);
-    // Authorizes one source; the delivery comes from another.
     seed_receiver_config(
         &mut state,
         None,
@@ -1591,8 +1474,6 @@ fn a_delivery_from_an_unauthorized_source_does_not_reach_ping_receiver() {
     );
 }
 
-/// The receiver's authority path is a mirror of the token's, and a mirror is
-/// exactly where a copy-paste slip hides. Same battery, run against it.
 #[test]
 fn the_receiver_authority_path_holds() {
     let receiver_id = programs::ping_receiver_account_id();
@@ -1633,8 +1514,6 @@ fn the_receiver_authority_path_holds() {
         )
     };
 
-    // The wrong account, and the right account without its own signature, are
-    // both refused for their own reasons.
     let mut state = base_state().with_public_accounts([(authority, Account::default())]);
     seed_receiver_config(&mut state, Some(authority), vec![]);
     rejects_at(
@@ -1662,7 +1541,6 @@ fn the_receiver_authority_path_holds() {
         "must authorize a change",
     );
 
-    // The authority itself works, and renouncing is one-way.
     let diff =
         ValidatedStateDiff::from_public_transaction(&update(authority, &key, 0), &state, 1, 0)
             .expect("the configured authority changes sources");
@@ -1695,12 +1573,6 @@ fn the_receiver_authority_path_holds() {
     );
 }
 
-/// The inbox cannot reach the authority messages, named as governance or not:
-/// it delivers only to the target's program account, which forwards nothing but
-/// the payload its peers send (a mint here), so an authority message never lands
-/// at the config. Worth pinning, because the inbox is the only program that sends
-/// to a target today, so this is what actually keeps a peer away from the source
-/// list.
 #[test]
 fn the_inbox_cannot_reach_the_authority_instructions() {
     let wrapped_token_id = programs::wrapped_token_account_id();
@@ -1725,7 +1597,6 @@ fn the_inbox_cannot_reach_the_authority_instructions() {
         )
     };
 
-    // No governance named: the delivery is refused.
     let mut closed = base_state();
     seed_inbox_config(&mut closed, self_zone);
     seed_wrapped_config(&mut closed, Some(authority), &[]);
@@ -1736,10 +1607,6 @@ fn the_inbox_cannot_reach_the_authority_instructions() {
         "a delivery to wrapped_token must carry a Mint",
     );
 
-    // Naming the inbox as governance changes nothing: the obstacle is structural,
-    // not the caller check. The delivery lands on the token's program account,
-    // which decodes its payload as a mint, so with or without the inbox named as
-    // governance the call dies there, before the caller check is reached.
     let mut open = base_state();
     seed_inbox_config(&mut open, self_zone);
     seed_wrapped_config_with_governance(&mut open, Some(inbox_id), Some(authority), &[]);
@@ -1751,8 +1618,6 @@ fn the_inbox_cannot_reach_the_authority_instructions() {
     );
 }
 
-/// A program-held authority acts through the governance program delegating its PDA to the
-/// authority's own actor, and renouncing through it is as total as renouncing top-level.
 #[test]
 fn the_governance_path_holds() {
     let wrapped_token_id = programs::wrapped_token_account_id();
@@ -1848,11 +1713,6 @@ fn the_governance_path_holds() {
     rejects_at(&state, &renounce(), 4, "already renounced");
 }
 
-/// Each governance-path guard fails on its own: a caller other than the
-/// configured governance program is refused with the delegation in order, no
-/// configured governance refuses every program caller (on the token's update
-/// and on its three sibling handlers), and the governance program without
-/// delegating finds the authority unauthorized.
 #[test]
 fn the_governance_path_guards_hold() {
     let wrapped_token_id = programs::wrapped_token_account_id();
@@ -1879,7 +1739,6 @@ fn the_governance_path_guards_hold() {
         )
     };
 
-    // A perfect call shape from a program that is not the configured governance.
     let mut other = base_state().with_programs_at([(proxy_id, test_programs::scripted(), true)]);
     seed_wrapped_config_with_governance(
         &mut other,
@@ -1894,7 +1753,6 @@ fn the_governance_path_guards_hold() {
         "through the configured governance program",
     );
 
-    // No governance configured: every chained caller is refused.
     let mut closed = base_state().with_programs_at([(proxy_id, test_programs::scripted(), true)]);
     seed_wrapped_config(&mut closed, Some(authority), &[]);
     seed_receiver_config(&mut closed, Some(authority), vec![]);
@@ -1905,9 +1763,6 @@ fn the_governance_path_guards_hold() {
         "through the configured governance program",
     );
 
-    // The same pin guards the three sibling handlers, both renounces and the
-    // receiver's update, each of which would otherwise accept the named
-    // authority and succeed.
     for (target, config, message) in [
         (
             wrapped_token_id,
@@ -1943,7 +1798,6 @@ fn the_governance_path_guards_hold() {
         );
     }
 
-    // The configured governance itself, but not delegating the authority.
     let mut undelegated =
         base_state().with_programs_at([(proxy_id, test_programs::scripted(), true)]);
     seed_wrapped_config_with_governance(&mut undelegated, Some(proxy_id), Some(authority), &[]);
@@ -1955,8 +1809,6 @@ fn the_governance_path_guards_hold() {
     );
 }
 
-/// The receiver's governance path works the same way; without this its config
-/// never carries a governance in any test.
 #[test]
 fn the_receiver_governance_path_holds() {
     let receiver_id = programs::ping_receiver_account_id();
@@ -2003,9 +1855,6 @@ fn the_receiver_governance_path_holds() {
     );
 }
 
-/// One authority seeds both targets at genesis, and neither takes it over: the
-/// authority carries no data, so it stays unowned and both keep working. Act
-/// through the token, then act and renounce on the receiver.
 #[test]
 fn a_shared_authority_serves_both_targets() {
     let wrapped_token_id = programs::wrapped_token_account_id();
@@ -2105,8 +1954,6 @@ fn a_shared_authority_serves_both_targets() {
     );
 }
 
-/// The guards that survive a deletion otherwise: the three authority messages a
-/// peer could only try to reach through the inbox.
 #[test]
 fn the_remaining_authority_guards_hold() {
     let wrapped_token_id = programs::wrapped_token_account_id();
@@ -2122,10 +1969,6 @@ fn the_remaining_authority_guards_hold() {
     seed_wrapped_config(&mut state, Some(authority), &[]);
     seed_receiver_config(&mut state, Some(authority), vec![]);
 
-    // Reached through the inbox rather than top-level: the delivery lands on the
-    // target's program account, which forwards only the payload its peers send, so
-    // each call dies decoding it. The caller pins themselves are exercised through
-    // the proxy in the_governance_path_guards_hold.
     for (target, config_id, message, refusal) in [
         (
             wrapped_token_id,
@@ -2165,9 +2008,6 @@ fn the_remaining_authority_guards_hold() {
     }
 }
 
-/// A token that authorizes nothing mints for nobody. The state a zone reaches with
-/// no peers configured, where the config is still seeded so its PDA cannot be
-/// claimed by a first initializer.
 #[test]
 fn a_mint_is_refused_when_the_token_authorizes_no_source() {
     let inbox_id = programs::cross_zone_inbox_account_id();
@@ -2213,9 +2053,6 @@ fn a_mint_is_refused_when_the_token_authorizes_no_source() {
     );
 }
 
-/// The deliverer only means something because only the token's own program
-/// account forwards it. Invoked directly, with the caller naming the inbox and an
-/// authorized source themselves, the mint must refuse before it ever looks at them.
 #[test]
 fn a_top_level_mint_is_refused() {
     let inbox_id = programs::cross_zone_inbox_account_id();
@@ -2260,8 +2097,6 @@ fn a_top_level_mint_is_refused() {
     );
 }
 
-/// Drives a hand-built `cross_zone_inbox::Dispatch` (as the watcher would inject)
-/// and asserts it chains into `wrapped_token::Mint`, crediting the recipient.
 #[test]
 fn inbox_dispatch_mints_wrapped_token() {
     let wrapped_token_id = programs::wrapped_token_account_id();
@@ -2279,11 +2114,6 @@ fn inbox_dispatch_mints_wrapped_token() {
     );
 }
 
-/// `ping_sender` lets its caller choose the target and payload freely, so any user
-/// on a peer can aim a `Mint` payload at `wrapped_token`. The inbox no longer
-/// refuses it; the token does, because the marker names `ping_sender` and the
-/// token authorized only the bridge. This is the check that replaced the central
-/// route table, so it must be the thing that rejects here.
 #[test]
 fn a_mint_from_an_unrouted_emitter_is_rejected() {
     let inbox_id = programs::cross_zone_inbox_account_id();
@@ -2294,7 +2124,6 @@ fn a_mint_from_an_unrouted_emitter_is_rejected() {
     let src_block_id = 5;
 
     let mut state = base_state();
-    // The config a bridging zone writes: the lock program may mint, nothing else.
     seed_inbox_config(&mut state, self_zone);
     seed_wrapped_config(
         &mut state,
@@ -2307,7 +2136,6 @@ fn a_mint_from_an_unrouted_emitter_is_rejected() {
         src_block_id,
         src_block_hash: SRC_BLOCK_HASH,
         src_outbound_index: 0,
-        // The emitter a user can drive directly, aimed at the bridge's target.
         src_account_id: programs::ping_sender_account_id(),
         target: Actor::new(wrapped_token_id, wrapped_token_id),
         payload: mint_payload(),
@@ -2335,9 +2163,6 @@ fn a_mint_from_an_unrouted_emitter_is_rejected() {
     );
 }
 
-/// The same target reached by the emitter the route names still works. Without
-/// this, the test above would pass equally against an inbox that rejected every
-/// delivery.
 #[test]
 fn a_mint_from_the_routed_emitter_is_accepted() {
     let inbox_id = programs::cross_zone_inbox_account_id();
@@ -2390,8 +2215,6 @@ fn a_mint_from_the_routed_emitter_is_accepted() {
     assert_eq!(minted, LOCK_AMOUNT);
 }
 
-/// A dispatch whose message key is already in the seen-shard is refused, so the
-/// wrapped token is not minted a second time. This is the bridge's replay defense.
 #[test]
 fn mint_replay_rejected() {
     let inbox_id = programs::cross_zone_inbox_account_id();
@@ -2410,9 +2233,6 @@ fn mint_replay_rejected() {
         &[(src_zone, AccountId::from_builtin_program([9_u32; 8]))],
     );
 
-    // Seed the seen-shard as already holding this delivery. The shard is
-    // inbox-owned (claimed on a prior delivery) and bound to the same source
-    // block, so only the replay check stands in the way.
     let seen_id = inbox_seen_shard_account_id(inbox_id, &src_zone, src_block_id);
     let mut shard = SeenShard::default();
     shard.insert(SRC_BLOCK_HASH, src_outbound_index);
@@ -2453,11 +2273,6 @@ fn mint_replay_rejected() {
     );
 }
 
-/// A peer publishing two blocks at one block id gets at most one delivered from.
-///
-/// Both resolve to the same shard account; the first binds it. Failing rather
-/// than no-opping is the point: a replay no-op would let a peer choose which of
-/// two messages at one coordinate the target program ever sees.
 #[test]
 fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
     let inbox_id = programs::cross_zone_inbox_account_id();
@@ -2476,7 +2291,6 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
         vec![(src_zone, AccountId::from_builtin_program([9_u32; 8]))],
     );
 
-    // The shard as the first delivery left it: bound, holding transaction 0.
     let seen_id = inbox_seen_shard_account_id(inbox_id, &src_zone, src_block_id);
     let mut shard = SeenShard::default();
     shard.insert(SRC_BLOCK_HASH, 0);
@@ -2490,8 +2304,6 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
     })
     .expect("serialize ping message");
 
-    // A different transaction index, so this is not a replay: only the source
-    // block differs from what the shard is bound to.
     let msg = CrossZoneMessage {
         src_zone,
         src_block_id,
@@ -2518,8 +2330,6 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
         "a delivery from a block the shard is not bound to must not execute"
     );
 
-    // Control: the same delivery naming the bound block executes, so the refusal
-    // above is the binding and not the transaction's shape.
     let control_payload = borsh::to_vec(&ReceiverMessage::Record {
         payload: b"from-the-bound-block".to_vec(),
     })
@@ -2559,8 +2369,6 @@ fn a_delivery_from_a_second_block_at_the_same_id_is_refused() {
     );
 }
 
-/// State registering the `zone_chat` test guest alongside the builtins: a
-/// receiver and generic emitter with no builtin privileges.
 fn chat_state(self_zone: [u8; 32]) -> (V03State, AccountId) {
     let chat_id = AccountId::from_builtin_program(test_programs::zone_chat().id());
     let mut state = base_state().with_programs_at([(chat_id, test_programs::zone_chat(), true)]);
@@ -2568,10 +2376,6 @@ fn chat_state(self_zone: [u8; 32]) -> (V03State, AccountId) {
     (state, chat_id)
 }
 
-/// The claim a deployer sends after deployment: the receiver contract's
-/// `InitConfig` to the config PDA, unsigned with the PDA's evidence.
-/// Writes the chat's receiver config straight into state: a claim needs the
-/// program account's key, which a program seeded from an image id has none of.
 fn seed_chat_config(state: &mut V03State, chat_id: AccountId, sources: Vec<([u8; 32], AccountId)>) {
     let config = ping_core::ReceiverConfig {
         deliverer: programs::cross_zone_inbox_account_id(),
@@ -2585,7 +2389,6 @@ fn seed_chat_config(state: &mut V03State, chat_id: AccountId, sources: Vec<([u8;
     )]);
 }
 
-/// An unsigned `InitConfig` aimed at `to`, the shape a front-runner would send.
 fn chat_init_config_tx(chat_id: AccountId, to: Actor) -> PublicTransaction {
     let message = Message {
         admission_evidence: vec![PublicAccountEvidence::Pda {
@@ -2608,7 +2411,6 @@ fn chat_init_config_tx(chat_id: AccountId, to: Actor) -> PublicTransaction {
     PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
 }
 
-/// The inbox dispatch a watcher would build for a chat delivery of `text`.
 fn chat_dispatch_tx(
     chat_id: AccountId,
     src_zone: [u8; 32],
@@ -2635,8 +2437,6 @@ fn chat_dispatch_tx(
     )
 }
 
-/// The receiver side of the any-program path, driven directly: the deployed
-/// receiver claims its config, then an authorized delivery lands in its log PDA.
 #[test]
 fn inbox_dispatch_delivers_to_the_chat_receiver() {
     let src_zone = [2_u8; 32];
@@ -2658,7 +2458,6 @@ fn inbox_dispatch_delivers_to_the_chat_receiver() {
     assert_eq!(log.entries, vec![(src_zone, b"hello-chat".to_vec())]);
 }
 
-/// The chat authorizes its own sources like the builtin receivers do.
 #[test]
 fn a_delivery_from_an_unauthorized_source_does_not_reach_the_chat_log() {
     let src_zone = [2_u8; 32];
@@ -2679,8 +2478,6 @@ fn a_delivery_from_an_unauthorized_source_does_not_reach_the_chat_log() {
     rejects_at(&state, &tx, 2, "peer source this receiver authorizes");
 }
 
-/// The log is an internal shard: only the chat's own config writes it, so a
-/// user cannot forge an entry past the source check.
 #[test]
 fn a_direct_write_to_the_chat_log_is_refused() {
     let (state, chat_id) = chat_state([1_u8; 32]);
@@ -2705,8 +2502,6 @@ fn a_direct_write_to_the_chat_log_is_refused() {
     rejects_at(&state, &tx, 1, "only written by this program's config");
 }
 
-/// The claim a deployer actually sends: signed by the program account's key,
-/// at the program account, forwarded from there to the config PDA.
 #[test]
 fn a_deployer_signed_claim_at_the_program_account_writes_the_config() {
     let key = PrivateKey::try_new([77; 32]).expect("valid key");
@@ -2755,8 +2550,6 @@ fn a_deployer_signed_claim_at_the_program_account_writes_the_config() {
     );
 }
 
-/// The config PDA refuses a claim that did not come through the program
-/// account, which is what stops a front-runner hijacking the receiver.
 #[test]
 fn a_claim_sent_straight_to_the_config_pda_is_refused() {
     let (state, chat_id) = chat_state([1_u8; 32]);
@@ -2765,8 +2558,6 @@ fn a_claim_sent_straight_to_the_config_pda_is_refused() {
     rejects_at(&state, &tx, 1, "only claimed through the program account");
 }
 
-/// And the program account refuses to forward one it did not authorize, so the
-/// claim needs the deployer's key either way.
 #[test]
 fn an_unauthorized_claim_at_the_program_account_is_refused() {
     let (state, chat_id) = chat_state([1_u8; 32]);
@@ -2774,8 +2565,6 @@ fn an_unauthorized_claim_at_the_program_account_is_refused() {
     rejects_at(&state, &tx, 1, "must authorize the receiver config claim");
 }
 
-/// A chained `Post` is refused and a top-level one sends: the chat program asserts
-/// top level itself, so a proxy cannot send under its name.
 #[test]
 fn a_chained_post_is_refused_and_a_top_level_post_sends() {
     let chat_id = AccountId::from_builtin_program(test_programs::zone_chat().id());
@@ -2810,9 +2599,6 @@ fn a_chained_post_is_refused_and_a_top_level_post_sends() {
             .expect("build proxy message")
     };
     let chained = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
-    // The delivery branch claims a program-origin call, so a chained Post dies
-    // at the Delivery decode rather than the Post arm's assert; refused either
-    // way, and a crafted delivery is stopped by the config's deliverer pin.
     rejects_at(&state, &chained, 1, "a delivery decodes");
 
     let post = Message::try_new(entry, vec![entry], BTreeMap::new(), post_message())

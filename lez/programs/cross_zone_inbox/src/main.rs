@@ -16,8 +16,6 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
             dispatch(input, msg)
         }
         Message::Mark(msg) => mark(input, msg),
-        // Genesis is replayed onto seeded state during multi-sequencer reconstruction, so
-        // a written config must already hold exactly this.
         Message::InitConfig(config) => {
             assert_root_origin_at_config(input);
             Response::set_state(write_once(&input.pre_state, config.to_bytes()))
@@ -25,17 +23,6 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
     }
 }
 
-/// Delivers a finalized peer message to its target program, refusing a replay.
-///
-/// The inbox does not decide who may deliver what. It authenticates transport
-/// and nothing else: any program this zone hosts can be named as a target, and
-/// receives a `Delivery` at its own program account's actor carrying a payload the
-/// peer chose. So a program meant to be reachable across zones MUST check the
-/// delivery's origin and source against sources it authorized itself, the way
-/// `wrapped_token` and `ping_receiver` do. A program not meant to be reachable
-/// has only whatever its own code happens to do with such a message. None of that
-/// was written with cross-zone delivery in mind. User-deployed programs are
-/// reachable too, and were written with no expectation of an inbox sender at all.
 fn dispatch(input: &ReceiveInput, msg: CrossZoneMessage) -> Response {
     assert!(
         msg.l1_inclusion_witness.is_none(),
@@ -70,9 +57,6 @@ fn mark(input: &ReceiveInput, msg: CrossZoneMessage) -> Response {
         "A delivery is marked only at its own seen shard"
     );
     let mut shard = SeenShard::from_bytes(&input.pre_state).expect("seen shard decodes");
-    // One block id, one delivering block. The address binds the zone and block id but
-    // not which block claimed them, so an equivocating peer's two blocks at one id land
-    // here; the first binds the shard and the second aborts.
     assert!(
         shard.binds(&msg.src_block_hash),
         "Seen shard is bound to a different peer block at this block id"
@@ -219,8 +203,6 @@ mod tests {
     #[test]
     #[should_panic(expected = "This delivery is already recorded")]
     fn a_recorded_delivery_cannot_claim_to_be_the_first() {
-        // The replay amplifier: taken, this re-fires the target's delivery for a message
-        // the zone already delivered.
         let _transition = mark_at_seen(shard_with(&[3]), HASH, 3);
     }
 
@@ -241,7 +223,6 @@ mod tests {
         );
     }
 
-    // A delivery targeting the inbox program reaches `(inbox, inbox)` under the inbox's own origin.
     #[test]
     #[should_panic(expected = "A delivery is marked only at its own seen shard")]
     fn an_own_origin_mark_at_another_inbox_actor_is_refused() {

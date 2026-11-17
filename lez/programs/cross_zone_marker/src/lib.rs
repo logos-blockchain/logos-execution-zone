@@ -1,13 +1,4 @@
 //! The account that names who sent a cross-zone delivery, and the delivery itself.
-//!
-//! Its own crate because both the inbox, which derives the marker and sends the
-//! delivery, and every target that authenticates a source need these, and nothing
-//! else. A target linking the inbox's core for this would tie its image id, and
-//! every PDA under it, to changes in the inbox's config types.
-//!
-//! It is the coupling this buys back, not size: the derivation needs risc0's
-//! sha, which is the bulk of what linking cost in the first place, so splitting
-//! it out barely moves the guest.
 
 use borsh::{BorshDeserialize, BorshSerialize};
 pub use lee_core::account::ZoneId;
@@ -22,14 +13,8 @@ pub struct Delivery {
     pub payload: Vec<u8>,
 }
 
-/// The address a target derives from a delivery's deliverer and source, to
-/// authenticate its own sources.
-///
-/// Its contents carry nothing and are never read.
-///
-/// The address is derivable by anyone, so it is not a secret and not a
-/// capability. What makes it mean something is that a target checks it only after
-/// pinning the delivery's origin to the inbox, and only the inbox can be that origin.
+/// The address a target derives from a delivery's deliverer and source, to authenticate its own
+/// sources.
 #[must_use]
 pub fn inbox_source_marker_account_id(
     inbox_id: AccountId,
@@ -42,8 +27,6 @@ pub fn inbox_source_marker_account_id(
     )
 }
 
-/// Seed of the source marker. Private: nothing ever needs to spend from the
-/// account, so no caller needs the seed, only the address.
 fn inbox_source_marker_seed(src_zone: &ZoneId, src_account_id: AccountId) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
@@ -63,8 +46,6 @@ fn inbox_source_marker_seed(src_zone: &ZoneId, src_account_id: AccountId) -> Pda
 mod tests {
     use super::*;
 
-    /// The address is the message: a different zone or a different source program
-    /// must not land on the same account.
     #[test]
     fn the_marker_separates_every_source() {
         let inbox = AccountId::new([1; 32]);

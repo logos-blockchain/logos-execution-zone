@@ -1,26 +1,4 @@
 //! Interactive cross-zone chat demo.
-//!
-//! Boots one Bedrock node hosting two zones (A and B), each running a sequencer
-//! whose cross-zone watcher points at the other zone, then serves a local
-//! two-column web UI. Type a message in one column and watch it cross Bedrock
-//! and appear in the other; two people can chat across the zones.
-//!
-//! This is the `cross_zone_ping` integration-test topology made interactive:
-//! a send builds a `ping_sender::Send` on the sender zone targeting the other
-//! zone's `ping_receiver`, the other zone's watcher reads the finalized source
-//! block and injects the inbox dispatch, and a per-zone block tailer decodes the
-//! delivered `cross_zone_inbox::Dispatch` payloads back into chat text.
-//!
-//! To make the cross-zone machinery visible, each message is tracked through its
-//! pipeline stages and surfaced to the page: submitted into a source block on the
-//! sender zone, that block's Bedrock finality (pending -> finalized), and final
-//! delivery into a block on the receiver zone. The Bedrock-finality wait is what
-//! dominates the latency, so it is shown live.
-//!
-//! Prerequisite: a working local Docker daemon (Bedrock comes up via
-//! `bedrock/docker-compose.yml`). Run with `RISC0_DEV_MODE=1` for fast,
-//! proving-free latency; on macOS run under the `just cross-zone-chat` recipe so
-//! the DYLD framework shim is set.
 
 #![allow(
     clippy::arithmetic_side_effects,
@@ -74,69 +52,50 @@ use tracing::{info, warn};
 const HTTP_PORT: u16 = 8088;
 const POLL_INTERVAL: Duration = Duration::from_secs(1);
 
-/// One chat message tracked through its cross-zone pipeline. Displayed in the
-/// receiving zone's column; the stage fields drive the on-page timeline.
 struct TrackedMessage {
     id: u64,
-    /// Label ("A" / "B") of the sender zone.
     source_label: &'static str,
-    /// Label of the receiver zone; the column this message shows in.
     dest_label: &'static str,
     text: String,
-    /// Block on the sender zone that included the `ping_sender` tx.
     source_block: Option<u64>,
-    /// Whether `source_block` has reached Bedrock finality.
     finalized: bool,
-    /// Block on the receiver zone that delivered the inbox dispatch.
     delivered_block: Option<u64>,
     created: Instant,
-    /// Wall-clock seconds from submit to delivery, set once delivered.
     delivered_secs: Option<u64>,
 }
 
-/// A single send to perform.
 #[derive(Deserialize)]
 struct SendRequest {
     zone: String,
     text: String,
 }
 
-/// The id assigned to a freshly submitted message.
 #[derive(Serialize)]
 struct SendResponse {
     id: u64,
 }
 
-/// One message's current pipeline state, as served to the page.
 #[derive(Serialize)]
 struct TimelineEntry {
     id: u64,
-    /// Receiver column the message belongs to.
     zone: &'static str,
     source_zone: &'static str,
     text: String,
     source_block: Option<u64>,
     finalized: bool,
     delivered_block: Option<u64>,
-    /// Seconds elapsed (live until delivered, then frozen at delivery time).
     elapsed: u64,
 }
 
-/// Everything one zone needs to send to its peer.
 struct ZoneRuntime {
-    /// The peer zone's channel id; the target of sends from this zone.
     other_zone: ZoneId,
     client: SequencerClient,
-    /// Next payer nonce, seeded from the chain at startup and advanced only on
-    /// a successful submit. Held across the submit, so two sends in one block
-    /// interval cannot take the same nonce.
     payer_nonce: tokio::sync::Mutex<u64>,
 }
 
 struct AppState {
     zone_a: ZoneRuntime,
     zone_b: ZoneRuntime,
-    /// Monotonic id assigned to every message.
     next_id: AtomicU64,
     messages: Mutex<Vec<TrackedMessage>>,
 }
@@ -150,7 +109,6 @@ impl AppState {
         }
     }
 
-    /// Records a freshly submitted outbound message and returns its id.
     fn record_outbound(
         &self,
         source_label: &'static str,
@@ -181,7 +139,6 @@ impl AppState {
         id
     }
 
-    /// Marks the source-zone block that included a send, matched by text.
     fn mark_source_block(&self, source_label: &'static str, text: &str, block_id: u64) {
         let mut messages = self.messages.lock().expect("messages mutex poisoned");
         if let Some(message) = messages
@@ -199,9 +156,6 @@ impl AppState {
         }
     }
 
-    /// Marks delivery on the receiver zone. Prefers the oldest undelivered
-    /// message whose text matches; falls back to the oldest undelivered for the
-    /// zone (delivery order is preserved end to end).
     fn mark_delivered(&self, dest_label: &'static str, text: &str, block_id: u64) {
         let mut messages = self.messages.lock().expect("messages mutex poisoned");
         let undelivered =
@@ -225,7 +179,6 @@ impl AppState {
         }
     }
 
-    /// Snapshot of (source zone, block) pairs whose finality is still unknown.
     fn pending_finality(&self) -> BTreeSet<(&'static str, u64)> {
         self.messages
             .lock()
@@ -236,7 +189,6 @@ impl AppState {
             .collect()
     }
 
-    /// Marks every message whose source block has reached Bedrock finality.
     fn mark_finalized(&self, source_label: &'static str, block_id: u64) {
         for message in self
             .messages
@@ -285,7 +237,6 @@ impl AppState {
 async fn main() -> Result<()> {
     logging::init();
 
-    // Declared first so Bedrock outlives both zones (drops run in reverse order).
     let (_bedrock, bedrock_addr) = setup_bedrock_node()
         .await
         .context("Failed to set up shared Bedrock node")?;
@@ -296,7 +247,6 @@ async fn main() -> Result<()> {
     let zone_b: ZoneId = *channel_b.as_ref();
     let receiver_id = programs::ping_receiver_account_id();
 
-    // Each zone watches the other and may deliver only to ping_receiver.
     let cross_zone_a = watch_peer(zone_b, receiver_id);
     let cross_zone_b = watch_peer(zone_a, receiver_id);
 
@@ -361,8 +311,6 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// A cross-zone config whose single peer is `peer`, allowed to deliver only to
-/// `receiver_id`.
 fn watch_peer(peer: ZoneId, receiver_id: AccountId) -> CrossZoneConfig {
     CrossZoneConfig {
         peers: vec![CrossZonePeer {
@@ -389,7 +337,6 @@ fn sequencer_client(addr: SocketAddr) -> Result<SequencerClient> {
         .context("Failed to build sequencer client")
 }
 
-/// The payer's current nonce on this zone, the seed for the local counter.
 async fn payer_nonce(client: &SequencerClient, payer_id: AccountId) -> Result<u64> {
     let nonce = client
         .get_account(payer_id)
@@ -400,15 +347,11 @@ async fn payer_nonce(client: &SequencerClient, payer_id: AccountId) -> Result<u6
     u64::try_from(nonce.0).context("payer nonce exceeds u64")
 }
 
-/// Scans one zone's new blocks. A `ping_sender` tx marks the message's source
-/// block (its outbound leg); an inbox dispatch marks delivery on this zone.
-/// Runs forever; transient RPC errors are logged and retried.
 async fn scan_zone(state: Arc<AppState>, label: &'static str) {
     let inbox_id = programs::cross_zone_inbox_account_id();
     let sender_id = programs::ping_sender_account_id();
     let client = &state.zone(label).expect("zone runtime exists").client;
 
-    // Start from the current tip so genesis/boot blocks are skipped.
     let mut cursor = client.get_last_block_id().await.unwrap_or(0);
 
     loop {
@@ -435,8 +378,6 @@ async fn scan_zone(state: Arc<AppState>, label: &'static str) {
                             continue;
                         };
                         let program_id = to.program_account_id;
-                        // A tx targets at most one of these programs; check both
-                        // independently rather than chaining (avoids an empty else).
                         if program_id == inbox_id
                             && let Some(text) = decode_inbox_text(data)
                         {
@@ -465,7 +406,6 @@ async fn scan_zone(state: Arc<AppState>, label: &'static str) {
     }
 }
 
-/// Polls each tracked source block's Bedrock finality until it is finalized.
 async fn poll_finality(state: Arc<AppState>) {
     loop {
         tokio::time::sleep(POLL_INTERVAL).await;
@@ -489,7 +429,6 @@ async fn poll_finality(state: Arc<AppState>) {
     }
 }
 
-/// Recovers the chat text from an inbox dispatch tx's message.
 fn decode_inbox_text(message: &[u8]) -> Option<String> {
     let InboxMessage::Dispatch(delivery) = borsh::from_slice::<InboxMessage>(message).ok()? else {
         return None;
@@ -497,13 +436,11 @@ fn decode_inbox_text(message: &[u8]) -> Option<String> {
     decode_payload(&delivery.payload)
 }
 
-/// Recovers the chat text from a `ping_sender::Send` tx's message.
 fn decode_send_text(message: &[u8]) -> Option<String> {
     let SenderMessage::Send { payload, .. } = borsh::from_slice::<SenderMessage>(message).ok()?;
     decode_payload(&payload)
 }
 
-/// Decodes a `ping_receiver::Record` payload (borsh bytes) to text.
 fn decode_payload(payload: &[u8]) -> Option<String> {
     let ReceiverMessage::Record { payload: bytes } =
         borsh::from_slice::<ReceiverMessage>(payload).ok()?
@@ -513,8 +450,6 @@ fn decode_payload(payload: &[u8]) -> Option<String> {
     Some(String::from_utf8_lossy(&bytes).into_owned())
 }
 
-/// Builds the fee-paying `ping_sender::Send` that carries `text` to
-/// `other_zone`, mirroring `integration_tests/tests/cross_zone_ping.rs`.
 fn build_send_tx(
     other_zone: ZoneId,
     text: &str,

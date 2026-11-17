@@ -3,13 +3,8 @@
     reason = "top-level test functions are conventional for integration tests"
 )]
 
-//! End-to-end cross-zone round trip: a ping submitted on zone A is delivered by
-//! zone B's watcher to `ping_receiver` on zone B, which records the payload.
-//!
-//! Two sequencers share one Bedrock node (no indexers): zone A publishes the
-//! ping to Bedrock, zone B's watcher reads zone A's finalized blocks, injects the
-//! inbox dispatch, and zone B's sequencer delivers it. This is the M3 milestone,
-//! sequencer-trusted, with no indexer re-derivation (that is M4).
+//! End-to-end cross-zone round trip: a ping submitted on zone A is delivered by zone B's watcher to
+//! `ping_receiver` on zone B, which records the payload.
 
 use std::{collections::BTreeMap, time::Duration};
 
@@ -37,7 +32,6 @@ const PING_PAYLOAD: &[u8] = b"hello-cross-zone";
 #[test]
 async fn ping_crosses_from_zone_a_to_zone_b() -> Result<()> {
     let partial = SequencerPartialConfig {
-        // Covers the storage price doubling at the devnet's first epoch rotations.
         priority_fee_percent: 150,
         ..SequencerPartialConfig::default()
     };
@@ -48,7 +42,6 @@ async fn ping_crosses_from_zone_a_to_zone_b() -> Result<()> {
 
     let receiver_id = programs::ping_receiver_account_id();
 
-    // Zone B watches zone A and allows delivery only to ping_receiver.
     let cross_zone = CrossZoneConfig {
         peers: vec![CrossZonePeer {
             channel_id: zone_a,
@@ -99,7 +92,6 @@ async fn ping_crosses_from_zone_a_to_zone_b() -> Result<()> {
         .zone_default_sequencer_component(channel_b)
         .sequencer_client;
 
-    // Submit the ping on zone A, addressed to ping_receiver on zone B.
     let payer = &initial_pub_accounts_private_keys()[0];
     let payer_nonce = seq_client_a
         .get_account(payer.account_id)
@@ -113,7 +105,6 @@ async fn ping_crosses_from_zone_a_to_zone_b() -> Result<()> {
         .await
         .context("Failed to submit ping on zone A")?;
 
-    // Wait until zone B's sequencer records the delivered payload.
     let record_id = ping_record_pda(receiver_id);
     let delivered = wait_for_delivery(seq_client_b.clone(), record_id, receiver_id).await?;
 
@@ -124,15 +115,12 @@ async fn ping_crosses_from_zone_a_to_zone_b() -> Result<()> {
     Ok(())
 }
 
-/// Builds a top-level `ping_sender` transaction sending a
-/// `ping_receiver::Record` message to the target zone.
 fn build_ping_tx(
     target_zone: [u8; 32],
     receiver_id: AccountId,
     payer: &PublicAccountPrivateInitialData,
     payer_nonce: Nonce,
 ) -> LeeTransaction {
-    // The payload is the ping_receiver message, borsh-serialized.
     let payload = borsh::to_vec(&ReceiverMessage::Record {
         payload: PING_PAYLOAD.to_vec(),
     })
@@ -163,7 +151,6 @@ fn build_ping_tx(
     LeeTransaction::Public(PublicTransaction::new(message, witness_set))
 }
 
-/// Polls zone B's sequencer until the ping record PDA holds a payload.
 async fn wait_for_delivery(
     client: SequencerClient,
     record_id: AccountId,

@@ -1,13 +1,5 @@
-//! Host-side cross-zone helpers that need program ids (`programs`) or the state
-//! machine (`lee`), kept out of the guest-pure cores. Mirrors `system_accounts`:
-//! it resolves builtin program ids and bakes them into transactions and genesis
-//! accounts for the watcher (sequencer) and verifier (indexer).
-//!
-//! This crate is the reference LEZ-to-LEZ adapter: it re-derives each delivery
-//! byte-for-byte from a peer LEZ zone's finalized blocks, valid only because the
-//! peer runs identical LEZ code. A non-LEZ peer needs a separate adapter with its
-//! own block-reading, outbound-extraction, delivery-building, and trust model; a
-//! shared trait is best lifted from that first real adapter, not from this one.
+//! Host-side cross-zone helpers that need program ids (`programs`) or the state machine (`lee`),
+//! kept out of the guest-pure cores.
 
 use std::collections::BTreeMap;
 
@@ -31,116 +23,62 @@ pub mod acceptance;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod test_utils;
 
-/// One delivery a peer is allowed to make: a program on the peer that may emit,
-/// paired with the program here it may reach.
-///
-/// The pair is the unit because the target authorizes a source, not a zone. A
-/// bridging peer needs `wrapped_token` reachable, and `ping_sender` lets its
-/// caller choose the target, so a zone-wide allowance would let it mint with no
-/// lock behind it. That rule now lives in each target, seeded from these pairs at
-/// genesis, rather than in the inbox.
-/// Unknown fields are refused so a misspelled `mint_cap` fails startup instead
-/// of silently seeding the source uncapped.
+/// One delivery a peer is allowed to make: a program on the peer that may emit, paired with the
+/// program here it may reach.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CrossZoneRoute {
-    /// The program on the peer zone that emitted the message, from any of its
-    /// actors at any call depth; a source that must stay top-level asserts it
-    /// in its own guest.
+    /// The program on the peer zone that emitted the message, from any of its actors at any call
+    /// depth; a source that must stay top-level asserts it in its own guest.
     pub src_account_id: AccountId,
     /// The program on this zone it may be delivered to.
     pub target_account_id: AccountId,
-    /// Lifetime mint allowance for this source at the target; `None` is
-    /// uncapped. Only meaningful on a route whose target mints against the
-    /// message (`wrapped_token`); genesis refuses it on any other target.
+    /// Lifetime mint allowance for this source at the target; `None` is uncapped.
     #[serde(default)]
     pub mint_cap: Option<Balance>,
 }
 
 /// A peer zone whose blocks a zone watches for inbound cross-zone messages.
-///
-/// Unknown fields are refused so a stale or misspelled key in an operator
-/// config fails startup instead of silently pinning nothing.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CrossZonePeer {
     /// The peer's Bedrock channel; its 32 bytes double as the peer's zone id.
     pub channel_id: ZoneId,
     /// Which of this peer's programs may reach which local program.
-    ///
-    /// No longer enforced in transit: the inbox delivers to whatever a message
-    /// names, and the target refuses a source it did not authorize. This is the
-    /// operator's statement of intent, fanned out at genesis into each target's
-    /// own config. A route naming a program that does not authorize cross-zone
-    /// sources is refused there, at genesis.
     pub allowed_routes: Vec<CrossZoneRoute>,
-    /// Minimum live committee size (accredited keys on the peer's channel)
-    /// below which reading from this peer is suspended, by the sequencer's
-    /// watcher and the indexer's verifier alike. 0, the default, disables the
-    /// floor, and a production peer should set it. With a floor set, a channel
-    /// state unreadable before the first successful read counts as below it (fail-closed), while a
-    /// bounded run of later read failures keeps the last known size. Unknown fields are
-    /// refused above, so a misspelling fails startup instead of silently running floorless.
+    /// Minimum live committee size (accredited keys on the peer's channel) below which reading
+    /// from this peer is suspended, by the sequencer's watcher and the indexer's verifier alike.
     #[serde(default)]
     pub min_committee_size: u32,
-    /// Recomputed hash of the peer's genesis block. Set, a first read that
-    /// hashes differently is refused; unset, the first genesis read is trusted
-    /// as-is. A production peer should set it.
+    /// Recomputed hash of the peer's genesis block.
     #[serde(default)]
     pub genesis_hash: Option<HashType>,
 }
 
-/// Cross-zone configuration shared by a zone's sequencer (watcher) and indexer
-/// (verifier): the peers it reads from Bedrock and, per peer, the deliveries the
-/// operator intends each target to accept.
+/// Cross-zone configuration shared by a zone's sequencer (watcher) and indexer (verifier): the
+/// peers it reads from Bedrock and, per peer, the deliveries the operator intends each target to
+/// accept.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CrossZoneConfig {
-    /// Read once at startup by the watchers and the verifier, so adding a peer
-    /// zone needs a config change and a restart on both sequencer and indexer.
-    /// Defaulted, so a source-only zone names only its lock targets.
+    /// Read once at startup by the watchers and the verifier, so adding a peer zone needs a config
+    /// change and a restart on both sequencer and indexer.
     #[serde(default)]
     pub peers: Vec<CrossZonePeer>,
-    /// The zones `bridge_lock` may name as a lock target on this zone, the
-    /// send-direction counterpart of `peers`, seeded into its config at genesis.
-    /// Empty means this zone locks to nobody, so a source-only zone that locks
-    /// outbound still has to list them here.
-    ///
-    /// Read by the sequencer alone, at genesis. Not defaulted: an empty list
-    /// leaves `bridge_lock` registered but unable to lock anywhere, and the
-    /// config is written once, so no later edit corrects it. Anyone may fund a
-    /// holding by transferring to its PDA and only a lock moves it out, so a
-    /// holding funded on such a zone is stuck. Genesis refuses to seed one,
-    /// which is the operator's path, not the runtime one.
-    ///
-    /// Naming a zone asserts only that this zone may lock to it. Whether that
-    /// zone routes the lock back to a mint is its own config, unreadable from
-    /// here, and a lock to a pinned zone that refuses the mint strands the same
-    /// way.
+    /// The zones `bridge_lock` may name as a lock target on this zone, the send-direction
+    /// counterpart of `peers`, seeded into its config at genesis.
     pub lock_target_zones: Vec<ZoneId>,
-    /// Account allowed to change which peer sources each target program accepts,
-    /// seeded into every target's own config at genesis.
-    ///
-    /// Unset by default, which leaves those lists fixed at genesis. It can only
-    /// ever be set at genesis and there is no rotation. One value seeds every
-    /// target, including the ones that mint, and whoever holds it can authorize
-    /// a source, so its compromise is theft rather than delay.
+    /// Account allowed to change which peer sources each target program accepts, seeded into every
+    /// target's own config at genesis.
     #[serde(default)]
     pub source_authority: Option<AccountId>,
-    /// Program allowed to act on the source authority's behalf by message, seeded
-    /// into every target's config at genesis. Needed only for a PDA
-    /// authority, which cannot sign; unset means the authority acts at top level.
+    /// Program allowed to act on the source authority's behalf by message, seeded into every
+    /// target's config at genesis.
     #[serde(default)]
     pub source_governance: Option<AccountId>,
 }
 
 /// Where a delivery came from on the peer chain.
-///
-/// One struct so the watcher and the verifier fill the same field list: their
-/// dispatch transactions for one message must be byte-identical.
-///
-/// `src_block_hash` is the recomputed hash on both sides, never the declared
-/// `header.hash`, which the signature does not cover.
 pub struct OutboundSource {
     pub src_zone: ZoneId,
     pub src_block_id: u64,
@@ -149,11 +87,6 @@ pub struct OutboundSource {
 }
 
 /// Whether a program may only be invoked by sequencer-origin transactions.
-///
-/// The cross-zone inbox is injected solely by the watcher and the fee program
-/// solely by the forced per-block fee transaction; a user-submitted call must be
-/// rejected at ingress, since `TransactionOrigin` is not carried in the block.
-/// Every `system_upgrader` transaction is built or admitted by the producer.
 #[must_use]
 pub fn is_sequencer_only_program(account_id: AccountId) -> bool {
     account_id == programs::cross_zone_inbox_account_id()
@@ -161,17 +94,11 @@ pub fn is_sequencer_only_program(account_id: AccountId) -> bool {
         || account_id == programs::system_upgrader_account_id()
 }
 
-/// Builds the sequencer-origin dispatch transaction. Pure for fixed inputs, so
-/// the watcher's injected tx and the indexer's re-derived tx are byte-identical.
 fn build_inbox_dispatch_tx(
     inbox_id: AccountId,
     msg: &CrossZoneMessage,
     accounts: Vec<Actor>,
 ) -> lee::PublicTransaction {
-    // The inbox's config and seen actors, then the target the delivery lands on,
-    // then the sender-declared actors the delivery reaches. Declared here rather
-    // than by the guest, since a guest cannot conjure an actor; both the watcher
-    // and the verifier build it through this one function.
     let config = Actor::new(inbox_config_account_id(inbox_id), inbox_id);
     let mut public_actors = Vec::with_capacity(accounts.len().saturating_add(3));
     public_actors.push(config);
@@ -203,11 +130,6 @@ fn build_inbox_dispatch_tx(
 }
 
 /// Builds the dispatch transaction for one message of a peer block's outbound list.
-///
-/// Both the sequencer's watcher and the indexer's verifier go through this so
-/// their transactions are byte-identical for the same message (the basis of the
-/// Option B check). The source a receiver authorizes against is the emitting
-/// actor's program.
 #[must_use]
 pub fn build_dispatch(
     source: &OutboundSource,
@@ -231,10 +153,6 @@ pub fn build_dispatch(
 }
 
 /// The genesis transaction that initializes this zone's inbox config PDA.
-///
-/// The operator's per-peer routes no longer live here. They are fanned out into
-/// each target program's own config, so all the inbox keeps is its zone id.
-/// Replaying this seeds the same account on every node.
 #[must_use]
 pub fn build_inbox_init_config_tx(self_zone: ZoneId) -> lee::PublicTransaction {
     genesis_public_tx(
@@ -244,17 +162,6 @@ pub fn build_inbox_init_config_tx(self_zone: ZoneId) -> lee::PublicTransaction {
     )
 }
 
-/// The `(src_zone, src_account_id)` pairs the operator's routes name for one
-/// target.
-///
-/// Panics on a route naming a program that does not authorize cross-zone sources.
-/// Nothing downstream would notice otherwise: the route is dropped here, the
-/// watcher no longer filters targets, and every delivery would be refused by a
-/// program that never opted in, dead-lettering after three attempts. A typo in a
-/// config file should not cost a channel silently.
-///
-/// Only the sequencer builds genesis, so an indexer handed the same typo starts
-/// normally and only the sequencer refuses to boot.
 fn sources_for_target(
     cross_zone: &CrossZoneConfig,
     target_account_id: AccountId,
@@ -273,9 +180,6 @@ fn sources_for_target(
                 "cross-zone route sets a mint cap, but its target {:?} does not mint",
                 route.target_account_id
             );
-            // A cap only the authority can raise, on a zone with no authority,
-            // is a fuse with no replacement: once honest volume exhausts it,
-            // every later delivery dead-letters and the peer's escrow strands.
             assert!(
                 route.mint_cap.is_none() || cross_zone.source_authority.is_some(),
                 "cross-zone route sets a mint cap, but no source_authority is configured to ever raise it"
@@ -285,8 +189,6 @@ fn sources_for_target(
             }
         }
     }
-    // Mint's counter advances the first matching entry, so a duplicated pair
-    // would split one source's policy across entries an auditor reads as two.
     for (index, (zone, program, _)) in sources.iter().enumerate() {
         assert!(
             !sources[..index].iter().any(
@@ -298,7 +200,6 @@ fn sources_for_target(
     sources
 }
 
-/// The programs a cross-zone route may name as a target on this zone.
 fn cross_zone_targets() -> [AccountId; 2] {
     [
         programs::wrapped_token_account_id(),
@@ -306,15 +207,8 @@ fn cross_zone_targets() -> [AccountId; 2] {
     ]
 }
 
-/// The genesis transaction that pins the cross-zone inbox as the wrapped-token
-/// minter and names the peer sources it may mint for, without importing either id
-/// into the guest.
-///
-/// The sources are the operator's own peer routes aimed at this token, moved from
-/// the inbox's allowlist to the token's own config: the same information, enforced
-/// by the program that owns the value. A zone with no peers gets an empty list,
-/// which authorizes nothing, and the config is still seeded so its PDA cannot be
-/// claimed by a first initializer.
+/// The genesis transaction that pins the cross-zone inbox as the wrapped-token minter and names the
+/// peer sources it may mint for, without importing either id into the guest.
 #[must_use]
 pub fn build_wrapped_token_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::PublicTransaction {
     let wrapped_token_id = programs::wrapped_token_account_id();
@@ -343,11 +237,8 @@ pub fn build_wrapped_token_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::
     )
 }
 
-/// The genesis transaction that pins the wrapped token `bridge_lock` mints and
-/// the zones it may lock to, without importing their ids into the guest.
-///
-/// The config is seeded even with an empty list, so its PDA cannot be claimed by
-/// a first initializer.
+/// The genesis transaction that pins the wrapped token `bridge_lock` mints and the zones it may
+/// lock to, without importing their ids into the guest.
 #[must_use]
 pub fn build_bridge_lock_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::PublicTransaction {
     genesis_public_tx(
@@ -366,14 +257,11 @@ pub fn bridge_lock_holding_account_id(holder: AccountId) -> AccountId {
     bridge_lock_core::holding_account_id(programs::bridge_lock_account_id(), &holder.into_value())
 }
 
-/// The genesis transaction naming the peer sources `ping_receiver` accepts a
-/// delivery from, fanned out of the operator's routes exactly as the wrapped
-/// token's is.
+/// The genesis transaction naming the peer sources `ping_receiver` accepts a delivery from, fanned
+/// out of the operator's routes exactly as the wrapped token's is.
 #[must_use]
 pub fn build_ping_receiver_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::PublicTransaction {
     let receiver_id = programs::ping_receiver_account_id();
-    // Caps are refused on non-minting targets above, so the cap is always
-    // absent here and the receiver's pair list keeps its shape.
     let sources = sources_for_target(cross_zone, receiver_id)
         .into_iter()
         .map(|(src_zone, src_account_id, _)| (src_zone, src_account_id))
@@ -390,8 +278,8 @@ pub fn build_ping_receiver_init_config_tx(cross_zone: &CrossZoneConfig) -> lee::
     )
 }
 
-/// Builds an unsigned, sequencer-origin genesis transaction sending `message` to `program`'s
-/// config PDA under `seed`, the only actor an `InitConfig` touches.
+/// Builds an unsigned, sequencer-origin genesis transaction sending `message` to `program`'s config
+/// PDA under `seed`, the only actor an `InitConfig` touches.
 fn genesis_public_tx<M: borsh::BorshSerialize>(
     program: AccountId,
     seed: PdaSeed,
@@ -434,9 +322,6 @@ mod tests {
         let _tx = build_wrapped_token_init_config_tx(&cross_zone);
     }
 
-    /// A capped route on an authority-less zone is a fuse with no replacement:
-    /// once honest volume exhausts the cap, every later delivery dead-letters
-    /// and the peer's escrow strands, so genesis refuses the combination.
     #[test]
     #[should_panic(expected = "no source_authority is configured")]
     fn a_capped_route_without_an_authority_is_refused() {
@@ -458,8 +343,6 @@ mod tests {
         let _tx = build_wrapped_token_init_config_tx(&cross_zone);
     }
 
-    /// Mint advances the first matching entry, so a source listed twice would
-    /// split one policy across entries an auditor reads as two.
     #[test]
     #[should_panic(expected = "same source twice")]
     fn a_duplicated_route_for_one_target_is_refused() {
