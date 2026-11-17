@@ -2,7 +2,7 @@
 
 End-to-end LEZ scenarios driven through the wallet against a docker-compose Bedrock node + in-process sequencer + indexer (via `test_fixtures::TestContext`). Times each step and records borsh sizes per block, split by tx variant.
 
-Numbers below are from a single-host docker-compose run on an Apple M2 Pro (CPU only, no GPU acceleration), macOS 26.5.1, Rust 1.94.0, Risc0 3.0.5. Absolute wall time and block sizes depend heavily on the bedrock config (block cadence and confirmation depth) and on dev-mode vs real proving; re-run the bench locally to characterise your own setup.
+Numbers below are from a single-host docker-compose run on a 12th Gen Intel Core i7-1270P (CPU only, no GPU acceleration), Linux 7.0, Rust 1.98.1, Risc0 3.1.0. Absolute wall time and block sizes depend heavily on the bedrock config (block cadence and confirmation depth) and on dev-mode vs real proving; re-run the bench locally to characterise your own setup.
 
 ## Scenarios
 
@@ -39,23 +39,23 @@ Per scenario, every produced block is fetched via `getBlock(BlockId)` and serial
 
 | Scenario | total_s | bedrock_finality_s |
 |---|---:|---:|
-| multi_recipient_fanout | 300.59 | 3.53 |
-| private_chained_flow | 90.41 | 0.00 |
-| parallel_fanout | 600.93 | 0.00 |
+| multi_recipient_fanout | 300.88 | unmeasured |
+| private_chained_flow | 92.23 | unmeasured |
+| parallel_fanout | 601.80 | unmeasured |
 
-Shared TestContext setup: 8.06 s (paid once per run). Total dev-mode wall time across all three scenarios: 1003.6 s.
+Shared TestContext setup: 15.68 s (paid once per run). Total dev-mode wall time across all three scenarios: 1910.6 s, of which 900 s is the three finality waits.
 
-A finality of 0.00 means the indexer had already reached the tip when the scenario finished, which is what long scenarios produce.
+In this run the indexer did not reach the sequencer tip within the 300 s `--finality-timeout-s` after any scenario, so finality is unmeasured.
 
 Per-step breakdown for `private_chained_flow`:
 
 | Step | submit_s | inclusion_s | total_s |
 |---|---:|---:|---:|
-| create_acc_priv_a | 0.009 | n/a | 0.009 |
-| create_acc_priv_b | 0.009 | n/a | 0.009 |
-| fund_private_account (PPE) | 30.093 | 0.000 | 30.110 |
-| deshielded_transfer (PPE) | 30.108 | 0.001 | 30.128 |
-| private_to_private (PPE) | 30.138 | 0.000 | 30.158 |
+| create_acc_priv_a | 0.018 | n/a | 0.018 |
+| create_acc_priv_b | 0.008 | n/a | 0.008 |
+| fund_private_account (PPE) | 30.507 | 0.001 | 31.008 |
+| deshielded_transfer (PPE) | 30.456 | 0.001 | 30.512 |
+| private_to_private (PPE) | 30.629 | 0.002 | 30.682 |
 
 In dev mode every submitting step costs about 30 s, which is block cadence and not compute: the harness waits two blocks before reading back. Dev-mode step times are therefore cadence-bound and say nothing about prover cost.
 
@@ -63,16 +63,18 @@ In dev mode every submitting step costs about 30 s, which is block cadence and n
 
 | Scenario | blocks | block_bytes (mean) | block_bytes (min..max) | public_tx (mean / n) | ppe_tx (mean / n) |
 |---|---:|---:|---|---:|---:|
-| multi_recipient_fanout | 30 | 933 | 810..1,181 | 322 / 70 | n/a |
-| private_chained_flow | 9 | 8,891 | 810..25,210 | 314 / 18 | 24,244 / 3 |
-| parallel_fanout | 60 | 933 | 810..1,181 | 322 / 140 | n/a |
+| multi_recipient_fanout | 30 | 927 | 711..1,358 | 350 / 70 | n/a |
+| private_chained_flow | 9 | 5,943 | 711..16,708 | 311 / 18 | 15,632 / 3 |
+| parallel_fanout | 60 | 932 | 711..1,391 | 352 / 140 | n/a |
 
-The `private_chained_flow` `ppe_tx_bytes` above are dev-mode stubs, measured before the proof's claim was pruned to a digest; a dev-mode stub is now far smaller. Under real proving each grows by the 223 KB proof from cycle_bench.
+Signatures are Schnorr. Each signer's witness entry is 133 B: 96 B of authentication data (signature and public key), the 33-byte key it rotates to, and a length prefix. At nonce 0 the entry also carries the account's 33-byte initial key. The public means mix the per-block system transactions (175 B and 447 B, no signature) with the signed transfers.
+
+The `private_chained_flow` `ppe_tx_bytes` above are dev-mode stubs, the proof pruned to a digest. Under real proving each grows by the 223 KB proof from cycle_bench.
 
 ## Findings
 
-- Public native transfers are small and uniform: 258 to 371 bytes per transaction, under 1.2 KB per block.
-- A PPE transaction dominates its block. Even the dev-mode stub takes a block from 810 bytes to 25 KB, and real proofs take it to roughly 223 KB.
+- A signed public native transfer is 582 B, or 615 B for a sender's first transaction, which also carries its 33-byte initial key; blocks stay under 1.4 KB.
+- A PPE transaction dominates its block. Even the dev-mode stub takes a block from 711 bytes to 17 KB, and real proofs take it to roughly 223 KB.
 - Wall time in dev mode is set by block cadence, not by the node's work.
 
 ## Reproduce
