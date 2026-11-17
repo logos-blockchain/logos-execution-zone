@@ -7,9 +7,11 @@ use std::{
 use anyhow::Context as _;
 use async_trait::async_trait;
 use indexer_service::IndexerHandle;
+use logos_blockchain_zone_sdk::{
+    testing_framework_app::{AppDeployment, AppHostEnv, DeployContext},
+    testing_framework_core::scenario::DynError,
+};
 use tempfile::TempDir;
-use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext};
-use testing_framework_core::scenario::DynError;
 
 use crate::{
     config::{self, UrlProtocol},

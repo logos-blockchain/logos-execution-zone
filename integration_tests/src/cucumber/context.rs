@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use common::HashType;
 use lee::AccountId;
+use logos_blockchain_zone_sdk::testing_framework_app::{AppHostEnv, DeployContext};
 use sequencer_service_rpc::SequencerClient;
-use testing_framework_app::{AppHostEnv, DeployContext};
 
 use crate::{
     config::SequencerPartialConfig,

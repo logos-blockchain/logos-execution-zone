@@ -23,27 +23,28 @@ use lee::{
     test_utils::{TestPrivateKeys, init_witness, no_seal, signer_nonces},
 };
 use lee_core::{GENESIS_BLOCK_ID, account::Nonce};
-use logos_blockchain_core::{
-    events::{DepositNote, DepositRecreatedNotes},
-    mantle::{
-        Note, TxHash,
-        ledger::{Inputs, NoteId, Outputs, Utxo},
-        ops::{
-            Op,
-            channel::{
-                ChannelId, MsgId,
-                channel_transfer::ChannelTransferOp,
-                deposit::Metadata,
-                inscribe::{Inscription, InscriptionOp},
+use logos_blockchain_zone_sdk::{
+    Slot,
+    core::{
+        events::{DepositNote, DepositRecreatedNotes},
+        mantle::{
+            Note, TxHash,
+            ledger::{Inputs, NoteId, Outputs, Utxo},
+            ops::{
+                Op,
+                channel::{
+                    ChannelId, MsgId,
+                    channel_transfer::ChannelTransferOp,
+                    deposit::Metadata,
+                    inscribe::{Inscription, InscriptionOp},
+                },
             },
+            transactions::Ops,
         },
-        transactions::Ops,
     },
+    key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey, ZkPublicKey},
+    sequencer::DepositInfo,
 };
-use logos_blockchain_key_management_system_service::keys::{
-    Ed25519Key, Ed25519PublicKey, ZkPublicKey,
-};
-use logos_blockchain_zone_sdk::{Slot, sequencer::DepositInfo};
 use mempool::{MemPool, MemPoolHandle};
 use ping_core::{ReceiverMessage, ping_record_pda, receiver_config_account_id};
 use sequencer_bedrock_actor::{
@@ -2993,7 +2994,7 @@ async fn signs_peer_pin(
 
     let channel_id = sequencer.sequencer_config.bedrock_config.channel_id;
     let pin = Ops::new(
-        logos_blockchain_core::era::ForkDigest::new([0; 32]),
+        logos_blockchain_zone_sdk::core::era::ForkDigest::new([0; 32]),
         [
             Op::ChannelInscribe(InscriptionOp {
                 channel_id,

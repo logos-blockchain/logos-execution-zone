@@ -18,11 +18,11 @@ use kameo::{
     message::{Context, Message},
 };
 use kameo_actors::broker::Broker;
-use logos_blockchain_common_http_client::BasicAuthCredentials;
-use logos_blockchain_core::mantle::NoteId;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient,
     adapter::{Node as _, NodeHttpClient},
+    common_http_client::BasicAuthCredentials,
+    core::mantle::NoteId,
     sequencer::{InscriptionInfo, PendingTx},
 };
 use sequencer_storage_actor::{

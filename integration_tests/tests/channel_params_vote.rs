@@ -18,10 +18,10 @@ use common::transaction::LeeTransaction;
 use integration_tests::{get_account, init_logger, wait_for_inclusion, wait_until};
 use lee::{AccountId, Actor, PrivateKey, PublicKey};
 use lee_core::account::Nonce;
-use logos_blockchain_core::mantle::channel::ChannelState;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient,
     adapter::{Node as _, NodeHttpClient},
+    core::mantle::channel::ChannelState,
 };
 use sequencer_service_rpc::RpcClient as _;
 use sequencer_stake_core::{ChannelParams, SequencerStakeConfig};

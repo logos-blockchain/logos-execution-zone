@@ -15,11 +15,11 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, ensure};
 use integration_tests::{account_balance, get_account, init_logger, new_account};
 use lee::{AccountId, PrivateKey, PublicAccountEvidence, PublicKey};
-use logos_blockchain_core::mantle::channel::ChannelState;
-use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
 use logos_blockchain_zone_sdk::{
     CommonHttpClient,
     adapter::{Node as _, NodeHttpClient},
+    core::mantle::channel::ChannelState,
+    key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey},
 };
 use sequencer_core::config::{DepositRecipient, GenesisAction};
 use test_fixtures::{

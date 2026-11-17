@@ -3,22 +3,19 @@ use std::{collections::BTreeSet, num::NonZero, sync::Arc, time::Duration};
 pub use chain_state::ChannelEntry;
 use common::block::Block;
 use kameo::Reply;
-pub use logos_blockchain_binary_codec::bincode::{DeserializeOp, SerializeOp};
-use logos_blockchain_core::mantle::OpProof;
-pub use logos_blockchain_core::mantle::{NoteId, transactions::Ops};
-pub use logos_blockchain_key_management_system_service::keys::{
-    Ed25519Key, Ed25519PublicKey, ZkPublicKey,
-};
-use logos_blockchain_zone_sdk::sequencer::PreparedChannelConfig;
 pub use logos_blockchain_zone_sdk::{
     Slot, UnverifiedEd25519PublicKey, ZoneMessage,
     adapter::BoxStream,
+    binary_codec::bincode::{DeserializeOp, SerializeOp},
+    core::mantle::{NoteId, transactions::Ops},
+    key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey, ZkPublicKey},
     node_types::{ChannelId, HeaderId, MsgId},
     sequencer::{
         DepositInfo, IndexedSignature, IndexedSignatures, SequencerCheckpoint as Checkpoint,
         SequencerCheckpoint, WithdrawArg, WithdrawInfo,
     },
 };
+use logos_blockchain_zone_sdk::{core::mantle::OpProof, sequencer::PreparedChannelConfig};
 pub use sequencer_stake_core::{ChannelParams, SequencerKey};
 use sharding_pool_actor::ShardingKey;
 
@@ -371,8 +368,10 @@ impl PreparedPin {
     pub fn mocked(msg_id: MsgId, parent: MsgId) -> Self {
         Self {
             tx: Ops::new(
-                logos_blockchain_core::era::ForkDigest::new([0; 32]),
-                logos_blockchain_core::mantle::transactions::TxList::new_unchecked(Vec::new()),
+                logos_blockchain_zone_sdk::core::era::ForkDigest::new([0; 32]),
+                logos_blockchain_zone_sdk::core::mantle::transactions::TxList::new_unchecked(
+                    Vec::new(),
+                ),
             ),
             msg_id,
             parent,

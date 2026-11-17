@@ -10,11 +10,13 @@ use async_trait::async_trait;
 use common::HashType;
 use lee::{AccountId, PrivateKey, PublicKey, program::Program};
 use lee_core::program::MessageData;
+use logos_blockchain_zone_sdk::{
+    testing_framework_app::{AppDeployment, AppHostEnv, DeployContext},
+    testing_framework_core::scenario::DynError,
+};
 use program_loader_core::MAX_SEGMENT_DATA_LEN;
 use sequencer_service_rpc::SequencerClient;
 use tempfile::TempDir;
-use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext};
-use testing_framework_core::scenario::DynError;
 use tokio::sync::{mpsc, oneshot};
 use wallet::{
     AccountIdentity, AccountMention, WalletCore,
