@@ -1,10 +1,9 @@
 //! The proofs this node holds in Logos Storage, by LEZ digest.
 //!
 //! An object is held while the proof store has its proof, pinned by a chain entry or cached, or
-//! while a hold names it: a mempool entry, an approval promise or a download in flight. Once
-//! released it is served for the serving window more, then deleted. Every CID the map keeps is
-//! the one this node's own canonical upload of verified bytes returned, so no peer's hint enters
-//! it.
+//! until the expiry of its last hold: a mempool entry's or an approval's promise. Once released it
+//! is served for the serving window more, then deleted. Every CID the map keeps is the one this
+//! node's own canonical upload of verified bytes returned, so no peer's hint enters it.
 
 use std::{
     collections::BTreeMap,
@@ -29,6 +28,9 @@ use tokio::sync::Semaphore;
 use tracing::warn;
 
 use crate::config::LogosStorageConfig;
+
+/// How long a mempool entry holds its proof's object.
+pub const MEMPOOL_HOLD: Duration = Duration::from_hours(1);
 
 /// Bytes one more object takes at most: its padded data block and its manifest's block.
 const OBJECT_BYTES: u64 = 2 * BLOCK_SIZE;
@@ -74,19 +76,19 @@ pub struct ProofObjects {
     records: Arc<dyn ObjectRecords>,
     serving_window: Duration,
     renewal_interval: Duration,
-    live_reserve_bytes: u64,
+    /// Free bytes optional admission leaves: the live reserve and every download in flight.
+    optional_floor: u64,
     max_downloads_per_peer: usize,
     downloads: Semaphore,
+    /// Taken by every store and by a sweep's deletions, so neither undoes the other.
+    writes: tokio::sync::Mutex<()>,
     state: Mutex<State>,
 }
 
 #[derive(Default)]
 struct State {
     objects: BTreeMap<ProofDigest, Object>,
-    holds: BTreeMap<ProofDigest, usize>,
     peer_downloads: BTreeMap<PeerId, usize>,
-    /// Refused datasets, by tree, whose deletion failed; retried on the next sweep.
-    leftovers: BTreeMap<StorageCid, String>,
 }
 
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
@@ -98,6 +100,8 @@ struct Object {
     tree: String,
     /// Seconds since the epoch of the upload that set the object's expiry.
     stored_at: u64,
+    /// Seconds since the epoch until which a hold keeps the object.
+    held_until: u64,
     /// Seconds since the epoch when the last holder let go, if one did.
     released_at: Option<u64>,
 }
@@ -110,15 +114,19 @@ impl ProofObjects {
         records: Arc<dyn ObjectRecords>,
         config: &LogosStorageConfig,
     ) -> Self {
+        let in_flight = u64::try_from(config.max_downloads)
+            .unwrap_or(u64::MAX)
+            .saturating_mul(OBJECT_BYTES);
         Self {
             storage,
             proofs,
             records,
             serving_window: config.serving_window,
             renewal_interval: config.renewal_interval,
-            live_reserve_bytes: config.live_reserve_bytes,
+            optional_floor: config.live_reserve_bytes.saturating_add(in_flight),
             max_downloads_per_peer: config.max_downloads_per_peer,
             downloads: Semaphore::new(config.max_downloads),
+            writes: tokio::sync::Mutex::new(()),
             state: Mutex::new(State::default()),
         }
     }
@@ -185,26 +193,41 @@ impl ProofObjects {
         self.store(proof, true, unix_now()).await
     }
 
+    /// [`Self::seed`] for a transaction this node admitted, which its mempool entry holds: bounded
+    /// as a peer's download is, and refused once only the live reserve is free.
+    pub async fn seed_admitted(&self, proof: &Proof) -> Result<StorageCid, Error> {
+        if !self.has_room().await? {
+            return Err(Error::Full);
+        }
+        let _permit = self
+            .downloads
+            .try_acquire()
+            .map_err(|_closed| Error::Busy)?;
+        let cid = self.seed(proof).await?;
+        self.hold(&proof.digest(), until(MEMPOOL_HOLD)).await?;
+        Ok(cid)
+    }
+
     /// The length of the proof the manifest `cid` names declares, read without advertising it and
-    /// bounded as a peer's download is. A manifest of another form is dropped.
+    /// bounded as a peer's download is. A refused manifest is left to expire.
     pub async fn declared_len(&self, cid: StorageCid, peer: PeerId) -> Result<u64, Error> {
+        if !self.has_room().await? {
+            return Err(Error::Full);
+        }
         let _permit = self
             .downloads
             .try_acquire()
             .map_err(|_closed| Error::Busy)?;
         let _peer = self.claim_peer(peer)?;
         let manifest = self.storage.manifest(cid).await?;
-        if let Err(err) = manifest.check_canonical(PROOF_BYTES) {
-            self.discard(cid, manifest.tree_cid).await;
-            return Err(err.into());
-        }
+        manifest.check_canonical(PROOF_BYTES)?;
         Ok(manifest.dataset_size)
     }
 
-    /// The proof `digest` names, from the dataset `cid` names unless held already. Only a
-    /// canonical manifest under the proof cap is followed, and only the exact proof `verify`
-    /// accepts is kept: it is stored again in the canonical form, so the map takes this node's
-    /// own CID.
+    /// The proof `digest` names, from this node's own copy, else from the dataset `cid` names.
+    /// Only a canonical manifest under the proof cap is followed, and only the exact proof
+    /// `verify` accepts is kept: it is stored again in the canonical form, so the map takes this
+    /// node's own CID.
     pub async fn fetch(
         &self,
         digest: ProofDigest,
@@ -213,22 +236,19 @@ impl ProofObjects {
         verify: impl FnOnce(&Proof) -> bool + Send,
     ) -> Result<Proof, Error> {
         let advertise = matches!(admission, Admission::Live);
-        if let Some(proof) = self.proofs.get(&digest) {
+        if let Some(proof) = self.get(&digest).await {
             if !verify(&proof) {
                 return Err(Error::Unverified);
             }
-            match self.locator(&digest) {
-                None => {
-                    self.store(&proof, advertise, unix_now()).await?;
-                }
-                Some(held) if advertise => self.storage.set_advertise(held, true).await?,
-                Some(_) => {}
+            // Stored again, the whole payload is local under this node's CID; an object already
+            // served is not stored unadvertised.
+            if advertise || self.locator(&digest).is_none() {
+                self.store(&proof, advertise, unix_now()).await?;
             }
             return Ok(proof);
         }
         if let Admission::Optional(_) = admission
-            && self.storage.free_bytes().await?
-                < self.live_reserve_bytes.saturating_add(OBJECT_BYTES)
+            && !self.has_room().await?
         {
             return Err(Error::Full);
         }
@@ -241,8 +261,8 @@ impl ProofObjects {
             Admission::Live => None,
         };
         let manifest = self.storage.manifest(cid).await?;
-        self.hold(digest);
-        let fetched = match self
+        manifest.check_canonical(PROOF_BYTES)?;
+        match self
             .download(digest, cid, &manifest)
             .await
             .and_then(|proof| {
@@ -257,12 +277,10 @@ impl ProofObjects {
                 .await
                 .map(|_cid| proof),
             Err(err) => {
-                self.discard(cid, manifest.tree_cid).await;
+                self.discard(cid, &manifest.tree_cid).await;
                 Err(err)
             }
-        };
-        self.release(&digest);
-        fetched
+        }
     }
 
     /// Starts serving the object of `digest` to peers, once its transaction is admitted.
@@ -273,21 +291,19 @@ impl ProofObjects {
         Ok(())
     }
 
-    /// Keeps the object of `digest` until as many [`Self::release`]s.
-    pub fn hold(&self, digest: ProofDigest) {
-        let mut state = self.lock();
-        let holds = state.holds.entry(digest).or_default();
-        *holds = holds.saturating_add(1);
-    }
-
-    pub fn release(&self, digest: &ProofDigest) {
-        let mut state = self.lock();
-        if let Some(holds) = state.holds.get_mut(digest) {
-            *holds = holds.saturating_sub(1);
-            if *holds == 0 {
-                state.holds.remove(digest);
-            }
-        }
+    /// Keeps the object of `digest` at least until `until`, seconds since the epoch, persisted
+    /// before this returns.
+    pub async fn hold(&self, digest: &ProofDigest, until: u64) -> Result<(), Error> {
+        let held = {
+            let mut state = self.lock();
+            let Some(object) = state.objects.get_mut(digest) else {
+                return Ok(());
+            };
+            object.held_until = object.held_until.max(until);
+            object.released_at = None;
+            object.clone()
+        };
+        self.persist(&held).await
     }
 
     /// Marks the objects held or released at `now` seconds since the epoch, renews the held ones
@@ -296,29 +312,35 @@ impl ProofObjects {
     pub async fn sweep(&self, now: u64) -> Result<(), Error> {
         let window = self.serving_window.as_secs();
         let renewal = self.renewal_interval.as_secs();
-        let (changed, renew, expired, leftovers) = {
+        let renew: Vec<Object> = self
+            .lock()
+            .objects
+            .values()
+            .filter(|object| {
+                self.is_held(object, now) && now.saturating_sub(object.stored_at) >= renewal
+            })
+            .cloned()
+            .collect();
+        for object in renew {
+            if let Err(err) = self.renew(&object, now).await {
+                warn!(cid = %object.cid, error = %err, "Failed to renew a held proof object");
+            }
+        }
+
+        let _writes = self.writes.lock().await;
+        let (changed, expired) = {
             let mut state = self.lock();
-            let State {
-                objects,
-                holds,
-                leftovers,
-                ..
-            } = &mut *state;
             let mut changed = Vec::new();
-            let mut renew = Vec::new();
-            for object in objects.values_mut() {
-                let held =
-                    holds.contains_key(&object.digest) || self.proofs.contains(&object.digest);
+            for object in state.objects.values_mut() {
+                let held = self.is_held(object, now);
                 let released_at = (!held).then(|| object.released_at.unwrap_or(now));
                 if released_at != object.released_at {
                     object.released_at = released_at;
                     changed.push(object.clone());
                 }
-                if held && now.saturating_sub(object.stored_at) >= renewal {
-                    renew.push(object.clone());
-                }
             }
-            let expired: Vec<Object> = objects
+            let expired: Vec<Object> = state
+                .objects
                 .values()
                 .filter(|object| {
                     object
@@ -328,37 +350,30 @@ impl ProofObjects {
                 .cloned()
                 .collect();
             for object in &expired {
-                objects.remove(&object.digest);
+                state.objects.remove(&object.digest);
             }
-            (changed, renew, expired, std::mem::take(leftovers))
+            (changed, expired)
         };
         for object in changed {
             self.persist(&object).await?;
-        }
-        for object in renew {
-            if let Err(err) = self.renew(&object, now).await {
-                warn!(cid = %object.cid, error = %err, "Failed to renew a held proof object");
-            }
-        }
-        for (cid, tree) in leftovers {
-            self.discard(cid, tree).await;
         }
         for object in expired {
             self.records
                 .delete(object.digest)
                 .await
                 .map_err(Error::Record)?;
-            // A tree a remaining object shares stays, to expire with the node's TTL.
-            let shared = self
-                .lock()
-                .objects
-                .values()
-                .any(|kept| kept.tree == object.tree);
-            if !shared && let Err(err) = self.storage.delete(object.cid).await {
-                warn!(cid = %object.cid, error = %err, "Failed to delete a released proof object");
-            }
+            self.discard(object.cid, &object.tree).await;
         }
         Ok(())
+    }
+
+    /// Bytes past the floor optional admission leaves.
+    async fn has_room(&self) -> Result<bool, Error> {
+        Ok(self.storage.free_bytes().await? >= self.optional_floor.saturating_add(OBJECT_BYTES))
+    }
+
+    fn is_held(&self, object: &Object, now: u64) -> bool {
+        object.held_until > now || self.proofs.contains(&object.digest)
     }
 
     /// Reads the proof back and uploads it again: Storage has no call that extends an expiry,
@@ -380,7 +395,6 @@ impl ProofObjects {
         cid: StorageCid,
         manifest: &Manifest,
     ) -> Result<Proof, Error> {
-        manifest.check_canonical(PROOF_BYTES)?;
         let bytes = self
             .storage
             .download(cid, manifest.dataset_size, false)
@@ -395,23 +409,20 @@ impl ProofObjects {
         Ok(proof)
     }
 
-    /// Deletes what a refused fetch of `cid` left behind, unless a kept object shares its
-    /// `tree`: deleting a manifest drops every block of its tree, and a zero-padded variant of a
-    /// live proof shares that proof's tree.
-    async fn discard(&self, cid: StorageCid, tree: String) {
+    /// Deletes the dataset `cid` names, unless a kept object shares its `tree`: deleting a
+    /// manifest drops every block of its tree, and a zero-padded variant of a live proof shares
+    /// that proof's tree. Only a canonical manifest is deleted, which names one block.
+    async fn discard(&self, cid: StorageCid, tree: &str) {
         let shared = self
             .lock()
             .objects
             .values()
             .any(|object| object.cid == cid || object.tree == tree);
-        if shared {
-            return;
-        }
-        if let Err(err) = self.storage.delete(cid).await
+        if !shared
+            && let Err(err) = self.storage.delete(cid).await
             && !err.is_not_found()
         {
-            warn!(%cid, error = %err, "Failed to delete a refused proof object");
-            self.lock().leftovers.insert(cid, tree);
+            warn!(%cid, error = %err, "Failed to delete a proof object");
         }
     }
 
@@ -429,17 +440,28 @@ impl ProofObjects {
     }
 
     async fn store(&self, proof: &Proof, advertise: bool, now: u64) -> Result<StorageCid, Error> {
+        let _writes = self.writes.lock().await;
         let cid = self
             .storage
             .upload(proof.clone().into_inner(), advertise)
             .await?;
+        // An upload leaves in place the suppression an unadvertised fetch set.
+        if advertise {
+            self.storage.set_advertise(cid, true).await?;
+        }
         let tree = self.storage.manifest(cid).await?.tree_cid;
         self.proofs.insert(proof);
+        let held_until = self
+            .lock()
+            .objects
+            .get(&proof.digest())
+            .map_or(0, |held| held.held_until);
         let object = Object {
             digest: proof.digest(),
             cid,
             tree,
             stored_at: now,
+            held_until,
             released_at: None,
         };
         self.persist(&object).await?;
@@ -534,6 +556,12 @@ pub fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |since| since.as_secs())
+}
+
+/// Seconds since the epoch, `hold` from now.
+#[must_use]
+pub fn until(hold: Duration) -> u64 {
+    unix_now().saturating_add(hold.as_secs())
 }
 
 #[cfg(test)]
@@ -658,9 +686,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_fetched_proof_is_kept_under_this_nodes_own_cid_and_served() {
+    async fn a_fetched_proof_is_kept_under_this_nodes_own_cid_and_served_once_its_seeder_is_gone() {
         let network = MemoryNetwork::default();
-        let seeder = objects(Arc::new(Scripted::on(&network)), Arc::default());
+        let seeding = Arc::new(Scripted::on(&network));
+        let seeder = objects(Arc::clone(&seeding), Arc::default());
         let fetching = Arc::new(Scripted::on(&network));
         let fetcher = objects(Arc::clone(&fetching), Arc::default());
         let cid = seeder.seed(&proof(1)).await.unwrap();
@@ -669,10 +698,32 @@ mod tests {
             .fetch(proof(1).digest(), cid, Admission::Live, |_proof| true)
             .await
             .unwrap();
+        seeding.node().set_online(false);
 
         assert_eq!(fetched, proof(1));
         assert_eq!(fetcher.locator(&proof(1).digest()), Some(cid));
         assert_eq!(fetching.downloads.load(Ordering::Relaxed), 1);
+        assert!(network.node().download(cid, 64, false).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_proof_held_in_memory_whose_payload_was_lost_is_stored_again_and_served() {
+        let network = MemoryNetwork::default();
+        let storage = Arc::new(Scripted::on(&network));
+        let held = ProofObjects::new(
+            Arc::<Scripted>::clone(&storage),
+            ProofStore::new(usize::MAX),
+            Arc::new(MemoryRecords::default()),
+            &config(),
+        );
+        let cid = held.seed(&proof(1)).await.unwrap();
+        storage.node().delete(cid).await.unwrap();
+
+        held.fetch(proof(1).digest(), cid, Admission::Live, |_proof| true)
+            .await
+            .unwrap();
+
+        assert_eq!(storage.downloads.load(Ordering::Relaxed), 0);
         assert!(network.node().download(cid, 64, false).await.is_ok());
     }
 
@@ -845,19 +896,20 @@ mod tests {
         let storage = Arc::new(Scripted::on(&MemoryNetwork::default()));
         let held = objects(Arc::clone(&storage), Arc::default());
         let cid = held.seed(&proof(1)).await.unwrap();
-        held.hold(proof(1).digest());
         let seeded = unix_now();
+        held.hold(&proof(1).digest(), seeded + RENEWAL + WINDOW)
+            .await
+            .unwrap();
 
         held.sweep(seeded + RENEWAL - 1).await.unwrap();
         assert_eq!(storage.uploads.load(Ordering::Relaxed), 1);
         held.sweep(seeded + RENEWAL).await.unwrap();
-        held.sweep(seeded + RENEWAL + WINDOW).await.unwrap();
+        held.sweep(seeded + RENEWAL + WINDOW - 1).await.unwrap();
         assert!(storage.node().holds(cid));
         assert_eq!(storage.uploads.load(Ordering::Relaxed), 2);
 
-        held.release(&proof(1).digest());
-        held.sweep(seeded + RENEWAL + WINDOW + 1).await.unwrap();
-        held.sweep(seeded + RENEWAL + 2 * WINDOW + 1).await.unwrap();
+        held.sweep(seeded + RENEWAL + WINDOW).await.unwrap();
+        held.sweep(seeded + RENEWAL + 2 * WINDOW).await.unwrap();
         assert!(!storage.node().holds(cid));
     }
 
@@ -873,7 +925,7 @@ mod tests {
             storage.node().manifest(kept_cid).await.unwrap().tree_cid,
             storage.node().manifest(variant_cid).await.unwrap().tree_cid
         );
-        held.hold(kept.digest());
+        held.hold(&kept.digest(), u64::MAX).await.unwrap();
 
         held.sweep(0).await.unwrap();
         held.sweep(WINDOW).await.unwrap();
@@ -890,10 +942,13 @@ mod tests {
         let before = objects(Arc::clone(&storage), Arc::clone(&records));
         let kept = before.seed(&proof(1)).await.unwrap();
         let lost = before.seed(&proof(2)).await.unwrap();
+        before.hold(&proof(1).digest(), 2 * WINDOW).await.unwrap();
         storage.node().delete(lost).await.unwrap();
 
         let after = objects(Arc::clone(&storage), Arc::clone(&records));
         after.restore().await.unwrap();
+        after.sweep(0).await.unwrap();
+        after.sweep(WINDOW).await.unwrap();
 
         assert_eq!(after.locator(&proof(1).digest()), Some(kept));
         assert_eq!(after.locator(&proof(2).digest()), None);
@@ -903,10 +958,20 @@ mod tests {
     #[tokio::test]
     async fn a_proof_held_in_memory_is_served_by_digest_after_its_eviction_from_memory() {
         let storage = Arc::new(Scripted::on(&MemoryNetwork::default()));
-        let held = objects(Arc::clone(&storage), Arc::default());
+        let proofs = ProofStore::new(64);
+        let held = ProofObjects::new(
+            Arc::<Scripted>::clone(&storage),
+            proofs.clone(),
+            Arc::new(MemoryRecords::default()),
+            &config(),
+        );
         held.seed(&proof(1)).await.unwrap();
+        assert!(proofs.contains(&proof(1).digest()));
 
+        held.seed(&proof(2)).await.unwrap();
+
+        assert!(!proofs.contains(&proof(1).digest()));
         assert_eq!(held.get(&proof(1).digest()).await, Some(proof(1)));
-        assert_eq!(held.get(&proof(2).digest()).await, None);
+        assert_eq!(held.get(&proof(3).digest()).await, None);
     }
 }
