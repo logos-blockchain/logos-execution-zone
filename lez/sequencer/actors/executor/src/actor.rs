@@ -29,7 +29,7 @@ use lee_core::{
 use sequencer_actors_common::{Reply, SendErrorExt};
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
-    protocol::{ChannelEvent, ChannelEventKind, Ed25519Key, PublisherEvent},
+    protocol::{ChannelEvent, ChannelEventKind, Ed25519Key},
 };
 use sequencer_channel_signing_actor::{ChannelSigningActor, protocol as channel_signing_protocol};
 use sequencer_core::{StakeConfigUpdate, config::SequencerConfig};
@@ -167,17 +167,13 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> kameo::Actor for ExecutorActor<
         if !bedrock_started {
             return Err(Error::BedrockActorStartFailed);
         }
-        let anchor = args
-            .storage_ref
-            .ask(sequencer_storage_actor::protocol::GetZoneAnchor)
-            .await?;
-        bedrock_pool_ref
-            .ask(sequencer_bedrock_actor::protocol::FollowChannel { channel_id, anchor })
+        let follow_start = bedrock_pool_ref
+            .ask(sequencer_bedrock_actor::protocol::FollowChannel { channel_id })
             .await
             .map_err(SendErrorExt::flatten)?;
 
         let storage_ref = args.storage_ref.clone();
-        let state = State::initialize(args).await?;
+        let state = State::initialize(args, follow_start).await?;
 
         Ok(Self {
             state,
@@ -871,87 +867,44 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEvent> for Execu
             );
         }
 
-        match msg.event {
-            ChannelEventKind::FinalizedBlock(finalized_block) => {
+        let event = msg.event;
+        match &mut self.state {
+            State::Error(details) => panic!("Actor has encountered an error state: {details}"),
+            State::Bootstrapping(_) => {
                 // A failure can leave the chain ahead of the store, so it ends in the error state.
-                self.state
-                    .modify(|mut state| async move {
-                        match &mut state {
-                            State::Error(details) => {
-                                panic!("Actor has encountered an error state: {details}")
-                            }
-                            State::Bootstrapping(bootstrapping) => {
-                                bootstrapping.on_finalized_block(&finalized_block).await?;
-                            }
-                            // Online state listens for Publisher events
-                            State::Online(_) => {}
+                Box::pin(self.state.modify(|state| async move {
+                    match state {
+                        State::Bootstrapping(bootstrapping) => {
+                            bootstrapping.on_channel_event(&event).await
                         }
-                        Ok(state)
-                    })
-                    .await?;
+                        State::Error(_) | State::Online(_) => Ok(state),
+                    }
+                }))
+                .await?;
             }
-            ChannelEventKind::FinalizedUpTo(up_to) => {
-                self.state
-                    .modify(|state| async move {
-                        match state {
-                            State::Error(details) => {
-                                panic!("Actor has encountered an error state: {details}")
-                            }
-                            State::Bootstrapping(bootstrapping) => {
-                                bootstrapping.on_finalized_up_to(up_to).await
-                            }
-                            // Online state listens for Publisher events
-                            State::Online(_) => Ok(state),
-                        }
-                    })
-                    .await?;
-            }
-            ChannelEventKind::FinalizedDeposit(deposit) => match &self.state {
-                State::Error(details) => panic!("Actor has encountered an error state: {details}"),
-                State::Bootstrapping(bootstrapping) => {
-                    bootstrapping.on_finalized_deposit(&deposit).await?;
+            State::Online(online) => match &event {
+                ChannelEventKind::Update(channel_update) => {
+                    online
+                        .sequencer_mut()
+                        .on_channel_update(channel_update)
+                        .await;
                 }
-                // Online state listens for Publisher events
-                State::Online(_) => {}
-            },
-            ChannelEventKind::FinalizedWithdrawal(withdrawal) => match &self.state {
-                State::Error(details) => panic!("Actor has encountered an error state: {details}"),
-                State::Bootstrapping(bootstrapping) => {
-                    bootstrapping.on_finalized_withdrawal(&withdrawal).await?;
+                ChannelEventKind::Ready => {}
+                ChannelEventKind::Turn {
+                    our_turn_to_write,
+                    starting_slot,
+                } => {
+                    online.update_turn(*our_turn_to_write, *starting_slot);
                 }
-                // Online state listens for Publisher events
-                State::Online(_) => {}
-            },
-            ChannelEventKind::Publisher(publisher_event) => match &mut self.state {
-                State::Error(details) => panic!("Actor has encountered an error state: {details}"),
-                State::Bootstrapping(_) => {
-                    warn!(
-                        "Ignoring a publisher event while bootstrapping, as no publisher runs yet"
-                    );
+                ChannelEventKind::Config(live_channel_config) => {
+                    online
+                        .sequencer_mut()
+                        .on_channel_config_update(live_channel_config)
+                        .await;
                 }
-                State::Online(online) => match &*publisher_event {
-                    PublisherEvent::Update(channel_update) => {
-                        online
-                            .sequencer_mut()
-                            .on_channel_update(channel_update)
-                            .await;
-                    }
-                    PublisherEvent::Turn {
-                        our_turn_to_write,
-                        starting_slot,
-                    } => {
-                        online.update_turn(*our_turn_to_write, *starting_slot);
-                    }
-                    PublisherEvent::Config(live_channel_config) => {
-                        online
-                            .sequencer_mut()
-                            .on_channel_config_update(live_channel_config)
-                            .await;
-                    }
-                    PublisherEvent::Deposits(deposits) => {
-                        online.sequencer_mut().on_observed_deposits(deposits).await;
-                    }
-                },
+                ChannelEventKind::PendingDeposits(deposits) => {
+                    online.sequencer_mut().on_observed_deposits(deposits).await;
+                }
             },
         }
 

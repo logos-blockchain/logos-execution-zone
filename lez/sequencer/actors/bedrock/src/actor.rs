@@ -27,7 +27,9 @@ use logos_blockchain_zone_sdk::{
 };
 use sequencer_storage_actor::{
     StorageActorTrait,
-    protocol::{GetFinalConfigsBytes, GetZoneCheckpoint, PutFinalConfigsBytes},
+    protocol::{
+        GetFinalConfigsBytes, GetZoneCheckpoint, PutFinalConfigsBytes, ZoneCheckpointRecord,
+    },
 };
 use tokio::select;
 use tracing::{Instrument as _, info_span, warn};
@@ -41,17 +43,16 @@ use crate::{
     protocol::{
         AccreditedKeys, ChangeChannelConfig, ChannelEvent, ChannelId, ChannelReadStream,
         ChannelSeq, CheckChannelExists, CheckIsOurTurn, CreateChannel, DeserializeOp as _,
-        Ed25519PublicKey, FilterFinallyAbsent, FollowChannel, GetAccreditedKeys, GetChannelNotes,
-        GetChannelTipMessageId, GetChannelTipSlot, HeaderId, InitializeChannelPublisher,
-        LiveChannelConfig, MsgId, PrepareConfig, PreparePin, PreparedConfig, PreparedPin,
-        PublishBlock, PublishOutcome, PublishPin, ReadChannel, SequencerCheckpoint, SequencerKey,
-        Slot, UnverifiedEd25519PublicKey,
+        Ed25519PublicKey, FilterFinallyAbsent, FollowChannel, FollowStart, GetAccreditedKeys,
+        GetChannelNotes, GetChannelTipMessageId, GetChannelTipSlot, HeaderId,
+        InitializeChannelPublisher, LiveChannelConfig, MsgId, PrepareConfig, PreparePin,
+        PreparedConfig, PreparedPin, PublishBlock, PublishOutcome, PublishPin, ReadChannel,
+        SequencerCheckpoint, SequencerKey, Slot, UnverifiedEd25519PublicKey,
     },
 };
 
+mod channel;
 mod finality;
-mod node_stream;
-mod publisher;
 #[cfg(test)]
 mod tests;
 
@@ -77,33 +78,24 @@ pub struct Args<S: StorageActorTrait> {
 /// To be able to submit channel updates, you must first submit an [`InitializeChannelPublisher`]
 /// message, otherwise [`Error::ChannelPublisherIsNotInitialized`] will be returned.
 ///
-/// [`BedrockActor`] will post [`ChannelEvent`]s to the provided broker using the following topics:
-/// - If the channel is followed with [`FollowChannel`]:
-///   - `channel/<channel_id>/finalized_block`: for
-///     [`ChannelEventKind::FinalizedBlock`](crate::protocol::ChannelEventKind::FinalizedBlock).
-///   - `channel/<channel_id>/finalized_deposit`: for
-///     [`ChannelEventKind::FinalizedDeposit`](crate::protocol::ChannelEventKind::FinalizedDeposit).
-///   - `channel/<channel_id>/finalized_withdrawal`: for
-///     [`ChannelEventKind::FinalizedWithdrawal`](crate::protocol::ChannelEventKind::FinalizedWithdrawal).
-///   - `channel/<channel_id>/finalized_up_to`: for
-///     [`ChannelEventKind::FinalizedUpTo`](crate::protocol::ChannelEventKind::FinalizedUpTo).
-/// - If publisher was initialized with [`InitializeChannelPublisher`]:
-///   - `channel/<channel_id>/publisher/update`: for
-///     [`PublisherEvent::Update`](crate::protocol::PublisherEvent::Update)
-///   - `channel/<channel_id>/publisher/turn`: for
-///     [`PublisherEvent::Turn`](crate::protocol::PublisherEvent::Turn)
-///   - `channel/<channel_id>/publisher/config`: for
-///     [`PublisherEvent::Config`](crate::protocol::PublisherEvent::Config)
-///   - `channel/<channel_id>/publisher/deposits`: for
-///     [`PublisherEvent::Deposits`](crate::protocol::PublisherEvent::Deposits)
+/// Once the channel is followed with [`FollowChannel`], [`BedrockActor`] will post
+/// [`ChannelEvent`]s to the provided broker using the following topics:
+///   - `channel/<channel_id>/update`: for
+///     [`ChannelEventKind::Update`](crate::protocol::ChannelEventKind::Update)
+///   - `channel/<channel_id>/ready`: for
+///     [`ChannelEventKind::Ready`](crate::protocol::ChannelEventKind::Ready)
+///   - `channel/<channel_id>/turn`: for
+///     [`ChannelEventKind::Turn`](crate::protocol::ChannelEventKind::Turn)
+///   - `channel/<channel_id>/config`: for
+///     [`ChannelEventKind::Config`](crate::protocol::ChannelEventKind::Config)
+///   - `channel/<channel_id>/pending_deposits`: for
+///     [`ChannelEventKind::PendingDeposits`](crate::protocol::ChannelEventKind::PendingDeposits)
 pub struct BedrockActor<S: StorageActorTrait> {
     channel_id: ChannelId,
     backfill_batch_slots: NonZero<u64>,
     node: TimeoutNode<NodeHttpClient>,
-    /// [`Some`] after [`FollowChannel`] has been handled.
-    node_stream: Option<node_stream::NodeStream>,
-    /// [`Some`] after [`InitializeChannelPublisher`] has been handled.
-    publisher: Option<publisher::Publisher>,
+    /// [`Some`] after [`FollowChannel`] or [`InitializeChannelPublisher`] has been handled.
+    channel: Option<channel::Channel>,
     broker_ref: ActorRef<Broker<ChannelEvent>>,
     storage_ref: ActorRef<S>,
     /// Summaries of the L1 blocks [`FilterFinallyAbsent`] walked, by id.
@@ -118,10 +110,52 @@ impl<S: StorageActorTrait> BedrockActor<S> {
         assert_eq!(self.channel_id, channel_id, "Channel ID mismatch");
     }
 
-    fn publisher(&mut self) -> Result<&mut publisher::Publisher> {
-        self.publisher
-            .as_mut()
-            .ok_or(Error::ChannelPublisherIsNotInitialized)
+    const fn publishing_channel(&mut self) -> Result<&mut channel::PublishingChannel> {
+        match &mut self.channel {
+            Some(channel::Channel::Publishing(publishing)) => Ok(publishing),
+            Some(channel::Channel::Followed(_)) | None => {
+                Err(Error::ChannelPublisherIsNotInitialized)
+            }
+        }
+    }
+
+    /// Starts following the channel from the stored checkpoint, returning it with the sequence it
+    /// started at. Events go to the broker only when `publish_events` is set.
+    async fn follow(
+        &mut self,
+        publish_events: bool,
+    ) -> Result<(channel::FollowedChannel, ChannelSeq)> {
+        let checkpoint = self.resume_checkpoint().await?;
+        let followed = channel::FollowedChannel::follow(
+            self.channel_id,
+            self.node.clone(),
+            self.backfill_batch_slots,
+            checkpoint,
+            publish_events.then(|| self.broker_ref.clone()),
+        )
+        .await?;
+        self.store_config_index().await;
+        Ok(followed)
+    }
+
+    /// The stored checkpoint, with the config index read up to its LIB, as zone-sdk's events
+    /// resumed from it start after it.
+    async fn resume_checkpoint(&mut self) -> Result<Option<ZoneCheckpointRecord>> {
+        let stored = self.storage_ref.ask(GetZoneCheckpoint).await?;
+        if let Some(stored) = &stored {
+            let lib_slot = SequencerCheckpoint::from_bytes(&stored.bytes)?
+                .lib_slot
+                .into_inner();
+            let mut reader = NodeReader {
+                node: &self.node,
+                block_summary_cache: &mut self.block_summary_cache,
+                channel_id: self.channel_id,
+            };
+            self.config_index
+                .cover_through(&mut reader, lib_slot)
+                .await?;
+        }
+        Ok(stored)
     }
 
     /// Stores the config index when its bytes are due.
@@ -156,7 +190,7 @@ impl<S: StorageActorTrait> Actor for BedrockActor<S> {
             node_url,
         ));
 
-        // The publisher starts zone-sdk from this stored checkpoint: a cold start backfills from
+        // Following starts zone-sdk from this stored checkpoint: a cold start backfills from
         // slot 0, a restart's events start after its LIB.
         let config_index = match storage_ref.ask(GetZoneCheckpoint).await? {
             None => ConfigIndex::starting_at(0),
@@ -176,9 +210,8 @@ impl<S: StorageActorTrait> Actor for BedrockActor<S> {
 
         Ok(Self {
             channel_id,
-            node_stream: None,
             node,
-            publisher: None,
+            channel: None,
             broker_ref,
             storage_ref,
             backfill_batch_slots,
@@ -198,16 +231,12 @@ impl<S: StorageActorTrait> Actor for BedrockActor<S> {
         )]
         loop {
             select! {
-                Some(Some(item)) = OptionFuture::from(self.node_stream.as_mut().map(node_stream::NodeStream::next_item)) => {
-                    let item = item?;
-                    let span = info_span!("bedrock_event", otel.name = item.span_name());
-                    self.node_stream.as_mut().expect("Channel is followed").on_item(item).instrument(span).await?;
-                }
-                Some(event) = OptionFuture::from(self.publisher.as_mut().map(publisher::Publisher::next_event)) => {
-                    let span = info_span!("bedrock_event", otel.name = publisher::span_name(&event));
-                    self.publisher
+                Some(event) = OptionFuture::from(self.channel.as_mut().map(|channel| channel.followed_mut().next_event())) => {
+                    let span = info_span!("bedrock_event", otel.name = channel::span_name(&event));
+                    self.channel
                         .as_mut()
-                        .expect("Publisher is initialized")
+                        .expect("Channel is followed")
+                        .followed_mut()
                         .on_event(event, &mut self.config_index)
                         .instrument(span)
                         .await?;
@@ -222,31 +251,30 @@ impl<S: StorageActorTrait> Actor for BedrockActor<S> {
 }
 
 impl<S: StorageActorTrait> Message<FollowChannel> for BedrockActor<S> {
-    type Reply = Result<()>;
+    type Reply = Result<FollowStart>;
 
     async fn handle(
         &mut self,
-        FollowChannel { channel_id, anchor }: FollowChannel,
+        FollowChannel { channel_id }: FollowChannel,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.assert_channel_id(channel_id);
 
-        self.node_stream = Some(
-            node_stream::NodeStream::new(
-                self.node.clone(),
-                channel_id,
-                anchor,
-                self.broker_ref.clone(),
-                self.backfill_batch_slots,
-            )
-            .await?,
-        );
-        Ok(())
+        let lib_slot = self
+            .node
+            .consensus_info()
+            .await
+            .inspect_err(|err| warn!(error = %err, "Failed to read the node's LIB"))
+            .ok()
+            .map(|info| info.cryptarchia_info.lib_slot);
+        let (followed, seq) = self.follow(true).await?;
+        self.channel = Some(channel::Channel::Followed(followed));
+        Ok(FollowStart { seq, lib_slot })
     }
 }
 
 impl<S: StorageActorTrait> Message<InitializeChannelPublisher> for BedrockActor<S> {
-    type Reply = Result<Option<ChannelSeq>>;
+    type Reply = Result<()>;
 
     async fn handle(
         &mut self,
@@ -257,52 +285,31 @@ impl<S: StorageActorTrait> Message<InitializeChannelPublisher> for BedrockActor<
             priority_fee_percent,
             resubmit_interval,
             stale_refund_slots,
-            replayed_up_to,
         }: InitializeChannelPublisher,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.assert_channel_id(channel_id);
 
-        if self.publisher.is_some() {
-            return Ok(None);
+        if matches!(self.channel, Some(channel::Channel::Publishing(_))) {
+            return Ok(());
         }
+        let followed = match self.channel.take() {
+            None => self.follow(false).await?.0,
+            Some(channel::Channel::Followed(followed)) => followed,
+            Some(channel::Channel::Publishing(_)) => unreachable!("Returned above"),
+        };
 
-        let initial_checkpoint = self.storage_ref.ask(GetZoneCheckpoint).await?;
-        // zone-sdk's events start after the checkpoint's LIB, so the index is read up to it.
-        if let Some(stored) = &initial_checkpoint {
-            let lib_slot = SequencerCheckpoint::from_bytes(&stored.bytes)?
-                .lib_slot
-                .into_inner();
-            let mut reader = NodeReader {
-                node: &self.node,
-                block_summary_cache: &mut self.block_summary_cache,
-                channel_id,
-            };
-            self.config_index
-                .cover_through(&mut reader, lib_slot)
-                .await?;
-        }
-
-        let (publisher, start_seq) = publisher::Publisher::new(
-            publisher::PublisherConfig {
-                channel_id: self.channel_id,
-                channel_signing_key,
-                funding_pk,
-                priority_fee_percent,
-                resubmit_interval,
-                stale_refund_slots,
-                backfill_batch_slots: self.backfill_batch_slots,
-            },
-            self.node.clone(),
-            initial_checkpoint,
-            replayed_up_to,
-            self.broker_ref.clone(),
-            &mut self.config_index,
-        )
-        .await?;
-        self.publisher = Some(publisher);
+        let mut publishing = followed.into_publishing(channel::PublishConfig {
+            channel_signing_key,
+            funding_pk,
+            priority_fee_percent,
+            resubmit_interval,
+            stale_refund_slots,
+        });
+        let ready = publishing.wait_until_ready(&mut self.config_index).await;
+        self.channel = Some(channel::Channel::Publishing(publishing));
         self.store_config_index().await;
-        Ok(Some(start_seq))
+        ready
     }
 }
 
@@ -323,7 +330,7 @@ impl<S: StorageActorTrait> Message<CreateChannel> for BedrockActor<S> {
     ) -> Self::Reply {
         self.assert_channel_id(channel_id);
 
-        self.publisher()?
+        self.publishing_channel()?
             .create_channel(
                 genesis,
                 keys,
@@ -351,7 +358,7 @@ impl<S: StorageActorTrait> Message<PublishBlock> for BedrockActor<S> {
     ) -> Self::Reply {
         self.assert_channel_id(channel_id);
 
-        self.publisher()?
+        self.publishing_channel()?
             .publish_block(block, withdrawals, parent, expected_seq)
             .await
     }
@@ -373,7 +380,7 @@ impl<S: StorageActorTrait> Message<PreparePin> for BedrockActor<S> {
     ) -> Self::Reply {
         self.assert_channel_id(channel_id);
 
-        self.publisher()?
+        self.publishing_channel()?
             .prepare_pin(block, parent, &notes, expected_seq)
             .await
     }
@@ -394,7 +401,7 @@ impl<S: StorageActorTrait> Message<PublishPin> for BedrockActor<S> {
     ) -> Self::Reply {
         self.assert_channel_id(channel_id);
 
-        self.publisher()?
+        self.publishing_channel()?
             .publish_pin(prepared, signatures, expected_seq)
     }
 }
@@ -416,7 +423,7 @@ impl<S: StorageActorTrait> Message<PrepareConfig> for BedrockActor<S> {
     ) -> Self::Reply {
         self.assert_channel_id(channel_id);
 
-        self.publisher()?
+        self.publishing_channel()?
             .prepare_config(
                 keys,
                 posting_timeframe,
@@ -442,7 +449,7 @@ impl<S: StorageActorTrait> Message<ChangeChannelConfig> for BedrockActor<S> {
     ) -> Self::Reply {
         self.assert_channel_id(channel_id);
 
-        self.publisher()?
+        self.publishing_channel()?
             .change_channel_config(prepared, signatures)
     }
 }
@@ -476,7 +483,7 @@ impl<S: StorageActorTrait> Message<CheckIsOurTurn> for BedrockActor<S> {
     ) -> Self::Reply {
         self.assert_channel_id(channel_id);
 
-        Ok(self.publisher()?.check_is_our_turn())
+        Ok(self.publishing_channel()?.check_is_our_turn())
     }
 }
 
@@ -516,7 +523,7 @@ impl<S: StorageActorTrait> Message<GetChannelNotes> for BedrockActor<S> {
     ) -> Self::Reply {
         self.assert_channel_id(channel_id);
 
-        Ok(self.publisher()?.channel_notes())
+        Ok(self.publishing_channel()?.channel_notes())
     }
 }
 
@@ -747,7 +754,9 @@ impl<S: StorageActorTrait> Message<PublishRawInscription> for BedrockActor<S> {
     ) -> Self::Reply {
         self.assert_channel_id(channel_id);
 
-        self.publisher()?.publish_raw_inscription(data).await
+        self.publishing_channel()?
+            .publish_raw_inscription(data)
+            .await
     }
 }
 

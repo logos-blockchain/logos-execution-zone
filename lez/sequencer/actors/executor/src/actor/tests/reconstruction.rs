@@ -1,10 +1,7 @@
 //! Startup reconstruction: a starting executor replays the finalized channel
 //! history its store misses.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
 use chain_state::{ChainState, ChannelEntry, Tip};
@@ -22,10 +19,7 @@ use lee::{
 use ping_core::{ReceiverMessage, ping_record_pda, receiver_config_account_id};
 use sequencer_bedrock_actor::{
     mock::{CannedChannel, mock_msg_of},
-    protocol::{
-        BlockData, ChannelEvent, ChannelEventKind, Ed25519Key, Ed25519PublicKey, FinalizedBlock,
-        MsgId, Slot,
-    },
+    protocol::{Ed25519Key, Ed25519PublicKey, MsgId, Slot},
 };
 use sequencer_storage_actor::{
     mock::{CannedStore, MockStorageActor, SharedStore},
@@ -34,7 +28,8 @@ use sequencer_storage_actor::{
 use tokio::test;
 
 use super::{
-    finalized_at, finalized_up_to, sequencer_config, spawn_bedrock_pool, spawn_executor,
+    Finalized, finalized_at, finalized_updates, junk_at, ready, sequencer_config,
+    spawn_bedrock_pool, spawn_executor,
     stored_chain::{
         PEER_ZONE, block_at, cross_zone_genesis_store, finalized_genesis_store, genesis,
         with_finalized, with_head,
@@ -76,24 +71,24 @@ fn stored_hashes(store: &SharedStore) -> Vec<HashType> {
 }
 
 /// Starts an executor over `store` and follows `history`: the finalized channel entries the
-/// Bedrock actor streams from the stored anchor on. The last one is the channel tip; an empty
+/// Bedrock actor reports from the stored checkpoint on. The last one is the channel tip; an empty
 /// history means there is no channel.
-async fn start(store: &SharedStore, history: Vec<FinalizedBlock>) -> Result<()> {
+async fn start(store: &SharedStore, history: Vec<Finalized>) -> Result<()> {
     start_observing(store, history, |_store| {}).await
 }
 
 /// [`start`], calling `observe` on the store after each entry of `history` replays.
 async fn start_observing(
     store: &SharedStore,
-    history: Vec<FinalizedBlock>,
+    history: Vec<Finalized>,
     mut observe: impl FnMut(&SharedStore),
 ) -> Result<()> {
     let (config, _home) = sequencer_config();
     let channel = history
         .last()
         .map_or_else(CannedChannel::absent, |tip| CannedChannel {
-            tip_slot: Some(tip.slot),
-            tip: Some(tip.msg_id),
+            tip_slot: Some(Slot::from(tip.slot)),
+            tip: Some(tip.msg),
             ..CannedChannel::absent()
         })
         .share();
@@ -104,19 +99,11 @@ async fn start_observing(
         spawn_bedrock_pool(move |_channel_id| channel.mock()),
     ))
     .await?;
-    let replayed_up_to = history.last().map(|finalized| finalized.slot.into_inner());
-    for finalized in history {
-        executor
-            .ask(ChannelEvent {
-                channel_id,
-                event: ChannelEventKind::FinalizedBlock(Arc::new(finalized)),
-            })
-            .await?;
+    for update in finalized_updates(channel_id, history) {
+        executor.ask(update).await?;
         observe(store);
     }
-    if let Some(slot) = replayed_up_to {
-        executor.ask(finalized_up_to(channel_id, slot)).await?;
-    }
+    executor.ask(ready(channel_id)).await?;
     executor.ask(GetLastBlockId).await?;
     Ok(())
 }
@@ -197,12 +184,7 @@ fn deposit_tx(
 async fn reconstruction_skips_an_undecodable_inscription() -> Result<()> {
     let genesis = genesis();
     let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
-    let junk = FinalizedBlock {
-        block: BlockData::Undecodable(b"not a block".to_vec()),
-        msg_id: MsgId::from([0xAA_u8; 32]),
-        slot: Slot::from(15),
-        signer: None,
-    };
+    let junk = junk_at(MsgId::from([0xAA_u8; 32]), b"not a block", 15);
     let store = finalized_genesis_store().share();
 
     start(
@@ -222,21 +204,13 @@ fn offender() -> Ed25519PublicKey {
 
 /// An inscription carrying `payload`, signed by [`offender`] and finalized at `slot`, that does
 /// not decode as a block.
-fn signed_junk_at(payload: &[u8], slot: u64) -> FinalizedBlock {
-    FinalizedBlock {
-        block: BlockData::Undecodable(payload.to_vec()),
-        msg_id: MsgId::from([0xAA_u8; 32]),
-        slot: Slot::from(slot),
-        signer: Some(offender()),
-    }
+fn signed_junk_at(payload: &[u8], slot: u64) -> Finalized {
+    junk_at(MsgId::from([0xAA_u8; 32]), payload, slot).signed(offender())
 }
 
 /// `block`, signed by [`offender`] and finalized at `slot`.
-fn signed_at(block: &Block, slot: u64) -> FinalizedBlock {
-    FinalizedBlock {
-        signer: Some(offender()),
-        ..finalized_at(block, slot)
-    }
+fn signed_at(block: &Block, slot: u64) -> Finalized {
+    finalized_at(block, slot).signed(offender())
 }
 
 /// A block that had to follow the final tip and does not is an offence, as on the follow path.
@@ -453,12 +427,7 @@ async fn a_blockless_final_entry_resumes_the_lineage() -> Result<()> {
         vec![
             finalized_at(&genesis, 10),
             finalized_at(&block2, 20),
-            FinalizedBlock {
-                block: BlockData::Undecodable(b"not a block".to_vec()),
-                msg_id: junk,
-                slot: Slot::from(25),
-                signer: None,
-            },
+            junk_at(junk, b"not a block", 25),
             finalized_at(&block3, 30),
         ],
     )
@@ -501,8 +470,7 @@ async fn reconstructs_missing_channel_blocks_into_the_store() -> Result<()> {
     .await?;
     assert_reconstructed(&store, &block2, 20);
 
-    // Restarting on the reconstructed store applies nothing again; the stream
-    // resumes at the anchor.
+    // Restarting on the reconstructed store applies nothing again.
     start(&store, vec![finalized_at(&block2, 20)]).await?;
     assert_reconstructed(&store, &block2, 20);
     assert_eq!(

@@ -771,8 +771,8 @@ typedef struct ExecutorStatusResult {
   bool has_height;
   /**
    * `Bootstrapping` only: the Bedrock slot bootstrapping completes at, the last one the
-   * node had finalized as of the latest batch. Only meaningful when `has_target_slot` is
-   * `true`.
+   * node had finalized when following the channel started. Only meaningful when
+   * `has_target_slot` is `true`.
    */
   uint64_t target_slot;
   bool has_target_slot;

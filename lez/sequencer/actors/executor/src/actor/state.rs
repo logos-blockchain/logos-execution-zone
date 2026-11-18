@@ -6,7 +6,7 @@ use kameo_actors::pubsub::PubSub;
 use sequencer_actors_common::SendErrorExt;
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
-    protocol::{ChannelId, ChannelSeq, Checkpoint, MsgId, SerializeOp as _, Slot},
+    protocol::{ChannelId, ChannelSeq, Checkpoint, FollowStart, MsgId, SerializeOp as _, Slot},
 };
 use sequencer_channel_signing_actor::ChannelSigningActor;
 use sequencer_core::{StakeConfigUpdate, config::SequencerConfig};
@@ -38,6 +38,7 @@ pub enum State<S: StorageActorTrait, B: BedrockActorTrait> {
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
+    /// The state a start following the channel from `follow_start` begins in.
     pub async fn initialize(
         Args {
             mut config,
@@ -49,6 +50,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
             channel_signer_ref,
             bedrock_broker_ref: _,
         }: Args<S, B>,
+        follow_start: FollowStart,
     ) -> Result<Self> {
         // TODO: Rework this encapsulation cringe
         sequencer_core_metrics::init();
@@ -123,6 +125,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
                 chain,
                 channel_signing_key,
                 consistency_check,
+                follow_start,
                 actors,
             )))
         } else if channel_tip_slot.is_some() {
@@ -133,8 +136,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
             info!("Channel holds nothing to bootstrap from; resuming on the stored chain");
 
             Ok(Self::Online(
-                online::OnlineState::from_stored_chain(config, chain, channel_signing_key, actors)
-                    .await?,
+                online::OnlineState::from_stored_chain(
+                    config,
+                    chain,
+                    channel_signing_key,
+                    follow_start.seq,
+                    actors,
+                )
+                .await?,
             ))
         } else {
             if config.genesis.is_none() {
@@ -143,8 +152,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
             info!("Channel does not exist yet; starting it as channel creator");
 
             Ok(Self::Online(
-                online::OnlineState::creating_channel(config, chain, channel_signing_key, actors)
-                    .await?,
+                online::OnlineState::creating_channel(
+                    config,
+                    chain,
+                    channel_signing_key,
+                    follow_start.seq,
+                    actors,
+                )
+                .await?,
             ))
         }
     }

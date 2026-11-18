@@ -36,14 +36,13 @@ pub struct OnlineState<S: StorageActorTrait, B: BedrockActorTrait> {
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
-    /// Goes online once bootstrapping replayed the channel up to its tip, read at `tip_slot`.
+    /// Goes online once bootstrapping replayed the channel's finalized history.
     pub(super) async fn from_bootstrapping(
         bootstrapping_state: bootstrapping::BootstrappingState<S, B>,
-        replayed_up_to: Slot,
     ) -> Result<Self> {
         Self::start(
             true,
-            Some(replayed_up_to),
+            bootstrapping_state.applied_seq,
             bootstrapping_state.config,
             bootstrapping_state.chain,
             bootstrapping_state.channel_signing_key,
@@ -56,9 +55,18 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         config: SequencerConfig,
         chain: ChainState,
         channel_signing_key: Ed25519Key,
+        applied_seq: ChannelSeq,
         actors: ActorsBundle<S, B>,
     ) -> Result<Self> {
-        Self::start(true, None, config, chain, channel_signing_key, actors).await
+        Self::start(
+            true,
+            applied_seq,
+            config,
+            chain,
+            channel_signing_key,
+            actors,
+        )
+        .await
     }
 
     /// Creates the channel, inscribing the stored chain onto it, or a new genesis when the store
@@ -67,9 +75,18 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         config: SequencerConfig,
         chain: ChainState,
         channel_signing_key: Ed25519Key,
+        applied_seq: ChannelSeq,
         actors: ActorsBundle<S, B>,
     ) -> Result<Self> {
-        Self::start(false, None, config, chain, channel_signing_key, actors).await
+        Self::start(
+            false,
+            applied_seq,
+            config,
+            chain,
+            channel_signing_key,
+            actors,
+        )
+        .await
     }
 
     pub const fn sequencer(&self) -> &SequencerCore<S, B> {
@@ -99,9 +116,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         &self.background_tasks
     }
 
+    /// Starts producing on `chain`, whose updates are applied up to channel sequence
+    /// `applied_seq`.
     async fn start(
         channel_exists: bool,
-        replayed_up_to: Option<Slot>,
+        mut applied_seq: ChannelSeq,
         config: SequencerConfig,
         mut chain: ChainState,
         channel_signing_key: Ed25519Key,
@@ -119,9 +138,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             sequencer_stake_core::SequencerKey::new(channel_signing_key.public_key().to_bytes())
                 .ok_or(Error::InvalidSequencerKey)?;
 
-        // Production waits for every update the publisher broadcasts past the
-        // sequence it started at.
-        let mut applied_seq = bedrock_pool_ref
+        bedrock_pool_ref
             .ask(
                 sequencer_bedrock_actor::protocol::InitializeChannelPublisher {
                     channel_id: config.bedrock_config.channel_id,
@@ -132,7 +149,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                     priority_fee_percent: config.bedrock_config.priority_fee_percent,
                     resubmit_interval: config.retry_pending_blocks_timeout,
                     stale_refund_slots: config.bedrock_config.stale_refund_slots,
-                    replayed_up_to,
                 },
             )
             .await
@@ -164,7 +180,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                     .await?,
                 )
             };
-            applied_seq = created_seq.or(applied_seq);
+            if let Some(created_seq) = created_seq {
+                applied_seq = created_seq;
+            }
         }
 
         // A joining node's config carries no channel params, so check the finalized chain's.
@@ -216,7 +234,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             config,
             mempool,
             chain,
-            applied_seq,
+            Some(applied_seq),
             channel_signing_key,
             storage_ref,
             bedrock_pool_ref,
