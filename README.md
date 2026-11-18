@@ -26,7 +26,7 @@ To our knowledge, this design is unique to LEZ. Other privacy-focused programmab
 2. Transfer from public to private (local / privacy-preserving execution)
    - Alice runs the token program `Transfer` function locally, sending to Bob’s private account.
    - A ZKP of correct execution is generated.
-   - The proof is submitted to the validators, which verify it; only its digest is published on-chain.
+   - The proof is submitted to the validators, which verify it and serve it over Logos Storage; only its digest and Storage CID are published on-chain.
    - Alice’s public balance is updated on-chain.
    - Bob’s private balance remains hidden, while the transfer is provably correct.
 
@@ -228,7 +228,7 @@ just run-sequencer-standalone
 
 ## Running with Docker
 
-The root `docker-compose.yml` runs the whole local stack: a dev Bedrock node, a four-sequencer devnet, the indexer and the explorer. The Bedrock image is built from the Cargo-authoritative node, so resolve it first:
+The root `docker-compose.yml` runs the whole local stack: a dev Bedrock node, a four-sequencer devnet, the indexer and the explorer, each sequencer and the indexer beside a Logos Storage node of its own that distributes proofs. The Bedrock image is built from the Cargo-authoritative node, so resolve it first:
 
 ```bash
 just resolve-bedrock-node
@@ -236,7 +236,7 @@ docker compose up                          # add --profile monitoring for Promet
 docker compose up indexer_service          # or just a service and what it depends on
 ```
 
-Bedrock, sequencer and indexer state persist in volumes, so `docker compose stop`/`start` and
+Bedrock, sequencer, indexer and Logos Storage state persist in volumes, so `docker compose stop`/`start` and
 rebuilds resume where they left off. To start over from a fresh chain:
 
 ```bash

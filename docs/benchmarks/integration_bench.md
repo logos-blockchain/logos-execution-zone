@@ -31,7 +31,7 @@ Tables below report dev mode for all three scenarios. A real-proving sweep is no
 
 ## Methodology
 
-Per scenario, every produced block is fetched via `getBlock(BlockId)` and measured as inscribed, each proof replaced by its digest (`block.digested().to_inscription()`). Each transaction is measured individually in the same form and counted by variant. Empty clock-only ticks give the per-block fixed-cost baseline. Wall time is captured per step (submit + inclusion + wallet sync) and aggregated to the per-scenario `total_s`. The one-time stack-setup cost (`shared_setup_s` at the run level) and the closing bedrock finality wait (`bedrock_finality_s` per scenario) are reported separately, not folded into `total_s`.
+Per scenario, every produced block is fetched via `getBlock(BlockId)` and measured as inscribed, each proof replaced by its digest and followed by its Logos Storage CID (`HashableBlockData::inscription_len`). Each transaction is measured individually in the same form and counted by variant. Empty clock-only ticks give the per-block fixed-cost baseline. Wall time is captured per step (submit + inclusion + wallet sync) and aggregated to the per-scenario `total_s`. The one-time stack-setup cost (`shared_setup_s` at the run level) and the closing bedrock finality wait (`bedrock_finality_s` per scenario) are reported separately, not folded into `total_s`.
 
 `bedrock_finality_s` is the time for the indexer's L1-finalised block id to reach the sequencer tip. If it does not within `--finality-timeout-s` (default 300), the scenario records it as unmeasured rather than reporting the deadline as a latency.
 
@@ -67,11 +67,11 @@ In dev mode every submitting step costs about 30 s, which is block cadence and n
 | private_chained_flow | 9 | 8,891 | 810..25,210 | 314 / 18 | 24,244 / 3 |
 | parallel_fanout | 60 | 933 | 810..1,181 | 322 / 140 | n/a |
 
-These figures predate digest-form inscriptions: they count each PPE transaction's full proof, a dev-mode stub measured before the proof's claim was pruned to a digest. Each PPE transaction now publishes its proof as a 32-byte digest, in either mode.
+These figures predate digest-form inscriptions: they count each PPE transaction's full proof, a dev-mode stub measured before the proof's claim was pruned to a digest. Each PPE transaction now publishes its proof as a 32-byte digest and a 38-byte Logos Storage CID, in either mode.
 
 ## Findings
 
-- Before digest-form inscriptions, a PPE transaction dominated its block: even the dev-mode stub took a block from 810 bytes to 25 KB, and real proofs took it to roughly 223 KB. Blocks now publish a 32-byte digest per proof; re-measurement is pending.
+- Before digest-form inscriptions, a PPE transaction dominated its block: even the dev-mode stub took a block from 810 bytes to 25 KB, and real proofs took it to roughly 223 KB. Blocks now publish a 32-byte digest and a 38-byte Logos Storage CID per proof; re-measurement is pending.
 - Wall time in dev mode is set by block cadence, not by the node's work.
 
 ## Reproduce
