@@ -153,6 +153,19 @@ impl db::Storable<ColumnFamily> for SystemApprovalsRecord {
     const TYPE_NAME: &'static str = db::type_name!(SystemApprovalsRecord);
 }
 
+/// One Logos Storage object this node holds, as opaque bytes whose encoding the caller owns.
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct ProofObject {
+    pub bytes: Vec<u8>,
+}
+
+impl db::Storable<ColumnFamily> for ProofObject {
+    type Key = [u8; 32];
+
+    const COLUMN_FAMILY: ColumnFamily = ColumnFamily::Pending;
+    const TYPE_NAME: &'static str = db::type_name!(ProofObject);
+}
+
 /// The channel's final configs as opaque bytes, whose encoding the caller owns.
 #[derive(BorshSerialize, BorshDeserialize)]
 pub struct FinalConfigs {

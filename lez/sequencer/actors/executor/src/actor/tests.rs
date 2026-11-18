@@ -90,6 +90,7 @@ pub(super) fn sequencer_config() -> (SequencerConfig, TempDir) {
         cross_zone: None,
         metrics_listen_address: None,
         gossip: None,
+        logos_storage: sequencer_core::config::LogosStorageConfig::default(),
         channel_signing_key_file: None,
         funding_public_key: None,
         wait_for_channel: false,

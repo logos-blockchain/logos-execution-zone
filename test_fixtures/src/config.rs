@@ -10,7 +10,7 @@ use logos_blockchain_zone_sdk::key_management_system_service::keys::{
 use num_bigint::BigUint;
 use sequencer_core::config::{
     BedrockConfig, ChannelParams, CrossZoneConfig, DepositRecipient, GenesisAction, GenesisConfig,
-    GossipConfig, SequencerConfig,
+    GossipConfig, LogosStorageConfig, SequencerConfig,
 };
 use sequencer_genesis::sign_genesis_stake;
 use sequencer_stake_core::SequencerKey;
@@ -182,6 +182,7 @@ pub fn sequencer_config(
         cross_zone,
         metrics_listen_address: Some(SequencerConfig::DEFAULT_METRICS_LISTEN_ADDRESS),
         gossip,
+        logos_storage: LogosStorageConfig::default(),
         channel_signing_key_file: None,
         funding_public_key: None,
         wait_for_channel: false,

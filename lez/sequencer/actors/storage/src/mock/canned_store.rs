@@ -11,9 +11,10 @@ use lee_core::BlockId;
 
 use super::MockStorageActor;
 use crate::protocol::{
-    AtomicUpdate, DropSettledCrossZoneDispatches, GetBlock, PendingCrossZoneDispatchRecord,
-    PendingDepositEventRecord, PutSlashRecordBytes, PutSystemApprovalsBytes, SetZoneAnchor,
-    StoreUpdateOutcome, UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
+    AtomicUpdate, DeleteProofObject, DropSettledCrossZoneDispatches, GetBlock,
+    PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutProofObject, PutSlashRecordBytes,
+    PutSystemApprovalsBytes, SetZoneAnchor, StoreUpdateOutcome, UpdateZoneCheckpoint,
+    ZoneAnchorRecord, ZoneCheckpointRecord,
 };
 
 /// What a mocked store holds.
@@ -32,6 +33,7 @@ pub struct CannedStore {
     pub pending_dispatches: Vec<PendingCrossZoneDispatchRecord>,
     pub slash_record: Option<Vec<u8>>,
     pub system_approvals: Option<Vec<u8>>,
+    pub proof_objects: BTreeMap<[u8; 32], Vec<u8>>,
 }
 
 impl CannedStore {
@@ -204,6 +206,24 @@ impl SharedStore {
             let store = self.clone();
             move |PutSystemApprovalsBytes { bytes }, _ctx| {
                 store.lock().system_approvals = Some(bytes);
+                Ok(())
+            }
+        });
+        mock.expect_handle_get_proof_objects().returning({
+            let store = self.clone();
+            move |_msg, _ctx| Ok(store.lock().proof_objects.values().cloned().collect())
+        });
+        mock.expect_handle_put_proof_object().returning({
+            let store = self.clone();
+            move |PutProofObject { digest, bytes }, _ctx| {
+                store.lock().proof_objects.insert(digest, bytes);
+                Ok(())
+            }
+        });
+        mock.expect_handle_delete_proof_object().returning({
+            let store = self.clone();
+            move |DeleteProofObject { digest }, _ctx| {
+                store.lock().proof_objects.remove(&digest);
                 Ok(())
             }
         });

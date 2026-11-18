@@ -78,6 +78,18 @@ pub struct PutSystemApprovalsBytes {
     pub bytes: Vec<u8>,
 }
 
+/// The Logos Storage objects this node holds, as opaque records whose encoding the caller owns.
+pub struct GetProofObjects;
+
+pub struct PutProofObject {
+    pub digest: [u8; 32],
+    pub bytes: Vec<u8>,
+}
+
+pub struct DeleteProofObject {
+    pub digest: [u8; 32],
+}
+
 pub struct GetFinalConfigsBytes;
 
 pub struct PutFinalConfigsBytes {

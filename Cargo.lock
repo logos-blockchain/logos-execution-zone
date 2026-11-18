@@ -8447,7 +8447,6 @@ dependencies = [
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.18",
- "tokio",
  "url",
 ]
 
@@ -12072,6 +12071,7 @@ name = "sequencer_core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "borsh",
  "bridge_core",
  "chain_state",
@@ -12091,6 +12091,7 @@ dependencies = [
  "lee_core",
  "libp2p 0.57.1",
  "logos-blockchain-zone-sdk",
+ "logos_storage",
  "mempool",
  "num-bigint 0.4.6",
  "ping_core",

@@ -76,7 +76,8 @@ use crate::{
     MAX_DISPATCHES_PER_BLOCK, RETIRE_DISPATCH_AFTER_FAILURES, SequencerCore, TransactionOrigin,
     build_bridge_deposit_tx_from_event, build_finalize_unstake_tx, classify_settled_deliveries,
     config::{
-        self, BedrockConfig, CrossZoneConfig, CrossZonePeer, CrossZoneRoute, SequencerConfig,
+        self, BedrockConfig, CrossZoneConfig, CrossZonePeer, CrossZoneRoute, LogosStorageConfig,
+        SequencerConfig,
     },
     config_target, deposit_already_minted, dispatch_already_delivered, extract_cross_zone_dispatch,
     extract_cross_zone_dispatch_key, is_sequencer_only_program, resubmittable_txs, round_robin,
@@ -387,6 +388,7 @@ fn setup_sequencer_config() -> SequencerConfig {
         cross_zone: None,
         metrics_listen_address: None,
         gossip: None,
+        logos_storage: LogosStorageConfig::default(),
         channel_signing_key_file: None,
         funding_public_key: None,
         wait_for_channel: false,

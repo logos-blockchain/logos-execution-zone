@@ -85,6 +85,7 @@ pub mod cross_zone_watcher;
 pub mod faults;
 pub mod fees;
 pub mod logging;
+pub mod proof_objects;
 pub mod release_finality;
 pub mod system_approvals;
 pub mod task_group;

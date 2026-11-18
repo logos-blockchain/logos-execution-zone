@@ -11,16 +11,17 @@ use crate::{
     error::Error,
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, DbDump, DeadLetterDispatch, DeadLetterRequeue,
-        DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
-        DropSettledCrossZoneDispatches, DumpDb, GetAccountTransactions, GetAllBlocks, GetBlock,
-        GetBlockByHash, GetChannelViewBytes, GetCrossZonePeerFloorBytes, GetCrossZonePeerTip,
-        GetDeadLetterDispatchCount, GetDeadLetterDispatchRetainedCount, GetDeadLetterDispatches,
-        GetFinalConfigsBytes, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
-        GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatchCount,
-        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetSlashRecordBytes,
-        GetSystemApprovalsBytes, GetTransactionByHash, GetTransactionReceiptByHash, GetZoneAnchor,
-        GetZoneCheckpoint, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
-        PutFinalConfigsBytes, PutSlashRecordBytes, PutSystemApprovalsBytes, RecordDispatchFailure,
+        DeleteBlock, DeleteCrossZonePeerFloor, DeleteProofObject, DeleteZoneCheckpoint,
+        DispatchFailure, DropSettledCrossZoneDispatches, DumpDb, GetAccountTransactions,
+        GetAllBlocks, GetBlock, GetBlockByHash, GetChannelViewBytes, GetCrossZonePeerFloorBytes,
+        GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatchRetainedCount,
+        GetDeadLetterDispatches, GetFinalConfigsBytes, GetFinalSnapshot, GetFirstBlockId,
+        GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatchCount,
+        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetProofObjects,
+        GetSlashRecordBytes, GetSystemApprovalsBytes, GetTransactionByHash,
+        GetTransactionReceiptByHash, GetZoneAnchor, GetZoneCheckpoint,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutFinalConfigsBytes,
+        PutProofObject, PutSlashRecordBytes, PutSystemApprovalsBytes, RecordDispatchFailure,
         RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
         StoreUpdateOutcome, UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
     },
@@ -45,6 +46,9 @@ pub trait StorageActorTrait:
     + Message<PutSlashRecordBytes, Reply = Result<()>>
     + Message<GetSystemApprovalsBytes, Reply = Result<Option<Vec<u8>>>>
     + Message<PutSystemApprovalsBytes, Reply = Result<()>>
+    + Message<GetProofObjects, Reply = Result<Vec<Vec<u8>>>>
+    + Message<PutProofObject, Reply = Result<()>>
+    + Message<DeleteProofObject, Reply = Result<()>>
     + Message<GetFinalConfigsBytes, Reply = Result<Option<Vec<u8>>>>
     + Message<PutFinalConfigsBytes, Reply = Result<()>>
     + Message<DeleteZoneCheckpoint, Reply = Result<()>>

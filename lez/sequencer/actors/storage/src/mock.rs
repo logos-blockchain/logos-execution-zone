@@ -22,17 +22,18 @@ use crate::{
     error::Error,
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, DbDump, DeadLetterDispatch, DeadLetterRequeue,
-        DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
-        DropSettledCrossZoneDispatches, DumpDb, EventFilter, GetAccountTransactions, GetAllBlocks,
-        GetBlock, GetBlockByHash, GetChannelViewBytes, GetCrossZonePeerFloorBytes,
-        GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatchRetainedCount,
-        GetDeadLetterDispatches, GetEventFilter, GetFinalConfigsBytes, GetFinalSnapshot,
-        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
-        GetPendingCrossZoneDispatchCount, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
+        DeleteBlock, DeleteCrossZonePeerFloor, DeleteProofObject, DeleteZoneCheckpoint,
+        DispatchFailure, DropSettledCrossZoneDispatches, DumpDb, EventFilter,
+        GetAccountTransactions, GetAllBlocks, GetBlock, GetBlockByHash, GetChannelViewBytes,
+        GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount,
+        GetDeadLetterDispatchRetainedCount, GetDeadLetterDispatches, GetEventFilter,
+        GetFinalConfigsBytes, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
+        GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatchCount,
+        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetProofObjects,
         GetSlashRecordBytes, GetSystemApprovalsBytes, GetTransactionByHash,
         GetTransactionReceiptByHash, GetZoneAnchor, GetZoneCheckpoint,
         PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutFinalConfigsBytes,
-        PutSlashRecordBytes, PutSystemApprovalsBytes, RecordDispatchFailure,
+        PutProofObject, PutSlashRecordBytes, PutSystemApprovalsBytes, RecordDispatchFailure,
         RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
         StoreUpdateOutcome, UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
     },
@@ -129,6 +130,24 @@ mockall::mock! {
         pub fn handle_put_system_approvals_bytes(
             &mut self,
             msg: PutSystemApprovalsBytes,
+            ctx: &mut Context<Self, Result<()>>
+        ) -> Result<()>;
+
+        pub fn handle_get_proof_objects(
+            &mut self,
+            msg: GetProofObjects,
+            ctx: &mut Context<Self, Result<Vec<Vec<u8>>>>
+        ) -> Result<Vec<Vec<u8>>>;
+
+        pub fn handle_put_proof_object(
+            &mut self,
+            msg: PutProofObject,
+            ctx: &mut Context<Self, Result<()>>
+        ) -> Result<()>;
+
+        pub fn handle_delete_proof_object(
+            &mut self,
+            msg: DeleteProofObject,
             ctx: &mut Context<Self, Result<()>>
         ) -> Result<()>;
 
@@ -475,6 +494,42 @@ impl Message<GetSystemApprovalsBytes> for MockStorageActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_get_system_approvals_bytes(msg, ctx)
+    }
+}
+
+impl Message<GetProofObjects> for MockStorageActor {
+    type Reply = Result<Vec<Vec<u8>>>;
+
+    async fn handle(
+        &mut self,
+        msg: GetProofObjects,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_get_proof_objects(msg, ctx)
+    }
+}
+
+impl Message<PutProofObject> for MockStorageActor {
+    type Reply = Result<()>;
+
+    async fn handle(
+        &mut self,
+        msg: PutProofObject,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_put_proof_object(msg, ctx)
+    }
+}
+
+impl Message<DeleteProofObject> for MockStorageActor {
+    type Reply = Result<()>;
+
+    async fn handle(
+        &mut self,
+        msg: DeleteProofObject,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_delete_proof_object(msg, ctx)
     }
 }
 

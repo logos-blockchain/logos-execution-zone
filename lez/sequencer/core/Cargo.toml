@@ -32,6 +32,7 @@ system_upgrader_core.workspace = true
 cross_zone.workspace = true
 cross_zone_inbox_core.workspace = true
 sequencer_stake_core.workspace = true
+logos_storage.workspace = true
 
 kameo.workspace = true
 kameo_actors.workspace = true
@@ -51,6 +52,7 @@ num-bigint.workspace = true
 futures.workspace = true
 libp2p.workspace = true
 thiserror.workspace = true
+async-trait.workspace = true
 
 [features]
 default = []

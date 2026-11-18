@@ -29,17 +29,18 @@ use crate::{
     error::Error,
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, DbDump, DeadLetterDispatch, DeadLetterRequeue,
-        DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
-        DropSettledCrossZoneDispatches, DumpDb, EventFilter, GetAccountTransactions, GetAllBlocks,
-        GetBlock, GetBlockByHash, GetBlockEvents, GetChannelViewBytes, GetCrossZonePeerFloorBytes,
-        GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatchRetainedCount,
-        GetDeadLetterDispatches, GetEventFilter, GetFinalConfigsBytes, GetFinalSnapshot,
-        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
-        GetPendingCrossZoneDispatchCount, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
+        DeleteBlock, DeleteCrossZonePeerFloor, DeleteProofObject, DeleteZoneCheckpoint,
+        DispatchFailure, DropSettledCrossZoneDispatches, DumpDb, EventFilter,
+        GetAccountTransactions, GetAllBlocks, GetBlock, GetBlockByHash, GetBlockEvents,
+        GetChannelViewBytes, GetCrossZonePeerFloorBytes, GetCrossZonePeerTip,
+        GetDeadLetterDispatchCount, GetDeadLetterDispatchRetainedCount, GetDeadLetterDispatches,
+        GetEventFilter, GetFinalConfigsBytes, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
+        GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatchCount,
+        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetProofObjects,
         GetSlashRecordBytes, GetSystemApprovalsBytes, GetTransactionByHash,
         GetTransactionReceiptByHash, GetTxHashToBlockIdMapItem, GetZoneAnchor, GetZoneCheckpoint,
         PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutFinalConfigsBytes,
-        PutSlashRecordBytes, PutSystemApprovalsBytes, RecordDispatchFailure,
+        PutProofObject, PutSlashRecordBytes, PutSystemApprovalsBytes, RecordDispatchFailure,
         RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
         StoreUpdateOutcome, UpdateZoneCheckpoint, WithdrawalReconciliationKey, ZoneAnchorRecord,
         ZoneCheckpointRecord,
@@ -950,6 +951,50 @@ impl Message<PutSystemApprovalsBytes> for StorageActor {
                 &encoding::SingletonKey,
                 &entities::SystemApprovalsRecord { bytes },
             )
+            .map_err(Into::into)
+    }
+}
+
+impl Message<GetProofObjects> for StorageActor {
+    type Reply = Result<Vec<Vec<u8>>>;
+
+    async fn handle(
+        &mut self,
+        GetProofObjects: GetProofObjects,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.db()
+            .iter::<entities::ProofObject>()
+            .map_ok(|record| record.bytes)
+            .collect::<db::Result<_>>()
+            .map_err(Into::into)
+    }
+}
+
+impl Message<PutProofObject> for StorageActor {
+    type Reply = Result<()>;
+
+    async fn handle(
+        &mut self,
+        PutProofObject { digest, bytes }: PutProofObject,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.db()
+            .put(&digest, &entities::ProofObject { bytes })
+            .map_err(Into::into)
+    }
+}
+
+impl Message<DeleteProofObject> for StorageActor {
+    type Reply = Result<()>;
+
+    async fn handle(
+        &mut self,
+        DeleteProofObject { digest }: DeleteProofObject,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.db()
+            .delete::<entities::ProofObject>(&digest)
             .map_err(Into::into)
     }
 }

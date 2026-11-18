@@ -108,6 +108,9 @@ pub struct SequencerConfig {
     /// Sequencer p2p gossip configuration. `None` disables gossip.
     #[serde(default)]
     pub gossip: Option<GossipConfig>,
+    /// The Logos Storage node this sequencer distributes proofs through.
+    #[serde(default)]
+    pub logos_storage: LogosStorageConfig,
     /// Overrides `<home>/channel_signing_key`.
     /// This is a "per-node" setting, and should not be read from a shared config.
     #[serde(skip)]
@@ -121,6 +124,32 @@ pub struct SequencerConfig {
     /// This is a "per-node" setting, and should not be read from a shared config.
     #[serde(skip)]
     pub wait_for_channel: bool,
+}
+
+/// The Logos Storage node a sequencer runs beside.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LogosStorageConfig {
+    /// Base URL of the node's REST API.
+    #[serde(default = "default_logos_storage_api_url")]
+    pub api_url: Url,
+    /// How long a proof stays served after its last holder lets go.
+    #[serde(with = "humantime_serde", default = "default_serving_window")]
+    pub serving_window: Duration,
+    /// Bytes of the node's quota kept for the proofs of live blocks, which optional admission
+    /// leaves free.
+    #[serde(default = "default_live_reserve_bytes")]
+    pub live_reserve_bytes: u64,
+}
+
+impl Default for LogosStorageConfig {
+    fn default() -> Self {
+        Self {
+            api_url: default_logos_storage_api_url(),
+            serving_window: default_serving_window(),
+            live_reserve_bytes: default_live_reserve_bytes(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -303,6 +332,20 @@ fn default_gossip_listen_addr() -> libp2p::Multiaddr {
     "/ip4/0.0.0.0/udp/0/quic-v1"
         .parse()
         .expect("hardcoded default gossip listen addr is a valid multiaddr")
+}
+
+fn default_logos_storage_api_url() -> Url {
+    "http://127.0.0.1:8080/"
+        .parse()
+        .expect("hardcoded default Logos Storage API URL is a valid URL")
+}
+
+const fn default_serving_window() -> Duration {
+    Duration::from_hours(1)
+}
+
+const fn default_live_reserve_bytes() -> u64 {
+    0x4000_0000
 }
 
 #[expect(clippy::unnecessary_wraps, reason = "Required by serde")]
