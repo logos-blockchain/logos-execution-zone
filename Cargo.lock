@@ -8441,7 +8441,7 @@ dependencies = [
 [[package]]
 name = "logos-blockchain-zone-sdk"
 version = "0.0.0"
-source = "git+https://github.com/logos-blockchain/logos-zone-sdk.git?rev=ac815a7aed598c90f99ee2213aa6664c544d7d19#ac815a7aed598c90f99ee2213aa6664c544d7d19"
+source = "git+https://github.com/logos-blockchain/logos-zone-sdk.git?rev=ae79990a1800eea1dc7c6f68e1ad17ef1f844870#ae79990a1800eea1dc7c6f68e1ad17ef1f844870"
 dependencies = [
  "async-trait",
  "blockchain-test-logos",

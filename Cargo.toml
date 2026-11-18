@@ -259,7 +259,7 @@ strum = { version = "0.28.0", features = ["derive"] }
 mockall = "0.15.0"
 
 # FIXME: WIP branch for PUTXOs
-logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-zone-sdk.git", rev = "ac815a7aed598c90f99ee2213aa6664c544d7d19" }
+logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-zone-sdk.git", rev = "ae79990a1800eea1dc7c6f68e1ad17ef1f844870" }
 
 # Bedrock's hash and Groth16 verifier, for the vault circuit. Keep on the node revision zone-sdk pins.
 logos-blockchain-poseidon2 = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "a54cbc526112d391f11901e7b284e1bbe5d801b8" }

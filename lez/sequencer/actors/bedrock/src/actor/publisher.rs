@@ -171,7 +171,7 @@ impl Publisher {
                 channel_update,
                 finalized,
                 // A plain channel deposit stays under its holder's key and mints nothing.
-                deposits: _,
+                observed: _,
             } => {
                 let config_keys = finalized.iter().flat_map(|item| {
                     item.ops.iter().filter_map(|op| {
@@ -272,7 +272,10 @@ impl Publisher {
                 }
                 // None carries a block or an author the LEZ chain models; deposits and
                 // withdrawals move their holders' own notes.
-                FinalizedOp::Deposit(_) | FinalizedOp::Withdraw(_) | FinalizedOp::Config(_) => {}
+                FinalizedOp::Deposit(_)
+                | FinalizedOp::Withdraw(_)
+                | FinalizedOp::Config(_)
+                | FinalizedOp::ProgramRegister(_) => {}
             }
         }
 
