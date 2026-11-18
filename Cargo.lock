@@ -259,6 +259,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ark-bls12-381"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3df4dcc01ff89867cd86b0da835f23c3f02738353aaee7dde7495af71363b8d5"
+dependencies = [
+ "ark-ec",
+ "ark-ff",
+ "ark-serialize",
+ "ark-std",
+]
+
+[[package]]
 name = "ark-bn254"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -289,6 +301,7 @@ dependencies = [
  "digest 0.10.7",
  "fnv",
  "merlin",
+ "rayon",
  "sha2 0.10.9",
 ]
 
@@ -321,7 +334,21 @@ dependencies = [
  "num-bigint 0.4.6",
  "num-integer",
  "num-traits",
+ "rayon",
  "zeroize",
+]
+
+[[package]]
+name = "ark-ed-on-bn254"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "962e24e25cbdcaabe619c281a62bccc885f778b188129d6a02875c2671666219"
+dependencies = [
+ "ark-bn254",
+ "ark-ec",
+ "ark-ff",
+ "ark-r1cs-std",
+ "ark-std",
 ]
 
 [[package]]
@@ -341,6 +368,7 @@ dependencies = [
  "num-bigint 0.4.6",
  "num-traits",
  "paste",
+ "rayon",
  "zeroize",
 ]
 
@@ -380,6 +408,7 @@ dependencies = [
  "ark-relations",
  "ark-serialize",
  "ark-std",
+ "rayon",
 ]
 
 [[package]]
@@ -395,6 +424,7 @@ dependencies = [
  "educe 0.6.0",
  "fnv",
  "hashbrown 0.15.5",
+ "rayon",
 ]
 
 [[package]]
@@ -437,6 +467,7 @@ dependencies = [
  "arrayvec",
  "digest 0.10.7",
  "num-bigint 0.4.6",
+ "rayon",
 ]
 
 [[package]]
@@ -470,6 +501,7 @@ checksum = "246a225cc6131e9ee4f24619af0f19d67761fff15d7ccc22e42b80846e69449a"
 dependencies = [
  "num-traits",
  "rand 0.8.6",
+ "rayon",
 ]
 
 [[package]]
@@ -2663,7 +2695,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ccc2776f0c61eca1ca32528f85548abd1a4be8fb53d1b21c013e4f18da1e7090"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -5203,6 +5235,7 @@ name = "jf-poseidon2"
 version = "0.2.0"
 source = "git+https://github.com/EspressoSystems/jellyfish.git?rev=8d80230358e900f8d63765a937f63f4978ca1daa#8d80230358e900f8d63765a937f63f4978ca1daa"
 dependencies = [
+ "ark-bls12-381",
  "ark-bn254",
  "ark-ff",
  "ark-std",
@@ -13341,7 +13374,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -14699,6 +14732,26 @@ name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
+
+[[package]]
+name = "vault_circuit"
+version = "0.1.0"
+dependencies = [
+ "ark-bn254",
+ "ark-ec",
+ "ark-ed-on-bn254",
+ "ark-ff",
+ "ark-groth16",
+ "ark-r1cs-std",
+ "ark-relations",
+ "jf-poseidon2",
+ "logos-blockchain-core",
+ "logos-blockchain-groth16",
+ "logos-blockchain-key-management-system-keys",
+ "logos-blockchain-poseidon2",
+ "rand 0.8.6",
+ "sha2 0.10.9",
+]
 
 [[package]]
 name = "vcpkg"
