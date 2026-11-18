@@ -535,3 +535,378 @@ pub fn unix_now() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |since| since.as_secs())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    use logos_storage::memory::{MemoryNetwork, MemoryStorage};
+    use tokio::sync::Notify;
+
+    use super::*;
+
+    const WINDOW: u64 = 3600;
+    const RENEWAL: u64 = 86_400;
+
+    /// A node of `network` that can be scripted and counts what it is asked.
+    #[derive(Default)]
+    struct Scripted {
+        node: Option<MemoryStorage>,
+        manifest: Mutex<Option<Manifest>>,
+        free: Mutex<Option<u64>>,
+        /// Holds every payload download until notified.
+        gate: Option<Arc<Notify>>,
+        uploads: AtomicUsize,
+        downloads: AtomicUsize,
+        deletes: AtomicUsize,
+    }
+
+    impl Scripted {
+        fn on(network: &MemoryNetwork) -> Self {
+            Self {
+                node: Some(network.node()),
+                ..Self::default()
+            }
+        }
+
+        fn node(&self) -> &MemoryStorage {
+            self.node
+                .as_ref()
+                .expect("a scripted node runs on a network")
+        }
+    }
+
+    #[async_trait]
+    impl Storage for Scripted {
+        async fn upload(
+            &self,
+            bytes: Vec<u8>,
+            advertise: bool,
+        ) -> Result<StorageCid, logos_storage::Error> {
+            self.uploads.fetch_add(1, Ordering::Relaxed);
+            self.node().upload(bytes, advertise).await
+        }
+
+        async fn manifest(&self, cid: StorageCid) -> Result<Manifest, logos_storage::Error> {
+            let scripted = self.manifest.lock().unwrap().clone();
+            match scripted {
+                Some(manifest) => Ok(manifest),
+                None => self.node().manifest(cid).await,
+            }
+        }
+
+        async fn download(
+            &self,
+            cid: StorageCid,
+            max_len: u64,
+            local: bool,
+        ) -> Result<Vec<u8>, logos_storage::Error> {
+            if !local {
+                self.downloads.fetch_add(1, Ordering::Relaxed);
+                if let Some(gate) = &self.gate {
+                    gate.notified().await;
+                }
+            }
+            self.node().download(cid, max_len, local).await
+        }
+
+        async fn exists(&self, cid: StorageCid) -> Result<bool, logos_storage::Error> {
+            self.node().exists(cid).await
+        }
+
+        async fn delete(&self, cid: StorageCid) -> Result<(), logos_storage::Error> {
+            self.deletes.fetch_add(1, Ordering::Relaxed);
+            self.node().delete(cid).await
+        }
+
+        async fn set_advertise(
+            &self,
+            cid: StorageCid,
+            advertise: bool,
+        ) -> Result<(), logos_storage::Error> {
+            self.node().set_advertise(cid, advertise).await
+        }
+
+        async fn free_bytes(&self) -> Result<u64, logos_storage::Error> {
+            let free = *self.free.lock().unwrap();
+            Ok(free.unwrap_or(u64::MAX))
+        }
+    }
+
+    fn config() -> LogosStorageConfig {
+        LogosStorageConfig {
+            serving_window: Duration::from_secs(WINDOW),
+            renewal_interval: Duration::from_secs(RENEWAL),
+            live_reserve_bytes: 1 << 30,
+            max_downloads: 4,
+            max_downloads_per_peer: 1,
+            ..LogosStorageConfig::default()
+        }
+    }
+
+    /// Objects over `storage`, whose proof store keeps nothing it is not told to pin.
+    fn objects(storage: Arc<Scripted>, records: Arc<MemoryRecords>) -> ProofObjects {
+        ProofObjects::new(storage, ProofStore::new(0), records, &config())
+    }
+
+    fn proof(fill: u8) -> Proof {
+        Proof::from_inner(vec![fill; 64])
+    }
+
+    fn peer() -> PeerId {
+        PeerId::random()
+    }
+
+    #[tokio::test]
+    async fn a_fetched_proof_is_kept_under_this_nodes_own_cid_and_served() {
+        let network = MemoryNetwork::default();
+        let seeder = objects(Arc::new(Scripted::on(&network)), Arc::default());
+        let fetching = Arc::new(Scripted::on(&network));
+        let fetcher = objects(Arc::clone(&fetching), Arc::default());
+        let cid = seeder.seed(&proof(1)).await.unwrap();
+
+        let fetched = fetcher
+            .fetch(proof(1).digest(), cid, Admission::Live, |_proof| true)
+            .await
+            .unwrap();
+
+        assert_eq!(fetched, proof(1));
+        assert_eq!(fetcher.locator(&proof(1).digest()), Some(cid));
+        assert_eq!(fetching.downloads.load(Ordering::Relaxed), 1);
+        assert!(network.node().download(cid, 64, false).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_dataset_that_is_not_the_named_proof_is_refused_and_dropped() {
+        let network = MemoryNetwork::default();
+        let seeder = objects(Arc::new(Scripted::on(&network)), Arc::default());
+        let fetching = Arc::new(Scripted::on(&network));
+        let fetcher = objects(Arc::clone(&fetching), Arc::default());
+        let other = seeder.seed(&proof(2)).await.unwrap();
+
+        let refused = fetcher
+            .fetch(proof(1).digest(), other, Admission::Live, |_proof| true)
+            .await;
+
+        assert!(matches!(refused, Err(Error::WrongProof)));
+        assert_eq!(fetcher.locator(&proof(1).digest()), None);
+        assert!(!fetching.node().holds(other));
+    }
+
+    #[tokio::test]
+    async fn a_proof_that_does_not_verify_is_neither_kept_nor_served() {
+        let network = MemoryNetwork::default();
+        let seeder = objects(Arc::new(Scripted::on(&network)), Arc::default());
+        let fetching = Arc::new(Scripted::on(&network));
+        let fetcher = objects(Arc::clone(&fetching), Arc::default());
+        let cid = seeder.seed(&proof(1)).await.unwrap();
+
+        let refused = fetcher
+            .fetch(proof(1).digest(), cid, Admission::Live, |_proof| false)
+            .await;
+
+        assert!(matches!(refused, Err(Error::Unverified)));
+        assert_eq!(fetcher.locator(&proof(1).digest()), None);
+        assert!(!fetching.node().holds(cid));
+    }
+
+    #[tokio::test]
+    async fn a_manifest_of_another_form_is_refused_before_any_payload_is_downloaded() {
+        let network = MemoryNetwork::default();
+        let seeder = objects(Arc::new(Scripted::on(&network)), Arc::default());
+        let fetching = Arc::new(Scripted::on(&network));
+        let cid = seeder.seed(&proof(1)).await.unwrap();
+        let named = Manifest {
+            filename: Some("proof".to_owned()),
+            ..fetching.node().manifest(cid).await.unwrap()
+        };
+        *fetching.manifest.lock().unwrap() = Some(named);
+        let fetcher = objects(Arc::clone(&fetching), Arc::default());
+
+        let refused = fetcher
+            .fetch(proof(1).digest(), cid, Admission::Live, |_proof| true)
+            .await;
+        let declared = fetcher.declared_len(cid, peer()).await;
+
+        assert!(matches!(
+            refused,
+            Err(Error::Storage(logos_storage::Error::NonCanonical(_)))
+        ));
+        assert!(matches!(
+            declared,
+            Err(Error::Storage(logos_storage::Error::NonCanonical(_)))
+        ));
+        assert_eq!(fetching.downloads.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn a_dataset_longer_than_the_proof_cap_is_refused_before_its_download() {
+        let network = MemoryNetwork::default();
+        let oversized = vec![1; usize::try_from(PROOF_BYTES).unwrap() + 1];
+        let cid = network
+            .node()
+            .upload(oversized.clone(), true)
+            .await
+            .unwrap();
+        let fetching = Arc::new(Scripted::on(&network));
+        let fetcher = objects(Arc::clone(&fetching), Arc::default());
+
+        let refused = fetcher
+            .fetch(
+                Proof::from_inner(oversized).digest(),
+                cid,
+                Admission::Live,
+                |_proof| true,
+            )
+            .await;
+
+        assert!(matches!(
+            refused,
+            Err(Error::Storage(logos_storage::Error::TooLong {
+                max: PROOF_BYTES
+            }))
+        ));
+        assert_eq!(fetching.downloads.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn a_peer_keeps_one_download_in_flight_and_the_reserve_turns_its_announcements_away() {
+        let network = MemoryNetwork::default();
+        let seeder = objects(Arc::new(Scripted::on(&network)), Arc::default());
+        let gate = Arc::new(Notify::new());
+        let fetching = Arc::new(Scripted {
+            gate: Some(Arc::clone(&gate)),
+            ..Scripted::on(&network)
+        });
+        let fetcher = Arc::new(objects(Arc::clone(&fetching), Arc::default()));
+        let first = seeder.seed(&proof(1)).await.unwrap();
+        let second = seeder.seed(&proof(2)).await.unwrap();
+        let flooding = peer();
+
+        let in_flight = tokio::spawn({
+            let fetcher = Arc::clone(&fetcher);
+            async move {
+                fetcher
+                    .fetch(
+                        proof(1).digest(),
+                        first,
+                        Admission::Optional(flooding),
+                        |_proof| true,
+                    )
+                    .await
+            }
+        });
+        while fetching.downloads.load(Ordering::Relaxed) == 0 {
+            tokio::task::yield_now().await;
+        }
+        let busy = fetcher
+            .fetch(
+                proof(2).digest(),
+                second,
+                Admission::Optional(flooding),
+                |_proof| true,
+            )
+            .await;
+        *fetching.free.lock().unwrap() = Some(1 << 30);
+        let full = fetcher
+            .fetch(
+                proof(2).digest(),
+                second,
+                Admission::Optional(peer()),
+                |_proof| true,
+            )
+            .await;
+        gate.notify_one();
+
+        assert!(matches!(busy, Err(Error::Busy)));
+        assert!(matches!(full, Err(Error::Full)));
+        assert!(in_flight.await.unwrap().is_ok());
+        assert_eq!(fetching.downloads.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn a_released_object_is_served_through_its_window_then_deleted() {
+        let storage = Arc::new(Scripted::on(&MemoryNetwork::default()));
+        let held = objects(Arc::clone(&storage), Arc::default());
+        let cid = held.seed(&proof(1)).await.unwrap();
+
+        held.sweep(1_000).await.unwrap();
+        held.sweep(1_000 + WINDOW - 1).await.unwrap();
+        assert_eq!(held.locator(&proof(1).digest()), Some(cid));
+        assert!(storage.node().holds(cid));
+
+        held.sweep(1_000 + WINDOW).await.unwrap();
+        assert_eq!(held.locator(&proof(1).digest()), None);
+        assert!(!storage.node().holds(cid));
+    }
+
+    #[tokio::test]
+    async fn a_hold_keeps_an_object_past_its_window_and_renews_it() {
+        let storage = Arc::new(Scripted::on(&MemoryNetwork::default()));
+        let held = objects(Arc::clone(&storage), Arc::default());
+        let cid = held.seed(&proof(1)).await.unwrap();
+        held.hold(proof(1).digest());
+        let seeded = unix_now();
+
+        held.sweep(seeded + RENEWAL - 1).await.unwrap();
+        assert_eq!(storage.uploads.load(Ordering::Relaxed), 1);
+        held.sweep(seeded + RENEWAL).await.unwrap();
+        held.sweep(seeded + RENEWAL + WINDOW).await.unwrap();
+        assert!(storage.node().holds(cid));
+        assert_eq!(storage.uploads.load(Ordering::Relaxed), 2);
+
+        held.release(&proof(1).digest());
+        held.sweep(seeded + RENEWAL + WINDOW + 1).await.unwrap();
+        held.sweep(seeded + RENEWAL + 2 * WINDOW + 1).await.unwrap();
+        assert!(!storage.node().holds(cid));
+    }
+
+    #[tokio::test]
+    async fn deleting_a_released_object_spares_the_tree_a_kept_one_shares() {
+        let storage = Arc::new(Scripted::on(&MemoryNetwork::default()));
+        let held = objects(Arc::clone(&storage), Arc::default());
+        let kept = proof(1);
+        let variant = Proof::from_inner([kept.clone().into_inner(), vec![0; 8]].concat());
+        let kept_cid = held.seed(&kept).await.unwrap();
+        let variant_cid = held.seed(&variant).await.unwrap();
+        assert_eq!(
+            storage.node().manifest(kept_cid).await.unwrap().tree_cid,
+            storage.node().manifest(variant_cid).await.unwrap().tree_cid
+        );
+        held.hold(kept.digest());
+
+        held.sweep(0).await.unwrap();
+        held.sweep(WINDOW).await.unwrap();
+
+        assert_eq!(held.locator(&variant.digest()), None);
+        assert_eq!(storage.deletes.load(Ordering::Relaxed), 0);
+        assert!(storage.node().holds(kept_cid));
+    }
+
+    #[tokio::test]
+    async fn a_restart_restores_the_objects_the_node_still_holds_and_drops_the_rest() {
+        let storage = Arc::new(Scripted::on(&MemoryNetwork::default()));
+        let records = Arc::new(MemoryRecords::default());
+        let before = objects(Arc::clone(&storage), Arc::clone(&records));
+        let kept = before.seed(&proof(1)).await.unwrap();
+        let lost = before.seed(&proof(2)).await.unwrap();
+        storage.node().delete(lost).await.unwrap();
+
+        let after = objects(Arc::clone(&storage), Arc::clone(&records));
+        after.restore().await.unwrap();
+
+        assert_eq!(after.locator(&proof(1).digest()), Some(kept));
+        assert_eq!(after.locator(&proof(2).digest()), None);
+        assert_eq!(records.load().await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_proof_held_in_memory_is_served_by_digest_after_its_eviction_from_memory() {
+        let storage = Arc::new(Scripted::on(&MemoryNetwork::default()));
+        let held = objects(Arc::clone(&storage), Arc::default());
+        held.seed(&proof(1)).await.unwrap();
+
+        assert_eq!(held.get(&proof(1).digest()).await, Some(proof(1)));
+        assert_eq!(held.get(&proof(2).digest()).await, None);
+    }
+}

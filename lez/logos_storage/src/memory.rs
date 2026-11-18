@@ -1,7 +1,8 @@
 //! In-memory Storage nodes on one network, for other crates' tests.
 //!
 //! A node's CID is the canonical prefix and the SHA-256 of the bytes, which no real node computes;
-//! within one network every node agrees on it, which is what tests rely on.
+//! within one network every node agrees on it, which is what tests rely on. A dataset's tree is
+//! its one zero-padded block, so a zero-suffixed variant shares it, as on a real node.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -119,8 +120,12 @@ impl Storage for MemoryStorage {
 
     async fn manifest(&self, cid: StorageCid) -> Result<Manifest, Error> {
         let bytes = self.object(cid, false)?;
+        let block = bytes
+            .iter()
+            .rposition(|byte| *byte != 0)
+            .map_or(&bytes[..0], |last| &bytes[..=last]);
         Ok(Manifest {
-            tree_cid: String::new(),
+            tree_cid: hex::encode(Sha256::digest(block)),
             block_size: BLOCK_SIZE,
             dataset_size: u64::try_from(bytes.len()).expect("a dataset's length fits u64"),
             filename: None,
