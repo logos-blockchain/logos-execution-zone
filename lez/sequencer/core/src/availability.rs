@@ -1,24 +1,31 @@
 //! A proof-bearing block's candidate, which its producer proposes before posting it, and the
 //! approvals of the committee members that hold its proofs in Logos Storage and serve them.
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use anyhow::{Context as _, ensure};
 use borsh::{BorshDeserialize, BorshSerialize};
 use chain_state::{
     ChainState,
-    apply::{apply_block_to_state, validate_against_tip},
+    apply::{apply_judged_block_to_state, validate_against_tip},
 };
 use common::{block::DigestedBlock, storage_cid::StorageCid};
-use lee::privacy_preserving_transaction::circuit::ProofDigest;
-use sequencer_bedrock_actor::protocol::Ed25519Key;
+use kameo::actor::ActorRef;
+use sequencer_bedrock_actor::{
+    BedrockActorTrait,
+    protocol::{ChannelId, Ed25519Key},
+};
 use sequencer_stake_core::{
     SequencerKey,
     ed25519_dalek::{Signature, VerifyingKey},
 };
+use sharding_pool_actor::ShardingPoolActor;
 use tokio::sync::Mutex;
 
-use crate::proof_objects::{Admission, ProofObjects};
+use crate::{
+    proof_objects::{Admission, ProofObjects, until},
+    release_finality,
+};
 
 /// How long an approval holds its candidate's proofs: for the block to land, and its chain entry
 /// to hold them in turn.
@@ -110,35 +117,38 @@ pub enum AvailabilityMessage {
 
 /// Approves `candidate` once this node holds and serves its proofs.
 ///
-/// The proofs are fetched whole, verified, and stored under exactly the CIDs the candidate names.
-/// The block must extend this node's head and execute on it. The proofs are then held for
-/// [`APPROVAL_PROMISE`], their records already persisted.
-pub async fn approve_candidate(
+/// The block must extend this node's head, checked before anything is fetched. Its proofs are
+/// fetched whole, verified, and stored under exactly the CIDs it names; it must then execute on
+/// the head as the fold would judge it. The proofs are held for [`APPROVAL_PROMISE`], persisted
+/// before the approval is signed.
+pub async fn approve_candidate<B: BedrockActorTrait>(
     candidate: Candidate,
     chain: Arc<Mutex<ChainState>>,
     proof_objects: Arc<ProofObjects>,
     key: Ed25519Key,
-    channel_id: [u8; 32],
+    bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
+    channel_id: ChannelId,
 ) -> anyhow::Result<AvailabilityApproval> {
     let Candidate { id, block } = candidate;
-    let mut proofs = Vec::with_capacity(id.locators.len());
+    ensure!(
+        <[u8; 32]>::from(chain.lock().await.pin()) == id.parent,
+        "the candidate does not extend this node's head"
+    );
+    let mut proofs = BTreeMap::new();
     for (digest, locator) in block.body.proofs().zip(&id.locators) {
-        let proof = proof_objects
-            .fetch(*digest, *locator, Admission::Live, |_proof| true)
-            .await?;
+        if !proofs.contains_key(digest) {
+            let proof = proof_objects
+                .fetch(*digest, *locator, Admission::Live, |_proof| true)
+                .await?;
+            proofs.insert(*digest, proof);
+        }
         ensure!(
             proof_objects.locator(digest) == Some(*locator),
             "a proof is stored under another CID than the candidate names"
         );
-        proofs.push(proof);
     }
     let full = block
-        .hydrate(|digest| {
-            proofs
-                .iter()
-                .find(|proof| proof.digest() == *digest)
-                .cloned()
-        })
+        .hydrate(|digest| proofs.get(digest).cloned())
         .context("the fetched proofs do not hydrate the candidate")?;
 
     let (pin, tip, mut state) = {
@@ -149,25 +159,20 @@ pub async fn approve_candidate(
         <[u8; 32]>::from(pin) == id.parent,
         "the candidate does not extend this node's head"
     );
+    let releasable =
+        release_finality::producible_releases(&bedrock_pool_ref, channel_id, &state).await;
     tokio::task::spawn_blocking(move || {
         validate_against_tip(tip.as_ref(), &full)?;
-        apply_block_to_state(&full, &mut state)
+        apply_judged_block_to_state(&full, &mut state, Some(&releasable))
     })
     .await
     .context("the candidate's execution did not finish")?
     .context("the candidate does not execute on this node's head")?;
 
-    let held: Vec<ProofDigest> = block.body.proofs().copied().collect();
-    for digest in &held {
-        proof_objects.hold(*digest);
+    for digest in proofs.keys() {
+        proof_objects.hold(digest, until(APPROVAL_PROMISE)).await?;
     }
-    tokio::spawn(async move {
-        tokio::time::sleep(APPROVAL_PROMISE).await;
-        for digest in &held {
-            proof_objects.release(digest);
-        }
-    });
-    Ok(AvailabilityApproval::sign(id, channel_id, &key))
+    Ok(AvailabilityApproval::sign(id, *channel_id.as_ref(), &key))
 }
 
 #[cfg(test)]
