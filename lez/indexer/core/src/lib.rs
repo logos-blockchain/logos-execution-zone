@@ -495,10 +495,9 @@ impl IndexerCore {
     }
 
     /// The proof `digest` names, read from the dataset `locator` names when its manifest is of
-    /// the canonical form. The node keeps nothing it fetched, as it serves no peer; what it held
-    /// already, a sequencer sharing it may serve.
+    /// the canonical form. What the read stores expires with the node's TTL: deleting it could
+    /// drop a tree a sequencer sharing the node serves.
     async fn read_from_storage(&self, locator: StorageCid, digest: &ProofDigest) -> Option<Proof> {
-        let held = self.storage.exists(locator).await.unwrap_or(true);
         let read = async {
             let manifest = self.storage.manifest(locator).await?;
             manifest.check_canonical(fee_core::market::PROOF_BYTES)?;
@@ -507,12 +506,6 @@ impl IndexerCore {
                 .await
         }
         .await;
-        if !held
-            && let Err(err) = self.storage.delete(locator).await
-            && !err.is_not_found()
-        {
-            warn!(%locator, error = %err, "Failed to drop a proof read from Logos Storage");
-        }
         match read {
             Ok(bytes) => {
                 let proof = Proof::from_inner(bytes);
@@ -1231,7 +1224,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_proof_is_read_from_logos_storage_at_its_inscribed_cid_and_not_kept_there() {
+    async fn a_proof_is_read_from_logos_storage_at_its_inscribed_cid() {
         let dir = tempfile::tempdir().expect("tempdir");
         let network = logos_storage::memory::MemoryNetwork::default();
         let proof = Proof::from_inner(vec![1; 32]);
@@ -1240,15 +1233,13 @@ mod tests {
             .upload(proof.clone().into_inner(), true)
             .await
             .unwrap();
-        let reading = network.node();
         let mut core = unreachable_core(dir.path());
-        core.storage = Arc::new(reading.clone());
+        core.storage = Arc::new(network.node());
 
         core.fetch_proofs(&[proof.digest()], |_digest| Some(locator))
             .await;
 
         assert_eq!(core.proofs.get(&proof.digest()), Some(proof));
-        assert!(!reading.holds(locator));
     }
 
     #[tokio::test]
