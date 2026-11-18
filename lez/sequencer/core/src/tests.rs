@@ -7953,21 +7953,38 @@ async fn a_deposit_minted_in_a_cut_block_is_minted_again_once_and_recorded_until
     assert!(!deposit_recorded(&sequencer, op_id).await);
 }
 
-#[tokio::test]
-async fn a_candidate_needs_two_thirds_of_the_committee_at_its_parent_counting_its_producer_once() {
-    let key = |seed: u8| {
-        sequencer_stake_core::SequencerKey::new(
-            Ed25519Key::from_bytes(&[seed; 32]).public_key().to_bytes(),
-        )
-        .unwrap()
-    };
-    let config = setup_sequencer_config();
-    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
-    let built = sequencer.build_block_from_mempool().await.unwrap();
-    let parked = crate::ParkedCandidate {
+/// A user transfer the head admits.
+fn user_transfer() -> LeeTransaction {
+    common::test_utils::create_transaction_native_token_transfer(
+        initial_public_user_accounts()[0].account_id,
+        0,
+        initial_public_user_accounts()[1].account_id,
+        10,
+        &create_signing_key_for_account1(),
+    )
+}
+
+/// A private transaction whose proof verifies for nothing.
+fn unprovable_private_transaction() -> LeeTransaction {
+    LeeTransaction::PrivacyPreserving(lee::PrivacyPreservingTransaction::new(
+        lee::privacy_preserving_transaction::Message::default(),
+        lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(
+            vec![],
+            lee::privacy_preserving_transaction::circuit::Proof::from_inner(vec![5; 64]),
+        ),
+    ))
+}
+
+/// `built`, parked against the head's committee of `sequencer`.
+async fn parked(
+    sequencer: &SequencerCore<StorageActor, MockBedrockActor>,
+    built: crate::BlockWithMeta,
+) -> crate::ParkedCandidate {
+    let committee = sequencer.accredited_committee().await;
+    crate::ParkedCandidate {
         candidate: crate::availability::Candidate {
             id: crate::availability::CandidateId {
-                producer: key(1),
+                producer: test_bootstrap_sequencer_key(sequencer.sequencer_config()),
                 turn_start_slot: 0,
                 parent: built.parent.into(),
                 candidate_hash: built.block.header.hash.0,
@@ -7977,16 +7994,100 @@ async fn a_candidate_needs_two_thirds_of_the_committee_at_its_parent_counting_it
         },
         built,
         locators: Vec::new(),
-        committee: [key(1), key(2), key(3)].into(),
-        threshold: sequencer_stake_core::slash_approval_threshold(3),
-        own: key(1),
-    };
-    let approved =
-        |approvers: &[u8]| parked.is_approved(&approvers.iter().map(|seed| key(*seed)).collect());
+        threshold: sequencer_stake_core::slash_approval_threshold(committee.len()),
+        committee,
+        approvers: BTreeSet::new(),
+        deadline: tokio::time::Instant::now(),
+    }
+}
 
-    assert!(!approved(&[]));
-    assert!(!approved(&[1]));
-    assert!(!approved(&[4, 5]));
-    assert!(approved(&[2]));
-    assert!(approved(&[1, 3]));
+/// The transactions the mempool holds, in the order a block takes them.
+fn drain(sequencer: &mut SequencerCore<StorageActor, MockBedrockActor>) -> Vec<LeeTransaction> {
+    std::iter::from_fn(|| sequencer.mempool.pop().map(|(_, tx)| tx)).collect()
+}
+
+#[tokio::test]
+async fn a_candidate_counts_each_accredited_approval_once() {
+    let key = |seed: u8| test_sequencer_key(seed);
+    let (mut sequencer, _mempool_handle) = start_sequencer(setup_sequencer_config()).await;
+    let built = sequencer.build_block_from_mempool().await.unwrap();
+    let mut parked = parked(&sequencer, built).await;
+    parked.committee = [key(1), key(2), key(3)].into();
+    parked.threshold = sequencer_stake_core::slash_approval_threshold(3);
+
+    assert!(!parked.approve(key(1)));
+    assert!(!parked.approve(key(1)));
+    assert!(!parked.approve(key(4)));
+    assert!(parked.approve(key(2)));
+}
+
+#[tokio::test]
+async fn an_approved_candidate_is_submitted_as_built() {
+    let (mut sequencer, mempool_handle) = start_sequencer(setup_sequencer_config()).await;
+    mempool_handle
+        .push((TransactionOrigin::User, user_transfer()))
+        .await
+        .unwrap();
+    let built = sequencer.build_block_from_mempool().await.unwrap();
+    let block = built.block.clone();
+    let parked = parked(&sequencer, built).await;
+
+    let published = sequencer.publish_parked(parked, true).await.unwrap();
+
+    assert_eq!(published, Some(block.header.block_id));
+    assert_eq!(
+        block_at(&sequencer, block.header.block_id)
+            .await
+            .map(|stored| stored.header.hash),
+        Some(block.header.hash)
+    );
+}
+
+#[tokio::test]
+async fn a_candidate_whose_committee_moved_goes_back_to_the_mempool_unsubmitted() {
+    let (mut sequencer, mempool_handle) = start_sequencer(setup_sequencer_config()).await;
+    mempool_handle
+        .push((TransactionOrigin::User, user_transfer()))
+        .await
+        .unwrap();
+    let built = sequencer.build_block_from_mempool().await.unwrap();
+    let block_id = built.block.header.block_id;
+    let mut parked = parked(&sequencer, built).await;
+    parked.committee.insert(test_sequencer_key(9));
+
+    let published = sequencer.publish_parked(parked, true).await.unwrap();
+
+    assert_eq!(published, None);
+    assert!(block_at(&sequencer, block_id).await.is_none());
+    assert_eq!(drain(&mut sequencer), vec![user_transfer()]);
+}
+
+#[tokio::test]
+async fn a_candidate_short_of_approvals_gives_way_to_its_public_remainder_deferring_private_ones_once()
+ {
+    let (mut sequencer, mempool_handle) = start_sequencer(setup_sequencer_config()).await;
+    mempool_handle
+        .push((TransactionOrigin::User, user_transfer()))
+        .await
+        .unwrap();
+    let mut built = sequencer.build_block_from_mempool().await.unwrap();
+    built.mempool_transactions = vec![
+        (TransactionOrigin::User, unprovable_private_transaction()),
+        (TransactionOrigin::User, user_transfer()),
+    ];
+    let parked = parked(&sequencer, built).await;
+
+    let block_id = sequencer
+        .publish_parked(parked, false)
+        .await
+        .unwrap()
+        .expect("the public remainder is submitted");
+
+    let block = block_at(&sequencer, block_id).await.unwrap();
+    assert!(block.body.transactions.contains(&user_transfer()));
+    assert!(block.body.proofs().next().is_none());
+    assert_eq!(
+        drain(&mut sequencer),
+        vec![unprovable_private_transaction()]
+    );
 }
