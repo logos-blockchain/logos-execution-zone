@@ -49,6 +49,7 @@ members = [
   "lez/mempool",
   "lez/wallet",
   "lez/common",
+  "lez/logos_storage",
   "lez/logging",
   "lez/programs",
   "lez/programs/bridge",
@@ -95,6 +96,7 @@ lee = { path = "lee/state_machine" }
 lee_core = { path = "lee/state_machine/core" }
 program_loader_core = { path = "lee/program_loader" }
 common = { path = "lez/common" }
+logos_storage = { path = "lez/logos_storage" }
 chain_state = { path = "lez/chain_state" }
 mempool = { path = "lez/mempool" }
 logging = { path = "lez/logging" }
@@ -177,6 +179,7 @@ openssl = { version = "0.10", features = ["vendored"] }
 openssl-probe = { version = "0.1.2" }
 serde = { version = "1.0.60", default-features = false, features = ["derive"] }
 serde_json = "1.0.81"
+multibase = "0.9"
 serde_yaml = "0.9.34"
 serde_with = "3.16.1"
 actix = "0.13.0"

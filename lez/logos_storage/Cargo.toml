@@ -1,0 +1,26 @@
+[package]
+name = "logos_storage"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+common.workspace = true
+
+async-trait.workspace = true
+multibase.workspace = true
+reqwest.workspace = true
+serde = { workspace = true, features = ["std"] }
+serde_json.workspace = true
+sha2 = { workspace = true, optional = true }
+thiserror.workspace = true
+url.workspace = true
+
+
+[features]
+default = []
+# An in-memory store for other crates' tests.
+test-utils = ["dep:sha2"]

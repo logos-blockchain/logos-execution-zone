@@ -7,6 +7,7 @@ pub mod block;
 pub mod borsh_base64;
 pub mod bounded_vec_deque;
 pub mod config;
+pub mod storage_cid;
 pub mod system_upgrades;
 pub mod transaction;
 
