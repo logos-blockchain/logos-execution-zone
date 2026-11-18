@@ -40,7 +40,7 @@ use sequencer_core::{
     StakeConfigUpdate,
     availability::AvailabilityMessage,
     config::{GossipConfig, MAX_BEDROCK_TX_SIZE, MAX_PUBLISHABLE_BLOCK_SIZE, MAX_TRANSACTION_SIZE},
-    proof_objects::{Admission, ProofObjects},
+    proof_objects::{Admission, MEMPOOL_HOLD, ProofObjects, until},
 };
 use sequencer_slasher_actor::protocol::Approval;
 use system_upgrader_core::SignedApproval;
@@ -789,7 +789,7 @@ impl GossipActor {
         let proof_objects = Arc::clone(&self.proof_objects);
         let myself = self.myself.clone();
         tokio::spawn(async move {
-            match proof_objects.seed(tx.witness_set().proof()).await {
+            match proof_objects.seed_admitted(tx.witness_set().proof()).await {
                 Ok(locator) => {
                     let announcement = Announcement {
                         transaction: LeeTransactionWith::PrivacyPreserving(tx.digested()),
@@ -1460,7 +1460,13 @@ async fn admit_announced(
         .hydrate(proof)
         .context("the fetched proof is not the announced one")?;
     submit(LeeTransaction::PrivacyPreserving(hydrated)).await?;
-    proof_objects.advertise(&digest).await?;
+    // Admitted, the transaction is not submitted again whether or not its proof is served.
+    if let Err(err) = proof_objects.hold(&digest, until(MEMPOOL_HOLD)).await {
+        tracing::warn!(error = %err, "Failed to hold an admitted proof");
+    }
+    if let Err(err) = proof_objects.advertise(&digest).await {
+        tracing::warn!(error = %err, "Failed to serve an admitted proof");
+    }
     Ok(())
 }
 
