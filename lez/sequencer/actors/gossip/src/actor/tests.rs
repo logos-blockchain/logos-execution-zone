@@ -1016,3 +1016,86 @@ async fn an_announcement_is_accepted_by_its_digest_form_alone_and_refused_when_p
         super::validation::AnnouncementEvaluation::Reject(_)
     ));
 }
+
+#[test]
+fn a_candidate_is_taken_only_from_its_accredited_producer_and_an_approval_only_signed_by_an_accredited_key()
+ {
+    use sequencer_core::availability::{AvailabilityApproval, Candidate, CandidateId};
+
+    use super::validation::{AvailabilityEvaluation, evaluate_availability};
+
+    let producer = Ed25519Key::from_bytes(&[11; 32]);
+    let approver = Ed25519Key::from_bytes(&[12; 32]);
+    let block = common::test_utils::produce_dummy_block(1, None, Vec::new()).digested();
+    let candidate = Candidate {
+        id: CandidateId {
+            producer: SequencerKey::new(producer.public_key().to_bytes()).unwrap(),
+            turn_start_slot: 60,
+            parent: [2; 32],
+            candidate_hash: block.header.hash.0,
+            locators: Vec::new(),
+        },
+        block,
+    };
+    let approval = AvailabilityApproval::sign(candidate.id.clone(), CHANNEL, &approver);
+    let forged = AvailabilityApproval {
+        signature: [0; 64],
+        ..approval.clone()
+    };
+    let committee: std::collections::HashSet<[u8; 32]> = [
+        producer.public_key().to_bytes(),
+        approver.public_key().to_bytes(),
+    ]
+    .into();
+    let outsiders: std::collections::HashSet<[u8; 32]> = [[0; 32]].into();
+    let evaluate = |message: AvailabilityMessage,
+                    keys: &std::collections::HashSet<[u8; 32]>,
+                    source: [u8; 32]| {
+        evaluate_availability(
+            &borsh::to_vec(&message).unwrap(),
+            CHANNEL,
+            Some(keys),
+            Some(source),
+        )
+    };
+    let proposed = || AvailabilityMessage::Candidate(Box::new(candidate.clone()));
+    let producer_key = producer.public_key().to_bytes();
+    let approver_key = approver.public_key().to_bytes();
+
+    assert!(matches!(
+        evaluate(proposed(), &committee, producer_key),
+        AvailabilityEvaluation::Accept(_)
+    ));
+    assert!(matches!(
+        evaluate(proposed(), &committee, approver_key),
+        AvailabilityEvaluation::Reject(_)
+    ));
+    assert!(matches!(
+        evaluate(proposed(), &outsiders, producer_key),
+        AvailabilityEvaluation::Ignore(_)
+    ));
+    assert!(matches!(
+        evaluate(
+            AvailabilityMessage::Approval(Box::new(approval.clone())),
+            &committee,
+            producer_key
+        ),
+        AvailabilityEvaluation::Accept(_)
+    ));
+    assert!(matches!(
+        evaluate(
+            AvailabilityMessage::Approval(Box::new(approval)),
+            &outsiders,
+            producer_key
+        ),
+        AvailabilityEvaluation::Ignore(_)
+    ));
+    assert!(matches!(
+        evaluate(
+            AvailabilityMessage::Approval(Box::new(forged)),
+            &committee,
+            producer_key
+        ),
+        AvailabilityEvaluation::Reject(_)
+    ));
+}

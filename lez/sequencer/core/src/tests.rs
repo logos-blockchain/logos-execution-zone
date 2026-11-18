@@ -7952,3 +7952,41 @@ async fn a_deposit_minted_in_a_cut_block_is_minted_again_once_and_recorded_until
     assert_eq!(final_tip_hash(&sequencer).await, Some(again.header.hash));
     assert!(!deposit_recorded(&sequencer, op_id).await);
 }
+
+#[tokio::test]
+async fn a_candidate_needs_two_thirds_of_the_committee_at_its_parent_counting_its_producer_once() {
+    let key = |seed: u8| {
+        sequencer_stake_core::SequencerKey::new(
+            Ed25519Key::from_bytes(&[seed; 32]).public_key().to_bytes(),
+        )
+        .unwrap()
+    };
+    let config = setup_sequencer_config();
+    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
+    let built = sequencer.build_block_from_mempool().await.unwrap();
+    let parked = crate::ParkedCandidate {
+        candidate: crate::availability::Candidate {
+            id: crate::availability::CandidateId {
+                producer: key(1),
+                turn_start_slot: 0,
+                parent: built.parent.into(),
+                candidate_hash: built.block.header.hash.0,
+                locators: Vec::new(),
+            },
+            block: built.block.digested(),
+        },
+        built,
+        locators: Vec::new(),
+        committee: [key(1), key(2), key(3)].into(),
+        threshold: sequencer_stake_core::slash_approval_threshold(3),
+        own: key(1),
+    };
+    let approved =
+        |approvers: &[u8]| parked.is_approved(&approvers.iter().map(|seed| key(*seed)).collect());
+
+    assert!(!approved(&[]));
+    assert!(!approved(&[1]));
+    assert!(!approved(&[4, 5]));
+    assert!(approved(&[2]));
+    assert!(approved(&[1, 3]));
+}

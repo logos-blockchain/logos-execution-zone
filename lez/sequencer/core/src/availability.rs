@@ -169,3 +169,113 @@ pub async fn approve_candidate(
     });
     Ok(AvailabilityApproval::sign(id, channel_id, &key))
 }
+
+#[cfg(test)]
+mod tests {
+    use common::{storage_cid::STORAGE_CID_PREFIX, test_utils};
+
+    use super::*;
+
+    const CHANNEL: [u8; 32] = [1; 32];
+
+    fn key(seed: u8) -> Ed25519Key {
+        Ed25519Key::from_bytes(&[seed; 32])
+    }
+
+    fn sequencer_key(seed: u8) -> SequencerKey {
+        SequencerKey::new(key(seed).public_key().to_bytes()).unwrap()
+    }
+
+    fn candidate() -> Candidate {
+        let block = test_utils::produce_dummy_block(1, None, Vec::new()).digested();
+        Candidate {
+            id: CandidateId {
+                producer: sequencer_key(1),
+                turn_start_slot: 60,
+                parent: [2; 32],
+                candidate_hash: block.header.hash.0,
+                locators: Vec::new(),
+            },
+            block,
+        }
+    }
+
+    #[test]
+    fn an_approval_verifies_for_its_candidate_only() {
+        let approval = AvailabilityApproval::sign(candidate().id, CHANNEL, &key(2));
+
+        assert!(approval.verify(CHANNEL));
+        assert!(!approval.verify([9; 32]));
+        for changed in [
+            CandidateId {
+                turn_start_slot: 61,
+                ..candidate().id
+            },
+            CandidateId {
+                parent: [3; 32],
+                ..candidate().id
+            },
+            CandidateId {
+                producer: sequencer_key(3),
+                ..candidate().id
+            },
+            CandidateId {
+                locators: vec![
+                    StorageCid::try_from([&STORAGE_CID_PREFIX[..], &[0; 32]].concat().as_slice())
+                        .unwrap(),
+                ],
+                ..candidate().id
+            },
+        ] {
+            assert!(
+                !AvailabilityApproval {
+                    candidate: changed,
+                    ..approval.clone()
+                }
+                .verify(CHANNEL)
+            );
+        }
+    }
+
+    #[test]
+    fn an_approval_is_no_slash_approval() {
+        let id = candidate().id;
+        let message = id.approval_message(CHANNEL);
+
+        assert!(message.starts_with(&sequencer_stake_core::AVAILABILITY_APPROVAL_DOMAIN));
+        assert_ne!(
+            sequencer_stake_core::AVAILABILITY_APPROVAL_DOMAIN,
+            sequencer_stake_core::SLASH_APPROVAL_DOMAIN
+        );
+    }
+
+    #[test]
+    fn a_candidate_names_its_own_block_with_a_locator_per_proof() {
+        assert!(candidate().is_consistent());
+        assert!(
+            !Candidate {
+                id: CandidateId {
+                    candidate_hash: [7; 32],
+                    ..candidate().id
+                },
+                ..candidate()
+            }
+            .is_consistent()
+        );
+        assert!(
+            !Candidate {
+                id: CandidateId {
+                    locators: vec![
+                        StorageCid::try_from(
+                            [&STORAGE_CID_PREFIX[..], &[0; 32]].concat().as_slice()
+                        )
+                        .unwrap(),
+                    ],
+                    ..candidate().id
+                },
+                ..candidate()
+            }
+            .is_consistent()
+        );
+    }
+}
