@@ -370,11 +370,12 @@ pub struct PrivateAction {
     pub encrypted_post_state: EncryptedNote,
 }
 
-/// What a proof commits about its in-proof fee: the public refund target, and the payer's
-/// transition after the fee transfer alone, applied when the public part fails.
+/// What a proof commits about its in-proof fee: the public refund target, the tip, and the
+/// payer's transition after the fee transfer alone, applied when the public part fails.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct ProvenFee {
     pub refund_to: Option<AccountId>,
+    pub tip: u64,
     pub fallback: Option<FeeFallback>,
 }
 

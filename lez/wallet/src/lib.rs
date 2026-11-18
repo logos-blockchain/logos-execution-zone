@@ -2089,6 +2089,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 recipient: fee_inbox,
                 amount: fee_floor,
                 refund_to: None,
+                tip: self.fee_params.tip,
             });
             if run_unproven(probe, acc_manager.presenter(Some((payer, opening))))
                 .await?
@@ -2097,7 +2098,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 return send_publicly_paid(signer, input).await;
             }
         }
-        let refund_to = self.fee_params.refund_to;
+        let FeeParams { refund_to, tip, .. } = self.fee_params;
         if let Some(target) = refund_to
             && !acc_manager
                 .public_actors()
@@ -2120,6 +2121,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 recipient: fee_inbox,
                 amount,
                 refund_to,
+                tip,
             });
             priced
         };
@@ -2207,6 +2209,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             let fee = PrivateFee {
                 payer,
                 reserve,
+                tip,
                 refund_to,
             };
             if self.dry_run {
@@ -2291,13 +2294,15 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         wire_bytes: u64,
     ) -> ReservePricing {
         let (exec_ceiling, stor_ceiling) = self.base_fee_ceilings(quote);
+        let tip = u128::from(self.fee_params.tip);
         ReservePricing {
             fee_at_head: fee_core::assess::private_fee_required(
                 cycles,
                 wire_bytes,
                 quote.base_fee_exec,
                 quote.base_fee_stor,
-            ),
+            )
+            .saturating_add(tip),
             exec_ceiling,
             stor_ceiling,
             headroom_reserve: fee_core::assess::private_fee_required(
@@ -2305,7 +2310,8 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 wire_bytes,
                 exec_ceiling,
                 stor_ceiling,
-            ),
+            )
+            .saturating_add(tip),
         }
     }
 
