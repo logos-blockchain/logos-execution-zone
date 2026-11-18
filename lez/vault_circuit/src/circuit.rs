@@ -13,38 +13,51 @@ use ark_r1cs_std::{
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
 
 use crate::{
-    MAX_INPUTS, NONCE_DST, PublicInputs, SIGNATURE_DST, STEP_ID_DST, Signature, Step, domain_tag,
+    COMMITTEE_DST, Committee, DEPOSITS_DST, Deposit, INTENT_DST, MAX_DEPOSITS, MAX_INPUTS,
+    NONCE_DST, PublicInputs, SIGNATURE_DST, STEP_ID_DST, Signature, Step, domain_tag,
     poseidon2::{Sponge, digest},
 };
 
 const INPUT_FIELDS: usize = 6;
 const OUTPUT_FIELDS: usize = 7;
 
-/// The vault's rule for one program step. `signers` and `threshold` shape the constraints, so
-/// they are part of the verification key; the rest is the assignment.
+/// The vault's rule for one program step. Every field is part of the assignment: the constraints
+/// are the same for every committee.
 #[derive(Clone)]
 pub struct VaultCircuit {
-    pub signers: Vec<EdwardsAffine>,
-    pub threshold: usize,
+    /// The committee the consumed notes and deposits name.
+    pub committee: Committee,
     pub step: Step,
+    /// The deposits the step consumes, in their order in the mini-block. At most
+    /// [`MAX_DEPOSITS`].
+    pub deposits: Vec<Deposit>,
     pub public: PublicInputs,
-    /// One slot per signer, in the order of `signers`.
+    /// One slot per signer of `committee`, in order.
     pub signatures: Vec<Option<Signature>>,
+    /// The committee the vault notes of the step go to: `committee` again unless it hands over.
+    pub successor: Committee,
+    pub successor_signatures: Vec<Option<Signature>>,
 }
 
 impl ConstraintSynthesizer<Fr> for VaultCircuit {
     fn generate_constraints(self, cs: ConstraintSystemRef<Fr>) -> Result<(), SynthesisError> {
-        assert_eq!(
-            self.signers.len(),
-            self.signatures.len(),
-            "one signature slot per signer"
+        assert!(
+            self.deposits.len() <= MAX_DEPOSITS,
+            "a step consumes at most {MAX_DEPOSITS} deposits"
         );
         let zero = FpVar::<Fr>::zero();
+        let one = FpVar::<Fr>::one();
 
         // Bedrock's order.
         let step_id = FpVar::new_input(cs.clone(), || Ok(self.public.program_step_id))?;
         let deposits_hash = FpVar::new_input(cs.clone(), || Ok(self.public.program_deposits_hash))?;
         let op_id = FpVar::new_input(cs.clone(), || Ok(self.public.op_id))?;
+
+        let message = [step_id.clone(), deposits_hash.clone(), op_id];
+        let committee = authorize(&cs, &self.committee, &self.signatures, &message)?;
+        // A committee that takes the vault over proves it holds its keys, so the vault cannot
+        // be handed to an id nobody can sign for.
+        let successor = authorize(&cs, &self.successor, &self.successor_signatures, &message)?;
 
         // Open the step. Flags and absent notes need no checks of their own: the hash ties every
         // element to the one Bedrock's program spend constrained.
@@ -54,20 +67,26 @@ impl ConstraintSynthesizer<Fr> for VaultCircuit {
             .into_iter()
             .map(|element| FpVar::new_witness(cs.clone(), || Ok(element)))
             .collect::<Result<Vec<_>, _>>()?;
-        let mut sponge = Sponge::new();
-        sponge.absorb(&FpVar::constant(domain_tag(STEP_ID_DST)))?;
+        let mut opened_step = Sponge::new();
+        opened_step.absorb(&FpVar::constant(domain_tag(STEP_ID_DST)))?;
         for element in &elements {
-            sponge.absorb(element)?;
+            opened_step.absorb(element)?;
         }
-        sponge.finalize()?.enforce_equal(&step_id)?;
-
+        opened_step.finalize()?.enforce_equal(&step_id)?;
         let (inputs, outputs) = elements.split_at(MAX_INPUTS * INPUT_FIELDS);
-        let consumes_nothing = FpVar::one() - &inputs[0];
-        let mut nonce_sponge = Sponge::new();
-        nonce_sponge.absorb(&FpVar::constant(domain_tag(NONCE_DST)))?;
-        nonce_sponge.absorb(&deposits_hash)?;
-
+        let (inputs, _) = inputs.as_chunks::<INPUT_FIELDS>();
         let (outputs, _) = outputs.as_chunks::<OUTPUT_FIELDS>();
+
+        // Every consumed note belongs to the committee.
+        for [active, _value, _nonce, _public_key, _stake_public_key, data] in inputs {
+            active.mul_equals(&(data - &committee), &zero)?;
+        }
+
+        let consumes_nothing = &one - &inputs[0][0];
+        let mut nonce_prefix = Sponge::new();
+        nonce_prefix.absorb(&FpVar::constant(domain_tag(NONCE_DST)))?;
+        nonce_prefix.absorb(&deposits_hash)?;
+
         for (index, output) in outputs.iter().enumerate() {
             let [
                 active,
@@ -79,59 +98,128 @@ impl ConstraintSynthesizer<Fr> for VaultCircuit {
                 data,
             ] = output;
 
-            // A vault note neither stakes nor carries data.
+            // A vault note does not stake, and goes to the successor.
             program.mul_equals(stake_public_key, &zero)?;
-            program.mul_equals(data, &zero)?;
+            program.mul_equals(&(data - &successor), &zero)?;
 
             // A payout stakes under its payee's key, or the payee could not spend it.
             stake_public_key.conditional_enforce_equal(public_key, &program.is_eq(&zero)?)?;
 
             // Bedrock derives the nonces only when the step consumes a note.
-            let mut derived = nonce_sponge.clone();
+            let mut derived = nonce_prefix.clone();
             let index = u64::try_from(index).expect("an output index fits a u64");
             derived.absorb(&FpVar::constant(Fr::from(index)))?;
             let derived = derived.finalize()?;
             (&consumes_nothing * active).mul_equals(&(nonce - derived), &zero)?;
         }
 
-        let generator = EdwardsVar::constant(EdwardsAffine::generator().into_group());
-        let mut signed = zero;
-        for (signer, signature) in self.signers.iter().zip(&self.signatures) {
-            let enabled = Boolean::new_witness(cs.clone(), || Ok(signature.is_some()))?;
-            let signature = signature.unwrap_or(Signature {
-                r: EdwardsAffine::zero(),
-                s: Scalar::ZERO,
-            });
-            let r = EdwardsVar::new_witness(cs.clone(), || Ok(signature.r.into_group()))?;
-            let s = signature
-                .s
-                .into_bigint()
-                .to_bits_le()
-                .into_iter()
-                .take(usize::try_from(Scalar::MODULUS_BIT_SIZE).expect("a bit size fits a usize"))
-                .map(|bit| Boolean::new_witness(cs.clone(), || Ok(bit)))
-                .collect::<Result<Vec<_>, _>>()?;
-
-            let challenge = digest(&[
-                FpVar::constant(domain_tag(SIGNATURE_DST)),
-                r.x.clone(),
-                r.y.clone(),
-                FpVar::constant(signer.x),
-                FpVar::constant(signer.y),
-                step_id.clone(),
-                deposits_hash.clone(),
-                op_id.clone(),
+        // Open the deposits: each was made out to the committee. The hash covers a variable
+        // count, so the digest of every prefix is computed and the one at the count is kept.
+        let present = (0..MAX_DEPOSITS)
+            .map(|slot| Boolean::new_witness(cs.clone(), || Ok(slot < self.deposits.len())))
+            .collect::<Result<Vec<_>, _>>()?;
+        let count = present.iter().fold(zero.clone(), |count, flag| {
+            count + FpVar::from(flag.clone())
+        });
+        let mut prefix = Sponge::new();
+        prefix.absorb(&FpVar::constant(domain_tag(DEPOSITS_DST)))?;
+        prefix.absorb(&count)?;
+        let mut opened_deposits = zero.clone();
+        let mut previous = one;
+        for (slot, flag) in present.iter().enumerate() {
+            let deposit = self.deposits.get(slot).copied().unwrap_or_default();
+            let value = FpVar::new_witness(cs.clone(), || Ok(Fr::from(deposit.value)))?;
+            let recipient = FpVar::new_witness(cs.clone(), || Ok(deposit.recipient))?;
+            let intent = digest(&[
+                FpVar::constant(domain_tag(INTENT_DST)),
+                committee.clone(),
+                recipient,
             ])?;
 
-            // s·B == R + e·A
-            let left = generator.scalar_mul_le(s.iter())?;
-            let right = EdwardsVar::constant(signer.into_group())
-                .scalar_mul_le(challenge.to_bits_le()?.iter())?
-                + &r;
-            left.conditional_enforce_equal(&right, &enabled)?;
-            signed += FpVar::from(enabled);
+            // The count is `slot` exactly when the previous slot is filled and this one is not.
+            // The difference is a bit only if the filled slots come first.
+            let flag = FpVar::from(flag.clone());
+            let ends_here = &previous - &flag;
+            ends_here.mul_equals(&(&ends_here - FpVar::one()), &zero)?;
+            opened_deposits += ends_here * prefix.clone().finalize()?;
+
+            prefix.absorb(&value)?;
+            prefix.absorb(&intent)?;
+            previous = flag;
         }
-        let threshold = u64::try_from(self.threshold).expect("a threshold fits a u64");
-        signed.enforce_equal(&FpVar::constant(Fr::from(threshold)))
+        opened_deposits += previous * prefix.finalize()?;
+        opened_deposits.enforce_equal(&deposits_hash)
     }
+}
+
+/// Opens `committee` and checks that its threshold signed `message`. Returns its id.
+fn authorize(
+    cs: &ConstraintSystemRef<Fr>,
+    committee: &Committee,
+    signatures: &[Option<Signature>],
+    message: &[FpVar<Fr>; 3],
+) -> Result<FpVar<Fr>, SynthesisError> {
+    let zero = FpVar::<Fr>::zero();
+
+    // Allocation checks each key is in the prime-order subgroup.
+    let threshold = FpVar::new_witness(cs.clone(), || Ok(Fr::from(committee.threshold)))?;
+    let signers = committee
+        .padded_signers()
+        .into_iter()
+        .map(|key| EdwardsVar::new_witness(cs.clone(), || Ok(key.into_group())))
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut id = Sponge::new();
+    id.absorb(&FpVar::constant(domain_tag(COMMITTEE_DST)))?;
+    id.absorb(&threshold)?;
+    for key in &signers {
+        id.absorb(&key.x)?;
+        id.absorb(&key.y)?;
+    }
+
+    // With no signature needed, anyone could move the notes.
+    threshold.enforce_not_equal(&zero)?;
+
+    // s·B == R + e·A for each signing member.
+    let generator = EdwardsVar::constant(EdwardsAffine::generator().into_group());
+    let mut signed = zero.clone();
+    for (slot, signer) in signers.iter().enumerate() {
+        let signature = signatures.get(slot).copied().flatten();
+        let enabled = Boolean::new_witness(cs.clone(), || Ok(signature.is_some()))?;
+        let signature = signature.unwrap_or(Signature {
+            r: EdwardsAffine::zero(),
+            s: Scalar::ZERO,
+        });
+        let r = EdwardsVar::new_witness(cs.clone(), || Ok(signature.r.into_group()))?;
+        let s = signature
+            .s
+            .into_bigint()
+            .to_bits_le()
+            .into_iter()
+            .take(usize::try_from(Scalar::MODULUS_BIT_SIZE).expect("a bit size fits a usize"))
+            .map(|bit| Boolean::new_witness(cs.clone(), || Ok(bit)))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let [step_id, deposits_hash, op_id] = message.clone();
+        let challenge = digest(&[
+            FpVar::constant(domain_tag(SIGNATURE_DST)),
+            r.x.clone(),
+            r.y.clone(),
+            signer.x.clone(),
+            signer.y.clone(),
+            step_id,
+            deposits_hash,
+            op_id,
+        ])?;
+        let left = generator.scalar_mul_le(s.iter())?;
+        let right = signer.scalar_mul_le(challenge.to_bits_le()?.iter())? + &r;
+        left.conditional_enforce_equal(&right, &enabled)?;
+
+        // An unused slot holds the identity, under which anyone can sign. In the subgroup it
+        // is the only point with a zero x.
+        let enabled = FpVar::from(enabled);
+        enabled.mul_equals(&FpVar::from(signer.x.is_eq(&zero)?), &zero)?;
+        signed += enabled;
+    }
+    signed.enforce_equal(&threshold)?;
+    id.finalize()
 }

@@ -21,6 +21,6 @@ rand.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
-logos-blockchain-core.workspace = true
+logos-blockchain-core = { workspace = true, features = ["test-utils"] }
 logos-blockchain-key-management-system-keys.workspace = true
 logos-blockchain-groth16.workspace = true
