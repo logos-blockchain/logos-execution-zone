@@ -9,10 +9,8 @@ use futures::{Stream, StreamExt as _, TryStreamExt as _};
 use kameo::actor::ActorRef;
 use kameo_actors::broker::Broker;
 use logos_blockchain_zone_sdk::{
-    Deposit, Withdraw,
     adapter::{Node as _, NodeHttpClient},
     common_http_client::ProcessedBlockEvent,
-    core::mantle::ops::channel::withdraw::ChannelWithdrawOp,
 };
 use sequencer_actors_common::SendErrorExt as _;
 use sequencer_storage_actor::protocol::ZoneAnchorRecord;
@@ -22,8 +20,8 @@ use crate::{
     Result,
     error::Error,
     protocol::{
-        BlockData, BoxStream, ChannelEvent, ChannelEventKind, ChannelId, DepositInfo,
-        Ed25519PublicKey, FinalizedBlock, FinalizedUpTo, Slot, WithdrawInfo, ZoneMessage,
+        BlockData, BoxStream, ChannelEvent, ChannelEventKind, ChannelId, Ed25519PublicKey,
+        FinalizedBlock, FinalizedUpTo, Slot, ZoneMessage,
     },
 };
 
@@ -66,8 +64,7 @@ pub struct NodeStream {
 
 impl NodeStream {
     /// Starts reading at the slot of the stored `anchor`, or at genesis without one. The anchor
-    /// block is read again, so a warm start can check it against the store, along with the deposits
-    /// and withdrawals following it, which may not have been persisted.
+    /// block is read again, so a warm start can check it against the store.
     pub async fn new(
         node: TimeoutNode<NodeHttpClient>,
         channel_id: ChannelId,
@@ -209,22 +206,8 @@ impl NodeStream {
                 )
                 .await
             }
-            ZoneMessage::Deposit(deposit) => {
-                let deposit = deposit_info(deposit, self.channel_id);
-                self.publish(
-                    "finalized_deposit",
-                    ChannelEventKind::FinalizedDeposit(Arc::new(deposit)),
-                )
-                .await
-            }
-            ZoneMessage::Withdraw(withdraw) => {
-                let withdraw = withdraw_info(withdraw, self.channel_id);
-                self.publish(
-                    "finalized_withdrawal",
-                    ChannelEventKind::FinalizedWithdrawal(Arc::new(withdraw)),
-                )
-                .await
-            }
+            // Deposits and withdrawals move their holders' own notes.
+            ZoneMessage::Deposit(_) | ZoneMessage::Withdraw(_) => Ok(()),
         }
     }
 
@@ -300,38 +283,6 @@ where
     }
 }
 
-/// The deposit `deposit` reports on `channel_id`, as the publisher reports it.
-fn deposit_info(deposit: Deposit, channel_id: ChannelId) -> DepositInfo {
-    let Deposit {
-        tx_hash,
-        op_id,
-        inputs,
-        notes,
-        amount,
-        metadata,
-    } = deposit;
-    DepositInfo {
-        tx_hash,
-        op_id,
-        channel_id,
-        inputs,
-        notes,
-        amount,
-        metadata,
-    }
-}
-
-/// The withdrawal `withdraw` reports on `channel_id`, as the publisher reports it.
-fn withdraw_info(withdraw: Withdraw, channel_id: ChannelId) -> WithdrawInfo {
-    WithdrawInfo {
-        tx_hash: withdraw.tx_hash,
-        op: ChannelWithdrawOp {
-            channel_id,
-            inputs: withdraw.inputs,
-        },
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use common::{HashType, block::HashableBlockData};
@@ -365,9 +316,7 @@ mod tests {
             let published = match msg.event {
                 ChannelEventKind::FinalizedBlock(finalized) => Published::Block(finalized.msg_id),
                 ChannelEventKind::FinalizedUpTo(up_to) => Published::UpTo(up_to),
-                ChannelEventKind::FinalizedDeposit(_)
-                | ChannelEventKind::FinalizedWithdrawal(_)
-                | ChannelEventKind::Publisher(_) => return,
+                ChannelEventKind::Publisher(_) => return,
             };
             self.0.send(published).expect("the test is listening");
         }
@@ -416,6 +365,7 @@ mod tests {
                     signer: Ed25519Key::from_bytes(&[3; 32])
                         .public_key()
                         .into_unverified(),
+                    steps: logos_blockchain_zone_sdk::InscriptionSteps::default(),
                 }),
                 Slot::from(slot),
             )

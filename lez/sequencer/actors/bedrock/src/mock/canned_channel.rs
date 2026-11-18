@@ -1,13 +1,12 @@
 //! A [`MockBedrockActor`] serving a canned channel.
 
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::BTreeSet,
     sync::{Arc, Mutex, MutexGuard},
 };
 
 use anyhow::anyhow;
 use common::block::Block;
-use logos_blockchain_zone_sdk::core::mantle::ledger::{Inputs, NoteId, Utxo};
 use sequencer_storage_actor::protocol::ZoneAnchorRecord;
 
 use super::MockBedrockActor;
@@ -16,9 +15,8 @@ use crate::{
     error::Error,
     protocol::{
         AccreditedKeys, ChannelReadStream, ChannelSeq, CreateChannel, FilterFinallyAbsent,
-        HeaderId, InitializeChannelPublisher, MsgId, PreparePin, PreparedPin, PublishBlock,
-        PublishOutcome, PublishPin, ReadChannel, SequencerCheckpoint, SequencerKey, Slot,
-        WithdrawArg, ZoneMessage,
+        HeaderId, InitializeChannelPublisher, MsgId, PublishBlock, PublishOutcome, ReadChannel,
+        SequencerCheckpoint, SequencerKey, Slot, ZoneMessage,
     },
 };
 
@@ -39,14 +37,6 @@ pub struct CannedChannel {
     pub failed_tip_slot_reads: u32,
     /// Fails every publish.
     pub publish_fails: bool,
-    /// Fails every pin before it is funded.
-    pub prepare_pin_fails: bool,
-    /// Fails every pin once it is signed.
-    pub publish_pin_fails: bool,
-    /// Channel notes on the current branch, the ones a publish may pin.
-    pub channel_notes: HashSet<NoteId>,
-    /// The deposit notes each publish pinned, in publish order.
-    pub pins: Arc<Mutex<Vec<Vec<NoteId>>>>,
     /// Keys whose removal config is reported not yet final; every other key's is.
     pub pending_removals: BTreeSet<SequencerKey>,
     /// Channel sequence the last publish left the channel at.
@@ -145,10 +135,6 @@ impl SharedChannel {
         });
         mock.expect_handle_change_channel_config()
             .returning(|_msg, _ctx| Ok(()));
-        mock.expect_handle_get_channel_notes().returning({
-            let channel = self.clone();
-            move |_msg, _ctx| Ok(channel.lock().channel_notes.clone())
-        });
         mock.expect_handle_filter_finally_absent().returning({
             let channel = self.clone();
             move |FilterFinallyAbsent { keys, .. }, _ctx| {
@@ -175,95 +161,24 @@ impl SharedChannel {
         });
         mock.expect_handle_create_channel().returning({
             let channel = self.clone();
-            move |CreateChannel { genesis, .. }, _ctx| channel.land(&genesis, None, Vec::new())
+            move |CreateChannel { genesis, .. }, _ctx| channel.land(&genesis, None)
         });
         mock.expect_handle_publish_block().returning({
             let channel = self.clone();
             move |PublishBlock {
                       channel_id: _,
                       block,
-                      withdrawals,
                       parent,
                       expected_seq: _,
                   },
-                  _ctx| {
-                let outcome = channel.publish(&block, parent, mock_released_notes(&withdrawals))?;
-                channel.record_pin(Vec::new());
-                Ok(outcome)
-            }
-        });
-        let prepared = Arc::new(Mutex::new(HashMap::new()));
-        mock.expect_handle_prepare_pin().returning({
-            let channel = self.clone();
-            let prepared = Arc::clone(&prepared);
-            move |PreparePin {
-                      channel_id: _,
-                      block,
-                      parent,
-                      notes,
-                      expected_seq: _,
-                  },
-                  _ctx| {
-                let (prepare_pin_fails, channel_notes) = {
-                    let channel = channel.lock();
-                    (channel.prepare_pin_fails, channel.channel_notes.clone())
-                };
-                if prepare_pin_fails {
-                    return Err(Error::DepositPinAssemblyFailed(anyhow!(
-                        "Canned pin failure for block {}",
-                        block.header.block_id
-                    )));
-                }
-                if let Some(missing) = notes.iter().find(|note| !channel_notes.contains(note)) {
-                    return Err(Error::DepositNoteNotOnBranch(*missing));
-                }
-                // Bedrock's own bound on the transfer's inputs.
-                Inputs::try_new(notes.clone())
-                    .map_err(|err| Error::DepositPinAssemblyFailed(anyhow!("{err:?}")))?;
-                let msg_id = mock_msg_of(&block);
-                prepared
-                    .lock()
-                    .expect("prepared pins lock poisoned")
-                    .insert(msg_id, (block, notes));
-                Ok(PreparedPin::mocked(msg_id, parent))
-            }
-        });
-        mock.expect_handle_publish_pin().returning({
-            let channel = self.clone();
-            move |PublishPin {
-                      channel_id: _,
-                      prepared: pin,
-                      signatures: _,
-                      expected_seq: _,
-                  },
-                  _ctx| {
-                let (block, notes) = prepared
-                    .lock()
-                    .expect("prepared pins lock poisoned")
-                    .remove(&pin.msg_id())
-                    .expect("only a prepared pin is published");
-                if channel.lock().publish_pin_fails {
-                    return Err(Error::SubmitSignedTransactionFailed(anyhow!(
-                        "Canned pin publish failure for block {}",
-                        block.header.block_id
-                    )));
-                }
-                let outcome = channel.publish(&block, Some(pin.parent()), Vec::new())?;
-                channel.record_pin(notes);
-                Ok(outcome)
-            }
+                  _ctx| channel.publish(&block, parent)
         });
         mock
     }
 
     /// Lands `block` unless it is chained on an entry that is no longer the tip, as L1 refuses
     /// it.
-    fn publish(
-        &self,
-        block: &Block,
-        parent: Option<MsgId>,
-        released_notes: Vec<NoteId>,
-    ) -> Result<PublishOutcome> {
+    fn publish(&self, block: &Block, parent: Option<MsgId>) -> Result<PublishOutcome> {
         let current = self.lock().tip;
         if let Some(parent) = parent
             && current.is_some_and(|current| current != parent)
@@ -273,23 +188,12 @@ impl SharedChannel {
                 block.header.block_id
             )));
         }
-        self.land(block, parent, released_notes)
-    }
-
-    /// Records the deposit notes a landed publish pinned.
-    fn record_pin(&self, notes: Vec<NoteId>) {
-        let pins = Arc::clone(&self.lock().pins);
-        pins.lock().expect("pins lock poisoned").push(notes);
+        self.land(block, parent)
     }
 
     /// Moves the channel tip to `block`, inscribed on `parent` or else on the tip, and reports
     /// what its publish produced.
-    fn land(
-        &self,
-        block: &Block,
-        parent: Option<MsgId>,
-        released_notes: Vec<NoteId>,
-    ) -> Result<PublishOutcome> {
+    fn land(&self, block: &Block, parent: Option<MsgId>) -> Result<PublishOutcome> {
         let mut channel = self.lock();
         if channel.publish_fails {
             return Err(Error::SubmitSignedTransactionFailed(anyhow!(
@@ -308,7 +212,6 @@ impl SharedChannel {
             parent,
             checkpoint: checkpoint_at(this_msg),
             seq: ChannelSeq::mocked(channel.seq),
-            released_notes,
         })
     }
 
@@ -334,7 +237,6 @@ pub fn checkpoint_at(tip: MsgId) -> SequencerCheckpoint {
         pending_txs: Vec::new(),
         lib: HeaderId::from([0; 32]),
         lib_slot: Slot::from(0),
-        channel_notes: Vec::new(),
         finalized_config: MsgId::root(),
         funding: Vec::new(),
     }
@@ -349,17 +251,4 @@ fn history_after(messages: &[(ZoneMessage, Slot)], after: Option<Slot>) -> Chann
         .map(Ok)
         .collect();
     Box::pin(futures::stream::iter(messages))
-}
-
-/// The notes the mock reports as released by `withdrawals`.
-///
-/// Zone-sdk picks the actual channel notes to release, so the mock invents one
-/// per requested output, derived from the output itself so a test can
-/// recompute the reconciliation keys of a block it produced.
-fn mock_released_notes(withdrawals: &[WithdrawArg]) -> Vec<NoteId> {
-    withdrawals
-        .iter()
-        .flat_map(|withdraw| withdraw.outputs.into_iter().enumerate())
-        .map(|(output_index, note)| Utxo::new([0; 32], output_index, *note).id())
-        .collect()
 }

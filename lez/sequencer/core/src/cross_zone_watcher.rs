@@ -926,6 +926,7 @@ mod tests {
                 id: MsgId::from([0; 32]),
                 data: Inscription::new_unchecked(data),
                 signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("valid key"),
+                steps: logos_blockchain_zone_sdk::InscriptionSteps::default(),
             }),
             Slot::from(slot),
         )

@@ -10,7 +10,6 @@ use tracing::warn;
 pub struct LiveChannel<'keys> {
     pub accredited_keys: &'keys [SequencerKey],
     pub configuration_threshold: u16,
-    pub transfer_threshold: u16,
     pub posting_timeframe: u32,
     pub posting_timeout: u32,
 }
@@ -85,10 +84,9 @@ pub fn committee_update(
     let mut live_keys = live.accredited_keys.to_vec();
     live_keys.sort_unstable();
 
-    // A mismatch in either threshold or either posting param triggers a channel update too.
-    let threshold = channel_config_threshold(desired.len()).get();
+    // A mismatch in the threshold or either posting param triggers a channel update too.
     let stale_threshold =
-        live.configuration_threshold != threshold || live.transfer_threshold != threshold;
+        live.configuration_threshold != channel_config_threshold(desired.len()).get();
     let stale_posting = live.posting_timeframe != params.posting_timeframe
         || live.posting_timeout != params.posting_timeout;
 
@@ -189,11 +187,10 @@ mod tests {
     }
 
     /// A live channel at the default posting params.
-    fn live(keys: &[SequencerKey], configuration: u16, transfer: u16) -> LiveChannel<'_> {
+    fn live(keys: &[SequencerKey], configuration: u16) -> LiveChannel<'_> {
         LiveChannel {
             accredited_keys: keys,
             configuration_threshold: configuration,
-            transfer_threshold: transfer,
             posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
             posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
         }
@@ -285,7 +282,7 @@ mod tests {
     fn candidate_below_minimum_is_not_accredited() {
         let staked = Staked::new(1, MINIMUM - 1);
 
-        assert!(committee_update(&state_with([staked]), &live(&[], 1, 1)).is_none());
+        assert!(committee_update(&state_with([staked]), &live(&[], 1)).is_none());
     }
 
     #[test]
@@ -293,7 +290,7 @@ mod tests {
         let staked = Staked::new(2, MINIMUM);
 
         assert_eq!(
-            committee_update(&state_with([staked]), &live(&[], 1, 1)),
+            committee_update(&state_with([staked]), &live(&[], 1)),
             Some(vec![staked.key])
         );
     }
@@ -302,7 +299,7 @@ mod tests {
     fn already_matching_live_committee_is_not_re_submitted() {
         let staked = Staked::new(3, MINIMUM);
 
-        assert!(committee_update(&state_with([staked]), &live(&[staked.key], 1, 1)).is_none());
+        assert!(committee_update(&state_with([staked]), &live(&[staked.key], 1)).is_none());
     }
 
     #[test]
@@ -316,26 +313,10 @@ mod tests {
         keys.sort_unstable();
 
         assert_eq!(
-            committee_update(&state_with(committee), &live(&keys, 1, 2)),
+            committee_update(&state_with(committee), &live(&keys, 1)),
             Some(keys.to_vec())
         );
-        assert!(committee_update(&state_with(committee), &live(&keys, 2, 2)).is_none());
-    }
-
-    #[test]
-    fn matching_keys_at_a_stale_transfer_threshold_are_re_submitted() {
-        let committee = [
-            Staked::new(1, MINIMUM),
-            Staked::new(2, MINIMUM),
-            Staked::new(3, MINIMUM),
-        ];
-        let mut keys = committee.map(|staked| staked.key);
-        keys.sort_unstable();
-
-        assert_eq!(
-            committee_update(&state_with(committee), &live(&keys, 2, 1)),
-            Some(keys.to_vec())
-        );
+        assert!(committee_update(&state_with(committee), &live(&keys, 2)).is_none());
     }
 
     #[test]
@@ -346,7 +327,7 @@ mod tests {
         assert_eq!(
             committee_update(
                 &state_with([exiting, staying]),
-                &live(&[exiting.key, staying.key], 1, 1)
+                &live(&[exiting.key, staying.key], 1)
             ),
             Some(vec![staying.key])
         );
@@ -360,7 +341,7 @@ mod tests {
         assert_eq!(
             committee_update(
                 &state_with([discounted, staying]),
-                &live(&[discounted.key, staying.key], 1, 1),
+                &live(&[discounted.key, staying.key], 1),
             ),
             Some(vec![staying.key])
         );
@@ -371,7 +352,7 @@ mod tests {
         let exiting = Staked::new(4, MINIMUM).pending(MINIMUM);
 
         assert_eq!(
-            committee_update(&state_with([exiting]), &live(&[exiting.key], 1, 1)),
+            committee_update(&state_with([exiting]), &live(&[exiting.key], 1)),
             None
         );
     }
@@ -387,10 +368,10 @@ mod tests {
         keys.sort_unstable();
         let state = state_with(committee);
 
-        assert!(committee_update(&state, &live(&keys, 2, 2)).is_none());
+        assert!(committee_update(&state, &live(&keys, 2)).is_none());
         let stale_timeframe = LiveChannel {
             posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME + 1,
-            ..live(&keys, 2, 2)
+            ..live(&keys, 2)
         };
         assert_eq!(
             committee_update(&state, &stale_timeframe),
@@ -398,7 +379,7 @@ mod tests {
         );
         let stale_timeout = LiveChannel {
             posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT + 1,
-            ..live(&keys, 2, 2)
+            ..live(&keys, 2)
         };
         assert_eq!(
             committee_update(&state, &stale_timeout),
@@ -412,8 +393,8 @@ mod tests {
         // asked for once and forgotten.
         let state = state_with([Staked::new(8, MINIMUM)]);
 
-        assert!(committee_update(&state, &live(&[], 1, 1)).is_some());
-        assert!(committee_update(&state, &live(&[], 1, 1)).is_some());
+        assert!(committee_update(&state, &live(&[], 1)).is_some());
+        assert!(committee_update(&state, &live(&[], 1)).is_some());
     }
 
     #[test]
@@ -422,7 +403,7 @@ mod tests {
         let low = Staked::new(1, MINIMUM);
 
         assert_eq!(
-            committee_update(&state_with([high, low]), &live(&[], 1, 1)),
+            committee_update(&state_with([high, low]), &live(&[], 1)),
             Some(vec![low.key, high.key])
         );
     }

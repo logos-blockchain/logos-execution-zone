@@ -47,7 +47,6 @@ rand.workspace = true
 borsh.workspace = true
 hex.workspace = true
 url.workspace = true
-num-bigint.workspace = true
 futures.workspace = true
 libp2p.workspace = true
 thiserror.workspace = true

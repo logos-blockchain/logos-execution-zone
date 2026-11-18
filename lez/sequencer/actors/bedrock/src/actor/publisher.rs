@@ -1,11 +1,6 @@
-use std::{
-    collections::{BTreeSet, HashMap, HashSet},
-    num::NonZero,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::BTreeSet, num::NonZero, sync::Arc, time::Duration};
 
-use anyhow::{Context as _, anyhow};
+use anyhow::Context as _;
 use chain_state::timeout_node::TimeoutNode;
 use common::block::Block;
 use kameo::actor::ActorRef;
@@ -14,13 +9,16 @@ use logos_blockchain_zone_sdk::{
     adapter::{Node as _, NodeHttpClient},
     core::{
         mantle::{
-            Note, Op, OpProof, SignedOps,
+            Op, OpProof, SignedOps,
             channel::{SlotTimeframe, SlotTimeout},
             gas::GasCost,
-            ledger::{Inputs, Outputs},
-            ops::channel::{
-                VerifiedChannelKeys, channel_transfer::ChannelTransferOp, config::ChannelConfigOp,
-                inscribe::InscriptionOp,
+            ops::{
+                ChannelInscribeProof,
+                channel::{
+                    VerifiedChannelKeys,
+                    config::ChannelConfigOp,
+                    inscribe::{InscriptionOp, MiniBlocks},
+                },
             },
             traits::Hashable as _,
             transactions::{MantleTxBuilder, OpProofs},
@@ -30,7 +28,7 @@ use logos_blockchain_zone_sdk::{
     node_types::{Inscription, WalletFundRequestBody, WalletFundResponseBody},
     sequencer::{
         ChannelUpdate as SdkChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FinalizedTx,
-        FundingConfig, InscriptionInfo, SequencerConfig, WithdrawInputs, ZoneSequencer,
+        FundingConfig, InscriptionInfo, SequencerConfig, ZoneSequencer,
     },
 };
 use sequencer_actors_common::SendErrorExt as _;
@@ -42,15 +40,14 @@ use crate::{
     actor::{
         block_from_inscription,
         finality::{self, ConfigIndex},
-        released_notes, verified_keys,
+        verified_keys,
     },
     error::Error,
     protocol::{
         ChannelEntry, ChannelEvent, ChannelEventKind, ChannelId, ChannelParams, ChannelSeq,
-        ChannelUpdate, DeserializeOp as _, Ed25519Key, Ed25519PublicKey, IndexedSignature,
-        IndexedSignatures, LiveChannelConfig, MsgId, NoteId, Ops, PreparedConfig, PreparedPin,
-        PublishOutcome, PublisherEvent, SequencerCheckpoint, Slot, ViewChange, WithdrawArg,
-        ZkPublicKey,
+        ChannelUpdate, DeserializeOp as _, Ed25519Key, Ed25519PublicKey, IndexedSignatures,
+        LiveChannelConfig, MsgId, Ops, PreparedConfig, PublishOutcome, PublisherEvent,
+        SequencerCheckpoint, Slot, ViewChange, ZkPublicKey,
     },
 };
 
@@ -124,8 +121,6 @@ impl Publisher {
             backfill_batch_slots: backfill_batch_slots.get(),
             ..SequencerConfig::new(FundingConfig {
                 funding_pk,
-                // Withdraw change goes back to the funding key.
-                change_pk: None,
                 max_tx_fee: GasCost::new(logos_blockchain_zone_sdk::core::mantle::Value::MAX),
                 priority_fee_percent,
             })
@@ -175,7 +170,8 @@ impl Publisher {
                 checkpoint,
                 channel_update,
                 finalized,
-                deposits: observed_deposits,
+                // A plain channel deposit stays under its holder's key and mints nothing.
+                deposits: _,
             } => {
                 let config_keys = finalized.iter().flat_map(|item| {
                     item.ops.iter().filter_map(|op| {
@@ -190,11 +186,6 @@ impl Publisher {
                     })
                 });
                 config_index.extend_final(config_keys, checkpoint.lib_slot.into_inner());
-                // Apart from the update: they carry no checkpoint and move no channel sequence.
-                if !observed_deposits.is_empty() {
-                    self.publish("deposits", PublisherEvent::Deposits(observed_deposits))
-                        .await?;
-                }
                 self.on_blocks_processed(checkpoint, channel_update, finalized)
                     .await?;
                 self.publish_live_config().await
@@ -254,8 +245,6 @@ impl Publisher {
         };
 
         let mut finalized_entries = Vec::new();
-        let mut deposits = Vec::new();
-        let mut withdrawals = Vec::new();
         let mut undecodable = Vec::new();
         let mut finalized_signers = Vec::new();
         for (slot, op) in finalized
@@ -281,13 +270,9 @@ impl Publisher {
                     }
                     finalized_entries.push(entry);
                 }
-                FinalizedOp::Deposit(deposit) => deposits.push(deposit),
-                FinalizedOp::Withdraw(withdraw) => {
-                    withdrawals.push(withdraw);
-                }
-                // Neither carries a block or an
-                // author the LEZ chain models.
-                FinalizedOp::Config(_) | FinalizedOp::ChannelTransfer(_) => {}
+                // None carries a block or an author the LEZ chain models; deposits and
+                // withdrawals move their holders' own notes.
+                FinalizedOp::Deposit(_) | FinalizedOp::Withdraw(_) | FinalizedOp::Config(_) => {}
             }
         }
 
@@ -299,8 +284,6 @@ impl Publisher {
                 seq,
                 view,
                 finalized: finalized_entries,
-                deposits,
-                withdrawals,
                 undecodable,
                 finalized_signers,
             })),
@@ -355,7 +338,6 @@ impl Publisher {
         keys: Vec<Ed25519PublicKey>,
         channel_params: ChannelParams,
         configuration_threshold: NonZero<u16>,
-        transfer_threshold: NonZero<u16>,
     ) -> Result<PublishOutcome> {
         let own_key = self.channel_signing_key.public_key();
         if keys.first() != Some(&own_key) {
@@ -371,7 +353,6 @@ impl Publisher {
             keys,
             &channel_params,
             configuration_threshold,
-            transfer_threshold,
         )?;
 
         let inscription = block_inscription(&self.node, &genesis).await?;
@@ -381,6 +362,7 @@ impl Publisher {
             inscription,
             parent: MsgId::root(),
             signer: own_key.into_unverified(),
+            mini_blocks: MiniBlocks::default(),
         };
         let msg_id = inscribe_op.id();
 
@@ -398,7 +380,7 @@ impl Publisher {
 
         let mut op_proofs = OpProofs::from([OpProof::ChannelMultiSigProof(genesis_config_proof())]);
         op_proofs
-            .try_push(OpProof::Ed25519Sig(signature))
+            .try_push(inscribe_proof(signature))
             .map_err(|err| Error::TooManyOperationProofs(err.into()))?;
         if let Some(transfer_proof) = funded.transfer_proof {
             op_proofs
@@ -418,7 +400,6 @@ impl Publisher {
     pub async fn publish_block(
         &mut self,
         block: Block,
-        withdrawals: Vec<WithdrawArg>,
         parent: Option<MsgId>,
         expected_seq: Option<ChannelSeq>,
     ) -> Result<PublishOutcome> {
@@ -427,36 +408,24 @@ impl Publisher {
         let data_byte_size = inscription.len();
 
         let published = if let Some(parent) = parent {
-            if !withdrawals.is_empty() {
-                return Err(Error::CannotPublishBlockOnParentWithWithdrawals);
-            }
-
             let inscribe_op = self.inscription_op(inscription, parent);
             let msg_id = inscribe_op.id();
             let funded = self.fund_ops([Op::ChannelInscribe(inscribe_op)]).await?;
 
             self.sign_and_submit(funded.funded_tx, msg_id, parent, funded.transfer_proof)
         } else {
-            let (result, checkpoint) = if withdrawals.is_empty() {
-                self.sequencer
-                    .handle()
-                    .publish(inscription)
-                    .await
-                    .map_err(|err| Error::SubmitSignedTransactionFailed(err.into()))?
-            } else {
-                self.sequencer
-                    .handle()
-                    .publish_atomic_withdraw(inscription, withdrawals, WithdrawInputs::Auto)
-                    .await
-                    .map_err(|err| Error::PublishAtomicWithdrawFailed(err.into()))?
-            };
+            let (result, checkpoint) = self
+                .sequencer
+                .handle()
+                .publish(inscription)
+                .await
+                .map_err(|err| Error::SubmitSignedTransactionFailed(err.into()))?;
 
             Ok(PublishOutcome {
                 this_msg: result.tx.inscription().this_msg,
                 parent: result.tx.inscription().parent_msg,
                 checkpoint,
                 seq: self.next_seq(),
-                released_notes: released_notes(&result.tx),
             })
         };
         if published.is_ok() {
@@ -469,85 +438,12 @@ impl Publisher {
         published
     }
 
-    pub async fn prepare_pin(
-        &mut self,
-        block: Block,
-        parent: MsgId,
-        notes: &[NoteId],
-        expected_seq: Option<ChannelSeq>,
-    ) -> Result<PreparedPin> {
-        self.check_seq(expected_seq)?;
-        let inscription = block_inscription(&self.node, &block).await?;
-        let block_size = inscription.len();
-        let inscribe_op = self.inscription_op(inscription, parent);
-        let msg_id = inscribe_op.id();
-        let transfer = self.deposit_pin_transfer(notes)?;
-        let funded = self
-            .fund_ops([
-                Op::ChannelInscribe(inscribe_op),
-                Op::ChannelTransfer(transfer),
-            ])
-            .await?;
-
-        Ok(PreparedPin {
-            tx: funded.funded_tx,
-            msg_id,
-            parent,
-            fee_proof: funded.transfer_proof,
-            block_id: block.header.block_id,
-            block_size,
-        })
-    }
-
-    pub fn publish_pin(
-        &mut self,
-        prepared: PreparedPin,
-        signatures: Vec<IndexedSignature>,
-        expected_seq: Option<ChannelSeq>,
-    ) -> Result<PublishOutcome> {
-        self.check_seq(expected_seq)?;
-        let PreparedPin {
-            tx,
-            msg_id,
-            parent,
-            fee_proof,
-            block_id,
-            block_size,
-        } = prepared;
-        let signatures = IndexedSignatures::try_from_iter(signatures.into_iter().map(Into::into))
-            .map_err(|err| Error::ChannelMultiSigProofAssemblyFailed(err.into()))?;
-        let transfer_proof = OpProof::ChannelMultiSigProof(ChannelMultiSigProof::new(signatures));
-
-        let published = self.sign_and_submit(
-            tx,
-            msg_id,
-            parent,
-            std::iter::once(transfer_proof).chain(fee_proof),
-        );
-        if published.is_ok() {
-            info!(block_id, size_bytes = block_size, "Published block");
-        }
-        published
-    }
-
-    /// The channel's notes on the current L1 branch, finalized or not.
-    pub fn channel_notes(&self) -> HashSet<NoteId> {
-        let wallet = self.sequencer.channel_wallet();
-        wallet
-            .finalized
-            .into_iter()
-            .chain(wallet.unfinalized)
-            .map(|note| note.note_id)
-            .collect()
-    }
-
     pub async fn prepare_config(
         &mut self,
         keys: Vec<Ed25519PublicKey>,
         posting_timeframe: u32,
         posting_timeout: u32,
         configuration_threshold: NonZero<u16>,
-        transfer_threshold: NonZero<u16>,
     ) -> Result<PreparedConfig> {
         let keys = VerifiedChannelKeys::try_from(keys)
             .map_err(|err| Error::InvalidChannelKeyList(err.into()))?;
@@ -560,7 +456,6 @@ impl Publisher {
                 SlotTimeframe::from(posting_timeframe),
                 SlotTimeout::from(posting_timeout),
                 configuration_threshold.get(),
-                transfer_threshold.get(),
             )
             .await?;
         let accredited_keys = verified_keys(&prepared.accredited_keys)?;
@@ -603,7 +498,6 @@ impl Publisher {
             parent: result.tx.inscription().parent_msg,
             checkpoint,
             seq: self.next_seq(),
-            released_notes: released_notes(&result.tx),
         })
     }
 
@@ -627,7 +521,6 @@ impl Publisher {
             parent,
             checkpoint,
             seq: self.next_seq(),
-            released_notes: released_notes(&result.tx),
         })
     }
 
@@ -652,6 +545,7 @@ impl Publisher {
             inscription,
             parent,
             signer: self.channel_signing_key.public_key().into_unverified(),
+            mini_blocks: MiniBlocks::default(),
         }
     }
 
@@ -667,7 +561,7 @@ impl Publisher {
         let signature = self
             .channel_signing_key
             .sign_payload(tx.hash().as_signing_bytes().as_ref());
-        let mut op_proofs = OpProofs::from([OpProof::Ed25519Sig(signature)]);
+        let mut op_proofs = OpProofs::from([inscribe_proof(signature)]);
         for proof in proofs {
             op_proofs
                 .try_push(proof)
@@ -676,35 +570,6 @@ impl Publisher {
 
         let tx = SignedOps::from_parts(tx, op_proofs)?;
         self.submit_tx(tx, msg_id, parent)
-    }
-
-    /// A transfer spending each of `notes` and re-creating it unchanged, so the
-    /// tx carrying it is valid only on a branch holding all of them.
-    fn deposit_pin_transfer(&self, notes: &[NoteId]) -> Result<ChannelTransferOp> {
-        let wallet = self.sequencer.channel_wallet();
-        let channel_notes: HashMap<NoteId, Note> = wallet
-            .finalized
-            .iter()
-            .chain(&wallet.unfinalized)
-            .map(|note| (note.note_id, Note::new(note.value, note.pk)))
-            .collect();
-        let outputs = notes
-            .iter()
-            .map(|id| {
-                channel_notes
-                    .get(id)
-                    .copied()
-                    .ok_or(Error::DepositNoteNotOnBranch(*id))
-            })
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok(ChannelTransferOp {
-            channel_id: self.channel_id,
-            inputs: Inputs::try_new(notes.to_vec())
-                .map_err(|err| Error::DepositPinAssemblyFailed(anyhow!("{err:?}")))?,
-            outputs: Outputs::try_new(outputs)
-                .map_err(|err| Error::DepositPinAssemblyFailed(anyhow!("{err:?}")))?,
-        })
     }
 
     /// Bumps the channel sequence and hands back the new one.
@@ -751,7 +616,6 @@ pub(super) fn genesis_config_op(
     keys: VerifiedChannelKeys,
     channel_params: &ChannelParams,
     configuration_threshold: NonZero<u16>,
-    transfer_threshold: NonZero<u16>,
 ) -> Result<ChannelConfigOp> {
     ChannelConfigOp::new(
         channel_id,
@@ -761,7 +625,6 @@ pub(super) fn genesis_config_op(
         SlotTimeframe::from(channel_params.posting_timeframe),
         SlotTimeout::from(channel_params.posting_timeout),
         configuration_threshold,
-        transfer_threshold,
     )
     .map_err(|err| Error::InvalidChannelConfig(err.into()))
 }
@@ -771,6 +634,13 @@ pub(super) fn genesis_config_op(
 /// whole creation tx over a proof holding any signature.
 pub(super) const fn genesis_config_proof() -> ChannelMultiSigProof {
     ChannelMultiSigProof::empty()
+}
+
+/// The proof of an inscription that moves no channel notes.
+const fn inscribe_proof(
+    signature: logos_blockchain_zone_sdk::key_management_system_service::keys::Ed25519Signature,
+) -> OpProof {
+    OpProof::ChannelInscribe(ChannelInscribeProof::without_steps(signature))
 }
 
 /// `data` as an inscription, if it fits what an operation may carry in the era
@@ -838,8 +708,6 @@ fn channel_entry(inscription: &InscriptionInfo, final_slot: Option<u64>) -> Chan
 pub(super) fn channel_entries(tx: &ChannelUpdateTx, channel_id: ChannelId) -> Vec<ChannelEntry> {
     match tx {
         ChannelUpdateTx::Inscription(info) => vec![channel_entry(info, None)],
-        ChannelUpdateTx::AtomicWithdraw(bundle) => vec![channel_entry(&bundle.inscription, None)],
-        ChannelUpdateTx::PinDeposit(bundle) => vec![channel_entry(&bundle.inscription, None)],
         ChannelUpdateTx::Config(_) => Vec::new(),
         ChannelUpdateTx::Custom(signed_tx) => {
             logos_blockchain_zone_sdk::sequencer::channel_inscriptions(signed_tx, channel_id)

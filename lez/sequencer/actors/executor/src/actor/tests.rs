@@ -347,7 +347,7 @@ pub(super) async fn executor_args<S: StorageActorTrait>(
     .expect("Failed to load or create channel signing key");
 
     let slasher_ref = spawn_slasher(&config, &storage_ref, &channel_signing_key).await;
-    let channel_signer_ref = spawn_channel_signer(&config, &channel_signing_key);
+    let channel_signer_ref = spawn_channel_signer(&channel_signing_key);
 
     Args {
         config,
@@ -395,14 +395,9 @@ async fn spawn_slasher<S: StorageActorTrait>(
 
 /// A channel-signing actor signing with `channel_signing_key`.
 fn spawn_channel_signer(
-    config: &SequencerConfig,
     channel_signing_key: &sequencer_bedrock_actor::protocol::Ed25519Key,
 ) -> ActorRef<ChannelSigningActor> {
-    ChannelSigningActor::spawn(ChannelSigningActor::new(
-        channel_signing_key.clone(),
-        config.bedrock_config.channel_id,
-        sequencer_core::inscribed_block_deposits,
-    ))
+    ChannelSigningActor::spawn(ChannelSigningActor::new(channel_signing_key.clone()))
 }
 
 /// Initializes the executor state over `store`, against a Bedrock serving `channel`.
@@ -418,7 +413,7 @@ pub(super) async fn initialize_state(
     let channel = channel.clone();
     let storage_ref = MockStorageActor::spawn(store.mock());
     let slasher_ref = spawn_slasher(&config, &storage_ref, &channel_signing_key).await;
-    let channel_signer_ref = spawn_channel_signer(&config, &channel_signing_key);
+    let channel_signer_ref = spawn_channel_signer(&channel_signing_key);
 
     Box::pin(State::initialize(Args {
         config,
@@ -534,12 +529,10 @@ async fn a_publish_refused_as_stale_returns_its_transactions_to_the_mempool() ->
                             pending_txs: Vec::new(),
                             lib: HeaderId::from([0; 32]),
                             lib_slot: Slot::from(0),
-                            channel_notes: Vec::new(),
                             finalized_config: MsgId::root(),
                             funding: Vec::new(),
                         },
                         seq: ChannelSeq::mocked(8),
-                        released_notes: Vec::new(),
                     })
                 });
             mock_bedrock

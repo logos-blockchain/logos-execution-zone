@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{BTreeSet, HashMap},
     num::NonZero,
     time::Duration,
 };
@@ -22,8 +22,7 @@ use logos_blockchain_zone_sdk::{
     CommonHttpClient,
     adapter::{Node as _, NodeHttpClient},
     common_http_client::BasicAuthCredentials,
-    core::mantle::NoteId,
-    sequencer::{InscriptionInfo, PendingTx},
+    sequencer::InscriptionInfo,
 };
 use sequencer_storage_actor::{
     StorageActorTrait,
@@ -41,11 +40,10 @@ use crate::{
     protocol::{
         AccreditedKeys, ChangeChannelConfig, ChannelEvent, ChannelId, ChannelReadStream,
         ChannelSeq, CheckChannelExists, CheckIsOurTurn, CreateChannel, DeserializeOp as _,
-        Ed25519PublicKey, FilterFinallyAbsent, FollowChannel, GetAccreditedKeys, GetChannelNotes,
+        Ed25519PublicKey, FilterFinallyAbsent, FollowChannel, GetAccreditedKeys,
         GetChannelTipMessageId, GetChannelTipSlot, HeaderId, InitializeChannelPublisher,
-        LiveChannelConfig, MsgId, PrepareConfig, PreparePin, PreparedConfig, PreparedPin,
-        PublishBlock, PublishOutcome, PublishPin, ReadChannel, SequencerCheckpoint, SequencerKey,
-        Slot, UnverifiedEd25519PublicKey,
+        LiveChannelConfig, MsgId, PrepareConfig, PreparedConfig, PublishBlock, PublishOutcome,
+        ReadChannel, SequencerCheckpoint, SequencerKey, Slot, UnverifiedEd25519PublicKey,
     },
 };
 
@@ -81,10 +79,6 @@ pub struct Args<S: StorageActorTrait> {
 /// - If the channel is followed with [`FollowChannel`]:
 ///   - `channel/<channel_id>/finalized_block`: for
 ///     [`ChannelEventKind::FinalizedBlock`](crate::protocol::ChannelEventKind::FinalizedBlock).
-///   - `channel/<channel_id>/finalized_deposit`: for
-///     [`ChannelEventKind::FinalizedDeposit`](crate::protocol::ChannelEventKind::FinalizedDeposit).
-///   - `channel/<channel_id>/finalized_withdrawal`: for
-///     [`ChannelEventKind::FinalizedWithdrawal`](crate::protocol::ChannelEventKind::FinalizedWithdrawal).
 ///   - `channel/<channel_id>/finalized_up_to`: for
 ///     [`ChannelEventKind::FinalizedUpTo`](crate::protocol::ChannelEventKind::FinalizedUpTo).
 /// - If publisher was initialized with [`InitializeChannelPublisher`]:
@@ -94,8 +88,6 @@ pub struct Args<S: StorageActorTrait> {
 ///     [`PublisherEvent::Turn`](crate::protocol::PublisherEvent::Turn)
 ///   - `channel/<channel_id>/publisher/config`: for
 ///     [`PublisherEvent::Config`](crate::protocol::PublisherEvent::Config)
-///   - `channel/<channel_id>/publisher/deposits`: for
-///     [`PublisherEvent::Deposits`](crate::protocol::PublisherEvent::Deposits)
 pub struct BedrockActor<S: StorageActorTrait> {
     channel_id: ChannelId,
     backfill_batch_slots: NonZero<u64>,
@@ -317,20 +309,13 @@ impl<S: StorageActorTrait> Message<CreateChannel> for BedrockActor<S> {
             keys,
             channel_params,
             configuration_threshold,
-            transfer_threshold,
         }: CreateChannel,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.assert_channel_id(channel_id);
 
         self.publisher()?
-            .create_channel(
-                genesis,
-                keys,
-                channel_params,
-                configuration_threshold,
-                transfer_threshold,
-            )
+            .create_channel(genesis, keys, channel_params, configuration_threshold)
             .await
     }
 }
@@ -343,7 +328,6 @@ impl<S: StorageActorTrait> Message<PublishBlock> for BedrockActor<S> {
         PublishBlock {
             channel_id,
             block,
-            withdrawals,
             parent,
             expected_seq,
         }: PublishBlock,
@@ -352,50 +336,8 @@ impl<S: StorageActorTrait> Message<PublishBlock> for BedrockActor<S> {
         self.assert_channel_id(channel_id);
 
         self.publisher()?
-            .publish_block(block, withdrawals, parent, expected_seq)
+            .publish_block(block, parent, expected_seq)
             .await
-    }
-}
-
-impl<S: StorageActorTrait> Message<PreparePin> for BedrockActor<S> {
-    type Reply = Result<PreparedPin>;
-
-    async fn handle(
-        &mut self,
-        PreparePin {
-            channel_id,
-            block,
-            parent,
-            notes,
-            expected_seq,
-        }: PreparePin,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.assert_channel_id(channel_id);
-
-        self.publisher()?
-            .prepare_pin(block, parent, &notes, expected_seq)
-            .await
-    }
-}
-
-impl<S: StorageActorTrait> Message<PublishPin> for BedrockActor<S> {
-    type Reply = Result<PublishOutcome>;
-
-    async fn handle(
-        &mut self,
-        PublishPin {
-            channel_id,
-            prepared,
-            signatures,
-            expected_seq,
-        }: PublishPin,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.assert_channel_id(channel_id);
-
-        self.publisher()?
-            .publish_pin(prepared, signatures, expected_seq)
     }
 }
 
@@ -410,7 +352,6 @@ impl<S: StorageActorTrait> Message<PrepareConfig> for BedrockActor<S> {
             posting_timeframe,
             posting_timeout,
             configuration_threshold,
-            transfer_threshold,
         }: PrepareConfig,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
@@ -422,7 +363,6 @@ impl<S: StorageActorTrait> Message<PrepareConfig> for BedrockActor<S> {
                 posting_timeframe,
                 posting_timeout,
                 configuration_threshold,
-                transfer_threshold,
             )
             .await
     }
@@ -503,20 +443,6 @@ impl<S: StorageActorTrait> Message<GetAccreditedKeys> for BedrockActor<S> {
                 })
             })
             .transpose()
-    }
-}
-
-impl<S: StorageActorTrait> Message<GetChannelNotes> for BedrockActor<S> {
-    type Reply = Result<HashSet<NoteId>>;
-
-    async fn handle(
-        &mut self,
-        GetChannelNotes { channel_id }: GetChannelNotes,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.assert_channel_id(channel_id);
-
-        Ok(self.publisher()?.channel_notes())
     }
 }
 
@@ -759,7 +685,6 @@ impl TryFrom<&logos_blockchain_zone_sdk::node_types::ChannelState> for LiveChann
             keys: verified_keys(&state.accredited_keys)?,
             config_tip: state.config_tip_hash,
             required_signatures: state.configuration_threshold,
-            transfer_threshold: state.transfer_threshold,
             posting_timeframe: state.posting_timeframe.clone().into(),
             posting_timeout: state.posting_timeout.clone().into(),
         })
@@ -787,19 +712,6 @@ fn block_from_inscription(inscription: &InscriptionInfo) -> Option<Block> {
             warn!(error = ?err, "Failed to deserialize block from inscription");
         })
         .ok()
-}
-
-/// Channel notes the withdraws bundled with a published tx release; empty for a
-/// plain inscription. See [`PublishOutcome::released_notes`].
-fn released_notes(tx: &PendingTx) -> Vec<NoteId> {
-    match tx {
-        PendingTx::Inscription(_) | PendingTx::PinDeposit(_) => Vec::new(),
-        PendingTx::AtomicWithdraw(bundle) => bundle
-            .withdraws
-            .iter()
-            .flat_map(|withdraw| withdraw.op.inputs.iter().copied())
-            .collect(),
-    }
 }
 
 fn verified_keys(keys: &[UnverifiedEd25519PublicKey]) -> Result<Vec<Ed25519PublicKey>> {

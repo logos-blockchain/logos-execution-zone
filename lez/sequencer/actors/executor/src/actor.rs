@@ -906,22 +906,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEvent> for Execu
                     })
                     .await?;
             }
-            ChannelEventKind::FinalizedDeposit(deposit) => match &self.state {
-                State::Error(details) => panic!("Actor has encountered an error state: {details}"),
-                State::Bootstrapping(bootstrapping) => {
-                    bootstrapping.on_finalized_deposit(&deposit).await?;
-                }
-                // Online state listens for Publisher events
-                State::Online(_) => {}
-            },
-            ChannelEventKind::FinalizedWithdrawal(withdrawal) => match &self.state {
-                State::Error(details) => panic!("Actor has encountered an error state: {details}"),
-                State::Bootstrapping(bootstrapping) => {
-                    bootstrapping.on_finalized_withdrawal(&withdrawal).await?;
-                }
-                // Online state listens for Publisher events
-                State::Online(_) => {}
-            },
             ChannelEventKind::Publisher(publisher_event) => match &mut self.state {
                 State::Error(details) => panic!("Actor has encountered an error state: {details}"),
                 State::Bootstrapping(_) => {
@@ -947,9 +931,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEvent> for Execu
                             .sequencer_mut()
                             .on_channel_config_update(live_channel_config)
                             .await;
-                    }
-                    PublisherEvent::Deposits(deposits) => {
-                        online.sequencer_mut().on_observed_deposits(deposits).await;
                     }
                 },
             },

@@ -8,17 +8,11 @@ use common::{
 use kameo::actor::ActorRef;
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
-    protocol::{
-        BlockData, DepositInfo, Ed25519Key, FinalizedBlock, FinalizedUpTo, L1Position, MsgId, Slot,
-        WithdrawInfo,
-    },
+    protocol::{BlockData, Ed25519Key, FinalizedBlock, FinalizedUpTo, L1Position, MsgId, Slot},
 };
 use sequencer_core::{config::SequencerConfig, faults, release_finality};
 use sequencer_slasher_actor::protocol::{Report, ReportedOffence};
-use sequencer_storage_actor::{
-    StorageActorTrait,
-    protocol::{AtomicUpdate, ZoneAnchorRecord},
-};
+use sequencer_storage_actor::{StorageActorTrait, protocol::ZoneAnchorRecord};
 use tracing::warn;
 
 use crate::{
@@ -138,34 +132,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
                 offences: vec![offence],
             })
             .await?;
-        Ok(())
-    }
-
-    /// Records a finalized deposit read alongside the finalized blocks.
-    pub async fn on_finalized_deposit(&self, deposit: &DepositInfo) -> Result<()> {
-        let outcome = self
-            .actors
-            .storage_ref
-            .ask(AtomicUpdate {
-                new_deposit_events: vec![sequencer_core::pending_deposit_event_record(deposit)],
-                ..sequencer_core::chain_update(&self.chain)
-            })
-            .await?;
-        sequencer_core::log_recorded_deposits(&outcome);
-        Ok(())
-    }
-
-    /// Reconciles a finalized withdrawal read alongside the finalized blocks.
-    pub async fn on_finalized_withdrawal(&self, withdrawal: &WithdrawInfo) -> Result<()> {
-        let outcome = self
-            .actors
-            .storage_ref
-            .ask(AtomicUpdate {
-                consumed_withdrawals: sequencer_core::released_note_keys(withdrawal).collect(),
-                ..sequencer_core::chain_update(&self.chain)
-            })
-            .await?;
-        sequencer_core::log_unmatched_withdrawals(&outcome);
         Ok(())
     }
 
