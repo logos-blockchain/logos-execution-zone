@@ -480,17 +480,21 @@ mod tests {
 
     #[test]
     fn a_digest_form_over_the_block_cap_is_refused_as_too_large_for_a_block() {
-        let tx = private_transaction(vec![7; 32]);
-        let inscribed_size = u64::try_from(borsh::to_vec(&tx.digested()).unwrap().len()).unwrap();
+        let announcement = Announcement {
+            transaction: private_transaction(vec![7; 32]).digested(),
+            locator: common::test_utils::placeholder_locator(),
+        };
+        let inscribed_size = announcement.transaction.charged_bytes().unwrap();
         let max_inscribed_size = inscribed_size.checked_sub(1).unwrap();
         let max_block_size = max_inscribed_size.checked_add(BLOCK_OVERHEAD).unwrap();
 
-        let evaluation = evaluate_transaction(&borsh::to_vec(&tx).unwrap(), max_block_size);
+        let evaluation =
+            evaluate_announcement(&borsh::to_vec(&announcement).unwrap(), max_block_size);
 
         let expected =
             format!("transaction too large for a block: {inscribed_size} > {max_inscribed_size}");
         assert!(
-            matches!(&evaluation, TxEvaluation::Reject(reason) if *reason == expected),
+            matches!(&evaluation, AnnouncementEvaluation::Reject(reason) if *reason == expected),
             "{evaluation:?}"
         );
     }
