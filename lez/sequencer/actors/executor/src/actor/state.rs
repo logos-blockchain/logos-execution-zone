@@ -330,13 +330,26 @@ fn check_startup_channel_params(
     params: &sequencer_core::config::ChannelParams,
     config: &SequencerConfig,
 ) -> Result<()> {
-    if !sequencer_core::config::keeps_turn(params, config.block_create_timeout) {
-        warn!(
+    let with_fallback = config
+        .block_create_timeout
+        .saturating_add(sequencer_core::config::PUBLIC_FALLBACK_MARGIN);
+    match (
+        sequencer_core::config::keeps_turn(params, config.block_create_timeout),
+        sequencer_core::config::keeps_turn(params, with_fallback),
+    ) {
+        (false, _) => warn!(
             block_create_timeout = ?config.block_create_timeout,
             posting_timeout_secs = params.posting_timeout,
             "block_create_timeout is not under posting_timeout: this node loses its turn between \
              its own blocks"
-        );
+        ),
+        (true, false) => warn!(
+            block_create_timeout = ?config.block_create_timeout,
+            posting_timeout_secs = params.posting_timeout,
+            "block_create_timeout leaves no time before posting_timeout for private blocks to \
+             gather their approvals: this node publishes public blocks only"
+        ),
+        (true, true) => {}
     }
     sequencer_core::config::check_max_block_size(params).map_err(Error::UnsupportedChannelParams)
 }

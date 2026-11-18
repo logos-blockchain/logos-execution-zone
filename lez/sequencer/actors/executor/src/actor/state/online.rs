@@ -22,8 +22,8 @@ use sequencer_bedrock_actor::{
 use sequencer_core::{
     ParkedCandidate, SequencerCore, TransactionOrigin, TurnOutcome,
     availability::{AvailabilityMessage, Candidate},
-    config::SequencerConfig,
-    proof_objects::Admission,
+    config::{PUBLIC_FALLBACK_MARGIN, SequencerConfig},
+    proof_objects::{Admission, ProofObjects},
 };
 use sequencer_gossip_actor::protocol::FetchProof;
 use sequencer_storage_actor::{StorageActorTrait, protocol::AtomicUpdate};
@@ -237,9 +237,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
     /// Produces this turn's block, or proposes a proof-bearing candidate to the committee and
     /// parks it until its approvals are in or the private cutoff passes.
     ///
-    /// The cutoff falls three quarters of the posting timeout, one slot a second, after the turn
-    /// last saw a post of this node's, so the public remainder still goes out before the turn
-    /// passes on. It bounds the seeding as well as the approvals.
+    /// The cutoff falls [`PUBLIC_FALLBACK_MARGIN`] before the posting timeout, one slot a second,
+    /// runs out since the turn last saw a post of this node's, so the public remainder still goes
+    /// out before the turn passes on. It bounds the seeding as well as the approvals.
     pub async fn produce(&mut self) -> anyhow::Result<Produced> {
         let posting_timeout = self
             .sequencer
@@ -249,10 +249,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             })
             .await
             .unwrap_or_default();
-        let budget = posting_timeout.saturating_sub(posting_timeout.div_ceil(4));
         let deadline = self
             .idle_since
-            .checked_add(Duration::from_secs(u64::from(budget)))
+            .checked_add(
+                Duration::from_secs(u64::from(posting_timeout))
+                    .saturating_sub(PUBLIC_FALLBACK_MARGIN),
+            )
             .unwrap_or(self.idle_since);
         let outcome = self
             .sequencer
@@ -447,6 +449,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                     own_sequencer_key,
                     &storage_ref,
                     &bedrock_pool_ref,
+                    &proof_objects,
                 )
                 .await?
             } else {
@@ -584,6 +587,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         own_sequencer_key: sequencer_stake_core::SequencerKey,
         storage_ref: &ActorRef<S>,
         bedrock_pool_ref: &ActorRef<ShardingPoolActor<B, ChannelId>>,
+        proof_objects: &ProofObjects,
     ) -> Result<Option<ChannelSeq>> {
         let mut pending_blocks = storage_ref
             .ask(sequencer_storage_actor::protocol::GetAllBlocks)
@@ -623,17 +627,29 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             own_sequencer_key,
             Vec::new(),
         )];
-        // A private block would need its committee's approvals, which no one can give a channel
-        // being created: it and the blocks after it are dropped with the stale store.
-        for block in descendants
-            .iter()
-            .take_while(|block| block.body.proofs().next().is_none())
-        {
+        // The final tier already holds the blocks up to its tip, private ones too, so they go out
+        // with their proofs seeded. Past it a private block would need its committee's approvals,
+        // which no one can give a channel being created: it and the blocks after it are dropped
+        // with the stale store.
+        let final_id = chain.final_tip().map(|tip| tip.block_id);
+        for block in descendants.iter().take_while(|block| {
+            final_id.is_some_and(|id| block.header.block_id <= id)
+                || block.body.proofs().next().is_none()
+        }) {
+            let mut locators = Vec::new();
+            for proof in block.body.proofs() {
+                locators.push(
+                    proof_objects
+                        .seed(proof)
+                        .await
+                        .map_err(|err| Error::SequencerStartFailed(err.into()))?,
+                );
+            }
             outcome = bedrock_pool_ref
                 .ask(sequencer_bedrock_actor::protocol::PublishBlock {
                     channel_id: config.bedrock_config.channel_id,
                     block: block.clone(),
-                    locators: Vec::new(),
+                    locators: locators.clone(),
                     withdrawals: Vec::new(),
                     parent: None,
                     expected_seq: None,
@@ -644,7 +660,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                 &outcome,
                 block,
                 own_sequencer_key,
-                Vec::new(),
+                locators,
             ));
         }
 

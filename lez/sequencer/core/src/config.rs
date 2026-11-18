@@ -48,6 +48,10 @@ const _: () = assert!(
 /// default deployment.
 pub const MAX_BEDROCK_TX_SIZE: u64 = 0x0020_0000;
 
+/// What a turn keeps, after a candidate's private cutoff, for its public remainder to be built
+/// and submitted before the posting timeout runs out.
+pub const PUBLIC_FALLBACK_MARGIN: Duration = Duration::from_secs(2);
+
 /// Bytes of transaction proofs a node keeps in memory.
 pub const PROOF_STORE_CAPACITY: usize = 256 * 1024 * 1024;
 
