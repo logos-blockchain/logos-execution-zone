@@ -3,8 +3,8 @@
 //! A node's CID is the canonical prefix and the SHA-256 of the bytes, which no real node computes;
 //! within one network every node agrees on it, which is what tests rely on. A dataset's tree is
 //! its one zero-padded block, so a zero-suffixed variant shares it, as on a real node. As on a
-//! real node, a dataset fetched or stored without advertising stays unserved until advertising is
-//! set, which a later upload does not do.
+//! real node, a dataset fetched or stored without advertising leaves its manifest and its tree
+//! unserved until advertising is set, which a later upload does not do.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -25,6 +25,7 @@ pub struct MemoryNetwork(Arc<Mutex<Vec<Arc<Mutex<Node>>>>>);
 struct Node {
     objects: HashMap<StorageCid, Vec<u8>>,
     unserved: HashSet<StorageCid>,
+    unserved_trees: HashSet<String>,
     online: bool,
     downloads: usize,
 }
@@ -61,10 +62,25 @@ impl MemoryNetwork {
             .iter()
             .find_map(|node| {
                 let node = node.lock().unwrap_or_else(PoisonError::into_inner);
-                (node.online && !node.unserved.contains(&cid))
-                    .then(|| node.objects.get(&cid).cloned())
-                    .flatten()
+                let bytes = node.objects.get(&cid)?;
+                (node.online
+                    && !node.unserved.contains(&cid)
+                    && !node.unserved_trees.contains(&tree(bytes)))
+                .then(|| bytes.clone())
             })
+    }
+}
+
+impl Node {
+    /// Starts or stops serving the dataset `cid` names, its manifest and its tree.
+    fn serve(&mut self, cid: StorageCid, bytes: &[u8], advertise: bool) {
+        if advertise {
+            self.unserved.remove(&cid);
+            self.unserved_trees.remove(&tree(bytes));
+        } else {
+            self.unserved.insert(cid);
+            self.unserved_trees.insert(tree(bytes));
+        }
     }
 }
 
@@ -113,7 +129,7 @@ impl MemoryStorage {
         }
         let bytes = self.network.find(cid).ok_or_else(not_found)?;
         let mut node = self.lock();
-        node.unserved.insert(cid);
+        node.serve(cid, &bytes, false);
         if keep {
             node.downloads = node.downloads.saturating_add(1);
             node.objects.insert(cid, bytes.clone());
@@ -127,21 +143,17 @@ impl Storage for MemoryStorage {
     async fn upload(&self, bytes: Vec<u8>, advertise: bool) -> Result<StorageCid, Error> {
         let cid = Self::cid_of(&bytes);
         let mut node = self.lock();
-        node.objects.insert(cid, bytes);
         if !advertise {
-            node.unserved.insert(cid);
+            node.serve(cid, &bytes, false);
         }
+        node.objects.insert(cid, bytes);
         Ok(cid)
     }
 
     async fn manifest(&self, cid: StorageCid) -> Result<Manifest, Error> {
         let bytes = self.object(cid, false, false)?;
-        let block = bytes
-            .iter()
-            .rposition(|byte| *byte != 0)
-            .map_or(&bytes[..0], |last| &bytes[..=last]);
         Ok(Manifest {
-            tree_cid: hex::encode(Sha256::digest(block)),
+            tree_cid: tree(&bytes),
             block_size: BLOCK_SIZE,
             dataset_size: u64::try_from(bytes.len()).expect("a dataset's length fits u64"),
             filename: None,
@@ -164,22 +176,36 @@ impl Storage for MemoryStorage {
 
     async fn delete(&self, cid: StorageCid) -> Result<(), Error> {
         let mut node = self.lock();
-        node.objects.remove(&cid);
-        node.unserved.remove(&cid);
+        if let Some(bytes) = node.objects.remove(&cid) {
+            node.serve(cid, &bytes, true);
+        }
         Ok(())
     }
 
     async fn set_advertise(&self, cid: StorageCid, advertise: bool) -> Result<(), Error> {
         let mut node = self.lock();
-        if advertise {
-            node.unserved.remove(&cid);
-        } else {
-            node.unserved.insert(cid);
-        }
+        let bytes = node
+            .objects
+            .get(&cid)
+            .cloned()
+            .ok_or_else(|| Error::Status {
+                status: reqwest::StatusCode::NOT_FOUND,
+                body: format!("{cid} not found"),
+            })?;
+        node.serve(cid, &bytes, advertise);
         Ok(())
     }
 
     async fn free_bytes(&self) -> Result<u64, Error> {
         Ok(u64::MAX)
     }
+}
+
+/// The tree of a dataset of one zero-padded block: its bytes without their trailing zeros.
+fn tree(bytes: &[u8]) -> String {
+    let block = bytes
+        .iter()
+        .rposition(|byte| *byte != 0)
+        .map_or(&bytes[..0], |last| &bytes[..=last]);
+    hex::encode(Sha256::digest(block))
 }
