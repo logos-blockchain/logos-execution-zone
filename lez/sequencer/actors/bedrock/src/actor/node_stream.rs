@@ -194,10 +194,7 @@ impl NodeStream {
         match msg {
             ZoneMessage::Block(zone_block) => {
                 let (block, locators) = match InscribedBlock::decode(&zone_block.data) {
-                    Ok(inscribed) => (
-                        BlockData::Block(inscribed.block),
-                        inscribed.locators.into_valid(),
-                    ),
+                    Ok(inscribed) => (BlockData::Block(inscribed.block), inscribed.locators),
                     Err(_) => (BlockData::Undecodable(zone_block.data.into()), Vec::new()),
                 };
 

@@ -236,36 +236,18 @@ impl DigestedBlock {
     }
 }
 
-/// What an inscription carries after its block: one Logos Storage manifest CID per private
-/// transaction, in transaction order. The block's hash does not cover them.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Locators {
-    Valid(Vec<StorageCid>),
-    /// A section of the wrong length, or a locator of another form. The block stands without it.
-    Malformed,
-}
-
-impl Locators {
-    /// The locators, none when malformed.
-    #[must_use]
-    pub fn into_valid(self) -> Vec<StorageCid> {
-        match self {
-            Self::Valid(locators) => locators,
-            Self::Malformed => Vec::new(),
-        }
-    }
-}
-
 /// A block as an inscription carries it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InscribedBlock {
     pub block: DigestedBlock,
-    pub locators: Locators,
+    /// One Logos Storage manifest CID per private transaction, in transaction order, which the
+    /// block's hash does not cover; none when the inscription's section of them is malformed.
+    pub locators: Vec<StorageCid>,
 }
 
 impl InscribedBlock {
     /// Reads the block before its locators, so a malformed locator section leaves the block
-    /// readable.
+    /// readable: a section of the wrong length, or a locator of another form.
     pub fn decode(mut bytes: &[u8]) -> std::io::Result<Self> {
         let block = DigestedBlock::deserialize(&mut bytes)?;
         let expected = block.body.proofs().count().checked_mul(STORAGE_CID_BYTES);
@@ -276,9 +258,9 @@ impl InscribedBlock {
                 .iter()
                 .map(|locator| StorageCid::try_from(locator.as_slice()))
                 .collect::<Result<_, _>>()
-                .map_or(Locators::Malformed, Locators::Valid)
+                .unwrap_or_default()
         } else {
-            Locators::Malformed
+            Vec::new()
         };
         Ok(Self { block, locators })
     }
@@ -391,7 +373,7 @@ mod tests {
     use super::TransactionReceipt;
     use crate::{
         HashType,
-        block::{HashableBlockData, HashableBlockDataWith, InscribedBlock, Locators, OwnHasher},
+        block::{HashableBlockData, HashableBlockDataWith, InscribedBlock, OwnHasher},
         storage_cid::{STORAGE_CID_PREFIX, StorageCid},
         test_utils,
         transaction::LeeTransaction,
@@ -538,7 +520,7 @@ mod tests {
 
         let decoded = InscribedBlock::decode(&inscription).unwrap();
         assert_eq!(decoded.block, block);
-        assert_eq!(decoded.locators, Locators::Valid(vec![locator()]));
+        assert_eq!(decoded.locators, vec![locator()]);
         assert!(decoded.block.body.proofs().eq([&digest]));
         assert!(inscription.len() < proof.len());
         let distinctive = &proof[4096..4128];
@@ -596,10 +578,7 @@ mod tests {
         );
         let decoded = InscribedBlock::decode(&inscription).unwrap();
         assert_eq!(decoded.block, block);
-        assert_eq!(
-            decoded.locators,
-            Locators::Valid(vec![locator(), other_locator()])
-        );
+        assert_eq!(decoded.locators, vec![locator(), other_locator()]);
     }
 
     #[test]
@@ -630,8 +609,7 @@ mod tests {
         ] {
             let decoded = InscribedBlock::decode(&malformed).unwrap();
             assert_eq!(decoded.block, block);
-            assert_eq!(decoded.locators, Locators::Malformed);
-            assert!(decoded.locators.into_valid().is_empty());
+            assert!(decoded.locators.is_empty());
         }
     }
 
@@ -655,7 +633,7 @@ mod tests {
         assert_eq!(data.inscription_len().unwrap(), inscription.len());
         assert_eq!(
             InscribedBlock::decode(&inscription).unwrap().locators,
-            Locators::Valid(Vec::new())
+            Vec::<StorageCid>::new()
         );
     }
 

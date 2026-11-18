@@ -497,7 +497,6 @@ fn map_executor_error<M>(
             ),
             handle_err @ (sequencer_executor_actor::error::Error::BackgroundTaskFinishedUnexpectedly
             | sequencer_executor_actor::error::Error::StorageRequestFailed(_)
-            | sequencer_executor_actor::error::Error::ProofSeedingFailed(_)
             | sequencer_executor_actor::error::Error::BedrockActorStartFailed
             | sequencer_executor_actor::error::Error::BedrockRequestFailed(_)
             | sequencer_executor_actor::error::Error::SlasherRequestFailed(_)

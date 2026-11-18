@@ -830,7 +830,7 @@ fn channel_entry(inscription: &InscriptionInfo, slot: Option<Slot>) -> ChannelEn
         block_from_inscription(inscription)
     };
     let (block, locators) = inscribed.map_or((None, Vec::new()), |inscribed| {
-        (Some(inscribed.block), inscribed.locators.into_valid())
+        (Some(inscribed.block), inscribed.locators)
     });
     ChannelEntry {
         msg: inscription.this_msg,
