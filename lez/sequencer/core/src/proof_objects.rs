@@ -49,6 +49,8 @@ pub enum Error {
     Busy,
     #[error("only the reserve for live blocks is free")]
     Full,
+    #[error("this node holds no object of the proof")]
+    NotHeld,
 }
 
 /// Why a proof is fetched.
@@ -176,7 +178,8 @@ impl ProofObjects {
         self.lock().objects.get(digest).map(|object| object.cid)
     }
 
-    /// The proof `digest` names, from memory or else from the object this node holds.
+    /// The proof `digest` names, from memory or else from the object this node holds, which the
+    /// proof store then keeps.
     pub async fn get(&self, digest: &ProofDigest) -> Option<Proof> {
         if let Some(proof) = self.proofs.get(digest) {
             return Some(proof);
@@ -184,7 +187,11 @@ impl ProofObjects {
         let cid = self.locator(digest)?;
         let bytes = self.storage.download(cid, PROOF_BYTES, true).await.ok()?;
         let proof = Proof::from_inner(bytes);
-        (proof.digest() == *digest).then_some(proof)
+        if proof.digest() != *digest {
+            return None;
+        }
+        self.proofs.insert(&proof);
+        Some(proof)
     }
 
     /// Stores `proof` in the canonical form, served to peers, and returns its CID. The proof
@@ -220,6 +227,7 @@ impl ProofObjects {
             .map_err(|_closed| Error::Busy)?;
         let _peer = self.claim_peer(peer)?;
         let manifest = self.storage.manifest(cid).await?;
+        self.serve_tree(cid, &manifest.tree_cid).await;
         manifest.check_canonical(PROOF_BYTES)?;
         Ok(manifest.dataset_size)
     }
@@ -261,6 +269,7 @@ impl ProofObjects {
             Admission::Live => None,
         };
         let manifest = self.storage.manifest(cid).await?;
+        self.serve_tree(cid, &manifest.tree_cid).await;
         manifest.check_canonical(PROOF_BYTES)?;
         match self
             .download(digest, cid, &manifest)
@@ -294,10 +303,11 @@ impl ProofObjects {
     /// Keeps the object of `digest` at least until `until`, seconds since the epoch, persisted
     /// before this returns.
     pub async fn hold(&self, digest: &ProofDigest, until: u64) -> Result<(), Error> {
+        let _writes = self.writes.lock().await;
         let held = {
             let mut state = self.lock();
             let Some(object) = state.objects.get_mut(digest) else {
-                return Ok(());
+                return Err(Error::NotHeld);
             };
             object.held_until = object.held_until.max(until);
             object.released_at = None;
@@ -365,6 +375,23 @@ impl ProofObjects {
             self.discard(object.cid, &object.tree).await;
         }
         Ok(())
+    }
+
+    /// Serves again the kept objects of `tree` but `cid`'s: fetching a manifest without
+    /// advertising it stops serving its whole tree.
+    async fn serve_tree(&self, cid: StorageCid, tree: &str) {
+        let kept: Vec<StorageCid> = self
+            .lock()
+            .objects
+            .values()
+            .filter(|object| object.tree == tree && object.cid != cid)
+            .map(|object| object.cid)
+            .collect();
+        for shared in kept {
+            if let Err(err) = self.storage.set_advertise(shared, true).await {
+                warn!(cid = %shared, error = %err, "Failed to serve a proof object again");
+            }
+        }
     }
 
     /// Bytes past the floor optional admission leaves.
@@ -972,6 +999,37 @@ mod tests {
 
         assert!(!proofs.contains(&proof(1).digest()));
         assert_eq!(held.get(&proof(1).digest()).await, Some(proof(1)));
+        assert!(proofs.contains(&proof(1).digest()));
         assert_eq!(held.get(&proof(3).digest()).await, None);
+    }
+
+    #[tokio::test]
+    async fn reading_another_manifest_of_a_kept_tree_does_not_stop_serving_it() {
+        let network = MemoryNetwork::default();
+        let held = objects(Arc::new(Scripted::on(&network)), Arc::default());
+        let kept = proof(1);
+        let cid = held.seed(&kept).await.unwrap();
+        let variant = network
+            .node()
+            .upload([kept.into_inner(), vec![0; 8]].concat(), true)
+            .await
+            .unwrap();
+
+        held.declared_len(variant, peer()).await.unwrap();
+
+        assert!(network.node().download(cid, 64, false).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn an_object_this_node_does_not_hold_cannot_be_promised() {
+        let held = objects(
+            Arc::new(Scripted::on(&MemoryNetwork::default())),
+            Arc::default(),
+        );
+
+        assert!(matches!(
+            held.hold(&proof(1).digest(), u64::MAX).await,
+            Err(Error::NotHeld)
+        ));
     }
 }
