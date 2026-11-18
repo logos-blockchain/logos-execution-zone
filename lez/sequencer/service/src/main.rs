@@ -137,6 +137,9 @@ struct StartArgs {
     /// Overrides the config's `bedrock_config.node_url`.
     #[clap(long, env = "SEQUENCER_BEDROCK_NODE_URL")]
     bedrock_node_url: Option<String>,
+    /// Overrides the config's `logos_storage.api_url`: the Logos Storage node beside this one.
+    #[clap(long, env = "SEQUENCER_LOGOS_STORAGE_API_URL")]
+    logos_storage_api_url: Option<String>,
     /// In hex. Overrides the config's `bedrock_config.channel_id`.
     #[clap(long, env = "SEQUENCER_CHANNEL_ID")]
     channel_id: Option<String>,
@@ -326,6 +329,9 @@ fn load_config(args: &StartArgs) -> Result<SequencerConfig> {
     }
     if let Some(url) = &args.bedrock_node_url {
         config.bedrock_config.node_url = url.parse().context("Invalid --bedrock-node-url")?;
+    }
+    if let Some(url) = &args.logos_storage_api_url {
+        config.logos_storage.api_url = url.parse().context("Invalid --logos-storage-api-url")?;
     }
     if let Some(channel_id) = &args.channel_id {
         let bytes: [u8; 32] = hex::decode(channel_id.trim_start_matches("0x"))

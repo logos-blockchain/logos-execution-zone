@@ -24,6 +24,19 @@ x-sequencer: &sequencer
   depends_on:
     logos-blockchain-node-0: { condition: service_healthy }
     indexer_service: { condition: service_healthy }
+    logos_storage_0: { condition: service_healthy }
+
+# Each sequencer and the indexer run a Logos Storage node of their own, with its own data and no
+# access to their keys. The nodes form a private network: `logos_storage_0` starts it, the others
+# bootstrap from it, and none joins a public preset. Their APIs are reachable on the compose network
+# only.
+x-logos-storage: &logos_storage
+  image: ${LEZ_COMPOSE_LOGOS_STORAGE_IMAGE:-lez/logos_storage}
+  pull_policy: never
+  environment:
+    LOGOS_STORAGE_BOOTSTRAP_API: http://logos_storage_0:8080
+  depends_on:
+    logos_storage_0: { condition: service_healthy }
 
 x-sequencer-environment: &sequencer_environment
   SEQUENCER_CONFIG: /etc/sequencer_service/sequencer_config.json
@@ -67,6 +80,7 @@ services:
       SEQUENCER_CREATE_CHANNEL: "true"
       # Names the node in its traces, as the `sequencer` label does in metrics and logs.
       OTEL_RESOURCE_ATTRIBUTES: service.instance.id=sequencer_0
+      SEQUENCER_LOGOS_STORAGE_API_URL: http://logos_storage_0:8080/
     ports:
       - "${LEZ_COMPOSE_SEQ_0_RPC_PORT:-3040}:3040"
       - "${LEZ_COMPOSE_SEQ_0_METRICS_PORT:-9000}:9000"
@@ -82,8 +96,10 @@ services:
     environment:
       <<: *follower_environment
       OTEL_RESOURCE_ATTRIBUTES: service.instance.id=sequencer_1
+      SEQUENCER_LOGOS_STORAGE_API_URL: http://logos_storage_1:8080/
     depends_on:
       sequencer_service_0: { condition: service_healthy }
+      logos_storage_1: { condition: service_healthy }
     ports:
       - "${LEZ_COMPOSE_SEQ_1_RPC_PORT:-3041}:3040"
       - "${LEZ_COMPOSE_SEQ_1_METRICS_PORT:-9001}:9000"
@@ -99,8 +115,10 @@ services:
     environment:
       <<: *follower_environment
       OTEL_RESOURCE_ATTRIBUTES: service.instance.id=sequencer_2
+      SEQUENCER_LOGOS_STORAGE_API_URL: http://logos_storage_2:8080/
     depends_on:
       sequencer_service_0: { condition: service_healthy }
+      logos_storage_2: { condition: service_healthy }
     ports:
       - "${LEZ_COMPOSE_SEQ_2_RPC_PORT:-3042}:3040"
       - "${LEZ_COMPOSE_SEQ_2_METRICS_PORT:-9002}:9000"
@@ -116,8 +134,10 @@ services:
     environment:
       <<: *follower_environment
       OTEL_RESOURCE_ATTRIBUTES: service.instance.id=sequencer_3
+      SEQUENCER_LOGOS_STORAGE_API_URL: http://logos_storage_3:8080/
     depends_on:
       sequencer_service_0: { condition: service_healthy }
+      logos_storage_3: { condition: service_healthy }
     ports:
       - "${LEZ_COMPOSE_SEQ_3_RPC_PORT:-3043}:3040"
       - "${LEZ_COMPOSE_SEQ_3_METRICS_PORT:-9003}:9000"
@@ -125,6 +145,40 @@ services:
       - ${LEZ_COMPOSE_SEQUENCER_CONFIG_FILE:-./lez/configs/docker-all-in-one/devnet/sequencer_config.json}:/etc/sequencer_service/sequencer_config.json:ro
       - ${LEZ_COMPOSE_SEQ_3_KEY_FILE:-./lez/configs/docker-all-in-one/devnet/seq-3/channel_signing_key}:/run/secrets/channel_signing_key:ro
       - sequencer_data_3:/var/lib/sequencer_service
+
+  logos_storage_0:
+    image: ${LEZ_COMPOSE_LOGOS_STORAGE_IMAGE:-lez/logos_storage}
+    # Only this node builds the image; the others run what it got.
+    build:
+      context: .
+      dockerfile: lez/docker/logos-storage.Dockerfile
+    container_name: logos_storage_0
+    volumes:
+      - logos_storage_data_0:/var/lib/logos_storage
+
+  logos_storage_1:
+    <<: *logos_storage
+    container_name: logos_storage_1
+    volumes:
+      - logos_storage_data_1:/var/lib/logos_storage
+
+  logos_storage_2:
+    <<: *logos_storage
+    container_name: logos_storage_2
+    volumes:
+      - logos_storage_data_2:/var/lib/logos_storage
+
+  logos_storage_3:
+    <<: *logos_storage
+    container_name: logos_storage_3
+    volumes:
+      - logos_storage_data_3:/var/lib/logos_storage
+
+  logos_storage_indexer:
+    <<: *logos_storage
+    container_name: logos_storage_indexer
+    volumes:
+      - logos_storage_data_indexer:/var/lib/logos_storage
 
   indexer_service:
     image: ${LEZ_COMPOSE_INDEXER_IMAGE:-lez/indexer_service}
@@ -136,6 +190,7 @@ services:
     container_name: indexer_service
     depends_on:
       logos-blockchain-node-0: { condition: service_healthy }
+      logos_storage_indexer: { condition: service_healthy }
     ports:
       - "${LEZ_COMPOSE_INDEXER_RPC_PORT:-8779}:8779"
     volumes:
@@ -246,6 +301,11 @@ volumes:
   sequencer_data_2:
   sequencer_data_3:
   indexer_data:
+  logos_storage_data_0:
+  logos_storage_data_1:
+  logos_storage_data_2:
+  logos_storage_data_3:
+  logos_storage_data_indexer:
   prometheus_data:
   loki_data:
   tempo_data:

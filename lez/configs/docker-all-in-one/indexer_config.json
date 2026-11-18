@@ -8,6 +8,7 @@
             "addr": "http://sequencer_service_0:3040"
         }
     ],
+    "logos_storage_api_url": "http://logos_storage_indexer:8080/",
     "channel_id": "0101010101010101010101010101010101010101010101010101010101010101",
     "allow_chain_reset": true,
     "event_filter": "archival"
