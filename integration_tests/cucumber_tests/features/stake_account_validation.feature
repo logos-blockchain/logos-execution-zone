@@ -17,7 +17,7 @@ Feature: Stake account validation
     Given a LEZ stack with fast blocks and configured public accounts
     And the sequencer_stake config account is at the default minimum stake
     And a sequencer key with no config entry
-    And a default-owned, unclaimed ownership account for the sequencer key
+    And a fresh, unclaimed ownership account for the sequencer key
     And a funding account holding "ten times the minimum stake"
     And chain waits give up after 60 blocks
 
