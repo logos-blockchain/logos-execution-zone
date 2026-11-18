@@ -1522,6 +1522,47 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_missing_proof_is_located_by_the_cid_its_inscription_names_and_by_nothing_when_malformed() {
+        let private = |fill: u8| {
+            common::transaction::LeeTransaction::PrivacyPreserving(
+                lee::PrivacyPreservingTransaction::new(
+                    lee::privacy_preserving_transaction::Message::default(),
+                    lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(
+                        vec![],
+                        lee::privacy_preserving_transaction::circuit::Proof::from_inner(vec![
+                            fill;
+                            32
+                        ]),
+                    ),
+                ),
+            )
+        };
+        let locator = |fill: u8| {
+            StorageCid::try_from(
+                [&common::storage_cid::STORAGE_CID_PREFIX[..], &[fill; 32]]
+                    .concat()
+                    .as_slice(),
+            )
+            .unwrap()
+        };
+        let block = produce_dummy_block(1, None, vec![private(1), private(2)]);
+        let digests: Vec<ProofDigest> = block.digested().body.proofs().copied().collect();
+        let mut chain = ChainState::new(claimed_initial_state(), ProofStore::new(0));
+        chain.apply_extension(vec![ChannelEntry {
+            locators: vec![locator(1), locator(2)],
+            ..entry(1, MsgId::root(), Some(&block))
+        }]);
+
+        assert_eq!(chain.inscribed_locator(&digests[0]), Some(locator(1)));
+        assert_eq!(chain.inscribed_locator(&digests[1]), Some(locator(2)));
+        assert_eq!(chain.inscribed_locator(&[9; 32]), None);
+
+        let mut malformed = ChainState::new(claimed_initial_state(), ProofStore::new(0));
+        malformed.apply_extension(vec![entry(1, MsgId::root(), Some(&block))]);
+        assert_eq!(malformed.inscribed_locator(&digests[0]), None);
+    }
+
     /// Blocks 1..=n chained on one another.
     fn chain_of(n: u64) -> Vec<Block> {
         let mut blocks: Vec<Block> = Vec::new();
