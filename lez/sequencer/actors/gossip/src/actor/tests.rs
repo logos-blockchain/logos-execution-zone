@@ -930,8 +930,11 @@ async fn an_announcement_the_fee_screen_refuses_downloads_no_payload() {
         Arc::new(MemoryRecords::default()),
         &LogosStorageConfig::default(),
     );
-    let refusing: AnnouncementScreen =
-        Arc::new(|_transaction, _proof_len| Box::pin(async { Err(anyhow::anyhow!("fee")) }));
+    let state = testnet_initial_state::initial_state(false);
+    let refusing: AnnouncementScreen = Arc::new(move |transaction, proof_len| {
+        let screened = sequencer_core::fees::screen_announced(&transaction, proof_len, &state);
+        Box::pin(async move { screened.map_err(Into::into) })
+    });
     let admitted = Arc::default();
 
     let result = super::admit_announced(
@@ -944,6 +947,7 @@ async fn an_announcement_the_fee_screen_refuses_downloads_no_payload() {
     .await;
 
     assert!(result.unwrap_err().to_string().contains("fee"));
+    assert_eq!(fetching.downloads(), 0);
     assert!(!fetching.holds(locator));
     assert!(admitted.lock().unwrap().is_empty());
 }
