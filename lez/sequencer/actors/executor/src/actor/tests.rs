@@ -385,6 +385,7 @@ pub(super) async fn executor_args<S: StorageActorTrait>(
         proofs: proofs.clone(),
         proof_requests: PubSub::spawn(PubSub::new(DeliveryStrategy::BestEffort)),
         proof_objects: Arc::new(ProofObjects::in_memory(proofs)),
+        availability_publisher: PubSub::spawn(PubSub::new(DeliveryStrategy::BestEffort)),
     }
 }
 
@@ -460,6 +461,7 @@ pub(super) async fn initialize_state(
         proofs: proofs.clone(),
         proof_requests: PubSub::spawn(PubSub::new(DeliveryStrategy::BestEffort)),
         proof_objects: Arc::new(ProofObjects::in_memory(proofs)),
+        availability_publisher: PubSub::spawn(PubSub::new(DeliveryStrategy::BestEffort)),
     }))
     .await
 }

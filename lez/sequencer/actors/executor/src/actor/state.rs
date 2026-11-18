@@ -9,7 +9,10 @@ use sequencer_bedrock_actor::{
     protocol::{ChannelId, ChannelSeq, Checkpoint, MsgId, SerializeOp as _, Slot},
 };
 use sequencer_channel_signing_actor::ChannelSigningActor;
-use sequencer_core::{StakeConfigUpdate, config::SequencerConfig, proof_objects::ProofObjects};
+use sequencer_core::{
+    StakeConfigUpdate, availability::AvailabilityMessage, config::SequencerConfig,
+    proof_objects::ProofObjects,
+};
 use sequencer_gossip_actor::protocol::FetchProof;
 use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::{
@@ -52,6 +55,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
             proofs,
             proof_requests,
             proof_objects,
+            availability_publisher,
         }: Args<S, B>,
     ) -> Result<Self> {
         // TODO: Rework this encapsulation cringe
@@ -112,6 +116,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
             channel_signer_ref,
             proof_requests_ref: proof_requests,
             proof_objects,
+            availability_publisher,
         };
 
         // A channel only configured so far has the root as its tip message.
@@ -305,6 +310,7 @@ struct ActorsBundle<S: StorageActorTrait, B: BedrockActorTrait> {
     channel_signer_ref: ActorRef<ChannelSigningActor>,
     proof_requests_ref: ActorRef<PubSub<FetchProof>>,
     proof_objects: Arc<ProofObjects>,
+    availability_publisher: ActorRef<PubSub<AvailabilityMessage>>,
 }
 
 /// The checkpoint record `checkpoint` and `seq` persist as.

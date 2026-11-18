@@ -1,6 +1,9 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
-    sync::{Arc, Mutex, PoisonError},
+    sync::{
+        Arc, Mutex, PoisonError,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -21,7 +24,7 @@ use sequencer_bedrock_actor::{
 };
 use sequencer_core::{
     SequencerCore, TransactionOrigin,
-    availability::{AvailabilityApproval, AvailabilityMessage, CandidateId},
+    availability::{AvailabilityApproval, AvailabilityMessage, Candidate, CandidateId},
     config::SequencerConfig,
     proof_objects::{Admission, ProofObjects},
 };
@@ -49,6 +52,15 @@ const TRACKED_CANDIDATES: usize = 8;
 /// The first wait before a missing proof is sought again; it doubles per attempt, up to 64 times.
 const RECOVERY_BACKOFF: Duration = Duration::from_secs(1);
 
+/// A candidate's producer, turn and parent.
+type ApprovalKey = (SequencerKey, u64, [u8; 32]);
+
+/// The candidate this node is approving, and whether a newer one superseded it.
+struct Approving {
+    key: ApprovalKey,
+    superseded: Arc<AtomicBool>,
+}
+
 /// One missing proof's recovery.
 struct Recovery {
     in_flight: bool,
@@ -68,6 +80,12 @@ pub struct OnlineState<S: StorageActorTrait, B: BedrockActorTrait> {
     recoveries: Arc<Mutex<BTreeMap<ProofDigest, Recovery>>>,
     /// The keys that approved this node's own recent candidates, by candidate.
     availability_approvals: BTreeMap<CandidateId, BTreeSet<SequencerKey>>,
+    /// Where this node publishes its own candidates and availability approvals.
+    availability_publisher: ActorRef<PubSub<AvailabilityMessage>>,
+    /// The slot the current turn started at, whoever's it is, as Bedrock last told us.
+    turn_start: Option<Slot>,
+    /// The candidate this node is approving.
+    approving: Option<Box<Approving>>,
     // TODO: Remove this field
     background_tasks: sequencer_core::task_group::TaskGroup,
 }
@@ -126,6 +144,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
     }
 
     pub fn update_turn(&mut self, our_turn_to_write: bool, starting_slot: Option<Slot>) {
+        self.turn_start = starting_slot;
         if self.turn.update(our_turn_to_write, starting_slot) {
             sequencer_executor_actor_metrics::increment_turns_to_write_total();
             self.skip_policy.start_turn();
@@ -218,8 +237,49 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                     self.availability_approvals.pop_first();
                 }
             }
-            AvailabilityMessage::Candidate(_) => {}
+            AvailabilityMessage::Candidate(candidate) => self.on_candidate(*candidate),
         }
+    }
+
+    /// Approves a peer's candidate for the current turn once this node holds its proofs. One
+    /// candidate per producer, turn and parent is approved at a time; a newer one supersedes it.
+    fn on_candidate(&mut self, candidate: Candidate) {
+        let id = &candidate.id;
+        if id.producer.to_bytes() == self.sequencer.channel_signing_public_key()
+            || self.turn.is_ours()
+            || self.turn_start.map(Slot::into_inner) != Some(id.turn_start_slot)
+        {
+            return;
+        }
+        let key = (id.producer, id.turn_start_slot, id.parent);
+        if self
+            .approving
+            .as_ref()
+            .is_some_and(|approving| approving.key == key)
+        {
+            return;
+        }
+        let superseded = Arc::new(AtomicBool::new(false));
+        if let Some(older) = self.approving.replace(Box::new(Approving {
+            key,
+            superseded: Arc::clone(&superseded),
+        })) {
+            older.superseded.store(true, Ordering::Relaxed);
+        }
+        let approval = self.sequencer.candidate_approval(candidate);
+        let publisher = self.availability_publisher.clone();
+        tokio::spawn(async move {
+            match approval.await {
+                Ok(_) if superseded.load(Ordering::Relaxed) => {}
+                Ok(approval) => {
+                    let message = AvailabilityMessage::Approval(Box::new(approval));
+                    if publisher.tell(Publish(message)).try_send().is_err() {
+                        debug!("Dropped this node's availability approval");
+                    }
+                }
+                Err(err) => debug!(error = %format!("{err:#}"), "Not approving a candidate"),
+            }
+        });
     }
 
     /// Whether this turn may build on the head tip, which skips the block past it, if any.
@@ -257,6 +317,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             channel_signer_ref,
             proof_requests_ref,
             proof_objects,
+            availability_publisher,
         } = actors;
 
         let own_sequencer_key =
@@ -379,6 +440,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             proof_requests_ref,
             recoveries: Arc::default(),
             availability_approvals: BTreeMap::new(),
+            availability_publisher,
+            turn_start: None,
+            approving: None,
             sequencer,
         })
     }

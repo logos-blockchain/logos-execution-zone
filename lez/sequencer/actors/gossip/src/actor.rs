@@ -49,9 +49,7 @@ use tracing::Instrument as _;
 
 pub use self::validation::Announcement;
 use self::{seen_cache::SeenCache, validation::AnnouncementEvaluation};
-use crate::protocol::{
-    FetchProof, GetConnectedPeers, Publish, PublishAvailability, PublishConfig, RetryBootstrap,
-};
+use crate::protocol::{FetchProof, GetConnectedPeers, Publish, PublishConfig, RetryBootstrap};
 
 mod seen_cache;
 #[cfg(test)]
@@ -1284,15 +1282,16 @@ impl Message<Approval> for GossipActor {
     }
 }
 
-impl Message<PublishAvailability> for GossipActor {
+impl Message<AvailabilityMessage> for GossipActor {
     type Reply = ();
 
+    /// Publish this node's own candidate or availability approval to the mesh.
     async fn handle(
         &mut self,
-        PublishAvailability(message): PublishAvailability,
+        msg: AvailabilityMessage,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.publish_availability(message);
+        self.publish_availability(msg);
     }
 }
 

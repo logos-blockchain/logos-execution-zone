@@ -2091,6 +2091,20 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         Arc::clone(&self.proof_objects)
     }
 
+    /// The work of approving `candidate`, which runs apart from the sequencer.
+    pub fn candidate_approval(
+        &self,
+        candidate: availability::Candidate,
+    ) -> impl Future<Output = Result<availability::AvailabilityApproval>> + Send + 'static {
+        availability::approve_candidate(
+            candidate,
+            Arc::clone(&self.chain),
+            Arc::clone(&self.proof_objects),
+            self.channel_signing_key.clone(),
+            *self.channel_id.as_ref(),
+        )
+    }
+
     /// This node's channel signing public key, as the entries it signs carry it.
     #[must_use]
     pub fn channel_signing_public_key(&self) -> [u8; 32] {

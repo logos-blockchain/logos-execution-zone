@@ -349,6 +349,8 @@ pub fn run(
         actor_handle::record_mailbox_capacity(&stake_config_pubsub_ref);
         let proof_requests_pubsub_ref = PubSub::spawn(PubSub::new(DeliveryStrategy::BestEffort));
         actor_handle::record_mailbox_capacity(&proof_requests_pubsub_ref);
+        let availability_pubsub_ref = PubSub::spawn(PubSub::new(DeliveryStrategy::BestEffort));
+        actor_handle::record_mailbox_capacity(&availability_pubsub_ref);
         let gossip_actor_prepared_opt = if gossip_config.is_some() {
             let gossip_actor_prepared = GossipActor::prepare_with_mailbox(kameo::mailbox::bounded(
                 sequencer_gossip_actor::MAILBOX_CAPACITY,
@@ -359,6 +361,11 @@ pub fn run(
                 ))
                 .await?;
             proof_requests_pubsub_ref
+                .ask(kameo_actors::pubsub::Subscribe(
+                    gossip_actor_prepared.actor_ref().clone(),
+                ))
+                .await?;
+            availability_pubsub_ref
                 .ask(kameo_actors::pubsub::Subscribe(
                     gossip_actor_prepared.actor_ref().clone(),
                 ))
@@ -421,6 +428,7 @@ pub fn run(
                 proofs: proof_store.clone(),
                 proof_requests: proof_requests_pubsub_ref,
                 proof_objects: Arc::clone(&proof_objects),
+                availability_publisher: availability_pubsub_ref,
             },
         )
         .await

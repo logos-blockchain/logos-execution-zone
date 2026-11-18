@@ -87,6 +87,8 @@ pub struct Args<S: StorageActorTrait, B: BedrockActorTrait> {
     pub proof_requests: ActorRef<PubSub<FetchProof>>,
     /// The proofs this node holds in Logos Storage.
     pub proof_objects: Arc<ProofObjects>,
+    /// Where this node publishes its own candidates and availability approvals.
+    pub availability_publisher: ActorRef<PubSub<AvailabilityMessage>>,
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> Clone for Args<S, B> {
@@ -103,6 +105,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Clone for Args<S, B> {
             proofs: self.proofs.clone(),
             proof_requests: self.proof_requests.clone(),
             proof_objects: Arc::clone(&self.proof_objects),
+            availability_publisher: self.availability_publisher.clone(),
         }
     }
 }
