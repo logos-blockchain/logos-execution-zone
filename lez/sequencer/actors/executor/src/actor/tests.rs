@@ -38,6 +38,7 @@ use sequencer_channel_signing_actor::ChannelSigningActor;
 use sequencer_core::{
     MsgId,
     config::{BedrockConfig, MAX_TRANSACTION_SIZE, SequencerConfig, TransactionTooLarge},
+    proof_objects::ProofObjects,
 };
 use sequencer_slasher_actor::SlasherActor;
 use sequencer_stake_core::{SequencerEntry, SequencerKey};
@@ -371,6 +372,7 @@ pub(super) async fn executor_args<S: StorageActorTrait>(
     let slasher_ref = spawn_slasher(&config, &storage_ref, &channel_signing_key).await;
     let channel_signer_ref = spawn_channel_signer(&config, &channel_signing_key);
 
+    let proofs = ProofStore::new(sequencer_core::config::PROOF_STORE_CAPACITY);
     Args {
         config,
         channel_signing_key,
@@ -380,8 +382,9 @@ pub(super) async fn executor_args<S: StorageActorTrait>(
         slasher_ref,
         channel_signer_ref,
         bedrock_broker_ref: Broker::spawn(Broker::new(DeliveryStrategy::Guaranteed)),
-        proofs: ProofStore::new(sequencer_core::config::PROOF_STORE_CAPACITY),
+        proofs: proofs.clone(),
         proof_requests: PubSub::spawn(PubSub::new(DeliveryStrategy::BestEffort)),
+        proof_objects: Arc::new(ProofObjects::in_memory(proofs)),
     }
 }
 
@@ -444,6 +447,7 @@ pub(super) async fn initialize_state(
     let slasher_ref = spawn_slasher(&config, &storage_ref, &channel_signing_key).await;
     let channel_signer_ref = spawn_channel_signer(&config, &channel_signing_key);
 
+    let proofs = ProofStore::new(sequencer_core::config::PROOF_STORE_CAPACITY);
     Box::pin(State::initialize(Args {
         config,
         channel_signing_key,
@@ -453,8 +457,9 @@ pub(super) async fn initialize_state(
         slasher_ref,
         channel_signer_ref,
         bedrock_broker_ref: Broker::spawn(Broker::new(DeliveryStrategy::Guaranteed)),
-        proofs: ProofStore::new(sequencer_core::config::PROOF_STORE_CAPACITY),
+        proofs: proofs.clone(),
         proof_requests: PubSub::spawn(PubSub::new(DeliveryStrategy::BestEffort)),
+        proof_objects: Arc::new(ProofObjects::in_memory(proofs)),
     }))
     .await
 }
@@ -503,6 +508,7 @@ pub(super) fn catching_up(
 pub(super) fn finalized_at(block: &Block, slot: u64) -> FinalizedBlock {
     FinalizedBlock {
         block: BlockData::Block(block.digested()),
+        locators: Vec::new(),
         msg_id: mock_msg_of(block),
         slot: Slot::from(slot),
         signer: None,

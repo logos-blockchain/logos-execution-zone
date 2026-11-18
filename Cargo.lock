@@ -12280,6 +12280,7 @@ dependencies = [
  "lee_core",
  "libp2p 0.57.1",
  "logging",
+ "logos_storage",
  "metrics",
  "metrics-exporter-prometheus",
  "opentelemetry",

@@ -17,8 +17,9 @@ use chain_state::{
 use common::{
     HashType,
     block::{
-        BedrockStatus, Block, BlockMeta, DigestedBlock, HashableBlockData, TransactionReceipt,
+        BedrockStatus, Block, BlockMeta, HashableBlockData, InscribedBlock, TransactionReceipt,
     },
+    storage_cid::StorageCid,
     system_upgrades::ProposalApprovals,
     transaction::{FeePayee, LeeTransaction, LeeTransactionWith, clock_invocation, fee_invocation},
 };
@@ -197,6 +198,8 @@ pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
     /// `on_follow` sink feeds adopted/orphaned/finalized peer blocks into it.
     chain: Arc<Mutex<ChainState>>,
     proofs: ProofStore,
+    /// Where this node seeds the proofs of the blocks it produces.
+    proof_objects: Arc<proof_objects::ProofObjects>,
     mempool: MemPool<(TransactionOrigin, LeeTransaction)>,
     sequencer_config: SequencerConfig,
     /// Cross-zone watchers, stopped when this sequencer is dropped. They hold a
@@ -262,6 +265,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         stake_config_pubsub_ref: ActorRef<PubSub<StakeConfigUpdate>>,
         slasher_ref: ActorRef<SlasherActor<S>>,
         channel_signer: ActorRef<ChannelSigningActor>,
+        proof_objects: Arc<proof_objects::ProofObjects>,
     ) -> Result<Self> {
         let channel_id = config.bedrock_config.channel_id;
 
@@ -313,6 +317,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let mut sequencer = Self {
             channel_id,
             proofs: chain.proofs().clone(),
+            proof_objects,
             chain: Arc::new(Mutex::new(chain)),
             mempool,
             stake_config: StakeConfigUpdate::default(),
@@ -755,11 +760,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .build_block_from_mempool()
             .await
             .context("Failed to build block from mempool transactions")?;
+        let mut locators = self.seed_proofs(&mut built).await?;
 
         let publish_res = if built.pinned_deposit_notes.is_empty() {
-            self.publish_block(&built).await
+            self.publish_block(&built, &locators).await
         } else {
-            let pinned = match self.sign_pin(&built).await {
+            let pinned = match self.sign_pin(&built, &locators).await {
                 Ok(Some((prepared, signatures))) => self
                     .bedrock_pool_ref
                     .ask(sequencer_bedrock_actor::protocol::PublishPin {
@@ -791,7 +797,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                         );
                     }
                     built = self.build_block_without_pins(built).await?;
-                    self.publish_block(&built).await
+                    locators = self.seed_proofs(&mut built).await?;
+                    self.publish_block(&built, &locators).await
                 }
             }
         };
@@ -824,13 +831,39 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
         let block_id = block.header.block_id;
         self.applied_seq = Some(outcome.seq);
-        self.record_produced_block(outcome, block).await?;
+        self.record_produced_block(outcome, block, locators).await?;
 
         Ok(block_id)
     }
 
+    /// Stores every proof `built` carries in Logos Storage, served to peers, and returns their
+    /// CIDs in transaction order. On a failure nothing is inscribed, so the block's transactions
+    /// go back in front.
+    async fn seed_proofs(&mut self, built: &mut BlockWithMeta) -> Result<Vec<StorageCid>> {
+        let mut locators = Vec::new();
+        for proof in built.block.body.proofs() {
+            match self.proof_objects.seed(proof).await {
+                Ok(locator) => locators.push(locator),
+                Err(err) => {
+                    for (origin, tx) in std::mem::take(&mut built.mempool_transactions)
+                        .into_iter()
+                        .rev()
+                    {
+                        self.mempool.push_front((origin, tx));
+                    }
+                    return Err(err).context("Failed to seed the proofs of the block");
+                }
+            }
+        }
+        Ok(locators)
+    }
+
     /// Publishes `built` chained on its pin, unless it carries withdrawals.
-    async fn publish_block(&self, built: &BlockWithMeta) -> Result<PublishOutcome, PublishError> {
+    async fn publish_block(
+        &self,
+        built: &BlockWithMeta,
+        locators: &[StorageCid],
+    ) -> Result<PublishOutcome, PublishError> {
         // Height and pin together: both come from the view, read under one lock.
         // Bundled withdrawals take the unpinned path, where the sdk picks the parent.
         info!(
@@ -843,6 +876,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .ask(sequencer_bedrock_actor::protocol::PublishBlock {
                 channel_id: self.channel_id,
                 block: built.block.clone(),
+                locators: locators.to_vec(),
                 withdrawals: built.withdrawals.clone(),
                 parent: built.withdrawals.is_empty().then_some(built.parent),
                 expected_seq: self.applied_seq,
@@ -857,6 +891,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     async fn sign_pin(
         &self,
         built: &BlockWithMeta,
+        locators: &[StorageCid],
     ) -> Result<Option<(PreparedPin, Vec<IndexedSignature>)>, PublishError> {
         let block_id = built.block.header.block_id;
         // A pin publishes on an explicit parent, which cannot carry withdrawals.
@@ -878,6 +913,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .ask(sequencer_bedrock_actor::protocol::PreparePin {
                 channel_id: self.channel_id,
                 block: built.block.clone(),
+                locators: locators.to_vec(),
                 parent: built.parent,
                 notes: built.pinned_deposit_notes.clone(),
                 expected_seq: self.applied_seq,
@@ -1143,6 +1179,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         &self,
         outcome: sequencer_bedrock_actor::protocol::PublishOutcome,
         block: Block,
+        locators: Vec<StorageCid>,
     ) -> Result<()> {
         let sequencer_bedrock_actor::protocol::PublishOutcome {
             this_msg,
@@ -1168,6 +1205,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             slot: None,
             block: Some(block.digested()),
             finally_absent_keys: full_stake_releases::finalize_unstake_keys(&block.body),
+            locators,
         });
         match record {
             PublishRecord::Extended | PublishRecord::Skipped => {
@@ -2902,7 +2940,7 @@ fn classify_settled_deliveries(
 
 /// The deposits a block inscription mints, or `None` when it is not a block.
 pub fn inscribed_block_deposits(inscription: &[u8]) -> Option<Vec<[u8; 32]>> {
-    let block = DigestedBlock::from_inscription(inscription).ok()?;
+    let block = InscribedBlock::decode(inscription).ok()?.block;
 
     Some(
         block

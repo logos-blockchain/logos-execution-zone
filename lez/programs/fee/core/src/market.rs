@@ -48,6 +48,9 @@ pub const MIN_PRIVATE_REFUND: Balance = 1_000_000;
 /// Re-pin on a RISC Zero bump.
 pub const PRIVATE_VERIFY_GAS: u64 = 409_764;
 pub const PROOF_DIGEST_BYTES: u64 = 32;
+/// The Logos Storage manifest CID a block inscribes for each private transaction, beside its
+/// proof digest.
+pub const PROOF_LOCATOR_BYTES: u64 = 38;
 /// The most bytes a private transaction's proof may carry.
 ///
 /// RISC Zero 3.1.0, measured with `cycle_bench --ppe` (`proof_bytes`); re-pin on a RISC Zero bump.

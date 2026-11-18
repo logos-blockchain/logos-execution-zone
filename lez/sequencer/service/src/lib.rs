@@ -1,4 +1,11 @@
-use std::{future::Future, net::SocketAddr, num::NonZero, path::Path, time::Duration};
+use std::{
+    future::Future,
+    net::SocketAddr,
+    num::NonZero,
+    path::Path,
+    sync::{Arc, Weak},
+    time::Duration,
+};
 
 use anyhow::{Context as _, Result, anyhow};
 use chain_state::ProofStore;
@@ -14,6 +21,7 @@ use kameo_actors::{
     pubsub::PubSub,
     scheduler::{Scheduler, SetInterval},
 };
+use logos_storage::StorageClient;
 #[cfg(feature = "rpc")]
 use sequencer_bedrock_actor::{BasicAuthCredentials, Url, protocol::ChannelId};
 use sequencer_channel_signing_actor::{
@@ -21,7 +29,10 @@ use sequencer_channel_signing_actor::{
     protocol::{SetPublisher, SetSubmitter, SubmitConfig},
 };
 pub use sequencer_core::config::*;
-use sequencer_core::load_or_create_signing_key;
+use sequencer_core::{
+    load_or_create_signing_key,
+    proof_objects::{ProofObjects, unix_now},
+};
 use sequencer_gossip_actor::{
     GossipActor,
     protocol::{Publish, PublishConfig},
@@ -31,7 +42,7 @@ use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::StorageActor;
 use sharding_pool_actor::ShardingPoolActor;
 use tokio::select;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::{actor_handle::ActorHandle, supervisor::SequencerSupervisor};
 
@@ -46,6 +57,8 @@ const OUTBOUND_CONFIG_CHANNEL_CAPACITY: usize = 64;
 /// it.
 const EXECUTOR_RESTART_LIMIT: u32 = 5;
 const EXECUTOR_RESTART_WINDOW: Duration = Duration::from_mins(2);
+/// How often held proofs are renewed and released ones past their serving window deleted.
+const PROOF_OBJECT_SWEEP_INTERVAL: Duration = Duration::from_mins(1);
 
 #[cfg(not(feature = "standalone"))]
 pub type BedrockActor = sequencer_bedrock_actor::BedrockActor<StorageActor>;
@@ -358,6 +371,17 @@ pub fn run(
         info!("Proof Requests PubSub Actor spawned");
 
         let proof_store = ProofStore::new(PROOF_STORE_CAPACITY);
+        let proof_objects = Arc::new(ProofObjects::new(
+            Arc::new(StorageClient::new(config.logos_storage.api_url.clone())),
+            proof_store.clone(),
+            Arc::new(storage_ref.clone()),
+            &config.logos_storage,
+        ));
+        proof_objects
+            .restore()
+            .await
+            .context("Failed to restore the Logos Storage proof objects")?;
+        spawn_proof_object_sweeps(Arc::downgrade(&proof_objects));
 
         // Starts without a committee: the executor hands it one once it has a
         // chain.
@@ -396,6 +420,7 @@ pub fn run(
                 bedrock_broker_ref: bedrock_broker_ref.clone(),
                 proofs: proof_store.clone(),
                 proof_requests: proof_requests_pubsub_ref,
+                proof_objects,
             },
         )
         .await
@@ -470,6 +495,23 @@ pub fn run(
             gossip,
         })
     })
+}
+
+/// Sweeps the proof objects every [`PROOF_OBJECT_SWEEP_INTERVAL`] while they live.
+fn spawn_proof_object_sweeps(proof_objects: Weak<ProofObjects>) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(PROOF_OBJECT_SWEEP_INTERVAL);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            let Some(proof_objects) = proof_objects.upgrade() else {
+                return;
+            };
+            if let Err(err) = proof_objects.sweep(unix_now()).await {
+                warn!(error = %err, "Failed to sweep the Logos Storage proof objects");
+            }
+        }
+    });
 }
 
 /// Starts the gossip actor together with its outage watchdog and its

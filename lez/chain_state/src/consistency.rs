@@ -4,7 +4,10 @@
 use std::num::NonZero;
 
 use anyhow::Result;
-use common::{HashType, block::DigestedBlock};
+use common::{
+    HashType,
+    block::{DigestedBlock, InscribedBlock},
+};
 use futures::StreamExt as _;
 use lee_core::BlockId;
 use logos_blockchain_zone_sdk::{
@@ -293,9 +296,9 @@ where
         while let Some(batch) = stream.next().await {
             if batch?.messages.iter().any(|(msg, slot)| {
                 let block = match msg {
-                    ZoneMessage::Block(zone_block) => {
-                        DigestedBlock::from_inscription(&zone_block.data).ok()
-                    }
+                    ZoneMessage::Block(zone_block) => InscribedBlock::decode(&zone_block.data)
+                        .ok()
+                        .map(|inscribed| inscribed.block),
                     ZoneMessage::Deposit(_) | ZoneMessage::Withdraw(_) => None,
                 };
 

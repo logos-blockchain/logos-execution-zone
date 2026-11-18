@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::anyhow;
 use chain_state::{timeout_node::TimeoutNode, zone_indexer};
-use common::block::DigestedBlock;
+use common::block::InscribedBlock;
 use futures::{StreamExt as _, future::OptionFuture};
 use kameo::{
     Actor,
@@ -340,6 +340,7 @@ impl<S: StorageActorTrait> Message<PublishBlock> for BedrockActor<S> {
         PublishBlock {
             channel_id,
             block,
+            locators,
             withdrawals,
             parent,
             expected_seq,
@@ -349,7 +350,7 @@ impl<S: StorageActorTrait> Message<PublishBlock> for BedrockActor<S> {
         self.assert_channel_id(channel_id);
 
         self.publisher()?
-            .publish_block(block, withdrawals, parent, expected_seq)
+            .publish_block(block, &locators, withdrawals, parent, expected_seq)
             .await
     }
 }
@@ -362,6 +363,7 @@ impl<S: StorageActorTrait> Message<PreparePin> for BedrockActor<S> {
         PreparePin {
             channel_id,
             block,
+            locators,
             parent,
             notes,
             expected_seq,
@@ -371,7 +373,7 @@ impl<S: StorageActorTrait> Message<PreparePin> for BedrockActor<S> {
         self.assert_channel_id(channel_id);
 
         self.publisher()?
-            .prepare_pin(block, parent, &notes, expected_seq)
+            .prepare_pin(block, &locators, parent, &notes, expected_seq)
             .await
     }
 }
@@ -750,10 +752,10 @@ fn keep_newest_block_summaries(cache: &mut HashMap<HeaderId, BlockSummary>) {
     cache.retain(|_, block_summary| block_summary.slot >= cutoff);
 }
 
-/// Deserialize an inscription payload into `(this_msg, DigestedBlock)`. Bad payloads are
-/// logged and skipped.
-fn block_from_inscription(inscription: &InscriptionInfo) -> Option<DigestedBlock> {
-    DigestedBlock::from_inscription(&inscription.payload)
+/// Deserialize an inscription payload into its block and locators. Bad payloads are logged and
+/// skipped.
+fn block_from_inscription(inscription: &InscriptionInfo) -> Option<InscribedBlock> {
+    InscribedBlock::decode(&inscription.payload)
         .inspect_err(|err| {
             warn!(error = ?err, "Failed to deserialize block from inscription");
         })

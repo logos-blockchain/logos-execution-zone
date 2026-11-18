@@ -4,7 +4,7 @@ use std::{num::NonZero, sync::Arc, time::Duration};
 
 use anyhow::anyhow;
 use chain_state::timeout_node::TimeoutNode;
-use common::block::DigestedBlock;
+use common::block::InscribedBlock;
 use futures::{Stream, StreamExt as _, TryStreamExt as _};
 use kameo::actor::ActorRef;
 use kameo_actors::broker::Broker;
@@ -193,15 +193,19 @@ impl NodeStream {
     async fn on_message(&mut self, msg: ZoneMessage, slot: Slot) -> Result<()> {
         match msg {
             ZoneMessage::Block(zone_block) => {
-                let block = match DigestedBlock::from_inscription(&zone_block.data) {
-                    Ok(block) => BlockData::Block(block),
-                    Err(_) => BlockData::Undecodable(zone_block.data.into()),
+                let (block, locators) = match InscribedBlock::decode(&zone_block.data) {
+                    Ok(inscribed) => (
+                        BlockData::Block(inscribed.block),
+                        inscribed.locators.into_valid(),
+                    ),
+                    Err(_) => (BlockData::Undecodable(zone_block.data.into()), Vec::new()),
                 };
 
                 self.publish(
                     "finalized_block",
                     ChannelEventKind::FinalizedBlock(Arc::new(FinalizedBlock {
                         block,
+                        locators,
                         msg_id: zone_block.id,
                         slot,
                         signer: Ed25519PublicKey::try_from(zone_block.signer).ok(),
@@ -415,9 +419,7 @@ mod tests {
             .on_message(
                 ZoneMessage::Block(ZoneBlock {
                     id: msg_id,
-                    data: Inscription::new_unchecked(
-                        block.digested().to_inscription().expect("serialize"),
-                    ),
+                    data: Inscription::new_unchecked(common::test_utils::inscription(block)),
                     signer: Ed25519Key::from_bytes(&[3; 32])
                         .public_key()
                         .into_unverified(),

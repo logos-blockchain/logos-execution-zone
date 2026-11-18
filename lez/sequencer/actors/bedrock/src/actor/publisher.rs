@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::{Context as _, anyhow};
 use chain_state::timeout_node::TimeoutNode;
-use common::block::Block;
+use common::{block::Block, storage_cid::StorageCid};
 use kameo::actor::ActorRef;
 use kameo_actors::broker::Broker;
 use logos_blockchain_zone_sdk::{
@@ -370,7 +370,7 @@ impl Publisher {
             transfer_threshold,
         )?;
 
-        let inscription = block_inscription(&self.node, &genesis).await?;
+        let inscription = block_inscription(&self.node, &genesis, &[]).await?;
         // A config moves the config tip only, so the first block chains on the root.
         let inscribe_op = InscriptionOp {
             channel_id: self.channel_id,
@@ -414,12 +414,13 @@ impl Publisher {
     pub async fn publish_block(
         &mut self,
         block: Block,
+        locators: &[StorageCid],
         withdrawals: Vec<WithdrawArg>,
         parent: Option<MsgId>,
         expected_seq: Option<ChannelSeq>,
     ) -> Result<PublishOutcome> {
         self.check_seq(expected_seq)?;
-        let inscription = block_inscription(&self.node, &block).await?;
+        let inscription = block_inscription(&self.node, &block, locators).await?;
         let data_byte_size = inscription.len();
 
         let published = if let Some(parent) = parent {
@@ -468,12 +469,13 @@ impl Publisher {
     pub async fn prepare_pin(
         &mut self,
         block: Block,
+        locators: &[StorageCid],
         parent: MsgId,
         notes: &[NoteId],
         expected_seq: Option<ChannelSeq>,
     ) -> Result<PreparedPin> {
         self.check_seq(expected_seq)?;
-        let inscription = block_inscription(&self.node, &block).await?;
+        let inscription = block_inscription(&self.node, &block, locators).await?;
         let block_size = inscription.len();
         let inscribe_op = self.inscription_op(inscription, parent);
         let msg_id = inscribe_op.id();
@@ -787,19 +789,20 @@ async fn checked_inscription(
     Ok(Inscription::new_unchecked(data))
 }
 
-/// `block` as the bytes of an inscription.
+/// `block` as the bytes of an inscription naming `locators`.
 async fn block_inscription(
     node: &TimeoutNode<NodeHttpClient>,
     block: &Block,
+    locators: &[StorageCid],
 ) -> Result<Inscription> {
-    checked_inscription(node, inscription_data(block)?).await
+    checked_inscription(node, inscription_data(block, locators)?).await
 }
 
-/// The data `block` is inscribed as: its digest form.
-pub(super) fn inscription_data(block: &Block) -> Result<Vec<u8>> {
+/// The data `block` is inscribed as: its digest form, then `locators`.
+pub(super) fn inscription_data(block: &Block, locators: &[StorageCid]) -> Result<Vec<u8>> {
     block
         .digested()
-        .to_inscription()
+        .to_inscription(locators)
         .map_err(Error::BlockEncodingFailed)
 }
 
@@ -821,11 +824,14 @@ fn has_channel_activity(checkpoint: &SequencerCheckpoint) -> bool {
 /// A message-lineage entry, with its block when the payload decodes to one, in the final block at
 /// `slot` or in the view when `None`.
 fn channel_entry(inscription: &InscriptionInfo, slot: Option<Slot>) -> ChannelEntry {
-    let block = if <Inscription as AsRef<[u8]>>::as_ref(&inscription.payload).is_empty() {
+    let inscribed = if <Inscription as AsRef<[u8]>>::as_ref(&inscription.payload).is_empty() {
         None
     } else {
         block_from_inscription(inscription)
     };
+    let (block, locators) = inscribed.map_or((None, Vec::new()), |inscribed| {
+        (Some(inscribed.block), inscribed.locators.into_valid())
+    });
     ChannelEntry {
         msg: inscription.this_msg,
         parent: inscription.parent_msg,
@@ -836,6 +842,7 @@ fn channel_entry(inscription: &InscriptionInfo, slot: Option<Slot>) -> ChannelEn
         slot,
         block,
         finally_absent_keys: BTreeSet::new(),
+        locators,
     }
 }
 

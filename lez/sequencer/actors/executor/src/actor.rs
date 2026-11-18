@@ -1,4 +1,4 @@
-use std::ops::ControlFlow;
+use std::{ops::ControlFlow, sync::Arc};
 
 use chain_state::ProofStore;
 use common::{
@@ -33,7 +33,7 @@ use sequencer_bedrock_actor::{
     protocol::{ChannelEvent, ChannelEventKind, Ed25519Key, PublisherEvent},
 };
 use sequencer_channel_signing_actor::{ChannelSigningActor, protocol as channel_signing_protocol};
-use sequencer_core::{StakeConfigUpdate, config::SequencerConfig};
+use sequencer_core::{StakeConfigUpdate, config::SequencerConfig, proof_objects::ProofObjects};
 use sequencer_gossip_actor::protocol::FetchProof;
 use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::StorageActorTrait;
@@ -82,6 +82,8 @@ pub struct Args<S: StorageActorTrait, B: BedrockActorTrait> {
     pub proofs: ProofStore,
     /// Where this node requests the proofs its chain state lacks.
     pub proof_requests: ActorRef<PubSub<FetchProof>>,
+    /// The proofs this node holds in Logos Storage.
+    pub proof_objects: Arc<ProofObjects>,
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> Clone for Args<S, B> {
@@ -97,6 +99,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Clone for Args<S, B> {
             bedrock_broker_ref: self.bedrock_broker_ref.clone(),
             proofs: self.proofs.clone(),
             proof_requests: self.proof_requests.clone(),
+            proof_objects: Arc::clone(&self.proof_objects),
         }
     }
 }

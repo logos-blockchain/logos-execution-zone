@@ -12,10 +12,28 @@ use lee::{AccountId, Actor};
 use crate::{
     HashType,
     block::{Block, HashableBlockData, TransactionReceipt},
+    storage_cid::{STORAGE_CID_PREFIX, StorageCid},
     transaction::{FeePayee, LeeTransaction, clock_invocation, fee_invocation},
 };
 
 // Helpers
+
+/// A locator of the canonical form that names no object.
+#[must_use]
+pub fn placeholder_locator() -> StorageCid {
+    StorageCid::try_from([&STORAGE_CID_PREFIX[..], &[0; 32]].concat().as_slice())
+        .expect("the canonical prefix and a digest form a locator")
+}
+
+/// `block`'s inscription, naming the placeholder locator for each of its proofs.
+#[must_use]
+pub fn inscription(block: &Block) -> Vec<u8> {
+    let digested = block.digested();
+    let locators = vec![placeholder_locator(); digested.body.proofs().count()];
+    digested
+        .to_inscription(&locators)
+        .expect("the block serializes")
+}
 
 /// The test block-producer's reward account.
 #[must_use]

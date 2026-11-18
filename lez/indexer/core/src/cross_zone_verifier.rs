@@ -17,7 +17,7 @@ use chain_state::{
 };
 use common::{
     HashType,
-    block::{Block, DigestedBlock, PeerChainTip},
+    block::{Block, DigestedBlock, InscribedBlock, PeerChainTip},
     transaction::{LeeTransaction, LeeTransactionWith},
 };
 use cross_zone::{
@@ -1318,14 +1318,15 @@ where
             let ZoneMessage::Block(zone_block) = msg else {
                 continue;
             };
-            match DigestedBlock::from_inscription(&zone_block.data) {
-                Ok(block) => entries.push(ChannelEntry {
+            match InscribedBlock::decode(&zone_block.data) {
+                Ok(InscribedBlock { block, .. }) => entries.push(ChannelEntry {
                     msg: zone_block.id,
                     parent: entries.last().map_or_else(|| chain.pin(), |prev| prev.msg),
                     signer: Some(zone_block.signer.to_bytes()),
                     slot: Some(slot),
                     block: Some(block),
                     finally_absent_keys: BTreeSet::new(),
+                    locators: Vec::new(),
                 }),
                 Err(err) => {
                     error!(
@@ -1400,7 +1401,7 @@ where
         let ZoneMessage::Block(zone_block) = msg else {
             continue;
         };
-        let Ok(mut block) = DigestedBlock::from_inscription(&zone_block.data) else {
+        let Ok(InscribedBlock { mut block, .. }) = InscribedBlock::decode(&zone_block.data) else {
             continue;
         };
         if block.header.block_id != block_id {
@@ -1518,10 +1519,7 @@ mod tests {
 
     /// A peer-stream item carrying `block`.
     fn peer_block_msg(block: &Block, slot: u64) -> (ZoneMessage, Slot) {
-        peer_msg(
-            block.digested().to_inscription().expect("block serializes"),
-            slot,
-        )
+        peer_msg(common::test_utils::inscription(block), slot)
     }
 
     /// A hash-linked run from the peer's genesis whose last block,
@@ -3242,9 +3240,7 @@ mod tests {
         (
             ZoneMessage::Block(ZoneBlock {
                 id: MsgId::from([0; 32]),
-                data: Inscription::new_unchecked(
-                    block.digested().to_inscription().expect("block serializes"),
-                ),
+                data: Inscription::new_unchecked(common::test_utils::inscription(block)),
                 signer: Ed25519Key::from_bytes(&[seed; 32])
                     .public_key()
                     .into_unverified(),

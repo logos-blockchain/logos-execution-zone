@@ -1,4 +1,4 @@
-use std::{fmt::Display, future::Future, time::Duration};
+use std::{fmt::Display, future::Future, sync::Arc, time::Duration};
 
 use chain_state::{Anchor, AnchorConsistencyCheck, ChainConsistency, ChainState, ProofStore, Tip};
 use kameo::actor::ActorRef;
@@ -9,7 +9,7 @@ use sequencer_bedrock_actor::{
     protocol::{ChannelId, ChannelSeq, Checkpoint, MsgId, SerializeOp as _, Slot},
 };
 use sequencer_channel_signing_actor::ChannelSigningActor;
-use sequencer_core::{StakeConfigUpdate, config::SequencerConfig};
+use sequencer_core::{StakeConfigUpdate, config::SequencerConfig, proof_objects::ProofObjects};
 use sequencer_gossip_actor::protocol::FetchProof;
 use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::{
@@ -51,6 +51,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
             bedrock_broker_ref: _,
             proofs,
             proof_requests,
+            proof_objects,
         }: Args<S, B>,
     ) -> Result<Self> {
         // TODO: Rework this encapsulation cringe
@@ -110,6 +111,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
             slasher_ref,
             channel_signer_ref,
             proof_requests_ref: proof_requests,
+            proof_objects,
         };
 
         // A channel only configured so far has the root as its tip message.
@@ -295,10 +297,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
     }
 }
 
-#[expect(
-    clippy::struct_field_names,
-    reason = "Every field is an actor ref, named the way they are everywhere else"
-)]
 struct ActorsBundle<S: StorageActorTrait, B: BedrockActorTrait> {
     storage_ref: ActorRef<S>,
     bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
@@ -306,6 +304,7 @@ struct ActorsBundle<S: StorageActorTrait, B: BedrockActorTrait> {
     slasher_ref: ActorRef<SlasherActor<S>>,
     channel_signer_ref: ActorRef<ChannelSigningActor>,
     proof_requests_ref: ActorRef<PubSub<FetchProof>>,
+    proof_objects: Arc<ProofObjects>,
 }
 
 /// The checkpoint record `checkpoint` and `seq` persist as.

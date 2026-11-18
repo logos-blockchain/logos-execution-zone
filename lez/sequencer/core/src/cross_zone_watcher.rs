@@ -7,7 +7,7 @@ use anyhow::{Context as _, Result};
 use chain_state::{ChannelEntry, StructuralChain, Tip, zone_indexer::Batch};
 use common::{
     HashType,
-    block::{DigestedBlock, PeerChainTip},
+    block::{DigestedBlock, InscribedBlock, PeerChainTip},
     transaction::{LeeTransaction, LeeTransactionWith},
 };
 use cross_zone::{
@@ -549,8 +549,8 @@ where
                     ZoneMessage::Block(block) => block,
                     ZoneMessage::Deposit(_) | ZoneMessage::Withdraw(_) => continue,
                 };
-                let block = match DigestedBlock::from_inscription(&zone_block.data) {
-                    Ok(block) => block,
+                let block = match InscribedBlock::decode(&zone_block.data) {
+                    Ok(inscribed) => inscribed.block,
                     Err(err) => {
                         warn!(
                             slot = slot.into_inner(),
@@ -573,6 +573,7 @@ where
                     slot: Some(slot),
                     block: Some(block),
                     finally_absent_keys: BTreeSet::new(),
+                    locators: Vec::new(),
                 });
             }
             let held = undecodable.map_or(Some(batch.watermark), |slot| {
@@ -1040,10 +1041,7 @@ mod tests {
     }
 
     fn block_msg(block: &Block, slot: u64) -> (ZoneMessage, Slot) {
-        peer_msg(
-            block.digested().to_inscription().expect("block serializes"),
-            slot,
-        )
+        peer_msg(common::test_utils::inscription(block), slot)
     }
 
     /// A stream item carrying the peer's block `block_id`.
@@ -2093,9 +2091,7 @@ mod tests {
         (
             ZoneMessage::Block(ZoneBlock {
                 id: MsgId::from([0; 32]),
-                data: Inscription::new_unchecked(
-                    block.digested().to_inscription().expect("block serializes"),
-                ),
+                data: Inscription::new_unchecked(common::test_utils::inscription(block)),
                 signer: Ed25519Key::from_bytes(&[seed; 32])
                     .public_key()
                     .into_unverified(),

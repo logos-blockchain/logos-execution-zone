@@ -171,6 +171,7 @@ pub fn lineage(blocks: &[(&Block, [u8; 32], u64)]) -> Vec<ChannelEntry> {
                 slot: Some(Slot::from(slot)),
                 block: Some(block.digested()),
                 finally_absent_keys: BTreeSet::new(),
+                locators: Vec::new(),
             };
             parent = entry.msg;
             entry

@@ -206,6 +206,7 @@ async fn reconstruction_skips_an_undecodable_inscription() -> Result<()> {
     let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
     let junk = FinalizedBlock {
         block: BlockData::Undecodable(b"not a block".to_vec()),
+        locators: Vec::new(),
         msg_id: MsgId::from([0xAA_u8; 32]),
         slot: Slot::from(15),
         signer: None,
@@ -232,6 +233,7 @@ fn offender() -> Ed25519PublicKey {
 fn signed_junk_at(payload: &[u8], slot: u64) -> FinalizedBlock {
     FinalizedBlock {
         block: BlockData::Undecodable(payload.to_vec()),
+        locators: Vec::new(),
         msg_id: MsgId::from([0xAA_u8; 32]),
         slot: Slot::from(slot),
         signer: Some(offender()),
@@ -367,6 +369,7 @@ fn final_through(block2: &Block, final_msg: Option<MsgId>, held: &[Block]) -> Sh
                 slot: None,
                 block: None,
                 finally_absent_keys: BTreeSet::new(),
+                locators: Vec::new(),
             }],
             Slot::from(0),
         );
@@ -380,6 +383,7 @@ fn final_through(block2: &Block, final_msg: Option<MsgId>, held: &[Block]) -> Sh
             slot: None,
             block: Some(block.digested()),
             finally_absent_keys: BTreeSet::new(),
+            locators: Vec::new(),
         }]);
         parent = mock_msg_of(block);
     }
@@ -479,6 +483,7 @@ async fn a_blockless_final_entry_resumes_the_lineage() -> Result<()> {
             finalized_at(&block2, 20),
             FinalizedBlock {
                 block: BlockData::Undecodable(b"not a block".to_vec()),
+                locators: Vec::new(),
                 msg_id: junk,
                 slot: Slot::from(25),
                 signer: None,
@@ -517,6 +522,7 @@ async fn reconstruction_pins_on_trailing_garbage() -> Result<()> {
     let genesis = genesis();
     let junk = |n: u8, slot: u64| FinalizedBlock {
         block: BlockData::Undecodable(b"not a block".to_vec()),
+        locators: Vec::new(),
         msg_id: MsgId::from([n; 32]),
         slot: Slot::from(slot),
         signer: None,
@@ -584,6 +590,7 @@ async fn replay_cuts_a_block_skipped_in_the_last_slot_of_its_window_as_a_live_no
         },
         FinalizedBlock {
             block: BlockData::Undecodable(b"not a block".to_vec()),
+            locators: Vec::new(),
             msg_id: MsgId::from([0xAA; 32]),
             slot: Slot::from(20),
             signer: None,
@@ -607,6 +614,7 @@ async fn replay_cuts_a_block_skipped_in_the_last_slot_of_its_window_as_a_live_no
                     BlockData::Undecodable(_) => None,
                 },
                 finally_absent_keys: BTreeSet::new(),
+                locators: Vec::new(),
             };
             parent = entry.msg;
             entry

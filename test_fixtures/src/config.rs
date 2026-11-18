@@ -42,8 +42,8 @@ pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000_000_000, 20_0
 /// price before any transaction exists; setup checks it against what the wallet measures.
 ///
 /// It is the shield's digest form: its serialized size with the proof replaced by the proof's
-/// 32-byte digest, mostly its padded private slots.
-pub const SHIELD_BYTES: u64 = 14_021;
+/// 32-byte digest, mostly its padded private slots, and the 38-byte locator its block inscribes.
+pub const SHIELD_BYTES: u64 = 14_059;
 
 /// The public account for funding the private accounts' balances at genesis.
 pub(crate) const PRIVATE_FUNDER_INDEX: usize = 0;

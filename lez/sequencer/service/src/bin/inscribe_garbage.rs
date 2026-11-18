@@ -106,9 +106,10 @@ fn block_on(
     let block =
         common::test_utils::produce_dummy_block(block_id, Some(parent.header.hash), transactions);
     let block = common::block::HashableBlockData::from(block).into_pending_block();
+    // Garbage blocks carry no private transaction, so no locator.
     block
         .digested()
-        .to_inscription()
+        .to_inscription(&[])
         .expect("a block should serialize")
 }
 

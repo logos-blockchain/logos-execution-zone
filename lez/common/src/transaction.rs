@@ -75,10 +75,17 @@ impl LeeTransaction {
         }
     }
 
-    /// The storage bytes charged for the transaction: the size of its inscribed digest form.
+    /// The storage bytes charged for the transaction: the size of its inscribed digest form, and
+    /// of the locator a private one's proof is inscribed with.
     pub fn charged_bytes(&self) -> borsh::io::Result<u64> {
         let size = borsh::object_length(&self.digested())?;
-        Ok(u64::try_from(size).expect("a transaction's size fits u64"))
+        let size = u64::try_from(size).expect("a transaction's size fits u64");
+        Ok(match self {
+            Self::Public(_) => size,
+            Self::PrivacyPreserving(_) => {
+                size.saturating_add(fee_core::market::PROOF_LOCATOR_BYTES)
+            }
+        })
     }
 
     /// Whether a declared fee is signed by its payer; a transaction declaring none always is.

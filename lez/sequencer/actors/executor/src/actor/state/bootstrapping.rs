@@ -109,6 +109,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
             slot: Some(finalized.slot),
             block: block.cloned(),
             finally_absent_keys: BTreeSet::new(),
+            locators: finalized.locators.clone(),
         };
         self.parent = finalized.msg_id;
         let undecodable: Vec<_> = match (&finalized.block, finalized.signer) {

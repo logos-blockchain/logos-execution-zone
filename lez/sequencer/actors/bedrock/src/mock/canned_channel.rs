@@ -182,6 +182,7 @@ impl SharedChannel {
             move |PublishBlock {
                       channel_id: _,
                       block,
+                      locators: _,
                       withdrawals,
                       parent,
                       expected_seq: _,
@@ -199,6 +200,7 @@ impl SharedChannel {
             move |PreparePin {
                       channel_id: _,
                       block,
+                      locators: _,
                       parent,
                       notes,
                       expected_seq: _,

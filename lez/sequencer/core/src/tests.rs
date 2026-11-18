@@ -80,8 +80,9 @@ use crate::{
         SequencerConfig,
     },
     config_target, deposit_already_minted, dispatch_already_delivered, extract_cross_zone_dispatch,
-    extract_cross_zone_dispatch_key, is_sequencer_only_program, resubmittable_txs, round_robin,
-    zone_checkpoint,
+    extract_cross_zone_dispatch_key, is_sequencer_only_program,
+    proof_objects::ProofObjects,
+    resubmittable_txs, round_robin, zone_checkpoint,
 };
 
 /// The peer zone a cross-zone test receives from. Distinct from the test
@@ -255,6 +256,7 @@ async fn start_sequencer_bare_on(
         crate::inscribed_block_deposits,
     ));
 
+    let proof_objects = Arc::new(ProofObjects::in_memory(chain.proofs().clone()));
     let sequencer = SequencerCore::new(
         config,
         mempool,
@@ -266,6 +268,7 @@ async fn start_sequencer_bare_on(
         PubSub::spawn(PubSub::new(DeliveryStrategy::Guaranteed)),
         slasher_ref,
         channel_signer,
+        proof_objects,
     )
     .await
     .expect("Failed to start the sequencer");
@@ -293,6 +296,7 @@ fn entry_of(block: &Block, parent: MsgId) -> ChannelEntry {
         slot: None,
         block: Some(block.digested()),
         finally_absent_keys: BTreeSet::new(),
+        locators: Vec::new(),
     }
 }
 
@@ -2709,6 +2713,7 @@ async fn production_chains_on_a_garbage_entry_at_the_tip() {
                 slot: None,
                 block: None,
                 finally_absent_keys: BTreeSet::new(),
+                locators: Vec::new(),
             }]),
             ..empty_channel_update()
         })
@@ -2782,6 +2787,7 @@ async fn a_conflict_dropping_a_garbage_entry_rewinds_only_the_pin() {
                 slot: None,
                 block: None,
                 finally_absent_keys: BTreeSet::new(),
+                locators: Vec::new(),
             }]),
             ..empty_channel_update()
         })
@@ -3012,7 +3018,7 @@ async fn signs_peer_pin(
         [
             Op::ChannelInscribe(InscriptionOp {
                 channel_id,
-                inscription: Inscription::new_unchecked(block.digested().to_inscription().unwrap()),
+                inscription: Inscription::new_unchecked(common::test_utils::inscription(block)),
                 parent: MsgId::root(),
                 signer: peer.public_key().into_unverified(),
             }),
@@ -4245,7 +4251,11 @@ async fn a_publish_on_a_pin_the_view_moved_past_is_dropped() {
     );
     let our_block = common::test_utils::produce_dummy_block(2, Some(genesis_meta.hash), vec![tx]);
     sequencer
-        .record_produced_block(publish_outcome(&our_block, pin), our_block.clone())
+        .record_produced_block(
+            publish_outcome(&our_block, pin),
+            our_block.clone(),
+            Vec::new(),
+        )
         .await
         .unwrap();
 
@@ -4265,7 +4275,7 @@ async fn a_published_block_that_does_not_apply_moves_only_the_pin() {
     // The head moved under us: our block's parent is no longer the tip.
     let stale = common::test_utils::produce_dummy_block(2, Some(HashType([9; 32])), vec![]);
     sequencer
-        .record_produced_block(publish_outcome(&stale, pin), stale.clone())
+        .record_produced_block(publish_outcome(&stale, pin), stale.clone(), Vec::new())
         .await
         .unwrap();
 

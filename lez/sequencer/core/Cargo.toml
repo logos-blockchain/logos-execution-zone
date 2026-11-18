@@ -58,9 +58,11 @@ async-trait.workspace = true
 default = []
 # In-process guest execution with a memoized memory image, via `lee`.
 prove = ["lee/prove", "chain_state/prove"]
+test-utils = ["logos_storage/test-utils"]
 
 [dev-dependencies]
 chain_state = { workspace = true, features = ["test-utils"] }
+logos_storage = { workspace = true, features = ["test-utils"] }
 cross_zone = { workspace = true, features = ["test-utils"] }
 sequencer_storage_actor = { workspace = true, features = ["actor", "mock"] }
 sequencer_bedrock_actor = { workspace = true, features = ["mock"] }

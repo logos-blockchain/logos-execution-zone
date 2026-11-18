@@ -5,6 +5,14 @@ use serde_with::{DeserializeFromStr, SerializeDisplay};
 
 /// Bytes of a [`StorageCid`].
 pub const STORAGE_CID_BYTES: usize = 38;
+#[expect(
+    clippy::as_conversions,
+    reason = "A const assertion cannot convert through TryFrom; the length fits both types"
+)]
+const _: () = assert!(
+    STORAGE_CID_BYTES as u64 == fee_core::market::PROOF_LOCATOR_BYTES,
+    "a private transaction is charged for the locator its block inscribes"
+);
 
 /// What precedes the digest in every manifest CID a canonical upload returns: `CIDv1`, the
 /// `storage-manifest` codec (`0xCD01`) and a SHA-256 multihash header.

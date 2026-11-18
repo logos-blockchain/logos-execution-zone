@@ -7,6 +7,7 @@ use sha2::{Digest as _, Sha256, digest::FixedOutput as _};
 
 use crate::{
     HashType,
+    storage_cid::{STORAGE_CID_BYTES, StorageCid},
     transaction::{LeeTransaction, LeeTransactionWith},
 };
 pub type BlockHash = HashType;
@@ -196,12 +197,20 @@ impl DigestedBlock {
         .compute_hash()
     }
 
-    pub fn to_inscription(&self) -> std::io::Result<Vec<u8>> {
-        borsh::to_vec(self)
-    }
-
-    pub fn from_inscription(bytes: &[u8]) -> std::io::Result<Self> {
-        borsh::from_slice(bytes)
+    /// The block's inscription: its digest form, then `locators`, one per private transaction in
+    /// transaction order.
+    pub fn to_inscription(&self, locators: &[StorageCid]) -> std::io::Result<Vec<u8>> {
+        if locators.len() != self.body.proofs().count() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "a block inscribes one locator per private transaction",
+            ));
+        }
+        let mut bytes = borsh::to_vec(self)?;
+        for locator in locators {
+            bytes.extend_from_slice(locator.as_bytes());
+        }
+        Ok(bytes)
     }
 
     pub fn hydrate(&self, proofs: impl Fn(&ProofDigest) -> Option<Proof>) -> Option<Block> {
@@ -224,6 +233,54 @@ impl DigestedBlock {
             },
             bedrock_status: BedrockStatus::Pending,
         })
+    }
+}
+
+/// What an inscription carries after its block: one Logos Storage manifest CID per private
+/// transaction, in transaction order. The block's hash does not cover them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Locators {
+    Valid(Vec<StorageCid>),
+    /// A section of the wrong length, or a locator of another form. The block stands without it.
+    Malformed,
+}
+
+impl Locators {
+    /// The locators, none when malformed.
+    #[must_use]
+    pub fn into_valid(self) -> Vec<StorageCid> {
+        match self {
+            Self::Valid(locators) => locators,
+            Self::Malformed => Vec::new(),
+        }
+    }
+}
+
+/// A block as an inscription carries it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InscribedBlock {
+    pub block: DigestedBlock,
+    pub locators: Locators,
+}
+
+impl InscribedBlock {
+    /// Reads the block before its locators, so a malformed locator section leaves the block
+    /// readable.
+    pub fn decode(mut bytes: &[u8]) -> std::io::Result<Self> {
+        let block = DigestedBlock::deserialize(&mut bytes)?;
+        let expected = block.body.proofs().count().checked_mul(STORAGE_CID_BYTES);
+        let locators = if expected == Some(bytes.len()) {
+            bytes
+                .as_chunks::<STORAGE_CID_BYTES>()
+                .0
+                .iter()
+                .map(|locator| StorageCid::try_from(locator.as_slice()))
+                .collect::<Result<_, _>>()
+                .map_or(Locators::Malformed, Locators::Valid)
+        } else {
+            Locators::Malformed
+        };
+        Ok(Self { block, locators })
     }
 }
 
@@ -283,9 +340,16 @@ impl HashableBlockData {
         self.into_block(hash)
     }
 
+    /// The length of the block's inscription, locators included.
     pub fn inscription_len(self) -> std::io::Result<usize> {
         // The hash is fixed-width, so its value does not change the length.
-        borsh::object_length(&self.into_block(HashType([0; 32])).digested())
+        let block = self.into_block(HashType([0; 32])).digested();
+        let locators = block
+            .body
+            .proofs()
+            .count()
+            .saturating_mul(STORAGE_CID_BYTES);
+        Ok(borsh::object_length(&block)?.saturating_add(locators))
     }
 
     fn into_block(self, hash: BlockHash) -> Block {
@@ -327,7 +391,8 @@ mod tests {
     use super::TransactionReceipt;
     use crate::{
         HashType,
-        block::{DigestedBlock, HashableBlockData, HashableBlockDataWith, OwnHasher},
+        block::{HashableBlockData, HashableBlockDataWith, InscribedBlock, Locators, OwnHasher},
+        storage_cid::{STORAGE_CID_PREFIX, StorageCid},
         test_utils,
         transaction::LeeTransaction,
     };
@@ -337,6 +402,10 @@ mod tests {
             Message::default(),
             WitnessSet::from_raw_parts(vec![], Proof::from_inner(proof)),
         ))
+    }
+
+    fn locator() -> StorageCid {
+        StorageCid::try_from([&STORAGE_CID_PREFIX[..], &[7; 32]].concat().as_slice()).unwrap()
     }
 
     fn non_repeating_proof() -> Vec<u8> {
@@ -465,11 +534,12 @@ mod tests {
         .into_pending_block()
         .digested();
 
-        let inscription = block.to_inscription().unwrap();
+        let inscription = block.to_inscription(&[locator()]).unwrap();
 
-        let decoded = DigestedBlock::from_inscription(&inscription).unwrap();
-        assert_eq!(decoded, block);
-        assert!(decoded.body.proofs().eq([&digest]));
+        let decoded = InscribedBlock::decode(&inscription).unwrap();
+        assert_eq!(decoded.block, block);
+        assert_eq!(decoded.locators, Locators::Valid(vec![locator()]));
+        assert!(decoded.block.body.proofs().eq([&digest]));
         assert!(inscription.len() < proof.len());
         let distinctive = &proof[4096..4128];
         assert!(
@@ -489,7 +559,7 @@ mod tests {
             ])
         };
         let block = data.clone().into_pending_block();
-        let inscribed = block.digested().to_inscription().unwrap();
+        let inscribed = block.digested().to_inscription(&[locator()]).unwrap();
 
         let measured = data.inscription_len().unwrap();
 

@@ -38,14 +38,13 @@ use logos_blockchain_zone_sdk::{
 
 use super::{
     BlockSummary, NodeReader, keep_newest_block_summaries,
-    publisher::{channel_entries, genesis_config_op, genesis_config_proof, inscription_data},
+    publisher::{channel_entries, genesis_config_op, genesis_config_proof},
 };
 use crate::protocol::ChannelParams;
 
 /// A tx wrapping `block` in one inscribe op on `channel`.
 fn inscribing_tx(channel: ChannelId, block: &Block) -> SignedOps<Unverified, StandardMode> {
-    let inscription =
-        Inscription::new_unchecked(inscription_data(block).expect("the block encodes"));
+    let inscription = Inscription::new_unchecked(common::test_utils::inscription(block));
     let signer = Ed25519Key::generate(&mut rand::rngs::OsRng);
     let op = Op::ChannelInscribe(InscriptionOp {
         channel_id: channel,

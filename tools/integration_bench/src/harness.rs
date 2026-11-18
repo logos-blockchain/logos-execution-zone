@@ -149,7 +149,9 @@ async fn finalize_step(
         let tip = ctx.sequencer_client().get_last_block_id().await?;
         for block_id in (pre_block_id.saturating_add(1))..=tip {
             if let Some(block) = ctx.sequencer_client().get_block(block_id).await? {
-                let block_bytes = block.digested().to_inscription().map_or(0, |v| v.len());
+                let block_bytes = common::block::HashableBlockData::from(block.clone())
+                    .inscription_len()
+                    .unwrap_or(0);
                 let mut sz = BlockSize {
                     block_id,
                     block_bytes,

@@ -65,6 +65,9 @@ pub enum Error {
     #[error("Storage inconsistency detected: {0}")]
     StorageInconsistency(String),
 
+    #[error("Failed to seed a proof in Logos Storage")]
+    ProofSeedingFailed(#[source] sequencer_core::proof_objects::Error),
+
     #[error("Storage request failed")]
     StorageRequestFailed(#[source] SendError<ErasedMessage, sequencer_storage_actor::error::Error>),
 

@@ -10,6 +10,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use common::{
     HashType,
     block::{Block, DigestedBlock},
+    storage_cid::StorageCid,
     transaction::TxEvents,
 };
 use lee::{V03State, privacy_preserving_transaction::circuit::ProofDigest};
@@ -40,6 +41,9 @@ pub struct ChannelEntry {
     /// Keys `block` may release in full: those absent from the config in effect `finality_depth`
     /// L1 blocks under where it landed and from every config since.
     pub finally_absent_keys: BTreeSet<SequencerKey>,
+    /// Where Logos Storage holds the proofs of `block`, one per private transaction in order, as
+    /// its inscription names them; none when it named them malformed.
+    pub locators: Vec<StorageCid>,
 }
 
 /// What recording one of our own publishes did.
@@ -190,6 +194,7 @@ struct StoredEntry {
     block: Option<StoredBlock>,
     judged: bool,
     finally_absent_keys: BTreeSet<SequencerKey>,
+    locators: Vec<StorageCid>,
 }
 
 #[derive(BorshSerialize, BorshDeserialize)]
@@ -657,6 +662,7 @@ impl ChainState {
             }),
             judged: self.judged.contains(&entry.msg),
             finally_absent_keys: entry.finally_absent_keys.clone(),
+            locators: entry.locators.clone(),
         };
         let (finalized, unfinalized) = self.view.split_at(self.finalized);
         let stored = StoredView {
@@ -703,6 +709,7 @@ impl ChainState {
                     slot: entry.slot.map(Slot::from),
                     block,
                     finally_absent_keys: entry.finally_absent_keys,
+                    locators: entry.locators,
                 }
             })
             .collect();
@@ -1501,6 +1508,7 @@ mod tests {
             slot: None,
             block: block.map(Block::digested),
             finally_absent_keys: BTreeSet::new(),
+            locators: Vec::new(),
         }
     }
 

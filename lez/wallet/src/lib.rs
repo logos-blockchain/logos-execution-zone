@@ -88,6 +88,11 @@ pub const DEFAULT_GAS_LIMIT: u64 = fee_core::market::MAX_GAS_EXEC;
 /// so defaults survive early congestion without re-signing.
 const ASSUMED_BASE_FEE: u128 = 64;
 
+/// The fewest bytes a private transaction is charged: its proof's digest and the locator its
+/// block inscribes.
+const PRIVATE_FLOOR_BYTES: u64 =
+    fee_core::market::PROOF_DIGEST_BYTES.saturating_add(fee_core::market::PROOF_LOCATOR_BYTES);
+
 /// Serialized-size allowance the default `max_fee` is sized against.
 const ASSUMED_DATA_BYTES: u128 = 100_000;
 
@@ -1697,7 +1702,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         let fee_payer = match (named_payer, public_payer) {
             (None, None) => self.auto_fee_payer(
                 &accounts,
-                self.reserve_pricing(&quote, 0, fee_core::market::PROOF_DIGEST_BYTES)
+                self.reserve_pricing(&quote, 0, PRIVATE_FLOOR_BYTES)
                     .headroom_reserve,
             ),
             (named_payer, _) => named_payer,
@@ -2046,13 +2051,13 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             return send_publicly_paid(payer, input).await;
         }
         let Some(payer) = acc_manager.private_fee_payer_account_id(
-            // The transaction is measured once its payer is known; its proof's digest bounds it
-            // below.
+            // The transaction is measured once its payer is known; its proof's digest and locator
+            // bound it below.
             //
             // TODO: An account holding less than the measured reserve can be chosen over a
             // richer one; measuring before choosing would fix that, as the size does not
             // depend on which of these accounts pays.
-            self.reserve_pricing(&quote, cycles, fee_core::market::PROOF_DIGEST_BYTES)
+            self.reserve_pricing(&quote, cycles, PRIVATE_FLOOR_BYTES)
                 .headroom_reserve,
         ) else {
             let Some(payer) = public_signer() else {
@@ -2074,7 +2079,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         // A picked payer short of the fee pays out of what the root credits it; when the root
         // credits it too little, a public signer declares the fee instead.
         let fee_floor = self
-            .reserve_pricing(&quote, cycles, fee_core::market::PROOF_DIGEST_BYTES)
+            .reserve_pricing(&quote, cycles, PRIVATE_FLOOR_BYTES)
             .fee_at_head;
         if named_payer.is_none()
             && balance < fee_floor

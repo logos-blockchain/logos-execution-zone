@@ -115,6 +115,7 @@ pub(in crate::actor) fn with_view(mut store: CannedStore) -> CannedStore {
                 slot: None,
                 block: Some(block.digested()),
                 finally_absent_keys: BTreeSet::new(),
+                locators: Vec::new(),
             };
             parent = entry.msg;
             entry

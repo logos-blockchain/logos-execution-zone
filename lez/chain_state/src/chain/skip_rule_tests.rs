@@ -241,6 +241,7 @@ fn lineage(blocks: &[(&Block, [u8; 32])]) -> Vec<ChannelEntry> {
                 slot: None,
                 block: Some(block.digested()),
                 finally_absent_keys: BTreeSet::new(),
+                locators: Vec::new(),
             };
             parent = entry.msg;
             entry

@@ -1,6 +1,7 @@
 use chain_state::{ChainState, ChannelEntry};
 use common::{
     block::{BedrockStatus, Block},
+    storage_cid::StorageCid,
     transaction::LeeTransaction,
 };
 use kameo::actor::ActorRef;
@@ -11,7 +12,9 @@ use sequencer_bedrock_actor::{
     BedrockActorTrait,
     protocol::{ChannelId, ChannelSeq, Ed25519Key, Ed25519PublicKey, PublishOutcome, Slot},
 };
-use sequencer_core::{SequencerCore, TransactionOrigin, config::SequencerConfig};
+use sequencer_core::{
+    SequencerCore, TransactionOrigin, config::SequencerConfig, proof_objects::ProofObjects,
+};
 use sequencer_gossip_actor::protocol::FetchProof;
 use sequencer_storage_actor::{StorageActorTrait, protocol::AtomicUpdate};
 use sharding_pool_actor::ShardingPoolActor;
@@ -150,6 +153,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             slasher_ref,
             channel_signer_ref,
             proof_requests_ref,
+            proof_objects,
         } = actors;
 
         let own_sequencer_key =
@@ -187,6 +191,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                     own_sequencer_key,
                     &storage_ref,
                     &bedrock_pool_ref,
+                    &proof_objects,
                 )
                 .await?
             } else {
@@ -258,6 +263,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             stake_config_pubsub_ref,
             slasher_ref,
             channel_signer_ref,
+            proof_objects,
         )
         .await
         .map_err(Error::SequencerStartFailed)?;
@@ -290,7 +296,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                 .await?;
 
         let block_id = block.header.block_id;
-        chain.replace_unfinalized_view(vec![published_entry(&outcome, &block, own_sequencer_key)]);
+        chain.replace_unfinalized_view(vec![published_entry(
+            &outcome,
+            &block,
+            own_sequencer_key,
+            Vec::new(),
+        )]);
         storage_ref
             .ask(AtomicUpdate {
                 checkpoint: Some(checkpoint_record(&outcome.checkpoint, outcome.seq)?),
@@ -312,6 +323,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         own_sequencer_key: sequencer_stake_core::SequencerKey,
         storage_ref: &ActorRef<S>,
         bedrock_pool_ref: &ActorRef<ShardingPoolActor<B, ChannelId>>,
+        proof_objects: &ProofObjects,
     ) -> Result<Option<ChannelSeq>> {
         let mut pending_blocks = storage_ref
             .ask(sequencer_storage_actor::protocol::GetAllBlocks)
@@ -345,12 +357,27 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             bedrock_pool_ref,
         )
         .await?;
-        let mut published = vec![published_entry(&outcome, genesis, own_sequencer_key)];
+        let mut published = vec![published_entry(
+            &outcome,
+            genesis,
+            own_sequencer_key,
+            Vec::new(),
+        )];
         for block in descendants {
+            let mut locators = Vec::new();
+            for proof in block.body.proofs() {
+                locators.push(
+                    proof_objects
+                        .seed(proof)
+                        .await
+                        .map_err(Error::ProofSeedingFailed)?,
+                );
+            }
             outcome = bedrock_pool_ref
                 .ask(sequencer_bedrock_actor::protocol::PublishBlock {
                     channel_id: config.bedrock_config.channel_id,
                     block: block.clone(),
+                    locators: locators.clone(),
                     withdrawals: Vec::new(),
                     parent: None,
                     expected_seq: None,
@@ -360,7 +387,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             for proof in block.body.proofs() {
                 chain.proofs().insert(proof);
             }
-            published.push(published_entry(&outcome, block, own_sequencer_key));
+            published.push(published_entry(
+                &outcome,
+                block,
+                own_sequencer_key,
+                locators,
+            ));
         }
 
         // These blocks are already stored, so only the view and the sdk's
@@ -425,6 +457,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                 .ask(sequencer_bedrock_actor::protocol::PublishBlock {
                     channel_id,
                     block: genesis.clone(),
+                    locators: Vec::new(),
                     withdrawals: Vec::new(),
                     parent: None,
                     expected_seq: None,
@@ -443,6 +476,7 @@ fn published_entry(
     outcome: &PublishOutcome,
     block: &Block,
     signer: sequencer_stake_core::SequencerKey,
+    locators: Vec<StorageCid>,
 ) -> ChannelEntry {
     ChannelEntry {
         msg: outcome.this_msg,
@@ -451,5 +485,6 @@ fn published_entry(
         slot: None,
         block: Some(block.digested()),
         finally_absent_keys: chain_state::full_stake_releases::finalize_unstake_keys(&block.body),
+        locators,
     }
 }

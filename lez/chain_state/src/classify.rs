@@ -307,7 +307,8 @@ mod tests {
     }
 
     #[test]
-    fn a_private_transaction_is_charged_its_proofs_digest_and_its_proof_may_not_exceed_the_cap() {
+    fn a_private_transaction_is_charged_its_proofs_digest_and_locator_and_its_proof_may_not_exceed_the_cap()
+     {
         let with_proof = |size| {
             let mut message = Message::default();
             message.execution.boundary = vec![
@@ -320,10 +321,11 @@ mod tests {
             ))
         };
         let cap = usize::try_from(market::PROOF_BYTES).unwrap();
-        // The proof's length-prefixed bytes give way to its fixed 32-byte digest.
+        // The proof's length-prefixed bytes give way to its fixed 32-byte digest, and its block
+        // inscribes a 38-byte locator.
         let compact = |size: usize| {
             let full = borsh::object_length(&with_proof(size)).unwrap();
-            u64::try_from(full - (4 + size) + 32).unwrap()
+            u64::try_from(full - (4 + size) + 32 + 38).unwrap()
         };
         for size in [0, cap] {
             assert_eq!(with_proof(size).charged_bytes().unwrap(), compact(size));

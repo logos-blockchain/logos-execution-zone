@@ -81,6 +81,7 @@ fn entry(block: &Block, parent: &Block) -> ChannelEntry {
         slot: None,
         block: Some(block.digested()),
         finally_absent_keys: BTreeSet::new(),
+        locators: Vec::new(),
     }
 }
 

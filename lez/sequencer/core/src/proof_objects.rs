@@ -121,6 +121,18 @@ impl ProofObjects {
         }
     }
 
+    /// Objects on an in-memory Storage node of their own, with in-memory records.
+    #[cfg(any(test, feature = "test-utils"))]
+    #[must_use]
+    pub fn in_memory(proofs: ProofStore) -> Self {
+        Self::new(
+            Arc::new(logos_storage::memory::MemoryNetwork::default().node()),
+            proofs,
+            Arc::new(MemoryRecords::default()),
+            &LogosStorageConfig::default(),
+        )
+    }
+
     /// Installs the map persisted before a restart, without the objects the node no longer
     /// holds.
     pub async fn restore(&self) -> Result<(), Error> {
@@ -129,13 +141,20 @@ impl ProofObjects {
                 warn!("Skipping a persisted proof object that doesn't decode");
                 continue;
             };
-            if self.storage.exists(object.cid).await? {
-                self.lock().objects.insert(object.digest, object);
-            } else {
-                self.records
+            // A node that cannot answer keeps the record, to be checked by the next restart.
+            match self.storage.exists(object.cid).await {
+                Ok(false) => self
+                    .records
                     .delete(object.digest)
                     .await
-                    .map_err(Error::Record)?;
+                    .map_err(Error::Record)?,
+                Ok(true) => {
+                    self.lock().objects.insert(object.digest, object);
+                }
+                Err(err) => {
+                    warn!(cid = %object.cid, error = %err, "Failed to reconcile a proof object");
+                    self.lock().objects.insert(object.digest, object);
+                }
             }
         }
         Ok(())
@@ -413,6 +432,41 @@ impl Drop for PeerClaim<'_> {
                 state.peer_downloads.remove(&self.peer);
             }
         }
+    }
+}
+
+/// Records kept in memory, for tests.
+#[cfg(any(test, feature = "test-utils"))]
+#[derive(Default)]
+pub struct MemoryRecords(Mutex<BTreeMap<ProofDigest, Vec<u8>>>);
+
+#[cfg(any(test, feature = "test-utils"))]
+#[async_trait]
+impl ObjectRecords for MemoryRecords {
+    async fn load(&self) -> anyhow::Result<Vec<Vec<u8>>> {
+        Ok(self
+            .0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .values()
+            .cloned()
+            .collect())
+    }
+
+    async fn put(&self, digest: ProofDigest, bytes: Vec<u8>) -> anyhow::Result<()> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(digest, bytes);
+        Ok(())
+    }
+
+    async fn delete(&self, digest: ProofDigest) -> anyhow::Result<()> {
+        self.0
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(&digest);
+        Ok(())
     }
 }
 

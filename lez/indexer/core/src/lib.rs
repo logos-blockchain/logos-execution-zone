@@ -11,7 +11,7 @@ use chain_state::{
     chain::SettledBlock, zone_indexer::ZoneIndexer,
 };
 pub use chain_state::{BlockIngestError, StallReason, timeout_node::TimeoutNode};
-use common::block::{Block, DigestedBlock};
+use common::block::{Block, InscribedBlock};
 // TODO: Remove after testnet
 use futures::StreamExt as _;
 use lee::privacy_preserving_transaction::circuit::ProofDigest;
@@ -719,8 +719,10 @@ impl IndexerCore {
                             continue;
                         }
 
-                        let block = match DigestedBlock::from_inscription(&zone_block.data) {
-                            Ok(b) => Some(b),
+                        let (block, locators) = match InscribedBlock::decode(&zone_block.data) {
+                            Ok(inscribed) => {
+                                (Some(inscribed.block), inscribed.locators.into_valid())
+                            }
                             Err(error) => {
                                 // The stall must be durable before the cursor moves.
                                 if !self.park_undeserializable(slot, error) {
@@ -730,7 +732,7 @@ impl IndexerCore {
                                     break;
                                 }
                                 // L1 proceeds regardless
-                                None
+                                (None, Vec::new())
                             }
                         };
                         entries.push(ChannelEntry {
@@ -741,6 +743,7 @@ impl IndexerCore {
                             slot: Some(slot),
                             block,
                             finally_absent_keys: BTreeSet::new(),
+                            locators,
                         });
                     }
 
@@ -1120,7 +1123,10 @@ mod tests {
     }
 
     /// The proofs `block` still lacks once the ones the proof store lacked are fetched.
-    async fn fetch_missing(core: &IndexerCore, block: &DigestedBlock) -> Vec<ProofDigest> {
+    async fn fetch_missing(
+        core: &IndexerCore,
+        block: &common::block::DigestedBlock,
+    ) -> Vec<ProofDigest> {
         let missing = || -> Vec<ProofDigest> {
             block
                 .body

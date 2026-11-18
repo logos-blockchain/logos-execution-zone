@@ -194,6 +194,7 @@ fn entry(block: &Block, parent: MsgId, signer: [u8; 32], slot: Option<u64>) -> C
         slot: slot.map(Slot::from),
         block: Some(block.digested()),
         finally_absent_keys: BTreeSet::new(),
+        locators: Vec::new(),
     }
 }
 

@@ -1,7 +1,10 @@
 use std::{collections::BTreeSet, num::NonZero, sync::Arc, time::Duration};
 
 pub use chain_state::{ChannelEntry, zone_indexer::Batch};
-use common::block::{Block, DigestedBlock};
+use common::{
+    block::{Block, DigestedBlock},
+    storage_cid::StorageCid,
+};
 use kameo::Reply;
 pub use logos_blockchain_zone_sdk::{
     Slot, UnverifiedEd25519PublicKey, ZoneMessage,
@@ -110,6 +113,8 @@ pub enum ChannelEventKind {
 #[derive(Debug, Clone)]
 pub struct FinalizedBlock {
     pub block: BlockData,
+    /// The locators the inscription names after its block; none when malformed or undecodable.
+    pub locators: Vec<StorageCid>,
     pub msg_id: MsgId,
     pub slot: Slot,
     /// The key that signed the inscription, [`None`] if it is not a valid one.
@@ -276,6 +281,8 @@ impl ShardingKey for CreateChannel {
 pub struct PublishBlock {
     pub channel_id: ChannelId,
     pub block: Block,
+    /// Where Logos Storage holds the block's proofs, one per private transaction in order.
+    pub locators: Vec<StorageCid>,
     pub withdrawals: Vec<WithdrawArg>,
     /// Parent message ID to inscribe the block on.
     /// If [`None`] then the block is inscribed on top of channel tip.
@@ -302,6 +309,8 @@ impl ShardingKey for PublishBlock {
 pub struct PreparePin {
     pub channel_id: ChannelId,
     pub block: Block,
+    /// As in [`PublishBlock::locators`].
+    pub locators: Vec<StorageCid>,
     pub parent: MsgId,
     /// Deposited channel notes the block mints from.
     pub notes: Vec<NoteId>,
