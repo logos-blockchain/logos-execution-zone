@@ -1,10 +1,7 @@
 //! Startup reconstruction: a starting executor replays the finalized channel
 //! history its store misses.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::Arc,
-};
+use std::{collections::BTreeSet, sync::Arc};
 
 use anyhow::Result;
 use chain_state::{ChainState, ChannelEntry, Tip};
@@ -15,10 +12,7 @@ use common::{
     transaction::LeeTransaction,
 };
 use kameo::actor::Spawn as _;
-use lee::{
-    AccountId, Actor, PublicTransaction, V03State,
-    public_transaction::{Message, WitnessSet},
-};
+use lee::{Actor, V03State};
 use ping_core::{ReceiverMessage, ping_record_pda, receiver_config_account_id};
 use sequencer_bedrock_actor::{
     mock::{CannedChannel, mock_msg_of},
@@ -29,7 +23,7 @@ use sequencer_bedrock_actor::{
 };
 use sequencer_storage_actor::{
     mock::{CannedStore, MockStorageActor, SharedStore},
-    protocol::{PendingCrossZoneDispatchRecord, PendingDepositEventRecord, ZoneAnchorRecord},
+    protocol::{PendingCrossZoneDispatchRecord, ZoneAnchorRecord},
 };
 use tokio::test;
 
@@ -148,45 +142,6 @@ fn dispatch_tx(src_block_id: u64, payload: &[u8]) -> LeeTransaction {
             Actor::new(ping_record_pda(receiver_id), receiver_id),
         ],
         message,
-    ))
-}
-
-/// The mint a finalized L1 deposit event injects, as the sequencer builds it.
-fn deposit_tx(
-    op_id: [u8; 32],
-    recipient: AccountId,
-    amount: bridge_core::BridgeAmount,
-) -> LeeTransaction {
-    let bridge_program_id = programs::bridge_account_id();
-    // The receipt PDA carries the exactly-once check, so the deposit is addressed to it.
-    let receipt = Actor::new(
-        bridge_core::deposit_receipt_account_id(bridge_program_id, op_id),
-        bridge_program_id,
-    );
-    let message = Message {
-        admission_evidence: vec![lee::PublicAccountEvidence::Pda {
-            program: bridge_program_id,
-            seed: bridge_core::deposit_receipt_seed(op_id),
-        }],
-        ..Message::try_new(
-            receipt,
-            vec![
-                receipt,
-                Actor::native_balance(system_accounts::bridge_account_id()),
-                Actor::native_balance(recipient),
-            ],
-            BTreeMap::new(),
-            bridge_core::Message::Deposit {
-                l1_deposit_op_id: op_id,
-                recipient_id: recipient,
-                amount,
-            },
-        )
-        .expect("deposit message builds")
-    };
-    LeeTransaction::Public(PublicTransaction::new(
-        message,
-        WitnessSet::from_raw_parts(Vec::new()),
     ))
 }
 
@@ -660,122 +615,3 @@ async fn a_verified_own_block_settles_its_delivery_records() -> Result<()> {
     assert!(store.lock().pending_dispatches.is_empty());
     Ok(())
 }
-
-/// A deposit whose mint this node already holds final, re-recorded as its L1 event is read again
-/// below the stored anchor. The channel serving the minting block back must settle the record,
-/// as nothing later will ever mint it again.
-#[test]
-async fn a_verified_own_block_settles_its_deposit_records() -> Result<()> {
-    let recipient = testnet_initial_state::initial_public_user_accounts()[0].account_id;
-    let deposit_op_id = [0x1b_u8; 32];
-
-    let genesis = genesis();
-    let block2 = produce_dummy_block(
-        2,
-        Some(genesis.header.hash),
-        vec![deposit_tx(deposit_op_id, recipient, 400)],
-    );
-    let store = CannedStore {
-        pending_deposits: vec![PendingDepositEventRecord {
-            deposit_op_id: HashType(deposit_op_id),
-            source_tx_hash: HashType([0; 32]),
-            amount: 400,
-            metadata: Vec::new(),
-        }],
-        ..with_finalized(finalized_genesis_store(), block2.clone())
-    }
-    .share();
-
-    start(
-        &store,
-        vec![finalized_at(&genesis, 10), finalized_at(&block2, 20)],
-    )
-    .await?;
-
-    assert_eq!(store.lock().anchor, Some(anchor_at(&block2, 20)));
-    assert!(store.lock().pending_deposits.is_empty());
-    Ok(())
-}
-
-/// A deposit whose L1 event was observed (a pending record exists) and whose L2
-/// mint is already contained in a finalized channel block. Reconstruction must
-/// apply the mint exactly once and settle the pending record on the way through,
-/// so the next production neither re-mints it nor re-injects it.
-#[test]
-async fn reconstruction_reconciles_already_finished_deposit() -> Result<()> {
-    let recipient = testnet_initial_state::initial_public_user_accounts()[0].account_id;
-    let funded = testnet_initial_state::initial_public_user_accounts()[0].balance;
-    let deposit_amount = 400_u64;
-    let deposit_op_id = [0x1a_u8; 32];
-    let bridge_program_id = programs::bridge_account_id();
-    let receipt_id = bridge_core::deposit_receipt_account_id(bridge_program_id, deposit_op_id);
-
-    let genesis = genesis();
-    let block2 = produce_dummy_block(
-        2,
-        Some(genesis.header.hash),
-        vec![deposit_tx(deposit_op_id, recipient, deposit_amount)],
-    );
-    let store = CannedStore {
-        pending_deposits: vec![PendingDepositEventRecord {
-            deposit_op_id: HashType(deposit_op_id),
-            source_tx_hash: HashType([0; 32]),
-            amount: deposit_amount,
-            metadata: Vec::new(),
-        }],
-        ..finalized_genesis_store()
-    }
-    .share();
-
-    start(
-        &store,
-        vec![finalized_at(&genesis, 10), finalized_at(&block2, 20)],
-    )
-    .await?;
-
-    // The mint lands once and the record its L1 event left behind is dropped.
-    assert_reconstructed(&store, &block2, 20);
-    let stored = store.lock();
-    let head_state = stored
-        .head_state
-        .as_ref()
-        .expect("the head state is stored");
-    assert_eq!(
-        head_state
-            .get_account_by_id(recipient)
-            .data
-            .native_balance()
-            .expect("the recipient holds a native balance"),
-        funded + u128::from(deposit_amount)
-    );
-    assert!(
-        !head_state
-            .get_account_by_id(receipt_id)
-            .data
-            .actor_state(bridge_program_id)
-            .is_empty(),
-        "the bridge claimed the deposit receipt"
-    );
-    assert!(stored.pending_deposits.is_empty());
-    Ok(())
-}
-
-// TODO(withdrawals): the two cases below need bridge withdrawals, which panic
-// today (`Withdraws are disabled in the current version of LEZ`), so neither the
-// withdraw block nor the L1 event it awaits can be built. Reinstate them when
-// withdrawals are enabled; the second also needs whatever replaces the
-// unseen-withdraw counter, whose storage API no longer exists.
-//
-// /// A reconstructed deposit must not be re-minted after cold-start backfill
-// /// re-delivers its event: the mint is permanently reflected in the
-// /// reconstructed state (the receipt PDA), so the drain has nothing to re-emit.
-// /// The withdraw block that follows it must likewise leave no phantom count.
-// #[test]
-// async fn reconstructed_deposit_is_not_reminted_after_backfill_redelivery() {}
-//
-// /// A reconstructed withdraw block must not touch the unseen-withdraw counter.
-// /// Its finalized L1 Withdraw event was already re-delivered (and dropped as a
-// /// no-op) by cold-start backfill, so counting it during reconstruction would
-// /// leave a permanent phantom that nothing ever consumes.
-// #[test]
-// async fn reconstructed_withdraw_leaves_no_phantom_unseen_count() {}

@@ -35,7 +35,6 @@ use sequencer_stake_core::{SequencerEntry, SequencerKey};
 use sequencer_storage_actor::{
     StorageActorTrait,
     mock::{MockStorageActor, SharedStore},
-    protocol::StoreUpdateOutcome,
 };
 use sharding_pool_actor::{RestartConfig, ShardingPoolActor, protocol::Reset};
 use tempfile::TempDir;
@@ -301,7 +300,7 @@ fn prepare_mock_storage_with_stake(
 
     mock_storage
         .expect_handle_apply_store_update()
-        .returning(|_, _| Ok(StoreUpdateOutcome::default()));
+        .returning(|_, _| Ok(()));
 
     mock_storage
         .expect_handle_get_dead_letter_dispatches()
@@ -488,10 +487,7 @@ async fn a_publish_refused_as_stale_returns_its_transactions_to_the_mempool() ->
     let _res = logging::try_init();
 
     let (config, _home, sequencer_key) = staked_sequencer_config();
-    let mut mock_storage = prepare_mock_storage_with_stake(stake_entries(sequencer_key));
-    mock_storage
-        .expect_handle_get_pending_deposit_events()
-        .returning(|_msg, _ctx| Ok(Vec::new()));
+    let mock_storage = prepare_mock_storage_with_stake(stake_entries(sequencer_key));
 
     // The first publish loses the race; the second is served and its block
     // recorded, so the test can see what the retry carried.
@@ -593,10 +589,7 @@ async fn a_publish_expects_the_sequence_the_publisher_started_at() -> Result<()>
     let _res = logging::try_init();
 
     let (config, _home, sequencer_key) = staked_sequencer_config();
-    let mut mock_storage = prepare_mock_storage_with_stake(stake_entries(sequencer_key));
-    mock_storage
-        .expect_handle_get_pending_deposit_events()
-        .returning(|_msg, _ctx| Ok(Vec::new()));
+    let mock_storage = prepare_mock_storage_with_stake(stake_entries(sequencer_key));
 
     let (expected_tx, mut expected_rx) = mpsc::unbounded_channel();
     let executor = spawn_on_genesis(
@@ -662,10 +655,7 @@ async fn spawn_supervised_on_genesis(
     ActorRef<ShardingPoolActor<MockBedrockActor, ChannelId>>,
     mpsc::UnboundedReceiver<()>,
 )> {
-    let mut mock_storage = prepare_mock_storage_with_empty_genesis();
-    mock_storage
-        .expect_handle_get_pending_deposit_events()
-        .returning(|_msg, _ctx| Ok(Vec::new()));
+    let mock_storage = prepare_mock_storage_with_empty_genesis();
     let storage_ref = MockStorageActor::spawn(mock_storage);
 
     let (publisher_init_tx, publisher_inits) = mpsc::unbounded_channel();
@@ -768,10 +758,7 @@ async fn a_failed_production_turn_does_not_stop_the_actor() -> Result<()> {
     let _res = logging::try_init();
 
     let (config, _home) = sequencer_config();
-    let mut mock_storage = prepare_mock_storage_with_empty_genesis();
-    mock_storage
-        .expect_handle_get_pending_deposit_events()
-        .returning(|_msg, _ctx| Ok(Vec::new()));
+    let mock_storage = prepare_mock_storage_with_empty_genesis();
     let storage_ref = MockStorageActor::spawn(mock_storage);
 
     let executor = spawn_on_genesis(

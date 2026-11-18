@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use bridge_core::{DepositMetadata, DepositRecipient};
+use bridge_core::DepositRecipient;
 use chain_state::{ChainState, ChannelEntry};
 use common::{
     HashType,
@@ -43,8 +43,7 @@ use sequencer_storage_actor::{
     protocol::{
         AddPendingCrossZoneDispatches, AtomicUpdate, CrossZoneMessageKey, DispatchOrigin, GetBlock,
         GetChannelViewBytes, GetFinalSnapshot, GetFirstBlockId, GetLatestBlockMeta, GetLeeState,
-        GetPendingCrossZoneDispatches, GetPendingDepositEvents, PendingCrossZoneDispatchRecord,
-        PendingDepositEventRecord,
+        GetPendingCrossZoneDispatches, PendingCrossZoneDispatchRecord,
     },
 };
 use sharding_pool_actor::{RestartConfig, ShardingPoolActor};
@@ -54,12 +53,11 @@ use tokio::sync::Mutex;
 
 use crate::{
     MAX_DISPATCHES_PER_BLOCK, RETIRE_DISPATCH_AFTER_FAILURES, SequencerCore, TransactionOrigin,
-    build_bridge_deposit_tx_from_event, build_finalize_unstake_tx, chain_update,
-    classify_settled_deliveries,
+    build_finalize_unstake_tx, classify_settled_deliveries,
     config::{
         self, BedrockConfig, CrossZoneConfig, CrossZonePeer, CrossZoneRoute, SequencerConfig,
     },
-    config_target, deposit_already_minted, dispatch_already_delivered, extract_cross_zone_dispatch,
+    config_target, dispatch_already_delivered, extract_cross_zone_dispatch,
     extract_cross_zone_dispatch_key, is_sequencer_only_program, resubmittable_txs, round_robin,
     zone_checkpoint,
 };
@@ -491,6 +489,29 @@ async fn common_setup_with_config(
     (sequencer, mempool_handle)
 }
 
+/// A bridge `Deposit` of `amount` to `recipient` under `op_id`, as the genesis builds them.
+fn bridge_deposit_tx(
+    op_id: [u8; 32],
+    recipient: &DepositRecipient,
+    amount: u64,
+) -> PublicTransaction {
+    sequencer_bridge::deposit_tx(
+        op_id,
+        &sequencer_bridge::Credited::Public(recipient.evidence()),
+        amount,
+    )
+    .expect("bridge deposit tx builds")
+}
+
+/// Whether the bridge holds the receipt of the deposit `op_id` in `state`.
+fn deposit_already_minted(state: &V03State, op_id: [u8; 32]) -> bool {
+    let bridge_program_id = programs::bridge_account_id();
+    let receipt_id = bridge_core::deposit_receipt_account_id(bridge_program_id, op_id);
+    state
+        .get_account_by_id_ref(receipt_id)
+        .is_some_and(|receipt| !receipt.data.actor_state(bridge_program_id).is_empty())
+}
+
 fn tx_is_bridge_deposit(
     tx: &LeeTransaction,
     deposit_op_id: [u8; 32],
@@ -620,7 +641,7 @@ async fn a_charged_bridge_deposit_is_dropped_by_the_builder_bridge_guard() {
     );
     assert!(
         !sequencer
-            .with_state(|state| deposit_already_minted(state, HashType(op_id)))
+            .with_state(|state| deposit_already_minted(state, op_id))
             .await,
         "a dropped deposit must not mint the receipt PDA",
     );
@@ -676,13 +697,7 @@ async fn an_exempt_public_bridge_deposit_is_dropped_by_the_builder_bridge_guard(
         PublicKey::new_from_private_key(&initial_pub_accounts_private_keys()[1].pub_sign_key),
     ));
     let op_id = [0x7c_u8; 32];
-    let forged = build_bridge_deposit_tx_from_event(&PendingDepositEventRecord {
-        deposit_op_id: HashType(op_id),
-        source_tx_hash: HashType([1_u8; 32]),
-        amount: 1,
-        metadata: borsh::to_vec(&DepositMetadata { recipient }).unwrap(),
-    })
-    .expect("bridge deposit tx builds");
+    let forged = LeeTransaction::Public(bridge_deposit_tx(op_id, &recipient, 1));
 
     mempool_handle
         .push((TransactionOrigin::User, forged))
@@ -707,7 +722,7 @@ async fn an_exempt_public_bridge_deposit_is_dropped_by_the_builder_bridge_guard(
     );
     assert!(
         !sequencer
-            .with_state(|state| deposit_already_minted(state, HashType(op_id)))
+            .with_state(|state| deposit_already_minted(state, op_id))
             .await,
         "a dropped deposit must not mint the receipt PDA",
     );
@@ -2462,20 +2477,13 @@ fn cooldown_rejects_before_the_cooldown_elapses() {
 #[test]
 fn resubmittable_txs_drops_clock_and_bridge_deposits() {
     let user_tx = common::test_utils::produce_dummy_empty_transaction();
-    let deposit_tx = build_bridge_deposit_tx_from_event(&PendingDepositEventRecord {
-        deposit_op_id: HashType([13; 32]),
-        source_tx_hash: HashType([7; 32]),
-        amount: 1,
-        metadata: borsh::to_vec(&DepositMetadata {
-            recipient: DepositRecipient::Identified(lee::PublicAccountEvidence::Key(
-                PublicKey::new_from_private_key(
-                    &initial_pub_accounts_private_keys()[0].pub_sign_key,
-                ),
-            )),
-        })
-        .unwrap(),
-    })
-    .unwrap();
+    let deposit_tx = LeeTransaction::Public(bridge_deposit_tx(
+        [13; 32],
+        &DepositRecipient::Identified(lee::PublicAccountEvidence::Key(
+            PublicKey::new_from_private_key(&initial_pub_accounts_private_keys()[0].pub_sign_key),
+        )),
+        1,
+    ));
     let withdraw_tx = {
         let bridge = Actor::new(
             system_accounts::bridge_account_id(),
@@ -3488,66 +3496,6 @@ async fn follow_update_persists_blocks_meta_and_state_atomically() {
     assert_eq!(
         stored_balance,
         initial_public_user_accounts()[1].balance + 10
-    );
-}
-
-/// A finalized block below the final tip cannot be checked against the tier,
-/// so it settles nothing: an accredited key could inscribe any bytes there.
-#[tokio::test]
-async fn a_foreign_block_below_the_final_tip_settles_no_deposit_record() {
-    let config = setup_sequencer_config();
-    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
-
-    // Final tier at block 2.
-    sequencer.run_production_turn().await.unwrap();
-    let block2 = block_at(&sequencer, 2).await.unwrap();
-    let finalized = finalized_as_held(&sequencer.chain(), &block2).await;
-    sequencer
-        .on_channel_update(&ChannelUpdate {
-            finalized: vec![finalized],
-            ..empty_channel_update()
-        })
-        .await;
-
-    let recipient = DepositRecipient::Identified(lee::PublicAccountEvidence::Key(
-        PublicKey::new_from_private_key(&initial_pub_accounts_private_keys()[0].pub_sign_key),
-    ));
-    let metadata = borsh::to_vec(&DepositMetadata { recipient }).unwrap();
-    let record = PendingDepositEventRecord {
-        deposit_op_id: HashType([21; 32]),
-        source_tx_hash: HashType([9; 32]),
-        amount: 5,
-        metadata,
-    };
-    let update = AtomicUpdate {
-        new_deposit_events: vec![record.clone()],
-        ..chain_update(&*sequencer.chain().lock().await)
-    };
-    sequencer.storage_ref.ask(update).await.unwrap();
-
-    // A crafted block 1 carrying the deposit's mint, as the next entry.
-    let forged = common::test_utils::produce_dummy_block(
-        1,
-        None,
-        vec![build_bridge_deposit_tx_from_event(&record).unwrap()],
-    );
-    let pin = sequencer.chain().lock().await.pin();
-    sequencer
-        .on_channel_update(&ChannelUpdate {
-            finalized: vec![entry_of(&forged, pin)],
-            ..empty_channel_update()
-        })
-        .await;
-
-    assert!(
-        sequencer
-            .storage_ref
-            .ask(GetPendingDepositEvents)
-            .await
-            .unwrap()
-            .iter()
-            .any(|event| event.deposit_op_id == record.deposit_op_id),
-        "a block the final tier cannot vouch for must not settle the deposit"
     );
 }
 
@@ -6268,39 +6216,17 @@ fn a_bridge_deposit_carries_its_receipts_and_its_recipients_evidence() {
             seed: lee_core::program::PdaSeed::new([6; 32]),
         }),
     ] {
-        let LeeTransaction::Public(event) =
-            build_bridge_deposit_tx_from_event(&PendingDepositEventRecord {
-                deposit_op_id: HashType(op_id),
-                source_tx_hash: HashType([1; 32]),
-                amount: 1,
-                metadata: borsh::to_vec(&DepositMetadata {
-                    recipient: recipient.clone(),
-                })
-                .unwrap(),
-            })
-            .expect("bridge deposit tx builds")
-        else {
-            panic!("a bridge deposit is a public transaction");
-        };
-        let genesis = sequencer_bridge::deposit_tx(
-            op_id,
-            &sequencer_bridge::Credited::Public(recipient.evidence()),
-            1,
-        )
-        .unwrap();
-
-        for tx in [event, genesis] {
-            let receipt = tx.message.execution.root.to.account_id;
-            assert_eq!(
-                tx.message
-                    .admission_evidence
-                    .iter()
-                    .map(lee::PublicAccountEvidence::account_id)
-                    .collect::<Vec<_>>(),
-                [receipt, recipient.account_id()],
-                "{recipient:?}"
-            );
-        }
+        let tx = bridge_deposit_tx(op_id, &recipient, 1);
+        let receipt = tx.message.execution.root.to.account_id;
+        assert_eq!(
+            tx.message
+                .admission_evidence
+                .iter()
+                .map(lee::PublicAccountEvidence::account_id)
+                .collect::<Vec<_>>(),
+            [receipt, recipient.account_id()],
+            "{recipient:?}"
+        );
     }
 }
 
@@ -6319,17 +6245,7 @@ fn a_bridge_deposit_credits_a_recipient_absent_from_public_state() {
     assert!(state.get_account_by_id_ref(recipient_id).is_none());
 
     let op_id = [0x7e; 32];
-    let LeeTransaction::Public(deposit) =
-        build_bridge_deposit_tx_from_event(&PendingDepositEventRecord {
-            deposit_op_id: HashType(op_id),
-            source_tx_hash: HashType([1; 32]),
-            amount: 9,
-            metadata: borsh::to_vec(&DepositMetadata { recipient }).unwrap(),
-        })
-        .expect("bridge deposit tx builds")
-    else {
-        panic!("a bridge deposit is a public transaction");
-    };
+    let deposit = bridge_deposit_tx(op_id, &recipient, 9);
     assert!(deposit.witness_set.signatures_and_public_keys().is_empty());
     assert!(deposit.message.nonces.is_empty());
     assert!(
@@ -6352,7 +6268,7 @@ fn a_bridge_deposit_credits_a_recipient_absent_from_public_state() {
             .unwrap(),
         9
     );
-    assert!(deposit_already_minted(&state, HashType(op_id)));
+    assert!(deposit_already_minted(&state, op_id));
 }
 
 #[test]

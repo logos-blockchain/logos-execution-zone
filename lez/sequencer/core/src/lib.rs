@@ -8,8 +8,6 @@ use std::{
 };
 
 use anyhow::{Context as _, Result, anyhow};
-use borsh::BorshDeserialize as _;
-use bridge_core::DepositMetadata;
 use chain_state::{AcceptOutcome, ChainState, ChannelEntry, PublishRecord, full_stake_releases};
 use common::{
     HashType,
@@ -38,7 +36,6 @@ use sequencer_bedrock_actor::{
     BedrockActorTrait,
     protocol::{ChannelId, Ed25519Key, LiveChannelConfig, PublishOutcome, ViewChange},
 };
-use sequencer_bridge::Credited;
 use sequencer_channel_signing_actor::{ChannelSigningActor, protocol as channel_signing};
 use sequencer_slasher_actor::{
     SlasherActor,
@@ -50,9 +47,9 @@ use sequencer_storage_actor::{
         AtomicUpdate, CrossZoneMessageKey, DeadLetterDispatch, DeadLetterRequeue, DispatchFailure,
         DispatchOrigin, DropSettledCrossZoneDispatches, GetAllBlocks, GetDeadLetterDispatchCount,
         GetDeadLetterDispatchRetainedCount, GetDeadLetterDispatches, GetLeeState,
-        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetSystemApprovalsBytes,
-        GetZoneCheckpoint, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
-        RecordDispatchFailure, RequeueDeadLetterDispatch, ZoneCheckpointRecord,
+        GetPendingCrossZoneDispatches, GetSystemApprovalsBytes, GetZoneCheckpoint,
+        PendingCrossZoneDispatchRecord, RecordDispatchFailure, RequeueDeadLetterDispatch,
+        ZoneCheckpointRecord,
     },
 };
 use sharding_pool_actor::ShardingPoolActor;
@@ -485,18 +482,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             // stored blocks there can be marked finalized.
             let last_finalized = irreversible.iter().map(|block| block.header.block_id).max();
 
-            // A deposit observed in a finalized block is permanently minted (its
-            // receipt is now in the irreversible tier), so its pending record can be
-            // dropped. Keyed by op id, not block id: a record only goes once its own
-            // deposit finalizes, never because some other block finalized at its
-            // height.
-            let finalized_deposit_ids: HashSet<HashType> = irreversible
-                .iter()
-                .flat_map(|block| block.body.transactions.iter())
-                .filter_map(extract_bridge_deposit_id)
-                .collect();
-
-            // The same for cross-zone deliveries, keyed by message key: a record
+            // A cross-zone delivery's record is keyed by message key: it
             // goes once its own delivery is irreversible, never because another
             // block finalized at its height.
             let mut finalized_dispatch_keys = HashSet::new();
@@ -512,7 +498,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     blocks: to_persist,
                     final_snapshot: final_meta.map(|meta| (chain.share_final_state(), meta)),
                     finalized_up_to: last_finalized,
-                    finalized_deposit_records: finalized_deposit_ids,
                     finalized_dispatch_records: finalized_dispatch_keys,
                     events,
                     ..chain_update(&chain)
@@ -1186,34 +1171,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         .await;
         let finalize_unstake_txs = build_finalize_unstake_txs(&working_state, &releasable_keys);
 
-        // Bridge deposit mints are drained from the store, not the mempool: the
-        // follow path records the event durably but cannot enqueue the mint
-        // itself. Draining here also subsumes the old
-        // startup replay.
-        //
-        // Skip deposits whose receipt has a nonempty bridge actor state.
-        // Reverting a block also reverts its receipts, allowing those deposits to be retried.
-        let deposit_records = self
-            .storage_ref
-            .ask(GetPendingDepositEvents)
-            .await
-            .context("Failed to load pending deposit events")?;
-        let pending_deposits: VecDeque<LeeTransaction> = deposit_records
-            .into_iter()
-            .filter(|record| !deposit_already_minted(&working_state, record.deposit_op_id))
-            .filter_map(|record| {
-                build_bridge_deposit_tx_from_event(&record)
-                    .map_err(|err| {
-                        warn!(
-                            deposit = %hex::encode(record.deposit_op_id),
-                            error = format_args!("{:#}", anyhow!(err)),
-                            "Skipping pending deposit event due to tx build failure"
-                        );
-                    })
-                    .ok()
-            })
-            .collect();
-
         let max_block_size = usize::try_from(
             committee_discovery::channel_params(&working_state)
                 .context("The chain holds no channel params")?
@@ -1270,8 +1227,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // `system_upgrader` changes in the mempool, returned by a reorg, wait for the one slot
         // before the fee.
         let mut upgrade_candidates = Vec::new();
-        let mut pending_from_store = pending_deposits;
-        pending_from_store.extend(pending_dispatches);
+        let mut pending_from_store = pending_dispatches;
         pending_from_store.extend(slash_txs);
         pending_from_store.extend(finalize_unstake_txs);
         while let Some((origin, tx, from_store)) = pending_from_store
@@ -1969,17 +1925,6 @@ fn checkpoint_bytes(checkpoint: &SequencerCheckpoint) -> Result<Vec<u8>> {
         .context("Failed to serialize zone-sdk checkpoint")
 }
 
-/// Whether `deposit_op_id`'s mint is already reflected in `state` — the bridge
-/// owns its receipt PDA. The receipt is the exactly-once ledger the bridge
-/// program keeps.
-fn deposit_already_minted(state: &lee::V03State, deposit_op_id: HashType) -> bool {
-    let bridge_program_id = programs::bridge_account_id();
-    let receipt_id = bridge_core::deposit_receipt_account_id(bridge_program_id, deposit_op_id.0);
-    state
-        .get_account_by_id_ref(receipt_id)
-        .is_some_and(|receipt| !receipt.data.actor_state(bridge_program_id).is_empty())
-}
-
 /// Whether a cross-zone delivery is already on the chain we are building on.
 ///
 /// The inbox records each peer block's delivered indices in that block's seen
@@ -2123,10 +2068,6 @@ pub fn chain_update(chain: &ChainState) -> AtomicUpdate {
         head_state: chain.share_head_state(),
         final_snapshot: None,
         finalized_up_to: None,
-        new_deposit_events: Vec::new(),
-        finalized_deposit_records: HashSet::new(),
-        consumed_withdrawals: HashSet::new(),
-        new_withdraw_intents: HashSet::new(),
         finalized_dispatch_records: HashSet::new(),
         zone_anchor: None,
         events: Vec::new(),
@@ -2145,23 +2086,6 @@ fn reserved_receipts(trailing: &[LeeTransaction]) -> impl Iterator<Item = Transa
 pub fn max_transaction_size(state: &lee::V03State) -> Option<u64> {
     committee_discovery::channel_params(state)
         .map(|params| params.max_block_size.saturating_sub(config::BLOCK_OVERHEAD))
-}
-
-/// Logs the deposits a store update recorded.
-fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Result<LeeTransaction> {
-    let metadata = DepositMetadata::try_from_slice(&event.metadata)
-        .context("Failed to decode finalized Bedrock deposit metadata")?;
-
-    // The receipt PDA carries the exactly-once check: the deposit is addressed to it,
-    // and its own actor state detects a replay.
-    Ok(LeeTransaction::Public(
-        sequencer_bridge::deposit_tx(
-            event.deposit_op_id.0,
-            &Credited::Public(metadata.recipient.evidence()),
-            event.amount,
-        )
-        .context("Failed to build bridge deposit message")?,
-    ))
 }
 
 /// The `Apply` of the upgrade that activates in block `block_id`, if any.

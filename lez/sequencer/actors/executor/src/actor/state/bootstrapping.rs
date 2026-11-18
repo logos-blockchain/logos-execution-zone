@@ -210,15 +210,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
         let mut update = sequencer_core::chain_update(&self.chain);
         update.blocks = sequencer_core::new_head_blocks(&self.chain, &head_before);
         if !newly_final.is_empty() {
-            // A reconstructed block is finalized, so any deposit it mints is
-            // permanently reflected in state (its receipt PDA); drop the
-            // pending record backfill may have re-delivered, so the drain
-            // stops re-minting. The same for the deliveries it carries.
-            update.finalized_deposit_records = newly_final
-                .iter()
-                .flat_map(|block| block.body.transactions.iter())
-                .filter_map(sequencer_core::extract_bridge_deposit_id)
-                .collect();
+            // A reconstructed block is finalized, so the deliveries it carries
+            // are settled: drop their pending records.
             for block in &newly_final {
                 update
                     .finalized_dispatch_records
@@ -258,19 +251,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
                 }
                 // A block we already hold verbatim needs no replay, but the
                 // channel serving it is what makes it irreversible, so its
-                // deposits and deliveries are settled and their records are
-                // owed nothing.
+                // deliveries are settled and their records are owed nothing.
                 Some(AcceptOutcome::AlreadyApplied | AcceptOutcome::Parked(_))
                     if let Some(stored) = held_final =>
                 {
                     Self::settle_reconstructed_deliveries(storage_ref, &stored).await?;
-                    update.finalized_deposit_records.extend(
-                        stored
-                            .body
-                            .transactions
-                            .iter()
-                            .filter_map(sequencer_core::extract_bridge_deposit_id),
-                    );
                     update.zone_anchor = Some(record);
                 }
                 Some(AcceptOutcome::AlreadyApplied) | None => {}

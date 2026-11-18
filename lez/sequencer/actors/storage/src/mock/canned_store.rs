@@ -12,8 +12,8 @@ use lee_core::BlockId;
 use super::MockStorageActor;
 use crate::protocol::{
     AtomicUpdate, DropSettledCrossZoneDispatches, GetBlock, PendingCrossZoneDispatchRecord,
-    PendingDepositEventRecord, PutSlashRecordBytes, PutSystemApprovalsBytes, SetZoneAnchor,
-    StoreUpdateOutcome, UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
+    PutSlashRecordBytes, PutSystemApprovalsBytes, SetZoneAnchor, UpdateZoneCheckpoint,
+    ZoneAnchorRecord, ZoneCheckpointRecord,
 };
 
 /// What a mocked store holds.
@@ -28,7 +28,6 @@ pub struct CannedStore {
     pub checkpoint: Option<ZoneCheckpointRecord>,
     /// Serialized unfinalized channel view.
     pub channel_view: Option<Vec<u8>>,
-    pub pending_deposits: Vec<PendingDepositEventRecord>,
     pub pending_dispatches: Vec<PendingCrossZoneDispatchRecord>,
     pub slash_record: Option<Vec<u8>>,
     pub system_approvals: Option<Vec<u8>>,
@@ -59,16 +58,6 @@ impl CannedStore {
         if let Some(view) = update.channel_view {
             self.channel_view = Some(view);
         }
-        for record in update.new_deposit_events {
-            if !self.pending_deposits.contains(&record) {
-                self.pending_deposits.push(record);
-            }
-        }
-        self.pending_deposits.retain(|record| {
-            !update
-                .finalized_deposit_records
-                .contains(&record.deposit_op_id)
-        });
         self.pending_dispatches.retain(|record| {
             !update
                 .finalized_dispatch_records
@@ -162,12 +151,8 @@ impl SharedStore {
             let store = self.clone();
             move |update, _ctx| {
                 store.lock().apply(update);
-                Ok(StoreUpdateOutcome::default())
+                Ok(())
             }
-        });
-        mock.expect_handle_get_pending_deposit_events().returning({
-            let store = self.clone();
-            move |_msg, _ctx| Ok(store.lock().pending_deposits.clone())
         });
         mock.expect_handle_get_pending_cross_zone_dispatches()
             .returning({

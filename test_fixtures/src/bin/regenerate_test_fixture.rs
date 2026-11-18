@@ -131,11 +131,7 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
             final_snapshot: Some((state, tip)),
             // Blocks must stay Pending for the re-publish; only the snapshot moves.
             finalized_up_to: None,
-            new_deposit_events: vec![],
-            finalized_deposit_records: HashSet::new(),
             finalized_dispatch_records: HashSet::new(),
-            consumed_withdrawals: HashSet::new(),
-            new_withdraw_intents: HashSet::new(),
             zone_anchor: None,
             events: vec![],
         })

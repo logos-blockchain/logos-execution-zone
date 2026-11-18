@@ -93,8 +93,6 @@ pub struct SetZoneAnchor {
 /// The serialized unfinalized channel view.
 pub struct GetChannelViewBytes;
 
-pub struct GetPendingDepositEvents;
-
 pub struct GetFinalSnapshot;
 
 pub struct GetPendingCrossZoneDispatches;
@@ -217,15 +215,6 @@ pub struct AtomicUpdate {
     /// it become finalized.
     pub finalized_up_to: Option<BlockId>,
 
-    /// Deposit events observed on L1, recorded unless already pending.
-    pub new_deposit_events: Vec<PendingDepositEventRecord>,
-    /// Deposit op ids whose mint finalized: their pending records are dropped.
-    pub finalized_deposit_records: HashSet<HashType>,
-    /// L1 withdraw events to reconcile against the intents held locally.
-    pub consumed_withdrawals: HashSet<WithdrawalReconciliationKey>,
-    /// L2 withdraw intents this update raises, awaiting their L1 event.
-    pub new_withdraw_intents: HashSet<WithdrawalReconciliationKey>,
-
     /// Message keys whose delivery finalized: their pending records are dropped.
     pub finalized_dispatch_records: HashSet<CrossZoneMessageKey>,
 
@@ -254,24 +243,11 @@ impl AtomicUpdate {
             head_state: state,
             final_snapshot: None,
             finalized_up_to: None,
-            new_deposit_events: Vec::new(),
-            finalized_deposit_records: HashSet::new(),
             finalized_dispatch_records: HashSet::new(),
-            consumed_withdrawals: HashSet::new(),
-            new_withdraw_intents: HashSet::new(),
             zone_anchor: None,
             events,
         }
     }
-}
-
-/// Identity of one withdrawal: the id of the channel note it releases.
-///
-/// Shared by the intent recorded when the sequencer publishes a withdrawal and
-/// the Bedrock event that later reports it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct WithdrawalReconciliationKey {
-    pub released_note_id: [u8; 32],
 }
 
 /// The last channel block read back and verified from Bedrock: the anchor for
@@ -284,18 +260,6 @@ pub struct ZoneAnchorRecord {
     pub slot: u64,
     pub block_id: u64,
     pub hash: HashType,
-}
-
-/// An L1 deposit event observed but not yet seen finalized.
-///
-/// Purely a liveness queue: whether to emit a mint is decided against chain
-/// state, and the record is dropped once its mint finalizes.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PendingDepositEventRecord {
-    pub deposit_op_id: HashType,
-    pub source_tx_hash: HashType,
-    pub amount: u64,
-    pub metadata: Vec<u8>,
 }
 
 /// A cross-zone delivery read off a peer block but not yet known to be
@@ -383,18 +347,6 @@ pub enum DispatchFailure {
     Retired(Box<DeadLetterDispatch>),
     /// No pending record, so nothing was counted and nothing was given up on.
     Absent,
-}
-
-/// What [`ApplyStoreUpdate`] observed while staging, for the caller to act on
-/// *after* the write committed.
-#[derive(Debug, Default)]
-pub struct StoreUpdateOutcome {
-    /// How many deposit events were newly recorded; the rest were already
-    /// pending, and so already owed.
-    pub accepted_deposits: usize,
-    /// The `consumed_withdrawals` this node holds no intent for: a released
-    /// note it never published, and so cannot account for.
-    pub unmatched_withdrawals: Vec<WithdrawalReconciliationKey>,
 }
 
 /// Schema-agnostic snapshot of a whole store, opaque by design.

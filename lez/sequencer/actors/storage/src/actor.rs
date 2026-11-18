@@ -1,8 +1,4 @@
-use std::{
-    collections::{BTreeMap, HashSet},
-    path::Path,
-    sync::Arc,
-};
+use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 use borsh::BorshDeserialize as _;
 use common::{
@@ -35,14 +31,13 @@ use crate::{
         GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatchRetainedCount,
         GetDeadLetterDispatches, GetEventFilter, GetFinalConfigsBytes, GetFinalSnapshot,
         GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
-        GetPendingCrossZoneDispatchCount, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
-        GetSlashRecordBytes, GetSystemApprovalsBytes, GetTransactionByHash,
-        GetTransactionReceiptByHash, GetTxHashToBlockIdMapItem, GetZoneAnchor, GetZoneCheckpoint,
-        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutFinalConfigsBytes,
-        PutSlashRecordBytes, PutSystemApprovalsBytes, RecordDispatchFailure,
-        RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
-        StoreUpdateOutcome, UpdateZoneCheckpoint, WithdrawalReconciliationKey, ZoneAnchorRecord,
-        ZoneCheckpointRecord,
+        GetPendingCrossZoneDispatchCount, GetPendingCrossZoneDispatches, GetSlashRecordBytes,
+        GetSystemApprovalsBytes, GetTransactionByHash, GetTransactionReceiptByHash,
+        GetTxHashToBlockIdMapItem, GetZoneAnchor, GetZoneCheckpoint,
+        PendingCrossZoneDispatchRecord, PutFinalConfigsBytes, PutSlashRecordBytes,
+        PutSystemApprovalsBytes, RecordDispatchFailure, RequeueDeadLetterDispatch,
+        SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor, UpdateZoneCheckpoint,
+        ZoneAnchorRecord, ZoneCheckpointRecord,
     },
 };
 
@@ -493,94 +488,6 @@ impl StorageActor {
                 &entities::ZoneCheckpoint::from(checkpoint),
             )
             .map_err(Into::into)
-    }
-
-    /// Records the deposits `new_deposit_events` observes and drops the records
-    /// of `finalized_deposit_records`, returning how many were newly recorded.
-    fn update_pending_deposits(
-        &self,
-        batch: &mut db::WriteBatch,
-        new_deposit_events: Vec<PendingDepositEventRecord>,
-        finalized_deposit_records: &HashSet<HashType>,
-    ) -> Result<usize> {
-        #[expect(
-            clippy::iter_over_hash_type,
-            reason = "HashSet is more efficient and delete order doesn't matter"
-        )]
-        for finalized_deposit in finalized_deposit_records {
-            self.db()
-                .delete_batch::<entities::PendingDeposit>(batch, finalized_deposit);
-        }
-
-        let mut accepted_deposits_count = 0_usize;
-        for deposit in new_deposit_events
-            .into_iter()
-            .unique_by(|event| event.deposit_op_id)
-            .filter(|event| !finalized_deposit_records.contains(&event.deposit_op_id))
-        {
-            if self
-                .db()
-                .get::<entities::PendingDeposit>(&deposit.deposit_op_id)?
-                .is_some()
-            {
-                continue;
-            }
-
-            let deposit_op_id = deposit.deposit_op_id;
-            self.db().put_batch(
-                batch,
-                &deposit_op_id,
-                &entities::PendingDeposit::from(deposit),
-            )?;
-            accepted_deposits_count = accepted_deposits_count.saturating_add(1);
-        }
-
-        Ok(accepted_deposits_count)
-    }
-
-    /// Raises the intents `new_withdrawals` publishes and settles the ones
-    /// `consumed_withdrawals` reports, returning the reported withdrawals this
-    /// node holds no intent for.
-    fn update_pending_withdrawals(
-        &self,
-        batch: &mut db::WriteBatch,
-        new_withdrawals: HashSet<WithdrawalReconciliationKey>,
-        consumed_withdrawals: &HashSet<WithdrawalReconciliationKey>,
-    ) -> Result<Vec<WithdrawalReconciliationKey>> {
-        let mut unmatched_withdrawals = Vec::new();
-
-        #[expect(
-            clippy::iter_over_hash_type,
-            reason = "HashSet is more efficient and delete order doesn't matter"
-        )]
-        for consumed in consumed_withdrawals {
-            let key = entities::WithdrawalReconciliationKey::from(*consumed);
-            let matched = new_withdrawals.contains(consumed)
-                || self
-                    .db()
-                    .get::<entities::PendingWithdrawal>(&key)?
-                    .is_some();
-
-            if matched {
-                self.db()
-                    .delete_batch::<entities::PendingWithdrawal>(batch, &key);
-            } else {
-                unmatched_withdrawals.push(*consumed);
-            }
-        }
-
-        for new_withdrawal in new_withdrawals
-            .into_iter()
-            .filter(|withdrawal| !consumed_withdrawals.contains(withdrawal))
-        {
-            self.db().put_batch(
-                batch,
-                &entities::WithdrawalReconciliationKey::from(new_withdrawal),
-                &entities::PendingWithdrawal,
-            )?;
-        }
-
-        Ok(unmatched_withdrawals)
     }
 
     /// Drops the records of the deliveries `settled_dispatches` reports as
@@ -1041,22 +948,6 @@ impl Message<GetChannelViewBytes> for StorageActor {
     }
 }
 
-impl Message<GetPendingDepositEvents> for StorageActor {
-    type Reply = Result<Vec<PendingDepositEventRecord>>;
-
-    async fn handle(
-        &mut self,
-        GetPendingDepositEvents: GetPendingDepositEvents,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.db()
-            .iter::<entities::PendingDeposit>()
-            .map_ok(Into::into)
-            .collect::<db::Result<_>>()
-            .map_err(Into::into)
-    }
-}
-
 impl Message<DumpDb> for StorageActor {
     type Reply = Result<DbDump>;
 
@@ -1072,7 +963,7 @@ impl Message<DumpDb> for StorageActor {
 }
 
 impl Message<AtomicUpdate> for StorageActor {
-    type Reply = Result<StoreUpdateOutcome>;
+    type Reply = Result<()>;
 
     async fn handle(
         &mut self,
@@ -1087,10 +978,6 @@ impl Message<AtomicUpdate> for StorageActor {
             head_state,
             final_snapshot,
             finalized_up_to,
-            new_deposit_events,
-            finalized_deposit_records,
-            consumed_withdrawals,
-            new_withdraw_intents,
             finalized_dispatch_records,
             zone_anchor,
             events,
@@ -1123,20 +1010,6 @@ impl Message<AtomicUpdate> for StorageActor {
 
         // Blocks
         let updated_blocks = self.update_blocks(&mut batch, blocks, finalized_up_to, head_tip)?;
-
-        // Deposits
-        let accepted_deposits_count = self.update_pending_deposits(
-            &mut batch,
-            new_deposit_events,
-            &finalized_deposit_records,
-        )?;
-
-        // Withdrawals
-        let unmatched_withdrawals = self.update_pending_withdrawals(
-            &mut batch,
-            new_withdraw_intents,
-            &consumed_withdrawals,
-        )?;
 
         // Cross-zone dispatches
         self.stage_settled_dispatches(&mut batch, finalized_dispatch_records)?;
@@ -1178,10 +1051,7 @@ impl Message<AtomicUpdate> for StorageActor {
             self.tx_index.delete_block(block_id);
         }
 
-        Ok(StoreUpdateOutcome {
-            accepted_deposits: accepted_deposits_count,
-            unmatched_withdrawals,
-        })
+        Ok(())
     }
 }
 

@@ -12112,7 +12112,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "borsh",
- "bridge_core",
  "bytesize",
  "chain_state",
  "common",
