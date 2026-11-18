@@ -480,7 +480,10 @@ impl IndexerCore {
                     .get_proof(sequencer_service_protocol::ProofDigest(*digest))
                     .await
                 {
-                    Ok(Some(proof)) if proof.0.digest() == *digest => {
+                    Ok(Some(proof))
+                        if proof.0.digest() == *digest
+                            && chain_state::classify::check_proof_size(&proof.0).is_ok() =>
+                    {
                         self.proofs.insert(&proof.0);
                         break;
                     }
@@ -492,8 +495,10 @@ impl IndexerCore {
     }
 
     /// The proof `digest` names, read from the dataset `locator` names when its manifest is of
-    /// the canonical form. The node keeps nothing: it serves no peer.
+    /// the canonical form. The node keeps nothing it fetched, as it serves no peer; what it held
+    /// already, a sequencer sharing it may serve.
     async fn read_from_storage(&self, locator: StorageCid, digest: &ProofDigest) -> Option<Proof> {
+        let held = self.storage.exists(locator).await.unwrap_or(true);
         let read = async {
             let manifest = self.storage.manifest(locator).await?;
             manifest.check_canonical(fee_core::market::PROOF_BYTES)?;
@@ -502,7 +507,8 @@ impl IndexerCore {
                 .await
         }
         .await;
-        if let Err(err) = self.storage.delete(locator).await
+        if !held
+            && let Err(err) = self.storage.delete(locator).await
             && !err.is_not_found()
         {
             warn!(%locator, error = %err, "Failed to drop a proof read from Logos Storage");
@@ -769,7 +775,7 @@ impl IndexerCore {
 
                         let (block, locators) = match InscribedBlock::decode(&zone_block.data) {
                             Ok(inscribed) => {
-                                (Some(inscribed.block), inscribed.locators.into_valid())
+                                (Some(inscribed.block), inscribed.locators)
                             }
                             Err(error) => {
                                 // The stall must be durable before the cursor moves.
@@ -1265,5 +1271,24 @@ mod tests {
         core.fetch_proofs(&[proof.digest()], |_digest| Some(other))
             .await;
         assert_eq!(core.proofs.get(&proof.digest()), Some(proof));
+    }
+
+    #[tokio::test]
+    async fn a_proof_read_from_a_node_that_already_held_it_stays_there() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let shared = logos_storage::memory::MemoryNetwork::default().node();
+        let proof = Proof::from_inner(vec![1; 32]);
+        let locator = shared
+            .upload(proof.clone().into_inner(), true)
+            .await
+            .unwrap();
+        let mut core = unreachable_core(dir.path());
+        core.storage = Arc::new(shared.clone());
+
+        core.fetch_proofs(&[proof.digest()], |_digest| Some(locator))
+            .await;
+
+        assert_eq!(core.proofs.get(&proof.digest()), Some(proof));
+        assert!(shared.holds(locator));
     }
 }
