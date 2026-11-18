@@ -3,15 +3,20 @@
 //!
 //! Every type here is `Serialize`-only: the model is sized for what we emit.
 
+use std::collections::BTreeMap;
+
 use serde::Serialize;
 
-use crate::{DATASOURCE_UID, FieldOverride, LOGS_DATASOURCE_UID, Target, unit::Unit};
+use crate::{
+    DATASOURCE_UID, FieldOverride, LOGS_DATASOURCE_UID, TRACES_DATASOURCE_UID, Target, unit::Unit,
+};
 
 #[derive(Clone, Copy, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum DatasourceKind {
     Prometheus,
     Loki,
+    Tempo,
 }
 
 #[derive(Clone, Copy, Serialize)]
@@ -39,6 +44,16 @@ pub enum PropertyId {
     Color,
     #[serde(rename = "custom.lineStyle")]
     LineStyle,
+    #[serde(rename = "links")]
+    Links,
+    /// A table column left out of view, its values still there for links.
+    #[serde(rename = "custom.hidden")]
+    Hidden,
+    /// A table column's width, in pixels.
+    #[serde(rename = "custom.width")]
+    Width,
+    #[serde(rename = "unit")]
+    Unit,
 }
 
 #[derive(Clone, Copy, Serialize)]
@@ -47,6 +62,8 @@ pub enum Calc {
     LastNotNull,
     Last,
     Max,
+    Sum,
+    Count,
 }
 
 #[derive(Clone, Copy, Serialize)]
@@ -98,6 +115,11 @@ pub enum PanelType {
     Logs,
     StateTimeline,
     StatusHistory,
+    #[serde(rename = "nodeGraph")]
+    NodeGraph,
+    Table,
+    Traces,
+    Row,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize)]
@@ -260,6 +282,13 @@ impl Datasource {
             uid: LOGS_DATASOURCE_UID.to_owned(),
         }
     }
+
+    pub fn tempo() -> Self {
+        Self {
+            kind: DatasourceKind::Tempo,
+            uid: TRACES_DATASOURCE_UID.to_owned(),
+        }
+    }
 }
 
 #[derive(Clone, Serialize)]
@@ -304,6 +333,10 @@ pub struct LineStyle {
 pub enum PropertyValue {
     Color(Color),
     LineStyle(LineStyle),
+    Links(Vec<DataLink>),
+    Flag(bool),
+    Pixels(u32),
+    Unit(Unit),
 }
 
 #[derive(Serialize)]
@@ -353,7 +386,9 @@ pub struct Defaults {
     pub color: Option<Color>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub custom: Option<CustomConfig>,
-    pub unit: Unit,
+    /// None leaves each field the unit its datasource gives it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<Unit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decimals: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -366,6 +401,23 @@ pub struct Defaults {
     pub mappings: Vec<ValueMapping>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub links: Vec<DataLink>,
+}
+
+impl Defaults {
+    /// None set: each field keeps what its datasource gives it.
+    pub const fn empty() -> Self {
+        Self {
+            color: None,
+            custom: None,
+            unit: None,
+            decimals: None,
+            min: None,
+            max: None,
+            thresholds: None,
+            mappings: Vec::new(),
+            links: Vec::new(),
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -512,6 +564,148 @@ pub struct StatusHistoryOptions {
     pub tooltip: Tooltip,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeGraphOptions {
+    pub edges: NodeGraphStats,
+    pub nodes: NodeGraphStats,
+    pub zoom_mode: ZoomMode,
+}
+
+/// How a node graph shows its nodes' or edges' `mainstat` field.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeGraphStats {
+    pub main_stat_unit: Unit,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableOptions {
+    pub cell_height: CellHeight,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub footer: Option<TableFooter>,
+    pub show_header: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sort_by: Vec<TableSort>,
+}
+
+/// A row under a table's others, here counting them.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableFooter {
+    pub count_rows: bool,
+    /// Empty for every field.
+    pub fields: String,
+    pub reducer: Vec<Calc>,
+    pub show: bool,
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CellHeight {
+    Sm,
+}
+
+/// The column a table is sorted by, by its name as shown.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableSort {
+    pub desc: bool,
+    pub display_name: String,
+}
+
+/// The options of a panel with none to set.
+#[expect(
+    clippy::empty_structs_with_brackets,
+    reason = "Serialized as `{}`, where a unit struct is `null`"
+)]
+#[derive(Serialize)]
+pub struct NoOptions {}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ZoomMode {
+    /// The wheel scrolls the dashboard, and zooms with Ctrl or Cmd held.
+    Cooperative,
+}
+
+/// A step reshaping a panel's query results before it draws them.
+#[derive(Serialize)]
+#[serde(tag = "id", content = "options", rename_all = "camelCase")]
+pub enum Transformation {
+    CalculateField(CalculateField),
+    Organize(Organize),
+    RenameByRegex(RenameByRegex),
+}
+
+/// Renames the series whose names match `regex` to `rename_pattern`, which
+/// may use its capture groups, e.g. `$1`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameByRegex {
+    pub regex: String,
+    pub rename_pattern: String,
+}
+
+/// Leaves out, orders and renames a table's columns, each by its name as
+/// shown, which may differ from the field's own.
+#[expect(clippy::struct_field_names, reason = "Grafana's names for them")]
+#[derive(Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Organize {
+    pub exclude_by_name: BTreeMap<String, bool>,
+    pub index_by_name: BTreeMap<String, u32>,
+    pub rename_by_name: BTreeMap<String, String>,
+}
+
+/// Adds the field `alias` to every row.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CalculateField {
+    pub alias: String,
+    pub mode: CalculateMode,
+    pub reduce: RowReduce,
+    pub replace_fields: bool,
+    /// Whether frames are joined by time first, rather than each taken alone.
+    pub time_series: bool,
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CalculateMode {
+    /// The row's number fields, reduced to one.
+    ReduceRow,
+}
+
+#[derive(Serialize)]
+pub struct RowReduce {
+    pub reducer: Calc,
+}
+
+/// How a query's result is laid out.
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TargetFormat {
+    /// One row per series, its labels in columns.
+    Table,
+}
+
+/// The language of a [`Target`]'s `query`.
+#[derive(Clone, Copy, Serialize)]
+pub enum QueryType {
+    #[serde(rename = "traceql")]
+    TraceQl,
+}
+
+/// How a trace search's result is laid out.
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TableType {
+    /// One row per matching span, its trace's id in `traceIdHidden`.
+    Spans,
+}
+
 #[derive(Clone, Copy, Serialize)]
 pub enum LogsSortOrder {
     Descending,
@@ -537,6 +731,9 @@ pub enum Options {
     StateTimeline(StateTimelineOptions),
     StatusHistory(StatusHistoryOptions),
     Logs(LogsOptions),
+    NodeGraph(NodeGraphOptions),
+    Table(TableOptions),
+    None(NoOptions),
 }
 
 /// One choice in a [`CustomVariable`] dropdown: `text` is displayed, `value` is
@@ -554,6 +751,16 @@ pub struct VariableOption {
 pub enum Variable {
     Custom(CustomVariable),
     Query(QueryVariable),
+    Textbox(TextboxVariable),
+}
+
+/// A text field, which links can fill in too.
+#[derive(Serialize)]
+pub struct TextboxVariable {
+    pub label: String,
+    pub name: String,
+    /// The text it starts with.
+    pub query: String,
 }
 
 /// A fixed list of choices, spelled out in the dashboard itself.
@@ -702,6 +909,30 @@ pub struct PanelModel {
     pub max_data_points: Option<u32>,
     pub options: Options,
     pub targets: Vec<Target>,
+    pub title: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transformations: Vec<Transformation>,
+    #[serde(rename = "type")]
+    pub panel_type: PanelType,
+}
+
+/// An entry of a dashboard's panel list: a panel, or a row heading.
+#[derive(Serialize)]
+#[serde(untagged)]
+pub enum DashboardPanel {
+    Panel(Box<PanelModel>),
+    Row(RowModel),
+}
+
+/// A row heading. An open row holds the panels after it, up to the next
+/// heading; a folded one holds its own, in `panels`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RowModel {
+    pub collapsed: bool,
+    pub grid_pos: GridPos,
+    pub id: u32,
+    pub panels: Vec<PanelModel>,
     pub title: String,
     #[serde(rename = "type")]
     pub panel_type: PanelType,

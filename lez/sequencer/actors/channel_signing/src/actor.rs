@@ -6,24 +6,24 @@ use kameo::{
     message::{Context, Message},
     reply::{DelegatedReply, ReplySender},
 };
-use log::{debug, warn};
-use logos_blockchain_core::{
-    mantle::{
-        NoteId,
-        ledger::Note,
-        ops::{
-            Op,
-            channel::{ChannelId, config::ChannelConfigOp},
+use logos_blockchain_zone_sdk::{
+    core::{
+        mantle::{
+            NoteId,
+            ledger::Note,
+            ops::{
+                Op,
+                channel::{ChannelId, config::ChannelConfigOp},
+            },
+            traits::Hashable as _,
+            transactions::Ops,
         },
-        traits::Hashable as _,
-        transactions::Ops,
+        proofs::channel_multi_sig_proof::{IndexedSignature, IndexedSignatures},
     },
-    proofs::channel_multi_sig_proof::{IndexedSignature, IndexedSignatures},
-};
-use logos_blockchain_key_management_system_service::keys::{
-    Ed25519Key, Ed25519PublicKey, Ed25519Signature,
+    key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey, Ed25519Signature},
 };
 use tokio::sync::mpsc;
+use tracing::{debug, warn};
 
 use crate::{
     error::Error,
@@ -140,7 +140,7 @@ impl ChannelSigningActor {
             return false;
         };
         if let Err(err) = submitter.tell(SubmitConfig(submission)).try_send() {
-            debug!("Dropped a signed channel config: {err}");
+            debug!(error = %err, "Dropped a signed channel config");
             return false;
         }
 

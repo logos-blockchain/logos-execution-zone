@@ -12,8 +12,7 @@ use lee_core::{
     EphemeralSecretKey, PrivateAccountKind, Recipient, RecipientEncryption, SenderPresentation,
     native_token,
 };
-use logos_blockchain_core::mantle::ops::channel::MsgId;
-use logos_blockchain_zone_sdk::Slot;
+use logos_blockchain_zone_sdk::{Slot, core::mantle::ops::channel::MsgId};
 
 use crate::ChannelEntry;
 
@@ -171,6 +170,7 @@ pub fn lineage(blocks: &[(&Block, [u8; 32], u64)]) -> Vec<ChannelEntry> {
                 signer: Some(signer),
                 slot: Some(Slot::from(slot)),
                 block: Some(block.digested()),
+                finally_absent_keys: BTreeSet::new(),
             };
             parent = entry.msg;
             entry

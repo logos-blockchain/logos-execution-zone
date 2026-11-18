@@ -1,6 +1,6 @@
 //! Starting the executor: creating the channel, and restarting over a store it already holds.
 
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 use anyhow::Result;
 use common::{block::Block, transaction::LeeTransaction};
@@ -9,7 +9,7 @@ use kameo::{
     error::HookError,
 };
 use lee_core::BlockId;
-use logos_blockchain_core::{
+use logos_blockchain_zone_sdk::core::{
     events::DepositRecreatedNotes,
     mantle::{TxHash, ledger::Inputs, ops::channel::deposit::Metadata},
 };
@@ -80,6 +80,7 @@ fn entry(block: &Block, parent: &Block) -> ChannelEntry {
         signer: None,
         slot: None,
         block: Some(block.digested()),
+        finally_absent_keys: BTreeSet::new(),
     }
 }
 

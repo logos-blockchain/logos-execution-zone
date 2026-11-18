@@ -1,7 +1,10 @@
 //! Startup reconstruction: a starting executor replays the finalized channel
 //! history its store misses.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 
 use anyhow::Result;
 use chain_state::{
@@ -363,6 +366,7 @@ fn final_through(block2: &Block, final_msg: Option<MsgId>, held: &[Block]) -> Sh
                 signer: None,
                 slot: None,
                 block: None,
+                finally_absent_keys: BTreeSet::new(),
             }],
             Slot::from(0),
         );
@@ -375,6 +379,7 @@ fn final_through(block2: &Block, final_msg: Option<MsgId>, held: &[Block]) -> Sh
             signer: None,
             slot: None,
             block: Some(block.digested()),
+            finally_absent_keys: BTreeSet::new(),
         }]);
         parent = mock_msg_of(block);
     }
@@ -550,7 +555,7 @@ async fn replay_cuts_a_block_skipped_in_the_last_slot_of_its_window_as_a_live_no
     let transfer = private_transfer(&state);
     let proofs = ProofStore::new(usize::MAX);
     proofs.insert(transfer.proof().expect("the transfer is private"));
-    let (summary, payout, reverted) =
+    let (summary, payout, receipts) =
         chain_state::apply::derive_block_summary(&state, std::slice::from_ref(&transfer), 2, 200)
             .expect("the transfer settles");
     let private = HashableBlockData {
@@ -566,7 +571,7 @@ async fn replay_cuts_a_block_skipped_in_the_last_slot_of_its_window_as_a_live_no
             )),
             LeeTransaction::Public(clock_invocation(2, 200)),
         ],
-        reverted,
+        receipts,
     }
     .into_pending_block();
     let skip = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
@@ -601,6 +606,7 @@ async fn replay_cuts_a_block_skipped_in_the_last_slot_of_its_window_as_a_live_no
                     BlockData::Block(block) => Some(block.clone()),
                     BlockData::Undecodable(_) => None,
                 },
+                finally_absent_keys: BTreeSet::new(),
             };
             parent = entry.msg;
             entry

@@ -15,7 +15,7 @@ actor = [
   "dep:sequencer_channel_signing_actor",
   "dep:sequencer_service_protocol",
 
-  "dep:logos-blockchain-key-management-system-service",
+  "dep:logos-blockchain-zone-sdk",
 
   "dep:tokio",
   "dep:kameo",
@@ -25,7 +25,7 @@ actor = [
   "dep:futures",
   "dep:hex",
   "dep:libp2p",
-  "dep:log",
+  "dep:tracing",
 ]
 # Enable mDNS-based local peer discovery for gossip.
 # All mDNS code lives in the actor, so this implies `actor`.
@@ -33,6 +33,7 @@ mdns = ["actor"]
 
 [dependencies]
 chain_state = { workspace = true, optional = true }
+system_upgrader_core.workspace = true
 common.workspace = true
 lee.workspace = true
 sequencer_channel_signing_actor = { workspace = true, optional = true }
@@ -41,12 +42,12 @@ sequencer_core = { workspace = true, optional = true }
 sequencer_service_protocol = { workspace = true, optional = true }
 sequencer_slasher_actor = { workspace = true, optional = true }
 
-logos-blockchain-key-management-system-service = { workspace = true, optional = true }
+logos-blockchain-zone-sdk = { workspace = true, optional = true }
 
 anyhow = { workspace = true, optional = true }
 borsh = { workspace = true, optional = true }
 kameo = { workspace = true, optional = true }
-log = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
 tokio = { workspace = true, features = [
   "macros",
   "rt-multi-thread",
@@ -58,8 +59,8 @@ libp2p = { workspace = true, optional = true }
 
 [dev-dependencies]
 lee = { workspace = true, features = ["test-utils"] }
-logos-blockchain-core.workspace = true
 mempool.workspace = true
 sequencer_stake_core.workspace = true
+system_upgrader_core.workspace = true
 testnet_initial_state.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

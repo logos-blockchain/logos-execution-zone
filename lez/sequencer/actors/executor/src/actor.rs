@@ -1,7 +1,11 @@
 use std::ops::ControlFlow;
 
 use chain_state::ProofStore;
-use common::{PageLimit, block::Block, transaction::LeeTransaction};
+use common::{
+    PageLimit,
+    block::{Block, TransactionReceipt},
+    transaction::LeeTransaction,
+};
 use fee_core::validity::FeeError;
 use futures::{
     FutureExt as _, StreamExt as _, TryFutureExt as _, TryStreamExt as _, future::ready, stream,
@@ -20,11 +24,9 @@ use kameo_actors::{
 };
 use lee::Account;
 use lee_core::{
-    BlockId, CommitmentPosition, EncryptedNote, MembershipProof,
+    BlockId, EncryptedNote, MembershipProof,
     account::{Actor, Balance, Nonce},
-    program::Publication,
 };
-use log::{debug, warn};
 use sequencer_actors_common::{Reply, SendErrorExt};
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
@@ -39,6 +41,7 @@ use sharding_pool_actor::{
     ShardingPoolActor,
     protocol::{Link, Reset, Unlink},
 };
+use tracing::{Instrument as _, debug, warn};
 
 use crate::{
     ExecutorActorTrait, Result,
@@ -49,8 +52,10 @@ use crate::{
         GetAccountTransactions, GetAccountView, GetBlock, GetBlockByHash, GetBlockRange,
         GetChannelId, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply, GetFeeQuote,
         GetLastBlockId, GetMessagePath, GetProofsAndRoot, GetProofsAndRootReply, GetPublications,
-        GetRecoveryBinding, GetStatus, GetTransaction, ProduceBlock, RequeueCrossZoneDeadLetter,
-        RequeueCrossZoneDeadLetterReply, Transaction,
+        GetPublicationsReply, GetRecoveryBinding, GetStatus, GetSystemProposals,
+        GetSystemProposalsReply, GetTransaction, GetTransactionReceipt, ProduceBlock,
+        RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, SubmitSystemApproval,
+        Transaction,
     },
 };
 
@@ -214,8 +219,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> kameo::Actor for ExecutorActor<
     ) -> Result<ControlFlow<ActorStopReason>> {
         // The only link is the Bedrock actor of the channel, whose publisher this start set up.
         warn!(
-            "Bedrock actor of channel {} stopped ({reason}), so the executor restarts with a fresh one",
-            self.channel_id
+            channel_id = %self.channel_id,
+            %reason,
+            "Bedrock actor of the channel stopped, so the executor restarts with a fresh one"
         );
         Ok(ControlFlow::Break(ActorStopReason::LinkDied {
             id,
@@ -292,14 +298,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ProduceBlock> for Execu
                 if std::mem::take(&mut self.failed_attempts) != 0 {
                     sequencer_executor_actor_metrics::record_production_failed_attempts(0);
                 }
-                log::info!(
-                    "Block with id {id} created by {}",
-                    online.sequencer().channel_signing_public_key_hex()
+                tracing::info!(
+                    block_id = id,
+                    producer = %online.sequencer().channel_signing_public_key_hex(),
+                    "Block created"
                 );
             }
             Err(err) if err.is::<sequencer_core::ChannelMovedWhileBuilding>() => {
                 // Skipping turn until next time hoping to catch up all missed updates
-                warn!("Skipping turn: {err}");
+                warn!(error = %err, "Skipping turn");
             }
             Err(err) => {
                 self.failed_attempts = self.failed_attempts.saturating_add(1);
@@ -307,8 +314,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ProduceBlock> for Execu
                     self.failed_attempts,
                 );
                 warn!(
-                    "Skipping turn: block production failed ({} in a row): {err:#}",
-                    self.failed_attempts
+                    failed_attempts = self.failed_attempts,
+                    error = format_args!("{err:#}"),
+                    "Skipping turn: block production failed"
                 );
             }
         }
@@ -434,6 +442,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetBlockRange> for Exec
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let storage_ref = self.storage_ref.clone();
+        // Not inside the handler's span, which would stay open, and timed,
+        // until the reads end.
+        let reads = tracing::info_span!(parent: None, "block_range_reads");
+        reads.follows_from(tracing::Span::current());
 
         ctx.spawn(async move {
             stream::iter(range.into_inner())
@@ -447,6 +459,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetBlockRange> for Exec
                 .try_take_while(|block_opt| ready(Ok(block_opt.is_some())))
                 .try_filter_map(|block_opt| ready(Ok(block_opt)))
                 .try_collect()
+                .instrument(reads)
                 .await
         })
     }
@@ -517,6 +530,23 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetTransaction> for Exe
     ) -> Self::Reply {
         self.storage_ref
             .ask(sequencer_storage_actor::protocol::GetTransactionByHash { hash: tx_hash })
+            .await
+            .map_err(Into::into)
+    }
+}
+
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetTransactionReceipt>
+    for ExecutorActor<S, B>
+{
+    type Reply = Result<Option<TransactionReceipt>>;
+
+    async fn handle(
+        &mut self,
+        GetTransactionReceipt { tx_hash }: GetTransactionReceipt,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.storage_ref
+            .ask(sequencer_storage_actor::protocol::GetTransactionReceiptByHash { hash: tx_hash })
             .await
             .map_err(Into::into)
     }
@@ -627,7 +657,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountView> for Exe
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetPublications> for ExecutorActor<S, B> {
-    type Reply = Result<Vec<(CommitmentPosition, Publication)>>;
+    type Reply = Result<GetPublicationsReply>;
 
     async fn handle(
         &mut self,
@@ -639,12 +669,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetPublications> for Ex
     ) -> Self::Reply {
         let limit = usize::try_from(limit.min(MAX_PUBLICATIONS_PER_REQUEST))
             .expect("the request limit fits in usize");
-        Ok(self
-            .state
-            .online()?
-            .sequencer()
-            .with_state(|state| state.publications_from(from_position).take(limit).collect())
-            .await)
+        Ok(GetPublicationsReply {
+            page: self
+                .state
+                .online()?
+                .sequencer()
+                .with_state(|state| state.publications_page(from_position, limit))
+                .await,
+        })
     }
 }
 
@@ -764,6 +796,54 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<RequeueCrossZoneDeadLet
     }
 }
 
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetSystemProposals>
+    for ExecutorActor<S, B>
+{
+    type Reply = Result<GetSystemProposalsReply>;
+
+    async fn handle(
+        &mut self,
+        GetSystemProposals: GetSystemProposals,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let sequencer_core::system_approvals::SystemProposals {
+            threshold,
+            proposals,
+        } = self
+            .state
+            .online()?
+            .sequencer()
+            .system_proposals()
+            .await
+            .map_err(Error::SystemProposalsUnavailable)?;
+        Ok(GetSystemProposalsReply {
+            threshold,
+            proposals,
+        })
+    }
+}
+
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<SubmitSystemApproval>
+    for ExecutorActor<S, B>
+{
+    type Reply = Result<()>;
+
+    async fn handle(
+        &mut self,
+        SubmitSystemApproval { approval }: SubmitSystemApproval,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let State::Online(online) = &mut self.state else {
+            return Err(Error::NotOnline);
+        };
+        online
+            .sequencer_mut()
+            .submit_system_approval(approval)
+            .await
+            .map_err(Error::SystemApprovalRefused)
+    }
+}
+
 impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetBlockByHash> for ExecutorActor<S, B> {
     type Reply = Result<Option<u64>>;
 
@@ -811,8 +891,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEvent> for Execu
 
         if msg.channel_id != self.channel_id {
             warn!(
-                "Received a channel event for a different channel: {}",
-                msg.channel_id
+                channel_id = %msg.channel_id,
+                "Received a channel event for a different channel"
             );
         }
 

@@ -2,7 +2,7 @@
 //! on, derived by folding it over the channel's message lineage above it.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     sync::Arc,
 };
 
@@ -13,13 +13,13 @@ use common::{
     transaction::TxEvents,
 };
 use lee::{V03State, privacy_preserving_transaction::circuit::ProofDigest};
-use log::warn;
-use logos_blockchain_core::mantle::ops::channel::MsgId;
-use logos_blockchain_zone_sdk::Slot;
+use logos_blockchain_zone_sdk::{Slot, core::mantle::ops::channel::MsgId};
+use sequencer_stake_core::SequencerKey;
+use tracing::warn;
 
 use crate::{
     BlockIngestError, ProofStore,
-    apply::{Tip, apply_block, validate_link},
+    apply::{Tip, apply_judged_block_to_state, validate_against_tip, validate_link},
     stake_config,
 };
 
@@ -37,6 +37,9 @@ pub struct ChannelEntry {
     pub slot: Option<Slot>,
     /// `None` for an entry that carries no block: an empty or undecodable payload.
     pub block: Option<DigestedBlock>,
+    /// Keys `block` may release in full: those absent from the config in effect `finality_depth`
+    /// L1 blocks under where it landed and from every config since.
+    pub finally_absent_keys: BTreeSet<SequencerKey>,
 }
 
 /// What recording one of our own publishes did.
@@ -186,6 +189,7 @@ struct StoredEntry {
     slot: Option<u64>,
     block: Option<StoredBlock>,
     judged: bool,
+    finally_absent_keys: BTreeSet<SequencerKey>,
 }
 
 #[derive(BorshSerialize, BorshDeserialize)]
@@ -224,6 +228,9 @@ pub struct ChainState {
     hydrated: Hydrated,
     /// The finalized entries whose verdicts have been returned.
     judged: HashSet<MsgId>,
+    /// Whether execution refuses a full stake release of a key outside its entry's
+    /// `finally_absent_keys`.
+    judges_releases: bool,
 }
 
 /// The head after folding one view entry.
@@ -428,7 +435,16 @@ impl ChainState {
                 proofs,
             },
             judged: HashSet::new(),
+            judges_releases: true,
         }
+    }
+
+    /// This chain with full stake releases applied unjudged, for a reader without the L1 config
+    /// history the keys come from.
+    #[must_use]
+    pub const fn without_release_judgement(mut self) -> Self {
+        self.judges_releases = false;
+        self
     }
 
     /// State the sequencer builds its next block on.
@@ -571,6 +587,48 @@ impl ChainState {
         &self.view
     }
 
+    /// The held entry `msg` and the held entries it chains on, nearest first. Held entries are
+    /// the unfinalized ones.
+    #[must_use]
+    pub fn held_lineage(&self, msg: MsgId) -> Vec<ChannelEntry> {
+        let held = &self.view[self.finalized..];
+        let mut lineage = Vec::new();
+        let mut next = msg;
+        while lineage.len() < held.len()
+            && let Some(entry) = held.iter().find(|entry| entry.msg == next)
+        {
+            next = entry.parent;
+            lineage.push(entry.clone());
+        }
+        lineage
+    }
+
+    /// Gives each held entry named in `finally_absent_keys` its keys, refolding the view from the
+    /// first one that changes.
+    pub fn set_finally_absent_keys(
+        &mut self,
+        finally_absent_keys: impl IntoIterator<Item = (MsgId, BTreeSet<SequencerKey>)>,
+    ) {
+        let mut first_changed: Option<usize> = None;
+        for (msg, keys) in finally_absent_keys {
+            let Some((idx, entry)) = self
+                .view
+                .iter_mut()
+                .enumerate()
+                .find(|(_, entry)| entry.msg == msg)
+            else {
+                continue;
+            };
+            if entry.finally_absent_keys != keys {
+                entry.finally_absent_keys = keys;
+                first_changed = Some(first_changed.map_or(idx, |first| first.min(idx)));
+            }
+        }
+        if let Some(idx) = first_changed {
+            self.fold_from(idx);
+        }
+    }
+
     #[must_use]
     pub fn final_tip(&self) -> Option<Tip> {
         self.final_tip.clone()
@@ -598,6 +656,7 @@ impl ChainState {
                 )
             }),
             judged: self.judged.contains(&entry.msg),
+            finally_absent_keys: entry.finally_absent_keys.clone(),
         };
         let (finalized, unfinalized) = self.view.split_at(self.finalized);
         let stored = StoredView {
@@ -643,6 +702,7 @@ impl ChainState {
                     signer: entry.signer,
                     slot: entry.slot.map(Slot::from),
                     block,
+                    finally_absent_keys: entry.finally_absent_keys,
                 }
             })
             .collect();
@@ -678,10 +738,10 @@ impl ChainState {
             }
             if entry.parent != self.pin() {
                 warn!(
-                    "Adopted channel entry {} chains on {}, not on the pin {}",
-                    entry.msg,
-                    entry.parent,
-                    self.pin()
+                    msg_id = %entry.msg,
+                    parent = %entry.parent,
+                    pin = %self.pin(),
+                    "Adopted channel entry does not chain on the pin"
                 );
             }
             self.push(entry);
@@ -711,18 +771,22 @@ impl ChainState {
         for entry in &canonical {
             if entry.parent != parent {
                 warn!(
-                    "Channel view entry {} chains on {}, not on {parent}",
-                    entry.msg, entry.parent
+                    msg_id = %entry.msg,
+                    parent = %entry.parent,
+                    expected_parent = %parent,
+                    "Channel view entry does not chain on the previous one"
                 );
             }
             parent = entry.msg;
         }
-        // The entries both views hold keep their folds: a `MsgId` commits to
+        // The entries both views hold with the same keys keep their folds: a `MsgId` commits to
         // its payload, so the same id carries the same block.
         let fork = self.view[final_len..]
             .iter()
             .zip(&canonical)
-            .take_while(|(held, entry)| held.msg == entry.msg)
+            .take_while(|(held, entry)| {
+                held.msg == entry.msg && held.finally_absent_keys == entry.finally_absent_keys
+            })
             .count();
         self.view.truncate(final_len);
         self.view.extend(canonical);
@@ -836,6 +900,10 @@ impl ChainState {
             self.forget(sibling.msg);
         }
         if ahead.is_some() {
+            // A held entry's executions are reused only under the keys they were judged with.
+            if self.view[final_len].finally_absent_keys != entry.finally_absent_keys {
+                self.folds.truncate(final_len);
+            }
             self.view[final_len] = entry.clone();
         } else {
             self.view.insert(final_len, entry.clone());
@@ -1258,10 +1326,13 @@ impl ChainState {
             self.hydrated.insert(entry.msg, block);
         }
         let block = &self.hydrated[&entry.msg];
-        apply_with_retries(parent, block, state).map_err(|err| {
+        let finally_absent_keys = self.judges_releases.then_some(&entry.finally_absent_keys);
+        apply_with_retries(parent, block, state, finally_absent_keys).map_err(|err| {
             warn!(
-                "Channel block {} ({}) does not apply: {err}",
-                block.header.block_id, block.header.hash
+                block_id = block.header.block_id,
+                block_hash = %block.header.hash,
+                error = %err,
+                "Channel block does not apply"
             );
             Some(err)
         })
@@ -1297,16 +1368,21 @@ fn apply_with_retries(
     tip: Option<&Tip>,
     block: &Block,
     state: &V03State,
+    finally_absent_keys: Option<&BTreeSet<SequencerKey>>,
 ) -> Result<(V03State, Vec<TxEvents>), BlockIngestError> {
     let mut attempt = 1;
     loop {
         let mut next = state.clone();
-        match apply_block(tip, block, &mut next) {
+        match validate_against_tip(tip, block)
+            .and_then(|()| apply_judged_block_to_state(block, &mut next, finally_absent_keys))
+        {
             Ok(block_events) => return Ok((next, block_events)),
             Err(err) if err.is_retryable() && attempt < APPLY_ATTEMPTS => {
                 warn!(
-                    "Block {} failed to apply (attempt {attempt}), retrying: {err}",
-                    block.header.block_id
+                    block_id = block.header.block_id,
+                    attempt,
+                    error = %err,
+                    "Block failed to apply, retrying"
                 );
                 attempt = attempt.saturating_add(1);
             }
@@ -1424,6 +1500,7 @@ mod tests {
             signer: None,
             slot: None,
             block: block.map(Block::digested),
+            finally_absent_keys: BTreeSet::new(),
         }
     }
 
@@ -1510,7 +1587,7 @@ mod tests {
             transaction::{FeePayee, LeeTransaction, clock_invocation, fee_invocation},
         };
         let timestamp = id.saturating_mul(100);
-        let (summary, payout, reverted) =
+        let (summary, payout, receipts) =
             crate::apply::derive_block_summary(state, &txs, id, timestamp)
                 .expect("test transactions settle");
         let producer = producer_account_for_testing();
@@ -1526,7 +1603,7 @@ mod tests {
             prev_block_hash: prev,
             timestamp,
             transactions,
-            reverted,
+            receipts,
         }
         .into_pending_block()
     }

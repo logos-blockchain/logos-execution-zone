@@ -25,7 +25,7 @@ use lee::{
     AccountId, Actor, PrivateKey, PublicKey, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
-use logos_blockchain_core::mantle::ops::channel::ChannelId;
+use logos_blockchain_zone_sdk::core::mantle::ops::channel::ChannelId;
 use ping_core::{ReceiverMessage, ping_record_pda, receiver_config_account_id};
 use program_loader_core::MAX_SEGMENT_DATA_LEN;
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
@@ -192,6 +192,7 @@ async fn wait_for_delivery(client: &SequencerClient) -> Result<()> {
 }
 
 #[test]
+#[ignore = "Both zones inscribe from one Bedrock funding account whose genesis notes do not recycle. Once it empties the leader evicts every pending inscription, including ones that only lost their ordering, and the channel head freezes. Needs an upstream logos-blockchain fix"]
 async fn a_registered_program_sends_and_receives_across_zones() -> Result<()> {
     let partial = SequencerPartialConfig::default();
     let channel_a = config::bedrock_channel_id();

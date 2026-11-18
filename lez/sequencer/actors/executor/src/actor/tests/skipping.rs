@@ -1,6 +1,10 @@
 //! A producer's turn while the head cannot execute the block past its tip.
 
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+    time::Duration,
+};
 
 use chain_state::{ChannelEntry, ProofStore};
 use common::{
@@ -189,6 +193,7 @@ fn entry(block: &Block, parent: MsgId, signer: [u8; 32], slot: Option<u64>) -> C
         signer: Some(signer),
         slot: slot.map(Slot::from),
         block: Some(block.digested()),
+        finally_absent_keys: BTreeSet::new(),
     }
 }
 
@@ -230,7 +235,7 @@ fn private_block(id: u64, prev: HashType, proof: Proof) -> Block {
                 WitnessSet::from_raw_parts(Vec::new(), proof),
             ),
         )],
-        reverted: Vec::new(),
+        receipts: Vec::new(),
     }
     .into_pending_block()
 }

@@ -126,11 +126,11 @@ where
     })
 }
 
-/// Ends the pass at the first read failure, naming `what` failed. For callers that retry
-/// the pass; wrong for one that reads the stream ending as a complete scan.
+/// Ends the pass at the first read failure, logged within `span`, which names what was read.
+/// For callers that retry the pass; wrong for one that reads the stream ending as a complete scan.
 pub fn stop_at_read_error<'stream, S, E>(
     stream: S,
-    what: String,
+    span: tracing::Span,
 ) -> impl Stream<Item = (ZoneMessage, Slot)> + 'stream
 where
     S: Stream<Item = Result<Batch, E>> + 'stream,
@@ -141,7 +141,12 @@ where
             let keep = match item {
                 Ok(_) => true,
                 Err(err) => {
-                    log::warn!("{what}: {err:#}");
+                    span.in_scope(|| {
+                        tracing::warn!(
+                            error = format_args!("{err:#}"),
+                            "Channel read failed, ending the pass"
+                        );
+                    });
                     false
                 }
             };
@@ -163,9 +168,9 @@ mod tests {
 
     use async_trait::async_trait;
     use futures::StreamExt as _;
-    use logos_blockchain_core::mantle::ledger::verification_mode::StandardMode;
     use logos_blockchain_zone_sdk::{
         UnverifiedEd25519PublicKey, ZoneBlock,
+        core::mantle::ledger::verification_mode::StandardMode,
         node_types::{
             ApiBlock, BlockInfo, ChainServiceInfo, ChannelState, Events, HeaderId, Inscription,
             MsgId, ProcessedBlockEvent, SignedOps, TimeInfo, Unverified, WalletFundRequestBody,
@@ -346,7 +351,7 @@ mod tests {
             }),
         ]);
 
-        let delivered: Vec<_> = stop_at_read_error(scripted, "test read".to_owned())
+        let delivered: Vec<_> = stop_at_read_error(scripted, tracing::Span::none())
             .collect()
             .await;
 

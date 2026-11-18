@@ -125,7 +125,8 @@ pub struct Args {
     #[arg(long, global = true)]
     pub allow_revert: bool,
     /// Declare this execution gas limit on a public transaction for this command, instead of the
-    /// cycles a simulation measures plus the configured margin.
+    /// cycles a simulation measures plus the configured margin. A proof paid by a public signer
+    /// adds its verification gas on top.
     #[arg(long, global = true, value_name = "GAS")]
     pub gas_limit: Option<u64>,
     /// Cap a public transaction's fee at this amount for this command, instead of its reserve at
@@ -140,10 +141,11 @@ pub struct Args {
     /// the configured headroom.
     #[arg(long, global = true, value_name = "BLOCKS")]
     pub fee_headroom: Option<u64>,
-    /// Pay a privacy-preserving transaction's fee from this owned private account for this
-    /// command, whether or not the transaction mentions it.
-    #[arg(long, global = true, value_name = "ACCOUNT_ID")]
-    pub fee_payer: Option<lee::AccountId>,
+    /// Pay a privacy-preserving transaction's fee from this account for this command:
+    /// `Private/<id>`, an owned private account, whether or not the transaction mentions it, or
+    /// `Public/<id>`, a public account the transaction already signs with.
+    #[arg(long, global = true, value_name = "ACCOUNT_ID_WITH_PRIVACY")]
+    pub fee_payer: Option<AccountIdWithPrivacy>,
     /// Refund a privacy-preserving transaction's fee surplus to this public account for this
     /// command, instead of the payer's blinded alias. Meant for a transaction that already
     /// credits that account publicly, such as a deshield; any other target links the transaction

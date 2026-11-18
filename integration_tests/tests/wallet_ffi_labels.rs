@@ -39,7 +39,7 @@ fn test_wallet_ffi_single_label() -> Result<()> {
         sequencer_home,
     } = sequencer_ffi_helpers::joining_setup(false)?;
 
-    log::info!("Joining sequencer home: {sequencer_home:?}");
+    tracing::info!(?sequencer_home, "Joining sequencer home");
 
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
@@ -52,7 +52,7 @@ fn test_wallet_ffi_single_label() -> Result<()> {
         wallet_ffi_create_account_public(wallet_ffi_handle, &raw mut out_account_id_1).unwrap();
     }
 
-    log::info!("Waiting for next block creation");
+    tracing::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     let lab_1 = CString::from_str("LABEL1").unwrap().into_raw();
@@ -102,7 +102,7 @@ fn test_wallet_ffi_more_labels() -> Result<()> {
         sequencer_home,
     } = sequencer_ffi_helpers::joining_setup(false)?;
 
-    log::info!("Joining sequencer home: {sequencer_home:?}");
+    tracing::info!(?sequencer_home, "Joining sequencer home");
 
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
@@ -115,7 +115,7 @@ fn test_wallet_ffi_more_labels() -> Result<()> {
         wallet_ffi_create_account_public(wallet_ffi_handle, &raw mut out_account_id_1).unwrap();
     }
 
-    log::info!("Waiting for next block creation");
+    tracing::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     let lab_1 = CString::from_str("LABEL1").unwrap().into_raw();

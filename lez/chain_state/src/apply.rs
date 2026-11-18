@@ -2,11 +2,11 @@
 //! indexer. Pure and storage-free: callers apply on a scratch clone of state and
 //! commit only on `Ok`.
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use common::{
     HashType,
-    block::{Block, BlockHeader, BlockMeta},
+    block::{Block, BlockHeader, BlockMeta, FeeReceipt, TransactionReceipt},
     transaction::{
         LeeTransaction, TxEvents, clock_invocation, fee_invocation, fee_refund_invocation,
         fee_reserve_invocation, private_fee_refund_invocation, validate_private_fee_credit,
@@ -24,9 +24,11 @@ use fee_core::{
 };
 use lee::{GENESIS_BLOCK_ID, V03State};
 use lee_core::{BlockId, Timestamp, program::TransactionEvent};
+use sequencer_stake_core::SequencerKey;
 
 use crate::{
     classify::{ClassifyError, FeeClass, classify},
+    full_stake_releases,
     ingest_error::BlockIngestError,
 };
 
@@ -134,6 +136,16 @@ pub fn apply_block_to_state(
     block: &Block,
     state: &mut V03State,
 ) -> Result<Vec<TxEvents>, BlockIngestError> {
+    apply_judged_block_to_state(block, state, None)
+}
+
+/// [`apply_block_to_state`], refusing a full stake release of a key outside `finally_absent_keys`
+/// when it is given.
+pub fn apply_judged_block_to_state(
+    block: &Block,
+    state: &mut V03State,
+    finally_absent_keys: Option<&BTreeSet<SequencerKey>>,
+) -> Result<Vec<TxEvents>, BlockIngestError> {
     let (clock_entry, front) = block
         .body
         .transactions
@@ -156,10 +168,22 @@ pub fn apply_block_to_state(
     // The fee tx is byte-compared only after the user transactions have been
     // settled: its summary is derived from their execution.
 
+    // At most one `system_upgrader` transaction, directly before the fee: a change takes effect
+    // after every transaction in its block except the fee and clock transactions, which already
+    // run the new code.
+    let last_index = user_txs.len().checked_sub(1);
+    if let Some(tx_index) = user_txs.iter().enumerate().position(|(index, tx)| {
+        common::system_upgrades::is_system_upgrader_tx(tx) && Some(index) != last_index
+    }) {
+        return Err(BlockIngestError::MisplacedSystemUpgraderTransaction {
+            tx_index: tx_index.try_into().expect("tx index fits in u64"),
+        });
+    }
+
     let opening = opening_fee_state(state);
     let mut summary = BlockFeeSummary::default();
     let mut block_events = Vec::new();
-    let mut reverted = Vec::new();
+    let mut receipts = Vec::with_capacity(user_txs.len());
 
     let is_genesis = block.header.block_id == GENESIS_BLOCK_ID;
     for (tx_index, transaction) in user_txs.iter().enumerate() {
@@ -171,19 +195,23 @@ pub fn apply_block_to_state(
 
         // Genesis transactions transition directly; every other user transaction
         // settles its fee. Both surface the events their execution emitted.
-        let events = if is_genesis {
+        let (events, receipt) = if is_genesis {
             let LeeTransaction::Public(public_tx) = transaction else {
                 return Err(BlockIngestError::NonPublicGenesisTransaction);
             };
-            state
+            let events = state
                 .transition_from_public_transaction(
                     public_tx,
                     block.header.block_id,
                     block.header.timestamp,
                 )
-                .map_err(|err| state_transition(err.into()))?
+                .map_err(|err| state_transition(err.into()))?;
+            (events, TransactionReceipt::EXEMPT)
         } else {
-            let (events, tx_reverted) = settle_transaction(
+            let entries_before = finally_absent_keys
+                .filter(|_| !full_stake_releases::releases_no_stake(transaction))
+                .map(|_| full_stake_releases::stake_entries(state));
+            let (events, receipt) = settle_transaction(
                 transaction,
                 state,
                 &opening,
@@ -192,17 +220,38 @@ pub fn apply_block_to_state(
                 tx_index_u64,
                 &mut summary,
             )?;
-            if tx_reverted {
-                reverted.push(tx_index_u64);
+            if let (Some(allowed), Some(before)) = (finally_absent_keys, entries_before) {
+                let after = full_stake_releases::stake_entries(state);
+                let released = full_stake_releases::full_releases(&before, &after);
+                if let Some(key) = released.iter().find(|key| !allowed.contains(key)) {
+                    return Err(BlockIngestError::UnfinalizedRelease {
+                        tx_index: tx_index_u64,
+                        key: hex::encode(key.to_bytes()),
+                    });
+                }
             }
-            events
+            (events, receipt)
         };
+        receipts.push(receipt);
         collect_tx_events(&mut block_events, tx_index, transaction, events);
     }
-    if block.body.reverted != reverted {
-        return Err(BlockIngestError::RevertMismatch {
-            listed: block.body.reverted.clone(),
-            settled: reverted,
+    let listed = &block.body.receipts;
+    if let Some(tx_index) =
+        (0..listed.len().max(receipts.len())).find(|&i| listed.get(i) != receipts.get(i))
+    {
+        return Err(BlockIngestError::ReceiptMismatch {
+            tx_index: u64::try_from(tx_index).expect("tx index fits in u64"),
+            listed: listed.get(tx_index).copied().map(Box::new),
+            settled: receipts.get(tx_index).copied().map(Box::new),
+        });
+    }
+
+    // The block an upgrade activates in must carry its `Apply`.
+    if let Some(name) = common::system_upgrades::due_at(state, block.header.block_id)? {
+        return Err(BlockIngestError::MissedSystemUpgrade {
+            name: String::from_utf8_lossy(name.as_bytes())
+                .trim_end_matches('\0')
+                .to_owned(),
         });
     }
 
@@ -292,21 +341,21 @@ pub fn block_payout(opening: &FeeState, summary: &BlockFeeSummary) -> u128 {
     opening.clone().apply_block(summary)
 }
 
-/// The fee summary, producer payout and reverted transaction indices a block of `transactions`
-/// settles to on `state`.
+/// The fee summary, producer payout and receipts a block of `transactions` settles to on
+/// `state`.
 pub fn derive_block_summary(
     state: &V03State,
     transactions: &[LeeTransaction],
     block_id: BlockId,
     timestamp: Timestamp,
-) -> Result<(BlockFeeSummary, u128, Vec<u64>), BlockIngestError> {
+) -> Result<(BlockFeeSummary, u128, Vec<TransactionReceipt>), BlockIngestError> {
     let mut scratch = state.clone();
     let opening = opening_fee_state(&scratch);
     let mut summary = BlockFeeSummary::default();
-    let mut reverted = Vec::new();
+    let mut receipts = Vec::with_capacity(transactions.len());
     for (tx_index, transaction) in transactions.iter().enumerate() {
         let tx_index = u64::try_from(tx_index).expect("tx index fits in u64");
-        let (_events, tx_reverted) = settle_transaction(
+        let (_events, receipt) = settle_transaction(
             transaction,
             &mut scratch,
             &opening,
@@ -315,16 +364,14 @@ pub fn derive_block_summary(
             tx_index,
             &mut summary,
         )?;
-        if tx_reverted {
-            reverted.push(tx_index);
-        }
+        receipts.push(receipt);
     }
     let payout = block_payout(&opening, &summary);
-    Ok((summary, payout, reverted))
+    Ok((summary, payout, receipts))
 }
 
 /// Classifies and applies one user transaction at its turn, accumulating the
-/// block summary. Returns its events and whether its action reverted.
+/// block summary. Returns its events and receipt.
 ///
 /// Shared by the apply path (any `Err` invalidates the block), the sequencer's
 /// builder (which runs it on a scratch clone and drops the transaction on
@@ -337,7 +384,7 @@ pub fn settle_transaction(
     timestamp: Timestamp,
     tx_index: u64,
     summary: &mut BlockFeeSummary,
-) -> Result<(Vec<TransactionEvent>, bool), BlockIngestError> {
+) -> Result<(Vec<TransactionEvent>, TransactionReceipt), BlockIngestError> {
     let class = classify(transaction, false).map_err(|err| match err {
         ClassifyError::Unserializable(err) => BlockIngestError::InvalidFeeClass {
             tx_index,
@@ -350,7 +397,9 @@ pub fn settle_transaction(
         | ClassifyError::TooManyPrivateActions { .. }
         | ClassifyError::OversizedProof { .. }
         | ClassifyError::InvalidRefundTarget { .. }
-        | ClassifyError::InvalidFeeFallback => BlockIngestError::InvalidFeeClass {
+        | ClassifyError::InvalidFeeFallback
+        | ClassifyError::DoubleFee
+        | ClassifyError::GasLimitBelowVerification { .. } => BlockIngestError::InvalidFeeClass {
             tx_index,
             reason: err.to_string(),
         },
@@ -380,7 +429,7 @@ pub fn settle_transaction(
                         tx_index,
                         reason: format!("{:#}", anyhow::Error::from(err)),
                     })?;
-            (events, false)
+            (events, TransactionReceipt::EXEMPT)
         }
         FeeClass::Charged(view @ FeeTxView::Private { .. }) => settle_private_transaction(
             transaction,
@@ -416,7 +465,7 @@ pub fn settle_transaction(
 /// pays the reserve in; a proof without one has no revert that keeps the fee,
 /// so its failure invalidates the transaction, as every other failure does.
 ///
-/// Also returns whether the action reverted.
+/// Also returns its receipt.
 #[expect(
     clippy::too_many_arguments,
     reason = "the settlement threads exactly the block-transition context"
@@ -430,7 +479,7 @@ fn settle_private_transaction(
     timestamp: Timestamp,
     tx_index: u64,
     summary: &mut BlockFeeSummary,
-) -> Result<(Vec<TransactionEvent>, bool), BlockIngestError> {
+) -> Result<(Vec<TransactionEvent>, TransactionReceipt), BlockIngestError> {
     let fee_validity = |reason: String| BlockIngestError::InvalidFeeClass { tx_index, reason };
     let gas_cap = |err: FeeError| BlockIngestError::GasCapExceeded {
         tx_index,
@@ -513,7 +562,7 @@ fn settle_private_transaction(
     let refund_to = private_tx
         .message()
         .execution
-        .fee
+        .proven_fee
         .as_ref()
         .and_then(|fee| fee.refund_to);
     let refundable = refund_to.is_some() || state.recovery_binding(*payer).is_some();
@@ -552,7 +601,19 @@ fn settle_private_transaction(
         .revenue_tip
         .checked_add(tip)
         .expect("block tips fit u128");
-    Ok((events, charge.revert.is_some()))
+    let receipt = TransactionReceipt {
+        success: charge.revert.is_none(),
+        fee: FeeReceipt {
+            gas_exec: market::PRIVATE_VERIFY_GAS
+                .checked_add(charged_cycles)
+                .expect("the accumulator is cap-checked"),
+            gas_stor: *data_bytes,
+            fee_base: actual,
+            tip,
+            refund,
+        },
+    };
+    Ok((events, receipt))
 }
 
 /// The reserve → action → refund cycle for one charged transaction.
@@ -565,7 +626,7 @@ fn settle_private_transaction(
 ///   paid its fee, its effects just did not take. It reverts, keeping the fee and burning the
 ///   signers' replay nonces.
 ///
-/// Also returns whether the action reverted.
+/// Also returns its receipt.
 #[expect(
     clippy::too_many_arguments,
     reason = "the settlement threads exactly the block-transition context the spec names"
@@ -579,16 +640,15 @@ fn settle_charged_transaction(
     timestamp: Timestamp,
     tx_index: u64,
     summary: &mut BlockFeeSummary,
-) -> Result<(Vec<TransactionEvent>, bool), BlockIngestError> {
+) -> Result<(Vec<TransactionEvent>, TransactionReceipt), BlockIngestError> {
     let fee_validity = |reason: String| BlockIngestError::InvalidFeeClass { tx_index, reason };
-    let (LeeTransaction::Public(public_tx), FeeTxView::Public { payer, .. }) = (transaction, view)
-    else {
-        unreachable!("only public transactions classify as a public fee view");
+    let FeeTxView::Public { payer, .. } = view else {
+        unreachable!("only a declared fee classifies as a public fee view");
     };
     let payer = *payer;
 
     validate_static_tx(view, opening).map_err(|err| fee_validity(err.to_string()))?;
-    if !lee::is_fee_authorized(public_tx.message(), public_tx.witness_set()) {
+    if !transaction.is_fee_authorized() {
         return Err(fee_validity(
             "designated payer's authorization is missing".into(),
         ));
@@ -624,13 +684,33 @@ fn settle_charged_transaction(
     // action's effects on success or only the signers' nonce advances on a
     // revert; either way the reserved fee stays committed. An authentication
     // failure is a malformed transaction that invalidates the whole block.
+    //
+    // A private transaction's gas limit also covers its proof's verification;
+    // its public part runs on the gas limit less that cost.
     let gas_limit = view.gas_limit();
-    let (charge, result) = lee::ValidatedStateDiff::from_public_transaction_metered(
-        public_tx, state, block_id, timestamp, gas_limit,
-    );
+    let (charge, result, verify_gas) = match transaction {
+        LeeTransaction::Public(public_tx) => {
+            let (charge, result) = lee::ValidatedStateDiff::from_public_transaction_metered(
+                public_tx, state, block_id, timestamp, gas_limit,
+            );
+            (charge, result, 0)
+        }
+        LeeTransaction::PrivacyPreserving(private_tx) => {
+            // Classify holds a declared gas limit to the verification cost.
+            let budget = gas_limit.saturating_sub(market::PRIVATE_VERIFY_GAS);
+            let (charge, result) =
+                match lee::ValidatedStateDiff::from_privacy_preserving_transaction_metered(
+                    private_tx, state, block_id, timestamp, budget,
+                ) {
+                    Ok((diff, charge)) => (charge, Ok(diff)),
+                    Err(err) => (lee::ExecutionCharge::FREE, Err(err)),
+                };
+            (charge, result, market::PRIVATE_VERIFY_GAS)
+        }
+    };
     let action_diff = result.map_err(|err| fee_validity(format!("fee action failed: {err}")))?;
     // r0 cycle count can overshoot, clamp to `gas_limit`
-    let charged_cycles = charge.cycles.min(gas_limit);
+    let charged_cycles = charge.cycles.saturating_add(verify_gas).min(gas_limit);
 
     summary.gas_used_exec =
         accumulate_exec_gas(summary.gas_used_exec, charged_cycles).map_err(|err| {
@@ -696,7 +776,17 @@ fn settle_charged_transaction(
         .revenue_tip
         .checked_add(u128::from(view.tip()))
         .expect("block tips fit u128");
-    Ok((action_events, charge.revert.is_some()))
+    let receipt = TransactionReceipt {
+        success: charge.revert.is_none(),
+        fee: FeeReceipt {
+            gas_exec: charged_cycles,
+            gas_stor: view.gas_stor(),
+            fee_base,
+            tip: u128::from(view.tip()),
+            refund,
+        },
+    };
+    Ok((action_events, receipt))
 }
 
 #[cfg(test)]
@@ -722,10 +812,11 @@ pub(crate) mod tests {
         test_utils::{TestPrivateKeys, no_seal, update_witness},
     };
     use lee_core::{
-        EphemeralSecretKey, PrivateAccountKind, Recipient, RecipientEncryption, SenderPresentation,
+        EphemeralSecretKey, PrivateAccountKind, PublicationMode, Recipient, RecipientEncryption,
+        SenderPresentation,
         account::Nonce,
         native_token,
-        program::{ProgramEvent, Publication, Response},
+        program::{ProgramEvent, Publication, Response, SYSTEM_UPGRADER_ACCOUNT_ID},
     };
     use test_guest_core::Script;
     use testnet_initial_state::{initial_pub_accounts_private_keys, initial_state};
@@ -820,7 +911,7 @@ pub(crate) mod tests {
         let mut state = initial_state(true);
         // A block with no transactions at all (not even the mandatory clock tx).
         let block = HashableBlockData {
-            reverted: Vec::new(),
+            receipts: Vec::new(),
             block_id: 1,
             prev_block_hash: HashType([0_u8; 32]),
             timestamp: 0,
@@ -878,7 +969,7 @@ pub(crate) mod tests {
         let mut state = initial_state(true);
         // Correct clock tail but no fee tx before it.
         let block = HashableBlockData {
-            reverted: Vec::new(),
+            receipts: Vec::new(),
             block_id: 1,
             prev_block_hash: HashType([0_u8; 32]),
             timestamp: 100,
@@ -900,7 +991,7 @@ pub(crate) mod tests {
             ..fee_core::BlockFeeSummary::default()
         };
         let block = HashableBlockData {
-            reverted: Vec::new(),
+            receipts: Vec::new(),
             block_id: 1,
             prev_block_hash: HashType([0_u8; 32]),
             timestamp: 100,
@@ -918,12 +1009,180 @@ pub(crate) mod tests {
         assert!(matches!(err, BlockIngestError::InvalidFeeTransaction));
     }
 
+    fn system_upgrader_tx() -> LeeTransaction {
+        LeeTransaction::Public(PublicTransaction::new(
+            public_transaction::Message::new_preserialized(
+                Actor::new(AccountId::new([1; 32]), SYSTEM_UPGRADER_ACCOUNT_ID),
+                vec![],
+                [],
+                BTreeMap::new(),
+                None,
+            ),
+            public_transaction::WitnessSet::from_raw_parts(vec![]),
+        ))
+    }
+
+    fn block_with(transactions: Vec<LeeTransaction>) -> Block {
+        let fee = LeeTransaction::Public(fee_invocation(
+            fee_core::BlockFeeSummary::default(),
+            0,
+            FeePayee::Present(producer_account_for_testing()),
+        ));
+        let receipts = vec![TransactionReceipt::EXEMPT; transactions.len()];
+        HashableBlockData {
+            block_id: 1,
+            prev_block_hash: HashType([0_u8; 32]),
+            timestamp: 100,
+            transactions: [
+                transactions,
+                vec![fee, LeeTransaction::Public(clock_invocation(1, 100))],
+            ]
+            .concat(),
+            receipts,
+        }
+        .into_pending_block()
+    }
+
+    #[test]
+    fn a_system_upgrader_tx_before_other_transactions_is_misplaced() {
+        let mut state = initial_state(true);
+        let block = block_with(vec![
+            system_upgrader_tx(),
+            produce_dummy_empty_transaction(),
+        ]);
+
+        let err = apply_block(None, &block, &mut state).expect_err("should reject");
+        assert!(matches!(
+            err,
+            BlockIngestError::MisplacedSystemUpgraderTransaction { tx_index: 0 }
+        ));
+    }
+
+    #[test]
+    fn a_second_system_upgrader_tx_is_misplaced() {
+        let mut state = initial_state(true);
+        let block = block_with(vec![system_upgrader_tx(), system_upgrader_tx()]);
+
+        let err = apply_block(None, &block, &mut state).expect_err("should reject");
+        assert!(matches!(
+            err,
+            BlockIngestError::MisplacedSystemUpgraderTransaction { tx_index: 0 }
+        ));
+    }
+
+    #[test]
+    fn a_block_missing_its_due_apply_is_invalid() {
+        use system_upgrader_core::{
+            Registry, ScheduledUpgrade, SystemProgramName, registry_account_id,
+        };
+
+        let mut registry = common::system_upgrades::registry(&initial_state(true)).unwrap();
+        registry.programs.insert(
+            SystemProgramName::new(b"clock"),
+            Some(ScheduledUpgrade {
+                first_segment: AccountId::new([9; 32]),
+                image_id: [0; 8],
+                immutable: false,
+                activation_height: 1,
+            }),
+        );
+        let mut state = initial_state(true).with_public_accounts([(
+            registry_account_id(),
+            lee::Account::default().with_actor_state(
+                SYSTEM_UPGRADER_ACCOUNT_ID,
+                Registry::to_bytes(&registry).into(),
+            ),
+        )]);
+
+        let err = apply_block(None, &block_with(vec![]), &mut state).expect_err("should reject");
+        assert!(matches!(
+            err,
+            BlockIngestError::MissedSystemUpgrade { name } if name == "clock"
+        ));
+    }
+
+    #[test]
+    fn a_clock_upgrade_runs_its_own_activation_blocks_tick() {
+        use program_loader_core::LoaderActorState as _;
+        use system_upgrader_core::{
+            Message, Registry, ScheduledUpgrade, loader_actor, registry_account_id, registry_actor,
+        };
+
+        // `ping_receiver` can't handle the clock's tick, so the first tick it runs fails.
+        let new_code = programs::ping_receiver();
+        let user_elf = new_code.user_elf().unwrap();
+        let ids: Vec<AccountId> = (0..program_loader_core::segment_count(&user_elf))
+            .map(|i| AccountId::new([0x40_u8.wrapping_add(u8::try_from(i).unwrap()); 32]))
+            .collect();
+        let segments = program_loader_core::build_segments(&user_elf, &ids).unwrap();
+        let mut registry = common::system_upgrades::registry(&initial_state(true)).unwrap();
+        registry.programs.insert(
+            clock_core::CLOCK_NAME,
+            Some(ScheduledUpgrade {
+                first_segment: ids[0],
+                image_id: new_code.id(),
+                immutable: false,
+                activation_height: 1,
+            }),
+        );
+        let mut state = initial_state(true)
+            .with_public_accounts([(
+                registry_account_id(),
+                lee::Account::default().with_actor_state(
+                    SYSTEM_UPGRADER_ACCOUNT_ID,
+                    Registry::to_bytes(&registry).into(),
+                ),
+            )])
+            .with_public_accounts(ids.iter().zip(segments).map(|(id, segment)| {
+                (
+                    *id,
+                    lee::Account::default().with_actor_state(
+                        lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+                        segment.to_loader_actor_state().into(),
+                    ),
+                )
+            }));
+        let apply = LeeTransaction::Public(PublicTransaction::new(
+            public_transaction::Message::try_new(
+                registry_actor(),
+                [registry_actor(), loader_actor(&clock_core::CLOCK_NAME)],
+                BTreeMap::new(),
+                Message::Apply {
+                    name: clock_core::CLOCK_NAME,
+                    activation_height: 1,
+                },
+            )
+            .unwrap(),
+            public_transaction::WitnessSet::from_raw_parts(vec![]),
+        ));
+
+        let err =
+            apply_block(None, &block_with(vec![apply]), &mut state).expect_err("should reject");
+        assert!(
+            matches!(err, BlockIngestError::StateTransition { tx_index: 2, .. }),
+            "the Apply and the fee settle; the clock's tick fails: {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_block_over_an_undecodable_registry_parks_without_blaming_its_producer() {
+        let mut state = initial_state(true).with_public_accounts([(
+            system_upgrader_core::registry_account_id(),
+            lee::Account::default().with_actor_state(SYSTEM_UPGRADER_ACCOUNT_ID, vec![0xFF].into()),
+        )]);
+
+        let err = apply_block(None, &block_with(vec![]), &mut state).expect_err("should reject");
+        assert!(matches!(err, BlockIngestError::UndecodableSystemRegistry));
+        assert!(!err.blames_producer());
+        assert!(!err.is_invalid_block());
+    }
+
     #[test]
     fn missing_clock_tail_is_invalid_clock() {
         let mut state = initial_state(true);
         // Last tx is not the expected clock invocation for the timestamp.
         let block = HashableBlockData {
-            reverted: Vec::new(),
+            receipts: Vec::new(),
             block_id: 1,
             prev_block_hash: HashType([0_u8; 32]),
             timestamp: 50,
@@ -1223,11 +1482,14 @@ pub(crate) mod tests {
         );
 
         let mut summary = BlockFeeSummary::default();
-        let (events, reverted) =
+        let (events, receipt) =
             settle_transaction(&tx, &mut state, &opening, 2, 200, 0, &mut summary)
                 .expect("a reverted action is charged, not block-rejected");
         assert!(events.is_empty(), "a reverted action emits no user events");
-        assert!(reverted, "the revert is reported for the block to list");
+        assert!(
+            !receipt.success,
+            "the revert is reported for the block to list"
+        );
 
         // The transfer moved nothing.
         assert_eq!(
@@ -1258,6 +1520,18 @@ pub(crate) mod tests {
         assert!(
             summary.revenue_base > 0,
             "the charged revert accrues real fee revenue",
+        );
+        assert_eq!(receipt.fee.gas_exec, summary.gas_used_exec);
+        assert_eq!(receipt.fee.fee_base, summary.revenue_base);
+        assert_eq!(
+            payer_before
+                - state
+                    .get_account_by_id(payer)
+                    .data
+                    .native_balance()
+                    .unwrap(),
+            receipt.fee.fee_base + receipt.fee.tip,
+            "the receipt's fee is what the payer paid",
         );
     }
 
@@ -1408,22 +1682,18 @@ pub(crate) mod tests {
         private_tx_presented(state, sender, recipient, amount, fee, true)
     }
 
-    fn size_of(tx: &LeeTransaction) -> u64 {
-        tx.charged_bytes().unwrap()
-    }
-
-    /// A call of the scripted program at `scripted`, which keeps its state, from a private sender
-    /// that only pays `fee`, presented under [`ALIAS_OPENING`] and bound for refunds.
-    fn public_root_private_tx(
+    /// A transfer of `amount` from the private `sender` to the undeclared address `to`, its
+    /// credit published clear, paying `fee` as [`private_tx`] does.
+    fn clear_credit_tx(
         state: &V03State,
         (keys, funded): &(TestPrivateKeys, lee::Account),
-        scripted: Actor,
+        to: AccountId,
+        amount: u128,
         fee: lee_core::FeeTransfer,
     ) -> LeeTransaction {
-        let public_actors = vec![
-            scripted,
-            Actor::native_balance(system_accounts::fee_inbox_account_id()),
-        ];
+        let public_actors = vec![Actor::native_balance(
+            system_accounts::fee_inbox_account_id(),
+        )];
         let public_actor_states = public_actors
             .iter()
             .map(|actor| {
@@ -1442,11 +1712,12 @@ pub(crate) mod tests {
             .expect("the sender's commitment is in state");
         let (output, proof) = lee::execute_and_prove(
             lee::ProvingInput {
-                root: TransactionEntry::Sync(RootCall {
-                    to: scripted,
-                    message: borsh::to_vec(&Script::default()).unwrap(),
-                }),
                 claims: Vec::new(),
+                root: TransactionEntry::Sync(RootCall {
+                    to: Actor::native_balance(keys.account_id()),
+                    message: borsh::to_vec(&native_token::Message::Transfer { to, amount })
+                        .unwrap(),
+                }),
                 fee: Some(fee),
                 public_context: lee::PublicExecutionContext::new(public_actors, []),
                 private_witnesses: vec![update_witness(keys, funded.clone(), membership_proof)],
@@ -1467,9 +1738,132 @@ pub(crate) mod tests {
                 public_actor_states,
                 admitted_accounts: None,
             },
+            &ProgramCatalog::default(),
+            |_| SenderPresentation::Blinded(ALIAS_OPENING),
+            |_, _| false,
+            |bodies| Ok(bodies.iter().map(|_| PublicationMode::Clear).collect()),
+        )
+        .expect("the clear credit proves");
+        let message = lee::privacy_preserving_transaction::Message::from_circuit_output(
+            BTreeMap::new(),
+            output,
+        );
+        LeeTransaction::PrivacyPreserving(lee::PrivacyPreservingTransaction::new(
+            message,
+            lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(vec![], proof),
+        ))
+    }
+
+    fn size_of(tx: &LeeTransaction) -> u64 {
+        tx.charged_bytes().unwrap()
+    }
+
+    /// A call of the scripted program at `scripted`, which keeps its state, from a private sender
+    /// that only pays `fee`, presented under [`ALIAS_OPENING`] and bound for refunds.
+    fn public_root_private_tx(
+        state: &V03State,
+        sender: &(TestPrivateKeys, lee::Account),
+        scripted: Actor,
+        fee: lee_core::FeeTransfer,
+    ) -> LeeTransaction {
+        public_root_private_tx_paid(state, sender, scripted_call(scripted), Some(fee), None)
+    }
+
+    /// A state holding one private sender and the scripted program, which it calls.
+    fn publicly_paid_setup(seed: u8) -> (V03State, (TestPrivateKeys, lee::Account), Actor) {
+        let (state, mut senders) = private_sender_state(&[seed]);
+        let scripted = Actor::new(
+            initial_pub_accounts_private_keys()[0].account_id,
+            AccountId::from_builtin_program(event_emitter().id()),
+        );
+        (
+            state.with_programs(vec![event_emitter()]),
+            senders.remove(0),
+            scripted,
+        )
+    }
+
+    /// The public account that signs [`publicly_paid_private_tx`].
+    fn public_payer() -> AccountId {
+        initial_pub_accounts_private_keys()[1].account_id
+    }
+
+    /// [`public_root_private_tx`] paying no fee in its proof: [`public_payer`] signs it and `fee`
+    /// is declared instead.
+    fn publicly_paid_private_tx(
+        state: &V03State,
+        sender: &(TestPrivateKeys, lee::Account),
+        scripted: Actor,
+        fee: lee::FeeDeclaration,
+    ) -> LeeTransaction {
+        public_root_private_tx_paid(state, sender, scripted_call(scripted), None, Some(fee))
+    }
+
+    /// A call of the scripted program at `scripted` that keeps its state.
+    fn scripted_call(scripted: Actor) -> RootCall {
+        RootCall {
+            to: scripted,
+            message: borsh::to_vec(&Script::default()).unwrap(),
+        }
+    }
+
+    fn public_root_private_tx_paid(
+        state: &V03State,
+        (keys, funded): &(TestPrivateKeys, lee::Account),
+        root: RootCall,
+        fee: Option<lee_core::FeeTransfer>,
+        declared: Option<lee::FeeDeclaration>,
+    ) -> LeeTransaction {
+        let signer_key =
+            declared.map(|_| initial_pub_accounts_private_keys()[1].pub_sign_key.clone());
+        let signer = declared.map(|_| public_payer());
+        let public_actors = vec![
+            root.to,
+            Actor::native_balance(system_accounts::fee_inbox_account_id()),
+        ];
+        let public_actor_states = public_actors
+            .iter()
+            .map(|actor| {
+                (
+                    *actor,
+                    state
+                        .get_account_by_id(actor.account_id)
+                        .data
+                        .actor_state(actor.program_account_id)
+                        .clone(),
+                )
+            })
+            .collect();
+        let membership_proof = state
+            .get_proof_for_commitment(&lee_core::Commitment::new(&keys.account_id(), funded))
+            .expect("the sender's commitment is in state");
+        let (output, proof) = lee::execute_and_prove(
+            lee::ProvingInput {
+                root: TransactionEntry::Sync(root),
+                claims: Vec::new(),
+                fee,
+                public_context: lee::PublicExecutionContext::new(public_actors, signer),
+                private_witnesses: vec![update_witness(keys, funded.clone(), membership_proof)],
+                dummy_inputs: Vec::new(),
+                ciphertext_padding: None,
+                recoveries: vec![RecipientEncryption {
+                    recipient: Recipient {
+                        npk: keys.npk(),
+                        vpk: keys.vpk(),
+                        kind: PrivateAccountKind::Regular,
+                        opening: Some(ALIAS_OPENING),
+                    },
+                    esk: EphemeralSecretKey([1; 32]),
+                }],
+                private_promotions: BTreeSet::new(),
+            },
+            &lee::Simulation {
+                public_actor_states,
+                admitted_accounts: None,
+            },
             &ProgramCatalog {
                 programs: HashMap::from([(
-                    scripted.program_account_id,
+                    AccountId::from_builtin_program(event_emitter().id()),
                     Dependency {
                         program: event_emitter(),
                         kind: ProgramKind::Disclosed,
@@ -1481,13 +1875,24 @@ pub(crate) mod tests {
             no_seal,
         )
         .expect("the scripted call proves");
-        let message = lee::privacy_preserving_transaction::Message::from_circuit_output(
-            BTreeMap::new(),
-            output,
-        );
+        let message = lee::privacy_preserving_transaction::Message {
+            fee: declared,
+            ..lee::privacy_preserving_transaction::Message::from_circuit_output(
+                signer
+                    .map(|signer| (signer, state.get_account_by_id(signer).nonce))
+                    .into_iter()
+                    .collect(),
+                output,
+            )
+        };
+        let signing_keys: Vec<&lee::PrivateKey> = signer_key.iter().collect();
         LeeTransaction::PrivacyPreserving(lee::PrivacyPreservingTransaction::new(
-            message,
-            lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(vec![], proof),
+            message.clone(),
+            lee::privacy_preserving_transaction::WitnessSet::for_message(
+                &message,
+                proof,
+                &signing_keys,
+            ),
         ))
     }
 
@@ -1504,14 +1909,14 @@ pub(crate) mod tests {
         state
             .publications_from(0)
             .find_map(|(_, publication)| match publication {
-                Publication::Clear { body, .. } if body.to == Actor::native_balance(alias) => {
+                Publication::Clear(body) if body.to == Actor::native_balance(alias) => {
                     match borsh::from_slice(&body.message).unwrap() {
                         native_token::Message::Credit(amount) => Some(amount),
                         native_token::Message::Transfer { .. }
                         | native_token::Message::ReadState => None,
                     }
                 }
-                Publication::Clear { .. } | Publication::Sealed(_) => None,
+                Publication::Clear(_) | Publication::Sealed(_) => None,
             })
     }
 
@@ -1617,7 +2022,7 @@ pub(crate) mod tests {
 
         let mut settled = state;
         let mut summary = BlockFeeSummary::default();
-        settle_transaction(
+        let (_, receipt) = settle_transaction(
             &tx,
             &mut settled,
             &FeeState::genesis(),
@@ -1629,6 +2034,19 @@ pub(crate) mod tests {
         .expect("settles");
         assert_eq!(summary.revenue_base, required);
         assert_eq!(summary.revenue_tip, fee_core::market::MIN_PRIVATE_REFUND);
+        assert_eq!(
+            receipt,
+            TransactionReceipt {
+                success: true,
+                fee: FeeReceipt {
+                    gas_exec: summary.gas_used_exec,
+                    gas_stor: summary.gas_used_stor,
+                    fee_base: required,
+                    tip: fee_core::market::MIN_PRIVATE_REFUND,
+                    refund: 0,
+                },
+            }
+        );
         assert_eq!(
             native_balance(&settled, system_accounts::fee_inbox_account_id()),
             reserve
@@ -1661,7 +2079,7 @@ pub(crate) mod tests {
 
         let mut settled = state;
         let mut summary = BlockFeeSummary::default();
-        let (_, reverted) = settle_transaction(
+        let (_, receipt) = settle_transaction(
             &tx,
             &mut settled,
             &FeeState::genesis(),
@@ -1671,7 +2089,19 @@ pub(crate) mod tests {
             &mut summary,
         )
         .expect("settles");
-        assert!(!reverted);
+        assert_eq!(
+            receipt,
+            TransactionReceipt {
+                success: true,
+                fee: FeeReceipt {
+                    gas_exec: summary.gas_used_exec,
+                    gas_stor: summary.gas_used_stor,
+                    fee_base: required,
+                    tip: 0,
+                    refund: surplus,
+                },
+            }
+        );
         assert_eq!(summary.revenue_base, required);
         assert_eq!(summary.revenue_tip, 0);
         assert_eq!(
@@ -1716,7 +2146,7 @@ pub(crate) mod tests {
         let fallback = private_tx
             .message
             .execution
-            .fee
+            .proven_fee
             .as_ref()
             .and_then(|fee| fee.fallback.as_ref())
             .expect("the payer's pre-state covers the reserve");
@@ -1728,7 +2158,7 @@ pub(crate) mod tests {
                 - budget,
             ..BlockFeeSummary::default()
         };
-        let (events, reverted) = settle_transaction(
+        let (events, receipt) = settle_transaction(
             &tx,
             &mut settled,
             &FeeState::genesis(),
@@ -1738,7 +2168,19 @@ pub(crate) mod tests {
             &mut summary,
         )
         .expect("a failing public part reverts to the fallback");
-        assert!(reverted);
+        assert_eq!(
+            receipt,
+            TransactionReceipt {
+                success: false,
+                fee: FeeReceipt {
+                    gas_exec: fee_core::market::PRIVATE_VERIFY_GAS + budget,
+                    gas_stor: summary.gas_used_stor,
+                    fee_base: required,
+                    tip: 0,
+                    refund: surplus,
+                },
+            }
+        );
         assert!(events.is_empty());
         assert_eq!(summary.gas_used_exec, fee_core::market::MAX_GAS_EXEC);
         assert_eq!(summary.revenue_base, required);
@@ -1789,7 +2231,7 @@ pub(crate) mod tests {
 
         let mut settled = state;
         let mut summary = BlockFeeSummary::default();
-        let (_, reverted) = settle_transaction(
+        let (_, receipt) = settle_transaction(
             &tx,
             &mut settled,
             &FeeState::genesis(),
@@ -1799,7 +2241,7 @@ pub(crate) mod tests {
             &mut summary,
         )
         .expect("a public part out of its reserve's cycles reverts to the fallback");
-        assert!(reverted);
+        assert!(!receipt.success);
         assert_eq!(
             summary.gas_used_exec,
             fee_core::market::PRIVATE_VERIFY_GAS + budget
@@ -1812,24 +2254,331 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_block_listing_a_revert_that_did_not_happen_is_rejected() {
+    fn a_private_transaction_declaring_its_fee_charges_its_public_signer() {
+        let (state, sender, scripted) = publicly_paid_setup(0x5a);
+        let payer = public_payer();
+        let gas_limit = fee_core::market::PRIVATE_VERIFY_GAS + 1_000_000;
+        let tx = publicly_paid_private_tx(
+            &state,
+            &sender,
+            scripted,
+            lee::FeeDeclaration::new(payer, gas_limit, 3, u128::MAX),
+        );
+        let LeeTransaction::PrivacyPreserving(private_tx) = &tx else {
+            unreachable!("a privacy-preserving transaction was built");
+        };
+        let payer_pre = native_balance(&state, payer);
+        let nonce_pre = state.get_account_by_id(payer).nonce;
+
+        let mut settled = state;
+        let mut summary = BlockFeeSummary::default();
+        let (_, receipt) = settle_transaction(
+            &tx,
+            &mut settled,
+            &FeeState::genesis(),
+            1,
+            100,
+            0,
+            &mut summary,
+        )
+        .expect("a declared fee settles");
+        assert!(receipt.success);
+        // The root needs more than the 5,000 cycles the revert test leaves it.
+        let cycles = summary.gas_used_exec - fee_core::market::PRIVATE_VERIFY_GAS;
+        assert!(cycles > 5_000 && cycles < fee_core::market::PRIVATE_VERIFY_GAS);
+        let base = fee_core::assess::fee_for(summary.gas_used_exec, size_of(&tx), 0, 8, 8);
+        assert_eq!(summary.gas_used_stor, size_of(&tx));
+        assert_eq!(summary.revenue_base, base);
+        assert_eq!(summary.revenue_tip, 3);
+        assert_eq!(
+            receipt.fee.gas_exec, summary.gas_used_exec,
+            "verification gas included"
+        );
+        assert_eq!(receipt.fee.gas_stor, size_of(&tx));
+        assert_eq!((receipt.fee.fee_base, receipt.fee.tip), (base, 3));
+        // The signer pays the actual fee and its tip; the proof pays nothing.
+        assert_eq!(native_balance(&settled, payer), payer_pre - base - 3);
+        assert_eq!(
+            native_balance(&settled, system_accounts::fee_inbox_account_id()),
+            base + 3
+        );
+        assert_eq!(
+            settled.get_account_by_id(payer).nonce,
+            Nonce(nonce_pre.0 + 1)
+        );
+        for commitment in private_tx.message.execution.commitments() {
+            assert!(settled.get_proof_for_commitment(&commitment).is_some());
+        }
+    }
+
+    #[test]
+    fn a_declared_fee_pays_for_a_reverted_private_transaction_that_spends_no_note() {
+        let (state, sender, scripted) = publicly_paid_setup(0x5b);
+        let payer = public_payer();
+        // The scripted public root runs out of the gas left after the proof's verification.
+        let gas_limit = fee_core::market::PRIVATE_VERIFY_GAS + 5_000;
+        let tx = publicly_paid_private_tx(
+            &state,
+            &sender,
+            scripted,
+            lee::FeeDeclaration::new(payer, gas_limit, 0, u128::MAX),
+        );
+        let LeeTransaction::PrivacyPreserving(private_tx) = &tx else {
+            unreachable!("a privacy-preserving transaction was built");
+        };
+        let payer_pre = native_balance(&state, payer);
+        let nonce_pre = state.get_account_by_id(payer).nonce;
+
+        let mut settled = state;
+        let mut summary = BlockFeeSummary::default();
+        let (events, receipt) = settle_transaction(
+            &tx,
+            &mut settled,
+            &FeeState::genesis(),
+            1,
+            100,
+            0,
+            &mut summary,
+        )
+        .expect("a failing public part is a charged revert");
+        assert!(!receipt.success);
+        assert!(events.is_empty());
+        assert_eq!(summary.gas_used_exec, gas_limit);
+        let charged = fee_core::assess::fee_for(gas_limit, size_of(&tx), 0, 8, 8);
+        assert_eq!(receipt.fee.gas_exec, gas_limit);
+        assert_eq!(receipt.fee.fee_base + receipt.fee.tip, charged);
+        assert_eq!(native_balance(&settled, payer), payer_pre - charged);
+        assert_eq!(
+            settled.get_account_by_id(payer).nonce,
+            Nonce(nonce_pre.0 + 1)
+        );
+        // No proven note lands and the sender's note stays unspent.
+        for commitment in private_tx.message.execution.commitments() {
+            assert!(settled.get_proof_for_commitment(&commitment).is_none());
+        }
+        for (nullifier, _) in private_tx.message.execution.nullifiers() {
+            assert!(!settled.is_spent(&nullifier));
+        }
+        // The advanced nonce stops the proof from being replayed.
+        summary = BlockFeeSummary::default();
+        let err = settle_transaction(
+            &tx,
+            &mut settled,
+            &FeeState::genesis(),
+            2,
+            200,
+            0,
+            &mut summary,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&err, BlockIngestError::InvalidFeeClass { reason, .. } if reason.contains("Nonce mismatch")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn a_declared_fee_naming_a_payer_that_does_not_sign_is_rejected() {
+        let (state, sender, scripted) = publicly_paid_setup(0x5c);
+        let outsider = initial_pub_accounts_private_keys()[0].account_id;
+        let tx = publicly_paid_private_tx(
+            &state,
+            &sender,
+            scripted,
+            lee::FeeDeclaration::new(
+                outsider,
+                fee_core::market::PRIVATE_VERIFY_GAS + 1_000_000,
+                0,
+                u128::MAX,
+            ),
+        );
+
+        let mut settled = state;
+        let mut summary = BlockFeeSummary::default();
+        assert!(matches!(
+            settle_transaction(
+                &tx,
+                &mut settled,
+                &FeeState::genesis(),
+                1,
+                100,
+                0,
+                &mut summary,
+            ),
+            Err(BlockIngestError::InvalidFeeClass { reason, .. }) if reason.contains("authorization")
+        ));
+    }
+
+    #[test]
+    fn a_declared_fee_cannot_credit_the_fee_inbox_from_its_public_part() {
+        // Only an in-proof fee may raise the inbox; a declared one is reserved from its payer.
+        let (state, sender, _) = publicly_paid_setup(0x5d);
+        let payer = public_payer();
+        let inbox = system_accounts::fee_inbox_account_id();
+        let tx = public_root_private_tx_paid(
+            &state,
+            &sender,
+            RootCall {
+                to: Actor::native_balance(payer),
+                message: borsh::to_vec(&native_token::Message::Transfer {
+                    to: inbox,
+                    amount: 1,
+                })
+                .unwrap(),
+            },
+            None,
+            Some(lee::FeeDeclaration::new(
+                payer,
+                fee_core::market::PRIVATE_VERIFY_GAS + 1_000_000,
+                0,
+                u128::MAX,
+            )),
+        );
+
+        let mut settled = state;
+        let mut summary = BlockFeeSummary::default();
+        assert!(matches!(
+            settle_transaction(
+                &tx,
+                &mut settled,
+                &FeeState::genesis(),
+                1,
+                100,
+                0,
+                &mut summary,
+            ),
+            Err(BlockIngestError::RestrictedAccountModification { .. })
+        ));
+    }
+
+    #[test]
+    fn a_clear_credit_to_an_unbound_alias_reverts_at_its_metered_fee_and_is_refunded_the_surplus() {
+        let (state, senders) = private_sender_state(&[0x59, 0x60]);
+        let sender = &senders[0];
+        let alias = sender.0.account_id().blinded(&ALIAS_OPENING);
+        // The recipient's alias, which no recovery binds.
+        let unbound = senders[1].0.account_id().blinded(&[10; 32]);
+        let build = |amount| {
+            clear_credit_tx(
+                &state,
+                sender,
+                unbound,
+                10,
+                inbox_fee(amount, sender.0.account_id()),
+            )
+        };
+        let required = required_for(0, build);
+        let surplus = fee_core::market::MIN_PRIVATE_REFUND + 1;
+        let tx = build(required + surplus);
+        let LeeTransaction::PrivacyPreserving(private_tx) = &tx else {
+            unreachable!("a privacy-preserving transaction was built");
+        };
+        let fallback = private_tx
+            .message
+            .execution
+            .proven_fee
+            .as_ref()
+            .and_then(|fee| fee.fallback.as_ref())
+            .expect("the payer's pre-state covers the reserve");
+        // The payment's proven post-state is not the fallback's own.
+        let paid = private_tx.message.execution.commitments();
+        assert!(!paid.is_empty());
+        assert!(!paid.contains(&fallback.action.commitment));
+
+        let mut settled = state;
+        let mut summary = BlockFeeSummary::default();
+        let (_, receipt) = settle_transaction(
+            &tx,
+            &mut settled,
+            &FeeState::genesis(),
+            1,
+            100,
+            0,
+            &mut summary,
+        )
+        .expect("a clear credit to an unbound alias reverts to the fallback");
+        assert!(!receipt.success);
+        // The native public part meters nothing, so the proof's verification is all that is
+        // charged.
+        assert_eq!(summary.gas_used_exec, fee_core::market::PRIVATE_VERIFY_GAS);
+        assert_eq!(summary.gas_used_stor, size_of(&tx));
+        assert_eq!(summary.revenue_base, required);
+        assert_eq!(summary.revenue_tip, 0);
+        // The inbox keeps the actual fee; the surplus is published back to the payer's alias.
+        assert_eq!(
+            native_balance(&settled, system_accounts::fee_inbox_account_id()),
+            required
+        );
+        assert_eq!(published_credit(&settled, alias), Some(surplus));
+        // The payment is neither published nor committed: the payer's note is spent for the
+        // fallback's state.
+        assert_eq!(published_credit(&settled, unbound), None);
+        assert!(
+            settled
+                .get_proof_for_commitment(&fallback.action.commitment)
+                .is_some()
+        );
+        for commitment in paid {
+            assert!(settled.get_proof_for_commitment(&commitment).is_none());
+        }
+    }
+
+    #[test]
+    fn a_block_with_a_tampered_receipt_is_rejected() {
         let mut state =
             initial_state(true).with_public_accounts([common::test_utils::producer_seed()]);
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
         let tip = tip_of(&genesis);
 
-        let block = HashableBlockData {
-            reverted: vec![0],
-            ..HashableBlockData::from(settled_block(2, tip.hash, vec![], &state))
-        }
-        .into_pending_block();
+        let accounts = initial_pub_accounts_private_keys();
+        let tx = create_transaction_native_token_transfer(
+            accounts[0].account_id,
+            0,
+            accounts[1].account_id,
+            10,
+            &accounts[0].pub_sign_key,
+        );
+        let block = settled_block(2, tip.hash, vec![tx], &state);
+        let receipt = block.body.receipts[0];
+        assert!(receipt.success);
+        apply_block(Some(&tip), &block, &mut state.clone()).expect("the honest block applies");
 
-        assert!(matches!(
-            apply_block(Some(&tip), &block, &mut state),
-            Err(BlockIngestError::RevertMismatch { listed, settled })
-                if listed == vec![0] && settled.is_empty()
-        ));
+        let wrong_fee = TransactionReceipt {
+            fee: FeeReceipt {
+                fee_base: receipt.fee.fee_base + 1,
+                ..receipt.fee
+            },
+            ..receipt
+        };
+        let wrong_status = TransactionReceipt {
+            success: false,
+            ..receipt
+        };
+        let exempt = TransactionReceipt::EXEMPT;
+        for (receipts, tx_index, listed, settled) in [
+            (vec![wrong_fee], 0, Some(wrong_fee), Some(receipt)),
+            (vec![wrong_status], 0, Some(wrong_status), Some(receipt)),
+            (vec![exempt], 0, Some(exempt), Some(receipt)),
+            (vec![], 0, None, Some(receipt)),
+            (vec![receipt, receipt], 1, Some(receipt), None),
+        ] {
+            let tampered = HashableBlockData {
+                receipts,
+                ..HashableBlockData::from(block.clone())
+            }
+            .into_pending_block();
+            let err = apply_block(Some(&tip), &tampered, &mut state.clone())
+                .expect_err("a tampered receipt is rejected");
+            assert!(
+                matches!(
+                    &err,
+                    BlockIngestError::ReceiptMismatch { tx_index: i, listed: l, settled: s }
+                        if (*i, l.as_deref().copied(), s.as_deref().copied()) == (tx_index, listed, settled)
+                ),
+                "got {err:?}",
+            );
+        }
     }
 
     #[test]
@@ -1954,7 +2703,7 @@ pub(crate) mod tests {
         reward: FeePayee,
     ) -> common::block::Block {
         let timestamp = id.saturating_mul(100);
-        let (summary, payout, reverted) =
+        let (summary, payout, receipts) =
             super::derive_block_summary(state, &transactions, id, timestamp)
                 .expect("test transactions settle");
         transactions.push(LeeTransaction::Public(fee_invocation(
@@ -1966,7 +2715,7 @@ pub(crate) mod tests {
             prev_block_hash: prev_hash,
             timestamp,
             transactions,
-            reverted,
+            receipts,
         }
         .into_pending_block()
     }

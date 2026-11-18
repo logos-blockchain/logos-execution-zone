@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     num::NonZero,
     sync::Arc,
     time::Duration,
@@ -10,24 +10,23 @@ use chain_state::timeout_node::TimeoutNode;
 use common::block::Block;
 use kameo::actor::ActorRef;
 use kameo_actors::broker::Broker;
-use log::info;
-use logos_blockchain_core::{
-    mantle::{
-        Note, Op, OpProof, SignedOps,
-        channel::{SlotTimeframe, SlotTimeout},
-        gas::GasCost,
-        ledger::{Inputs, Outputs},
-        ops::channel::{
-            VerifiedChannelKeys, channel_transfer::ChannelTransferOp, config::ChannelConfigOp,
-            inscribe::InscriptionOp,
-        },
-        traits::Hashable as _,
-        transactions::{MantleTxBuilder, OpProofs},
-    },
-    proofs::channel_multi_sig_proof::ChannelMultiSigProof,
-};
 use logos_blockchain_zone_sdk::{
     adapter::{Node as _, NodeHttpClient},
+    core::{
+        mantle::{
+            Note, Op, OpProof, SignedOps,
+            channel::{SlotTimeframe, SlotTimeout},
+            gas::GasCost,
+            ledger::{Inputs, Outputs},
+            ops::channel::{
+                VerifiedChannelKeys, channel_transfer::ChannelTransferOp, config::ChannelConfigOp,
+                inscribe::InscriptionOp,
+            },
+            traits::Hashable as _,
+            transactions::{MantleTxBuilder, OpProofs},
+        },
+        proofs::channel_multi_sig_proof::ChannelMultiSigProof,
+    },
     node_types::{Inscription, WalletFundRequestBody, WalletFundResponseBody},
     sequencer::{
         ChannelUpdate as SdkChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FinalizedTx,
@@ -36,10 +35,15 @@ use logos_blockchain_zone_sdk::{
 };
 use sequencer_actors_common::SendErrorExt as _;
 use sequencer_storage_actor::protocol::ZoneCheckpointRecord;
+use tracing::info;
 
 use crate::{
     Result,
-    actor::{block_from_inscription, released_notes, verified_keys},
+    actor::{
+        block_from_inscription,
+        finality::{self, ConfigIndex},
+        released_notes, verified_keys,
+    },
     error::Error,
     protocol::{
         ChannelEntry, ChannelEvent, ChannelEventKind, ChannelId, ChannelParams, ChannelSeq,
@@ -76,13 +80,15 @@ pub struct Publisher {
 }
 
 impl Publisher {
-    /// Starts a publisher, returning it with the sequence it started at.
+    /// Starts a publisher, returning it with the sequence it started at, feeding the configs
+    /// zone-sdk reports final to `config_index`.
     pub async fn new(
         config: PublisherConfig,
         node: TimeoutNode<NodeHttpClient>,
         initial_checkpoint: Option<ZoneCheckpointRecord>,
         replayed_up_to: Option<Slot>,
         broker_ref: ActorRef<Broker<ChannelEvent>>,
+        config_index: &mut ConfigIndex,
     ) -> Result<(Self, ChannelSeq)> {
         let PublisherConfig {
             channel_id,
@@ -120,7 +126,7 @@ impl Publisher {
                 funding_pk,
                 // Withdraw change goes back to the funding key.
                 change_pk: None,
-                max_tx_fee: GasCost::new(logos_blockchain_core::mantle::Value::MAX),
+                max_tx_fee: GasCost::new(logos_blockchain_zone_sdk::core::mantle::Value::MAX),
                 priority_fee_percent,
             })
         };
@@ -150,7 +156,7 @@ impl Publisher {
         // way report the channel up to its tip, so they are published as well.
         while !publisher.sequencer.is_ready() {
             let event = publisher.sequencer.next_event().await;
-            publisher.on_event(event).await?;
+            publisher.on_event(event, config_index).await?;
         }
 
         Ok((publisher, seq))
@@ -161,8 +167,9 @@ impl Publisher {
         self.sequencer.next_event().await
     }
 
-    /// Publishes what `event` reports to the broker.
-    pub async fn on_event(&mut self, event: Event) -> Result<()> {
+    /// Publishes what `event` reports to the broker, after adding the configs it reports final to
+    /// `config_index`.
+    pub async fn on_event(&mut self, event: Event, config_index: &mut ConfigIndex) -> Result<()> {
         match event {
             Event::BlocksProcessed {
                 checkpoint,
@@ -170,6 +177,19 @@ impl Publisher {
                 finalized,
                 deposits: observed_deposits,
             } => {
+                let config_keys = finalized.iter().flat_map(|item| {
+                    item.ops.iter().filter_map(|op| {
+                        if let FinalizedOp::Config(info) = op {
+                            Some((
+                                item.l1_slot.into_inner(),
+                                finality::config_key_bytes(&info.config),
+                            ))
+                        } else {
+                            None
+                        }
+                    })
+                });
+                config_index.extend_final(config_keys, checkpoint.lib_slot.into_inner());
                 // Apart from the update: they carry no checkpoint and move no channel sequence.
                 if !observed_deposits.is_empty() {
                     self.publish("deposits", PublisherEvent::Deposits(observed_deposits))
@@ -181,10 +201,10 @@ impl Publisher {
             }
             Event::TurnNotification { notification } => {
                 info!(
-                    "Turn update: our_turn={}, starting_slot={:?}, ends_at_slot={:?}",
-                    notification.our_turn_to_write,
-                    notification.starting_slot,
-                    notification.ends_at_slot
+                    our_turn = notification.our_turn_to_write,
+                    starting_slot = notification.starting_slot,
+                    ends_at_slot = notification.ends_at_slot,
+                    "Turn update"
                 );
 
                 self.publish(
@@ -382,7 +402,10 @@ impl Publisher {
                 .map_err(|err| Error::TooManyOperationProofs(err.into()))?;
         }
 
-        info!("Creating the channel with {key_count} accredited key(s), genesis block bundled");
+        info!(
+            accredited_keys = key_count,
+            "Creating the channel, genesis block bundled"
+        );
 
         let tx = SignedOps::from_parts(mantle_tx, op_proofs)?;
         self.submit_tx(tx, msg_id, MsgId::root())
@@ -434,8 +457,9 @@ impl Publisher {
         };
         if published.is_ok() {
             info!(
-                "Published block {} with the size of {data_byte_size} bytes",
-                block.header.block_id
+                block_id = block.header.block_id,
+                size_bytes = data_byte_size,
+                "Published block"
             );
         }
         published
@@ -497,7 +521,7 @@ impl Publisher {
             std::iter::once(transfer_proof).chain(fee_proof),
         );
         if published.is_ok() {
-            info!("Published block {block_id} with the size of {block_size} bytes");
+            info!(block_id, size_bytes = block_size, "Published block");
         }
         published
     }
@@ -583,7 +607,7 @@ impl Publisher {
         &mut self,
         tx: SignedOps<
             logos_blockchain_zone_sdk::node_types::Unverified,
-            logos_blockchain_core::mantle::ledger::verification_mode::StandardMode,
+            logos_blockchain_zone_sdk::core::mantle::ledger::verification_mode::StandardMode,
         >,
         msg_id: MsgId,
         parent: MsgId,
@@ -708,7 +732,7 @@ impl Publisher {
                 tx_builder,
                 change_public_key: self.funding_pk,
                 funding_public_keys: vec![self.funding_pk],
-                max_tx_fee: GasCost::new(logos_blockchain_core::mantle::Value::MAX),
+                max_tx_fee: GasCost::new(logos_blockchain_zone_sdk::core::mantle::Value::MAX),
                 priority_fee_percent: self.priority_fee_percent,
             })
             .await
@@ -779,12 +803,23 @@ pub(super) fn inscription_data(block: &Block) -> Result<Vec<u8>> {
         .map_err(Error::BlockEncodingFailed)
 }
 
+/// The name of the span `event` is handled in, which roots the trace of what it
+/// sets off.
+pub const fn span_name(event: &Event) -> &'static str {
+    match event {
+        Event::BlocksProcessed { .. } => "bedrock.blocks_processed",
+        Event::TurnNotification { .. } => "bedrock.turn_notification",
+        Event::Ready => "bedrock.ready",
+    }
+}
+
 /// Whether `checkpoint` records messages published to or observed on the channel.
 fn has_channel_activity(checkpoint: &SequencerCheckpoint) -> bool {
     checkpoint.last_msg_id != MsgId::root() || !checkpoint.pending_txs.is_empty()
 }
 
-/// A message-lineage entry, with its block when the payload decodes to one.
+/// A message-lineage entry, with its block when the payload decodes to one, in the final block at
+/// `slot` or in the view when `None`.
 fn channel_entry(inscription: &InscriptionInfo, slot: Option<Slot>) -> ChannelEntry {
     let block = if <Inscription as AsRef<[u8]>>::as_ref(&inscription.payload).is_empty() {
         None
@@ -800,6 +835,7 @@ fn channel_entry(inscription: &InscriptionInfo, slot: Option<Slot>) -> ChannelEn
             .map(|key| key.to_bytes()),
         slot,
         block,
+        finally_absent_keys: BTreeSet::new(),
     }
 }
 

@@ -71,7 +71,7 @@ pub fn AccountPage() -> impl IntoView {
                     set_has_more.set(txs_count == tx_limit);
                 }
                 Err(e) => {
-                    log::error!("Failed to load more transactions: {e}");
+                    tracing::error!(error = %e, "Failed to load more transactions");
                 }
             }
             set_is_loading.set(false);

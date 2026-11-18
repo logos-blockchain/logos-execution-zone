@@ -2,8 +2,8 @@
 //! `ValidatedStateDiff::execute_authorized`, and `get_program_via`'s segment-chain resolution
 //! that a live deploy (or a hand-assembled one, here) must decode back out of.
 
-use lee_core::program::{MAX_PROGRAM_SEGMENTS, ProgramHeader, ReceiveInput};
-use program_loader_core::Message as LoaderMessage;
+use lee_core::program::{ProgramHeader, ReceiveInput};
+use program_loader_core::{MAX_PROGRAM_SEGMENTS, Message as LoaderMessage};
 
 use super::*;
 
@@ -294,7 +294,7 @@ fn write_segment_then_create_header_deploys_a_dispatchable_program() {
     // Deployed at an arbitrary key-derived address rather than its builtin address, so
     // resolution goes through `get_program_via` directly.
     let (image_id, user_elf) =
-        lee_core::program::get_program_via(header_account_id, |id| state.loader_actor_state(id))
+        program_loader_core::get_program_via(header_account_id, |id| state.loader_actor_state(id))
             .expect("the newly-deployed program must be resolvable by its header address");
     assert_eq!(image_id, program.id());
     assert_eq!(
@@ -395,7 +395,7 @@ fn a_header_sized_segment_is_stored_as_a_segment_not_a_header() {
         Some(bytecode)
     );
     assert!(
-        lee_core::program::get_program_via(target, |id| state.loader_actor_state(id)).is_none(),
+        program_loader_core::get_program_via(target, |id| state.loader_actor_state(id)).is_none(),
         "no program may resolve at the target"
     );
 }
@@ -602,7 +602,7 @@ fn a_program_deployed_earlier_in_the_transaction_is_dispatchable_by_a_later_call
         .expect("the header written by the first send must dispatch the second");
 
     let (image_id, _) =
-        lee_core::program::get_program_via(header_account_id, |id| state.loader_actor_state(id))
+        program_loader_core::get_program_via(header_account_id, |id| state.loader_actor_state(id))
             .unwrap();
     assert_eq!(image_id, program.id());
     assert_eq!(

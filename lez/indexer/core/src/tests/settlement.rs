@@ -26,7 +26,7 @@ fn channel() -> Channel {
         posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
         posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
         skip_window: SKIP_WINDOW,
-        exit_delay: system_accounts::DEFAULT_SEQUENCER_EXIT_DELAY,
+        finality_depth: system_accounts::DEFAULT_FINALITY_DEPTH,
         max_block_size: system_accounts::DEFAULT_MAX_BLOCK_SIZE,
     };
     let initial = with_private_sender(

@@ -12,8 +12,8 @@ use lee_core::BlockId;
 use super::MockStorageActor;
 use crate::protocol::{
     AtomicUpdate, DropSettledCrossZoneDispatches, GetBlock, PendingCrossZoneDispatchRecord,
-    PendingDepositEventRecord, PutSlashRecordBytes, SetZoneAnchor, StoreUpdateOutcome,
-    UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
+    PendingDepositEventRecord, PutSlashRecordBytes, PutSystemApprovalsBytes, SetZoneAnchor,
+    StoreUpdateOutcome, UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
 };
 
 /// What a mocked store holds.
@@ -31,6 +31,7 @@ pub struct CannedStore {
     pub pending_deposits: Vec<PendingDepositEventRecord>,
     pub pending_dispatches: Vec<PendingCrossZoneDispatchRecord>,
     pub slash_record: Option<Vec<u8>>,
+    pub system_approvals: Option<Vec<u8>>,
 }
 
 impl CannedStore {
@@ -192,6 +193,17 @@ impl SharedStore {
             let store = self.clone();
             move |PutSlashRecordBytes { bytes }, _ctx| {
                 store.lock().slash_record = Some(bytes);
+                Ok(())
+            }
+        });
+        mock.expect_handle_get_system_approvals_bytes().returning({
+            let store = self.clone();
+            move |_msg, _ctx| Ok(store.lock().system_approvals.clone())
+        });
+        mock.expect_handle_put_system_approvals_bytes().returning({
+            let store = self.clone();
+            move |PutSystemApprovalsBytes { bytes }, _ctx| {
+                store.lock().system_approvals = Some(bytes);
                 Ok(())
             }
         });

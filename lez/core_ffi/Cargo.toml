@@ -19,10 +19,10 @@ wallet.workspace = true
 key_protocol.workspace = true
 
 tokio = { features = ["rt-multi-thread"], workspace = true }
-log = { workspace = true }
+tracing.workspace = true
 serde_json.workspace = true
 kameo.workspace = true
-env_logger.workspace = true
+logging.workspace = true
 bip39.workspace = true
 anyhow.workspace = true
 zeroize.workspace = true

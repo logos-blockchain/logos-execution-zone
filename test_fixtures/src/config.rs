@@ -4,7 +4,9 @@ use anyhow::{Context as _, Result};
 use indexer_service::{ChannelId, ClientConfig, EventFilterConfig, IndexerConfig};
 use key_protocol::key_management::{KeyChain, secret_holders::SeedHolder};
 use lee::{AccountId, PrivateKey, PublicAccountEvidence, PublicKey};
-use logos_blockchain_key_management_system_service::keys::{UnsecuredEd25519Key, ZkPublicKey};
+use logos_blockchain_zone_sdk::key_management_system_service::keys::{
+    UnsecuredEd25519Key, ZkPublicKey,
+};
 use num_bigint::BigUint;
 use sequencer_core::config::{
     BedrockConfig, ChannelParams, CrossZoneConfig, DepositRecipient, GenesisAction, GenesisConfig,
@@ -26,8 +28,8 @@ pub const TEST_POSTING_TIMEFRAME: u32 = 13;
 /// Idle slots before the turn passes on; the production 25 outlasts the shortened timeframe.
 pub const TEST_POSTING_TIMEOUT: u32 = TEST_POSTING_TIMEFRAME;
 
-/// Blocks an unstake waits; the production 100 would outlast the exit tests.
-pub const TEST_EXIT_DELAY: u64 = 3;
+/// L1 blocks on top of a key's removal config before its whole stake is released.
+pub const TEST_FINALITY_DEPTH: u64 = 11;
 
 // Balances are LGO-scale (`testnet_initial_state` precedent): a charged public
 // transaction reserves `gas_limit x base_fee` up front (~16M at wallet defaults)
@@ -41,7 +43,7 @@ pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000_000_000, 20_0
 ///
 /// It is the shield's digest form: its serialized size with the proof replaced by the proof's
 /// 32-byte digest, mostly its padded private slots.
-pub const SHIELD_BYTES: u64 = 14_020;
+pub const SHIELD_BYTES: u64 = 14_021;
 
 /// The public account for funding the private accounts' balances at genesis.
 pub(crate) const PRIVATE_FUNDER_INDEX: usize = 0;
@@ -103,7 +105,7 @@ impl Default for SequencerPartialConfig {
                 posting_timeframe: TEST_POSTING_TIMEFRAME,
                 posting_timeout: TEST_POSTING_TIMEOUT,
                 skip_window: 0,
-                exit_delay: TEST_EXIT_DELAY,
+                finality_depth: TEST_FINALITY_DEPTH,
                 ..sequencer_core::config::default_channel_params()
             },
         }

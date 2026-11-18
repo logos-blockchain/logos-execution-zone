@@ -3,7 +3,7 @@
     reason = "`handle*` prefix is used for convenience with `Message` trait"
 )]
 
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use kameo::{
     Actor,
@@ -19,10 +19,10 @@ use crate::{
     error::Error,
     protocol::{
         AccreditedKeys, ChangeChannelConfig, ChannelId, ChannelReadStream, ChannelSeq,
-        CheckChannelExists, CheckIsOurTurn, CreateChannel, FollowChannel, GetAccreditedKeys,
-        GetChannelNotes, GetChannelTipMessageId, GetChannelTipSlot, InitializeChannelPublisher,
-        MsgId, NoteId, PrepareConfig, PreparePin, PreparedConfig, PreparedPin, PublishBlock,
-        PublishOutcome, PublishPin, ReadChannel, Slot,
+        CheckChannelExists, CheckIsOurTurn, CreateChannel, FilterFinallyAbsent, FollowChannel,
+        GetAccreditedKeys, GetChannelNotes, GetChannelTipMessageId, GetChannelTipSlot,
+        InitializeChannelPublisher, MsgId, NoteId, PrepareConfig, PreparePin, PreparedConfig,
+        PreparedPin, PublishBlock, PublishOutcome, PublishPin, ReadChannel, SequencerKey, Slot,
     },
 };
 
@@ -151,6 +151,12 @@ mockall::mock! {
             msg: ReadChannel,
             ctx: &mut Context<Self, Result<ChannelReadStream>>
         ) -> Result<ChannelReadStream>;
+
+        pub fn handle_filter_finally_absent(
+            &mut self,
+            msg: FilterFinallyAbsent,
+            ctx: &mut Context<Self, Result<BTreeSet<SequencerKey>>>
+        ) -> Result<BTreeSet<SequencerKey>>;
     }
 }
 
@@ -370,5 +376,17 @@ impl Message<ReadChannel> for MockBedrockActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_read_channel(msg, ctx)
+    }
+}
+
+impl Message<FilterFinallyAbsent> for MockBedrockActor {
+    type Reply = Result<BTreeSet<SequencerKey>>;
+
+    async fn handle(
+        &mut self,
+        msg: FilterFinallyAbsent,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_filter_finally_absent(msg, ctx)
     }
 }

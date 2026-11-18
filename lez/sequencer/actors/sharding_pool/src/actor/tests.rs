@@ -1,3 +1,8 @@
+#![expect(
+    clippy::arithmetic_side_effects,
+    reason = "We don't care about these in tests"
+)]
+
 use std::{
     fmt::Display,
     sync::{Arc, Mutex},
@@ -11,9 +16,15 @@ use kameo::{
     message::{Context, Message},
     supervision::RestartPolicy,
 };
-use log::info;
 use sequencer_actors_common::SendErrorExt;
+use tracing::{
+    Subscriber,
+    field::{Field, Visit},
+    info, span,
+};
+use tracing_subscriber::{Layer, layer::SubscriberExt as _, registry::LookupSpan};
 
+use super::FORWARD_SPAN;
 use crate::{
     RestartConfig, ShardingKey, ShardingPoolActor,
     protocol::{Link, Reset, Spawn, Unlink},
@@ -81,7 +92,7 @@ impl Actor for TickingBomb {
 
     async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Self::Error> {
         let ticks = args;
-        info!("Starting TickingBombActor with ticks: {ticks:?}");
+        info!(?ticks, "Starting TickingBombActor");
 
         if ticks == 0 {
             return Err("Ticks must be greater than zero".to_owned());
@@ -149,6 +160,71 @@ impl Message<TriggeredTick> for TickingBomb {
             .await
             .expect("Trigger must not be dropped before firing");
         <Self as Message<Tick>>::handle(self, Tick, ctx).await;
+    }
+}
+
+/// Records which span follows from which, each by the actor it runs in, or
+/// else by its name.
+#[derive(Clone, Default)]
+struct FollowsFrom(Arc<Mutex<Vec<(String, String)>>>);
+
+/// A span's name as [`FollowsFrom`] records it.
+struct SpanName(String);
+
+/// The `actor.name` field kameo puts on its spans.
+#[derive(Default)]
+struct ActorName(Option<String>);
+
+impl Visit for ActorName {
+    fn record_str(&mut self, field: &Field, value: &str) {
+        if field.name() == "actor.name" {
+            self.0 = Some(value.to_owned());
+        }
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "actor.name" {
+            self.0 = Some(format!("{value:?}"));
+        }
+    }
+}
+
+impl<S: Subscriber + for<'lookup> LookupSpan<'lookup>> Layer<S> for FollowsFrom {
+    fn on_new_span(
+        &self,
+        attrs: &span::Attributes<'_>,
+        id: &span::Id,
+        ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let mut actor = ActorName::default();
+        attrs.record(&mut actor);
+        let name = actor
+            .0
+            .unwrap_or_else(|| attrs.metadata().name().to_owned());
+        if let Some(span) = ctx.span(id) {
+            span.extensions_mut().insert(SpanName(name));
+        }
+    }
+
+    fn on_follows_from(
+        &self,
+        id: &span::Id,
+        follows: &span::Id,
+        ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let name = |span_id| {
+            let span = ctx.span(span_id)?;
+            let extensions = span.extensions();
+            extensions
+                .get::<SpanName>()
+                .map(|SpanName(name)| name.clone())
+        };
+        if let (Some(span), Some(cause)) = (name(id), name(follows)) {
+            self.0
+                .lock()
+                .expect("Follows-from lock poisoned")
+                .push((span, cause));
+        }
     }
 }
 
@@ -233,7 +309,9 @@ async fn the_spawn_hook_sees_a_worker_per_key() {
             },
             Counter::fresh,
         )
-        .with_on_worker_spawned(move |worker| spawned_clone.lock().unwrap().push(worker.id())),
+        .with_on_worker_spawned(move |key, worker| {
+            spawned_clone.lock().unwrap().push((*key, worker.id()));
+        }),
     );
 
     increment(&pool, 1).await;
@@ -241,13 +319,14 @@ async fn the_spawn_hook_sees_a_worker_per_key() {
     increment(&pool, 2).await;
 
     let spawned = spawned.lock().unwrap();
-    assert_eq!(spawned.len(), 2, "{spawned:?}");
-    assert_ne!(spawned[0], spawned[1]);
+    let keys: Vec<_> = spawned.iter().map(|(key, _)| *key).collect();
+    assert_eq!(keys, [1, 2]);
+    assert_ne!(spawned[0].1, spawned[1].1);
 }
 
 #[tokio::test]
 async fn the_spawn_hook_skips_a_restarted_worker() {
-    let _err = env_logger::try_init();
+    let _err = logging::try_init();
 
     let spawned = Arc::new(Mutex::new(0_u32));
     let spawned_clone = Arc::clone(&spawned);
@@ -260,7 +339,7 @@ async fn the_spawn_hook_skips_a_restarted_worker() {
             },
             |TickShardingKey| 2,
         )
-        .with_on_worker_spawned(move |_worker| *spawned_clone.lock().unwrap() += 1),
+        .with_on_worker_spawned(move |_key, _worker| *spawned_clone.lock().unwrap() += 1),
     );
 
     assert_eq!(pool.ask(Tick).await, Ok(()));
@@ -272,7 +351,7 @@ async fn the_spawn_hook_skips_a_restarted_worker() {
 
 #[tokio::test]
 async fn sending_message_to_actor_which_failed_to_start_results_in_error() {
-    let _err = env_logger::try_init();
+    let _err = logging::try_init();
 
     let pool = ShardingPoolActor::<TickingBomb, TickShardingKey>::new(
         RestartConfig {
@@ -292,7 +371,7 @@ async fn sending_message_to_actor_which_failed_to_start_results_in_error() {
 
 #[tokio::test]
 async fn actor_panicked_when_handling_message_is_restarted() {
-    let _err = env_logger::try_init();
+    let _err = logging::try_init();
 
     let pool = ShardingPoolActor::<TickingBomb, TickShardingKey>::new(
         RestartConfig {
@@ -318,7 +397,7 @@ async fn actor_panicked_when_handling_message_is_restarted() {
 
 #[tokio::test]
 async fn a_given_up_actor_stays_stopped_until_reset() {
-    let _err = env_logger::try_init();
+    let _err = logging::try_init();
 
     let pool = ShardingPoolActor::<TickingBomb, TickShardingKey>::new(
         RestartConfig {
@@ -361,7 +440,7 @@ async fn a_given_up_actor_stays_stopped_until_reset() {
 
 #[tokio::test]
 async fn spending_the_restart_budget_stops_the_pool() {
-    let _err = env_logger::try_init();
+    let _err = logging::try_init();
 
     let pool = ShardingPoolActor::<TickingBomb, TickShardingKey>::new(
         RestartConfig {
@@ -399,7 +478,7 @@ async fn a_key_is_restarted_by_its_own_restart_config() {
     const RESTARTED_KEY: u32 = 0;
     const NEVER_RESTARTED_KEY: u32 = 1;
 
-    let _err = env_logger::try_init();
+    let _err = logging::try_init();
 
     let pool = ShardingPoolActor::<TickingBomb, u32>::new(
         RestartConfig {
@@ -489,7 +568,7 @@ async fn an_unlinked_actor_outlives_its_worker() {
 
 #[tokio::test]
 async fn linking_a_worker_that_failed_to_start_replies_so() {
-    let _err = env_logger::try_init();
+    let _err = logging::try_init();
 
     let pool = ShardingPoolActor::spawn(ShardingPoolActor::<TickingBomb, TickShardingKey>::new(
         RestartConfig {
@@ -530,7 +609,7 @@ async fn pool_with_full_mailbox_will_still_restart_failed_actor() {
     const STEP_DURATION: Duration = Duration::from_millis(100);
     const BLOCK_DURATION: Duration = Duration::from_millis(500);
 
-    let _err = env_logger::try_init();
+    let _err = logging::try_init();
 
     let pool = ShardingPoolActor::<TickingBomb, u32>::new(
         RestartConfig {
@@ -540,7 +619,7 @@ async fn pool_with_full_mailbox_will_still_restart_failed_actor() {
         },
         |key| {
             if key == SLOW_KEY {
-                info!("Blocking the pool for {BLOCK_DURATION:?}");
+                info!(duration = ?BLOCK_DURATION, "Blocking the pool");
                 // Constructor is called by the pool itself, so this blocks the pool.
                 std::thread::sleep(BLOCK_DURATION);
             }
@@ -610,4 +689,28 @@ async fn pool_with_full_mailbox_will_still_restart_failed_actor() {
         waiting_sender.await.expect("Waiting sender panicked"),
         "Waiting sender must eventually be served"
     );
+}
+
+#[tokio::test]
+async fn a_message_passed_on_follows_from_the_pool_handling_it() {
+    let follows = FollowsFrom::default();
+    let _subscriber =
+        tracing::subscriber::set_default(tracing_subscriber::registry().with(follows.clone()));
+
+    let pool = spawn_pool();
+    increment(&pool, 1).await;
+
+    let follows = follows
+        .0
+        .lock()
+        .expect("Follows-from lock poisoned")
+        .clone();
+    let pool_name = <ShardingPoolActor<Counter, u32> as Actor>::name();
+    let worker_name = <Counter as Actor>::name();
+    for (span, cause) in [(worker_name, FORWARD_SPAN), (FORWARD_SPAN, pool_name)] {
+        assert!(
+            follows.contains(&(span.to_owned(), cause.to_owned())),
+            "{span} does not follow from {cause}: {follows:?}"
+        );
+    }
 }

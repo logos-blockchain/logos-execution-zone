@@ -10,8 +10,10 @@ from pathlib import Path
 from typing import Any
 
 
-# Scheduled one test per shard: both are far slower sharing a runner.
-SPLIT_PER_TEST = frozenset({"scoped_reads", "slashing"})
+# Scheduled one test per shard: each is far slower sharing a runner. The
+# system-upgrade tests in `program_deployment` each hold a two-node zone, and
+# sharing starved a funding request until it timed out.
+SPLIT_PER_TEST = frozenset({"program_deployment", "scoped_reads", "slashing"})
 
 
 class DiscoveryError(ValueError):

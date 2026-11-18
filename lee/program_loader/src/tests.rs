@@ -253,6 +253,54 @@ fn update_header_rejects_an_immutable_header() {
 }
 
 #[test]
+fn assert_mutable_accepts_a_mutable_header_and_changes_nothing() {
+    let target_id = AccountId::new([1; 32]);
+    let actor_states = ActorStates::default().header(target_id, &linked_header());
+    let pre_state = actor_states.read()(target_id).clone();
+
+    let (transition, new_commitment) = handle_message(
+        &input(target_id, false, pre_state, &Message::AssertMutable),
+        actor_states.read(),
+    );
+
+    assert_eq!(transition.response.post_state, None);
+    assert!(new_commitment.is_none());
+}
+
+#[test]
+#[should_panic(expected = "AssertMutable target is immutable")]
+fn assert_mutable_rejects_an_immutable_header() {
+    let target_id = AccountId::new([1; 32]);
+    let actor_states = ActorStates::default().header(
+        target_id,
+        &ProgramHeader {
+            immutable: true,
+            ..linked_header()
+        },
+    );
+    let pre_state = actor_states.read()(target_id).clone();
+
+    let _transition = handle_message(
+        &input(target_id, false, pre_state, &Message::AssertMutable),
+        actor_states.read(),
+    );
+}
+
+#[test]
+#[should_panic(expected = "AssertMutable target must hold a valid header")]
+fn assert_mutable_rejects_a_target_with_no_header() {
+    let _transition = handle_message(
+        &input(
+            AccountId::new([1; 32]),
+            false,
+            ActorState::empty(),
+            &Message::AssertMutable,
+        ),
+        ActorStates::default().read(),
+    );
+}
+
+#[test]
 #[should_panic(expected = "must be authorized by the signer")]
 fn update_header_rejects_an_unauthorized_caller() {
     let target_id = AccountId::new([1; 32]);
@@ -421,4 +469,133 @@ fn write_segment_rejects_linking_to_a_header() {
         &input(AccountId::new([1; 32]), true, ActorState::empty(), &message),
         actor_states.read(),
     );
+}
+
+#[test]
+fn get_program_via_reads_the_loader_actor_state() {
+    let program_account = AccountId::new([1; 32]);
+    let segment_account = AccountId::new([2; 32]);
+    let header = ProgramHeader {
+        image_id: [7; 8],
+        program_first_segment: segment_account,
+        immutable: false,
+    };
+    let segment = ProgramSegment {
+        bytecode: vec![1, 2, 3],
+        next_segment: None,
+    };
+    let program_actor_state: ActorState = header.to_loader_actor_state().into();
+    let segment_actor_state: ActorState = segment.to_loader_actor_state().into();
+    let lookup = |id| {
+        if id == program_account {
+            Some(&program_actor_state)
+        } else if id == segment_account {
+            Some(&segment_actor_state)
+        } else {
+            None
+        }
+    };
+    assert_eq!(
+        get_program_via(program_account, lookup),
+        Some(([7; 8], vec![1, 2, 3]))
+    );
+
+    let deleted = ActorState::empty();
+    let deleted_header = |id| (id == program_account).then_some(&deleted);
+    assert_eq!(get_program_via(program_account, deleted_header), None);
+}
+
+/// Untagged, the linked header's bytes would parse as a segment.
+#[test]
+fn get_program_via_does_not_follow_a_link_to_a_header() {
+    let program_account = AccountId::new([1; 32]);
+    let linked_header_account = AccountId::new([2; 32]);
+    let program_actor_state: ActorState = ProgramHeader {
+        image_id: [7; 8],
+        program_first_segment: linked_header_account,
+        immutable: true,
+    }
+    .to_loader_actor_state()
+    .into();
+    let linked_actor_state: ActorState = ProgramHeader {
+        image_id: [60, 0, 0, 0, 0, 0, 0, 0],
+        program_first_segment: AccountId::new([3; 32]),
+        immutable: false,
+    }
+    .to_loader_actor_state()
+    .into();
+    let lookup = |id| {
+        if id == program_account {
+            Some(&program_actor_state)
+        } else if id == linked_header_account {
+            Some(&linked_actor_state)
+        } else {
+            None
+        }
+    };
+    assert_eq!(get_program_via(program_account, lookup), None);
+}
+
+#[test]
+fn loader_entry_decoders_reject_the_other_variant() {
+    let header = ProgramHeader {
+        image_id: [7; 8],
+        program_first_segment: AccountId::new([2; 32]),
+        immutable: false,
+    };
+    let segment = ProgramSegment {
+        bytecode: vec![1, 2, 3],
+        next_segment: None,
+    };
+    let header_bytes = header.to_loader_actor_state();
+    let segment_bytes = segment.clone().to_loader_actor_state();
+
+    assert_eq!(
+        ProgramHeader::from_loader_actor_state(&header_bytes),
+        Some(header)
+    );
+    assert_eq!(ProgramSegment::from_loader_actor_state(&header_bytes), None);
+    assert_eq!(
+        ProgramSegment::from_loader_actor_state(&segment_bytes),
+        Some(segment)
+    );
+    assert_eq!(ProgramHeader::from_loader_actor_state(&segment_bytes), None);
+}
+
+/// `system_upgrader` changes only by protocol upgrade and encodes `UpdateHeader` (for `Apply`),
+/// `CreateHeaderOf` (for `Schedule` and `Install`) and `AssertMutable` (for `Schedule`) itself, so
+/// these encodings are fixed for as long as it is deployed.
+#[test]
+fn system_upgrader_loader_message_encodings_are_pinned() {
+    let first_segment = AccountId::new([9; 32]);
+
+    let mut update = vec![2];
+    update.extend_from_slice(first_segment.value());
+    update.push(0);
+    assert_eq!(
+        borsh::to_vec(&Message::UpdateHeader {
+            first_segment,
+            immutable: false,
+        })
+        .unwrap(),
+        update
+    );
+
+    let mut create_of = vec![3];
+    create_of.extend_from_slice(first_segment.value());
+    for word in [1_u32, 2, 3, 4, 5, 6, 7, 8] {
+        create_of.extend_from_slice(&word.to_le_bytes());
+    }
+    create_of.push(0);
+    assert_eq!(
+        borsh::to_vec(&Message::CreateHeaderOf {
+            first_segment,
+            image_id: [1, 2, 3, 4, 5, 6, 7, 8],
+            immutable: false,
+        })
+        .unwrap(),
+        create_of
+    );
+
+    assert_eq!(borsh::to_vec(&Message::AssertMutable).unwrap(), vec![4]);
 }

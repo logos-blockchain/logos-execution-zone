@@ -1,3 +1,8 @@
+#![expect(
+    clippy::arithmetic_side_effects,
+    reason = "We don't care about these in tests"
+)]
+
 use std::{collections::BTreeSet, time::Duration};
 
 use anyhow::{Context as _, Result};
@@ -39,13 +44,13 @@ async fn private_transfer_to_owned_account() -> Result<()> {
 
     send(&mut ctx, private_mention(from), private_mention(to), 100).await?;
 
-    log::info!("Waiting for next block creation");
+    tracing::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     assert_private_commitment_in_state(&ctx, from, "sender").await?;
     assert_private_commitment_in_state(&ctx, to, "receiver").await?;
 
-    log::info!("Successfully transferred privately to owned account");
+    tracing::info!("Successfully transferred privately to owned account");
 
     Ok(())
 }
@@ -74,7 +79,7 @@ async fn private_transfer_to_foreign_account() -> Result<()> {
         anyhow::bail!("Expected TransactionExecuted return value");
     };
 
-    log::info!("Waiting for next block creation");
+    tracing::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let new_commitment1 = ctx
@@ -94,7 +99,7 @@ async fn private_transfer_to_foreign_account() -> Result<()> {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }
 
-    log::info!("Successfully transferred privately to foreign account");
+    tracing::info!("Successfully transferred privately to foreign account");
 
     Ok(())
 }
@@ -119,7 +124,7 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
 
     let sent = send(&mut ctx, private_mention(from), public_mention(to), 100).await?;
 
-    log::info!("Waiting for next block creation");
+    tracing::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let from_acc = ctx
@@ -137,7 +142,7 @@ async fn deshielded_transfer_to_public_account() -> Result<()> {
     );
     assert_eq!(acc_2_balance, to_before + 100);
 
-    log::info!("Successfully deshielded transfer to public account");
+    tracing::info!("Successfully deshielded transfer to public account");
 
     Ok(())
 }
@@ -186,7 +191,7 @@ async fn concurrent_deshielded_transfers_settle_against_live_state() -> Result<(
     )
     .await?;
 
-    log::info!("Waiting for next block creation");
+    tracing::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let sender_1_after = ctx
@@ -225,7 +230,7 @@ async fn concurrent_deshielded_transfers_settle_against_live_state() -> Result<(
         "receiver must reflect both credits (30 + 20), not just whichever transfer settled last"
     );
 
-    log::info!("Successfully settled two concurrent deshielded transfers against live state");
+    tracing::info!("Successfully settled two concurrent deshielded transfers against live state");
 
     Ok(())
 }
@@ -256,7 +261,7 @@ async fn deshielded_transfer_does_not_sign_with_recipient_key() -> Result<()> {
         anyhow::bail!("Expected TransactionExecuted return value");
     };
 
-    log::info!("Waiting for next block creation");
+    tracing::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let tx = fetch_privacy_preserving_tx(ctx.sequencer_client(), tx_hash).await;
@@ -266,7 +271,7 @@ async fn deshielded_transfer_does_not_sign_with_recipient_key() -> Result<()> {
         "deshielded transfer must not carry any signature, in particular not the recipient's"
     );
 
-    log::info!("Deshielded transfer correctly did not sign with the recipient's key");
+    tracing::info!("Deshielded transfer correctly did not sign with the recipient's key");
 
     Ok(())
 }
@@ -332,7 +337,7 @@ async fn private_transfer_to_owned_account_over_foreign_keys() -> Result<()> {
         .context("Failed to get recipient's private account")?;
     assert_eq!(to_res_acc.data.native_balance().unwrap(), 100);
 
-    log::info!("Successfully transferred over the foreign-keys path");
+    tracing::info!("Successfully transferred over the foreign-keys path");
 
     Ok(())
 }
@@ -347,7 +352,7 @@ async fn shielded_transfer_to_owned_private_account() -> Result<()> {
 
     send(&mut ctx, public_mention(from), private_mention(to), 100).await?;
 
-    log::info!("Waiting for next block creation");
+    tracing::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let acc_to = ctx
@@ -366,7 +371,7 @@ async fn shielded_transfer_to_owned_private_account() -> Result<()> {
         INITIAL_PRIVATE_BALANCES_FOR_WALLET[1] + 100
     );
 
-    log::info!("Successfully shielded transfer to owned private account");
+    tracing::info!("Successfully shielded transfer to owned private account");
 
     Ok(())
 }
@@ -396,7 +401,7 @@ async fn shielded_transfer_to_foreign_account() -> Result<()> {
         anyhow::bail!("Expected TransactionExecuted return value");
     };
 
-    log::info!("Waiting for next block creation");
+    tracing::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let tx = fetch_privacy_preserving_tx(ctx.sequencer_client(), tx_hash).await;
@@ -411,7 +416,7 @@ async fn shielded_transfer_to_foreign_account() -> Result<()> {
     // and the public sender pays exactly the amount.
     assert_eq!(acc_1_balance, from_before - 100);
 
-    log::info!("Successfully shielded transfer to foreign account");
+    tracing::info!("Successfully shielded transfer to foreign account");
 
     Ok(())
 }
@@ -456,7 +461,7 @@ async fn private_transfer_to_owned_account_continuous_run_path() -> Result<()> {
 
     let tx = fetch_privacy_preserving_tx(ctx.sequencer_client(), tx_hash).await;
 
-    log::info!("Waiting for next blocks to check if continuous run fetches account");
+    tracing::info!("Waiting for next blocks to check if continuous run fetches account");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
@@ -501,13 +506,13 @@ async fn private_transfer_using_from_label() -> Result<()> {
     )
     .await?;
 
-    log::info!("Waiting for next block creation");
+    tracing::info!("Waiting for next block creation");
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     assert_private_commitment_in_state(&ctx, from, "sender").await?;
     assert_private_commitment_in_state(&ctx, to, "receiver").await?;
 
-    log::info!("Successfully transferred privately using from_label");
+    tracing::info!("Successfully transferred privately using from_label");
 
     Ok(())
 }

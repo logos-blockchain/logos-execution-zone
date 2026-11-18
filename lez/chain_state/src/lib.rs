@@ -2,7 +2,9 @@
 //! the [`apply_block`] entry point plus [`BlockIngestError`], [`StallReason`]
 //! and [`Tip`]. See [`ChainState`] for the two-tier model.
 
-pub use apply::{Tip, apply_block, apply_block_to_state, validate_against_tip};
+pub use apply::{
+    Tip, apply_block, apply_block_to_state, apply_judged_block_to_state, validate_against_tip,
+};
 pub use chain::{Blocker, ChainState, ChannelEntry, Judged, PublishRecord, Verdict};
 pub use consistency::{
     Anchor, AnchorConsistencyCheck, ChainConsistency, ChainMismatch, verify_chain_consistency,
@@ -16,6 +18,7 @@ pub mod apply;
 pub mod chain;
 pub mod classify;
 pub mod consistency;
+pub mod full_stake_releases;
 pub mod ingest_error;
 pub mod proof_store;
 pub mod stake_config;

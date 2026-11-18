@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
 use chain_state::{Blocker, ChainState, ChannelEntry, stake_config};
-use log::info;
 use sequencer_bedrock_actor::protocol::Slot;
 use sequencer_core::{MsgId, config::ChannelParams};
 use tokio::time::{Duration, Instant};
+use tracing::info;
 
 use super::turn::Turn;
 
@@ -136,7 +136,7 @@ mod tests {
         posting_timeframe: 30,
         posting_timeout: POSTING_TIMEOUT,
         skip_window: SKIP_WINDOW,
-        exit_delay: 0,
+        finality_depth: 1,
         max_block_size: 0,
     };
 

@@ -5,11 +5,10 @@ use common::HashType;
 use kameo::actor::ActorRef;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee_core::{
-    RecipientEncryption,
+    PublicationMode,
     account::{AccountId, Actor},
     program::MessageBody,
 };
-use log::info;
 use sequencer_bedrock_actor::protocol::{ChannelId, GetAccreditedKeys};
 use sequencer_core::Ed25519PublicKey;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
@@ -17,6 +16,7 @@ use test_fixtures::{
     StandaloneBedrockActor, TestContext, private_mention, public_mention,
     verify_commitment_is_in_state,
 };
+use tracing::info;
 use wallet::{
     cli::{
         CliAccountMention, Command, SubcommandReturnValue,
@@ -37,7 +37,10 @@ const POLL_INTERVAL: Duration = Duration::from_secs(2);
 /// Maximum time two sequencers may disagree at their unfinalized tips.
 const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(60);
 
-pub fn no_seal(_body: &MessageBody) -> Result<RecipientEncryption, lee::error::LeeError> {
+pub fn no_seal(bodies: &[MessageBody]) -> Result<Vec<PublicationMode>, lee::error::LeeError> {
+    if bodies.is_empty() {
+        return Ok(Vec::new());
+    }
     Err(lee::error::LeeError::InvalidInput(
         "No durable async message is sealed".to_owned(),
     ))
@@ -345,7 +348,9 @@ pub async fn wait_for_indexer_to_catch_up(ctx: &TestContext) -> anyhow::Result<u
                     sequencer_service_rpc::RpcClient::get_last_block_id(ctx.sequencer_client())
                         .await?;
                 info!(
-                    "Indexer caught up. Indexer last block id: {ind}. Current sequencer last block id: {last_seq}"
+                    indexer_last_block_id = ind,
+                    sequencer_last_block_id = last_seq,
+                    "Indexer caught up"
                 );
                 return anyhow::Ok(ind);
             }

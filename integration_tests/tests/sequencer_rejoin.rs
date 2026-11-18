@@ -1,6 +1,7 @@
 #![expect(
     clippy::tests_outside_test_module,
-    reason = "top-level test functions are conventional for integration tests"
+    clippy::arithmetic_side_effects,
+    reason = "We don't care about these in tests"
 )]
 
 //! B unstakes in full, leaves the committee, gets its stake back, then rejoins.
@@ -9,10 +10,9 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result, ensure};
 use integration_tests::{
-    account_balance, assert_same_chain, committee, get_account, init_logger, wait_until,
+    account_balance, committee, get_account, init_logger, wait_for_same_chain, wait_until,
 };
 use lee::{AccountId, PublicKey, program::Program};
-use log::info;
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
     MultiZoneTestContextBuilder, TestContext, ZoneTestContextBuilder,
@@ -20,6 +20,7 @@ use test_fixtures::{
     spawn_channel_observer,
 };
 use tokio::test;
+use tracing::info;
 use wallet::{AccountIdentity, AccountMention, program_facades::sequencer_stake::SequencerStake};
 
 /// What genesis stakes each founding sequencer.
@@ -83,11 +84,6 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
 
     // B leaves.
     let settlement_before = account_balance(&ctx, settlement).await?;
-    let requested_at = ctx
-        .sequencer_client()
-        .get_last_block_id()
-        .await?
-        .saturating_add(sequencer_stake_core::UNSTAKE_REQUEST_WINDOW);
     send_stake_tx(
         &ctx,
         ownership_b,
@@ -96,7 +92,6 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
             sequencer_key: stake_key_b,
             amount: STAKE,
             destination: settlement,
-            requested_at,
         },
     )
     .await
@@ -179,7 +174,7 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
         Ok(a.get_last_block_id().await? > resumed_at)
     })
     .await?;
-    assert_same_chain(a, b).await?;
+    wait_for_same_chain(a, b).await?;
     info!("B produces again and both sequencers agree on the chain");
 
     Ok(())

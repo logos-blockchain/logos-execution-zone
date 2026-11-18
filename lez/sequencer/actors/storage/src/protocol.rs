@@ -29,6 +29,11 @@ pub struct GetTransactionByHash {
     pub hash: HashType,
 }
 
+/// `None` also for a block's trailing fee and clock transactions, which have no receipt.
+pub struct GetTransactionReceiptByHash {
+    pub hash: HashType,
+}
+
 pub struct DeleteBlock {
     pub block_id: BlockId,
 }
@@ -64,6 +69,18 @@ pub struct DeleteZoneCheckpoint;
 pub struct GetSlashRecordBytes;
 
 pub struct PutSlashRecordBytes {
+    pub bytes: Vec<u8>,
+}
+
+pub struct GetSystemApprovalsBytes;
+
+pub struct PutSystemApprovalsBytes {
+    pub bytes: Vec<u8>,
+}
+
+pub struct GetFinalConfigsBytes;
+
+pub struct PutFinalConfigsBytes {
     pub bytes: Vec<u8>,
 }
 

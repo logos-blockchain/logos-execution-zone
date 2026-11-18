@@ -2,15 +2,17 @@ use std::{net::SocketAddr, num::NonZeroU32, path::PathBuf, sync::Arc, time::Dura
 
 use anyhow::{Context as _, anyhow};
 use async_trait::async_trait;
-use logos_blockchain_key_management_system_service::keys::ZkKey;
-use logos_blockchain_testing_framework::{
-    DeploymentBuilder, LbcEnv, TopologyConfig,
-    configs::wallet::{WalletAccount, WalletConfig},
+use logos_blockchain_zone_sdk::{
+    key_management_system_service::keys::ZkKey,
+    testing_framework::{
+        DeploymentBuilder, LbcEnv, TopologyConfig,
+        configs::wallet::{WalletAccount, WalletConfig},
+    },
+    testing_framework_app::{AppDeployment, AppHostEnv, DeployContext},
+    testing_framework_core::scenario::{ClusterHandle, ClusterRequest, DynError},
 };
 use num_bigint::BigUint;
 use tempfile::TempDir;
-use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext};
-use testing_framework_core::scenario::{ClusterHandle, ClusterRequest, DynError};
 use tokio::time::{sleep, timeout};
 
 /// A TF-managed Logos blockchain cluster used as LEZ's Bedrock layer.

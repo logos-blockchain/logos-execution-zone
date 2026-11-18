@@ -1,5 +1,5 @@
-use log::warn;
 use sequencer_stake_core::{ChannelParams, SequencerStakeConfig};
+use tracing::warn;
 
 /// Reads the `sequencer_stake` config account.
 ///

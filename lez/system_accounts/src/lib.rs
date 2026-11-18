@@ -22,12 +22,12 @@ pub const DEFAULT_SEQUENCER_POSTING_TIMEOUT: Slots = 25;
 pub const DEFAULT_SKIP_WINDOW: Slots = DEFAULT_SEQUENCER_POSTING_TIMEFRAME
     .saturating_add(DEFAULT_SEQUENCER_POSTING_TIMEOUT.saturating_mul(4));
 
-// TODO: Size against mainnet finality before launch.
-/// Blocks an unstake waits before release.
-pub const DEFAULT_SEQUENCER_EXIT_DELAY: u64 = 100;
-
 /// Largest block a sequencer builds, in bytes.
 pub const DEFAULT_MAX_BLOCK_SIZE: u64 = 1024 * 1024;
+
+// TODO: Size against mainnet finality before launch.
+/// L1 blocks on top of a key's removal config before its whole stake is released.
+pub const DEFAULT_FINALITY_DEPTH: u64 = 180;
 
 pub type Slots = u32;
 
@@ -123,6 +123,7 @@ pub fn sequencer_stake_config_account(
             channel_params,
             channel_id,
             entries: BTreeMap::new(),
+            params_votes: BTreeMap::new(),
         }
         .to_bytes()
         .into(),

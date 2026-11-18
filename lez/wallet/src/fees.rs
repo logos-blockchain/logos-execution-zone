@@ -3,6 +3,8 @@
 use lee::{AccountId, FeeDeclaration};
 use sequencer_service_rpc::FeeStateQuote;
 
+use crate::account::AccountIdWithPrivacy;
+
 /// The in-proof fee of a privacy-preserving transaction.
 ///
 /// Its proof debits `reserve` from `payer`. The surplus over the fee charged is refunded to
@@ -17,7 +19,8 @@ pub struct PrivateFee {
 /// What every send declares in place of the wallet's defaults; `None` keeps the default.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct FeeParams {
-    /// Public: the execution gas limit, else the measured cycles plus the configured margin.
+    /// Public: the execution gas limit, else the measured cycles plus the configured margin. A
+    /// proof paid by a public signer adds its verification gas on top.
     pub gas_limit: Option<u64>,
     /// Public: the fee cap, else the reserve at the headroom's base fees plus the tip.
     pub max_fee: Option<u128>,
@@ -25,9 +28,10 @@ pub struct FeeParams {
     pub tip: u64,
     /// Blocks of steepest base fee climb a fee is priced to cover, else the configured ones.
     pub headroom_blocks: Option<u64>,
-    /// Private: the owned private account paying every in-proof fee, unless a send names its
-    /// own, else each send picks its payer.
-    pub payer: Option<AccountId>,
+    /// Privacy-preserving: the account paying every fee, unless a send names its own, else each
+    /// send picks its payer. An owned private account pays inside the proof; a public account
+    /// declares the fee and must sign the transaction already.
+    pub payer: Option<AccountIdWithPrivacy>,
     /// Private: the public account the surplus is refunded to, else the payer's alias.
     pub refund_to: Option<AccountId>,
 }

@@ -1,11 +1,12 @@
+use std::collections::BTreeSet;
+
 use common::{
     block::{Block, HashableBlockData},
     test_utils::{create_transaction_native_token_transfer, produce_dummy_block},
     transaction::LeeTransaction,
 };
 use lee::{V03State, privacy_preserving_transaction::circuit::Proof};
-use logos_blockchain_core::mantle::ops::channel::MsgId;
-use logos_blockchain_zone_sdk::Slot;
+use logos_blockchain_zone_sdk::{Slot, core::mantle::ops::channel::MsgId};
 use sequencer_stake_core::ChannelParams;
 use testnet_initial_state::initial_pub_accounts_private_keys;
 
@@ -55,8 +56,8 @@ impl PlainFixture {
                 posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
                 posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
                 skip_window,
-                exit_delay: system_accounts::DEFAULT_SEQUENCER_EXIT_DELAY,
                 max_block_size: system_accounts::DEFAULT_MAX_BLOCK_SIZE,
+                finality_depth: system_accounts::DEFAULT_FINALITY_DEPTH,
             }),
             None,
         );
@@ -239,6 +240,7 @@ fn lineage(blocks: &[(&Block, [u8; 32])]) -> Vec<ChannelEntry> {
                 signer: Some(signer),
                 slot: None,
                 block: Some(block.digested()),
+                finally_absent_keys: BTreeSet::new(),
             };
             parent = entry.msg;
             entry

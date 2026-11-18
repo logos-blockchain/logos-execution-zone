@@ -1,25 +1,22 @@
-use std::{num::NonZero, sync::Arc, time::Duration};
+use std::{collections::BTreeSet, num::NonZero, sync::Arc, time::Duration};
 
 pub use chain_state::{ChannelEntry, zone_indexer::Batch};
 use common::block::{Block, DigestedBlock};
 use kameo::Reply;
-pub use logos_blockchain_binary_codec::bincode::{DeserializeOp, SerializeOp};
-use logos_blockchain_core::mantle::OpProof;
-pub use logos_blockchain_core::mantle::{NoteId, transactions::Ops};
-pub use logos_blockchain_key_management_system_service::keys::{
-    Ed25519Key, Ed25519PublicKey, ZkPublicKey,
-};
-use logos_blockchain_zone_sdk::sequencer::PreparedChannelConfig;
 pub use logos_blockchain_zone_sdk::{
     Slot, UnverifiedEd25519PublicKey, ZoneMessage,
     adapter::BoxStream,
+    binary_codec::bincode::{DeserializeOp, SerializeOp},
+    core::mantle::{NoteId, transactions::Ops},
+    key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey, ZkPublicKey},
     node_types::{ChannelId, HeaderId, MsgId},
     sequencer::{
         DepositInfo, IndexedSignature, IndexedSignatures, SequencerCheckpoint as Checkpoint,
         SequencerCheckpoint, WithdrawArg, WithdrawInfo,
     },
 };
-pub use sequencer_stake_core::ChannelParams;
+use logos_blockchain_zone_sdk::{core::mantle::OpProof, sequencer::PreparedChannelConfig};
+pub use sequencer_stake_core::{ChannelParams, SequencerKey};
 use sharding_pool_actor::ShardingKey;
 
 /// What [`ReadChannel`] serves: a failed read is an `Err` item, not the stream's end.
@@ -203,6 +200,10 @@ pub struct LiveChannelConfig {
     pub required_signatures: u16,
     /// Signatures Bedrock demands of a channel transfer, exactly.
     pub transfer_threshold: u16,
+    /// Slots one sequencer's posting turn lasts.
+    pub posting_timeframe: u32,
+    /// Idle slots after which Bedrock passes a turn on.
+    pub posting_timeout: u32,
 }
 
 /// Start following the channel's finalized history, publishing it to the `finalized_*` topics.
@@ -365,8 +366,10 @@ impl PreparedPin {
     pub fn mocked(msg_id: MsgId, parent: MsgId) -> Self {
         Self {
             tx: Ops::new(
-                logos_blockchain_core::era::ForkDigest::new([0; 32]),
-                logos_blockchain_core::mantle::transactions::TxList::new_unchecked(Vec::new()),
+                logos_blockchain_zone_sdk::core::era::ForkDigest::new([0; 32]),
+                logos_blockchain_zone_sdk::core::mantle::transactions::TxList::new_unchecked(
+                    Vec::new(),
+                ),
             ),
             msg_id,
             parent,
@@ -597,6 +600,38 @@ pub struct GetChannelTipMessageId {
 }
 
 impl ShardingKey for GetChannelTipMessageId {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
+}
+
+/// Where on L1 a block to judge sits, as far as the asker knows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum L1Position {
+    /// Not on L1 yet.
+    Unknown,
+    /// In the L1 block holding the inscription with this id, final or not.
+    Msg(MsgId),
+    /// In the final L1 block at this slot.
+    FinalSlot(u64),
+    /// In the final L1 block holding the inscription `msg`, at or under the final block at
+    /// `descendant_slot`.
+    FinalAncestor { msg: MsgId, descendant_slot: u64 },
+}
+
+/// The keys of `keys` the L1 block at `at` may release in full: those absent from the config in
+/// effect `depth` L1 blocks under it and from every config since.
+#[derive(Debug, Clone)]
+pub struct FilterFinallyAbsent {
+    pub channel_id: ChannelId,
+    pub at: L1Position,
+    pub keys: BTreeSet<SequencerKey>,
+    pub depth: u64,
+}
+
+impl ShardingKey for FilterFinallyAbsent {
     type Key = ChannelId;
 
     fn sharding_key(&self) -> Self::Key {

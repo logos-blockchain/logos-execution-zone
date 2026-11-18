@@ -7,7 +7,7 @@ use std::{
 use borsh::BorshDeserialize as _;
 use common::{
     HashType,
-    block::{BedrockStatus, Block, BlockMeta, PeerChainTip},
+    block::{BedrockStatus, Block, BlockMeta, PeerChainTip, TransactionReceipt},
     transaction::{LeeTransaction, TxEvents},
 };
 use itertools::Itertools as _;
@@ -19,7 +19,7 @@ use kameo::{
 };
 use lee::{AccountId, V03State};
 use lee_core::BlockId;
-use log::debug;
+use tracing::debug;
 
 #[cfg(feature = "test-utils")]
 use crate::protocol::ResetAllBlocksToPending;
@@ -33,14 +33,16 @@ use crate::{
         DropSettledCrossZoneDispatches, DumpDb, EventFilter, GetAccountTransactions, GetAllBlocks,
         GetBlock, GetBlockByHash, GetBlockEvents, GetChannelViewBytes, GetCrossZonePeerFloorBytes,
         GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatchRetainedCount,
-        GetDeadLetterDispatches, GetEventFilter, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
-        GetLatestBlockMeta, GetLeeState, GetPendingCrossZoneDispatchCount,
-        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetSlashRecordBytes,
-        GetTransactionByHash, GetTxHashToBlockIdMapItem, GetZoneAnchor, GetZoneCheckpoint,
-        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutSlashRecordBytes,
-        RecordDispatchFailure, RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes,
-        SetCrossZonePeerTip, SetZoneAnchor, StoreUpdateOutcome, UpdateZoneCheckpoint,
-        WithdrawalReconciliationKey, ZoneAnchorRecord, ZoneCheckpointRecord,
+        GetDeadLetterDispatches, GetEventFilter, GetFinalConfigsBytes, GetFinalSnapshot,
+        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
+        GetPendingCrossZoneDispatchCount, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
+        GetSlashRecordBytes, GetSystemApprovalsBytes, GetTransactionByHash,
+        GetTransactionReceiptByHash, GetTxHashToBlockIdMapItem, GetZoneAnchor, GetZoneCheckpoint,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutFinalConfigsBytes,
+        PutSlashRecordBytes, PutSystemApprovalsBytes, RecordDispatchFailure,
+        RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
+        StoreUpdateOutcome, UpdateZoneCheckpoint, WithdrawalReconciliationKey, ZoneAnchorRecord,
+        ZoneCheckpointRecord,
     },
 };
 
@@ -109,6 +111,26 @@ impl StorageActor {
             .expect("Database is closed, the actor has already stopped")
     }
 
+    /// The block holding `hash`, and the transaction's position in it.
+    fn block_with_transaction(&self, hash: HashType) -> Result<Option<(Block, usize)>> {
+        let Some(block_id) = self.tx_index.block_for_tx(&hash) else {
+            return Ok(None);
+        };
+        let Some(block) = self
+            .db()
+            .get::<entities::Block>(&encoding::BigEndian::new(&block_id))?
+        else {
+            return Ok(None);
+        };
+        let block = block.block;
+        Ok(block
+            .body
+            .transactions
+            .iter()
+            .position(|transaction| transaction.hash() == hash)
+            .map(|position| (block, position)))
+    }
+
     fn build_tx_index(db: &db::Database<entities::ColumnFamily>) -> Result<TransactionIndex> {
         debug!("Building the transaction index");
 
@@ -121,8 +143,8 @@ impl StorageActor {
             })?;
 
         debug!(
-            "Transaction index built, holding {} transactions",
-            index.transaction_count()
+            transaction_count = index.transaction_count(),
+            "Transaction index built"
         );
 
         Ok(index)
@@ -456,10 +478,10 @@ impl StorageActor {
         if let Some(stored) = stored
             && stored.seq >= checkpoint.seq
         {
-            log::debug!(
-                "Dropping a zone checkpoint at sequence {} for the stored one at {}",
-                checkpoint.seq,
-                stored.seq,
+            tracing::debug!(
+                seq = checkpoint.seq,
+                stored_seq = stored.seq,
+                "Dropping a zone checkpoint older than the stored one"
             );
             return Ok(());
         }
@@ -744,23 +766,28 @@ impl Message<GetTransactionByHash> for StorageActor {
         GetTransactionByHash { hash }: GetTransactionByHash,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let Some(block_id) = self.tx_index.block_for_tx(&hash) else {
-            return Ok(None);
-        };
-        let Some(block) = self
-            .db()
-            .get::<entities::Block>(&encoding::BigEndian::new(&block_id))?
-        else {
-            return Ok(None);
-        };
+        Ok(self
+            .block_with_transaction(hash)?
+            .map(|(mut block, position)| {
+                (
+                    block.body.transactions.swap_remove(position),
+                    block.header.block_id,
+                )
+            }))
+    }
+}
 
-        Ok(block
-            .block
-            .body
-            .transactions
-            .into_iter()
-            .find(|transaction| transaction.hash() == hash)
-            .map(|transaction| (transaction, block_id)))
+impl Message<GetTransactionReceiptByHash> for StorageActor {
+    type Reply = Result<Option<TransactionReceipt>>;
+
+    async fn handle(
+        &mut self,
+        GetTransactionReceiptByHash { hash }: GetTransactionReceiptByHash,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self
+            .block_with_transaction(hash)?
+            .and_then(|(block, position)| block.body.receipts.get(position).copied()))
     }
 }
 
@@ -891,6 +918,67 @@ impl Message<PutSlashRecordBytes> for StorageActor {
     ) -> Self::Reply {
         self.db()
             .put(&encoding::SingletonKey, &entities::SlashRecord { bytes })
+            .map_err(Into::into)
+    }
+}
+
+impl Message<GetSystemApprovalsBytes> for StorageActor {
+    type Reply = Result<Option<Vec<u8>>>;
+
+    async fn handle(
+        &mut self,
+        GetSystemApprovalsBytes: GetSystemApprovalsBytes,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self
+            .db()
+            .get::<entities::SystemApprovalsRecord>(&encoding::SingletonKey)?
+            .map(|record| record.bytes))
+    }
+}
+
+impl Message<PutSystemApprovalsBytes> for StorageActor {
+    type Reply = Result<()>;
+
+    async fn handle(
+        &mut self,
+        PutSystemApprovalsBytes { bytes }: PutSystemApprovalsBytes,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.db()
+            .put(
+                &encoding::SingletonKey,
+                &entities::SystemApprovalsRecord { bytes },
+            )
+            .map_err(Into::into)
+    }
+}
+
+impl Message<GetFinalConfigsBytes> for StorageActor {
+    type Reply = Result<Option<Vec<u8>>>;
+
+    async fn handle(
+        &mut self,
+        GetFinalConfigsBytes: GetFinalConfigsBytes,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self
+            .db()
+            .get::<entities::FinalConfigs>(&encoding::SingletonKey)?
+            .map(|record| record.bytes))
+    }
+}
+
+impl Message<PutFinalConfigsBytes> for StorageActor {
+    type Reply = Result<()>;
+
+    async fn handle(
+        &mut self,
+        PutFinalConfigsBytes { bytes }: PutFinalConfigsBytes,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.db()
+            .put(&encoding::SingletonKey, &entities::FinalConfigs { bytes })
             .map_err(Into::into)
     }
 }

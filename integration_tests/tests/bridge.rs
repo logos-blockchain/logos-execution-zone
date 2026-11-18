@@ -21,20 +21,23 @@ use lee::{
     public_transaction,
 };
 use lee_core::{RootCall, execution_state::TransactionEntry};
-use logos_blockchain_core::mantle::{
-    Note, Value,
-    gas::GasCost,
-    ledger::{Inputs, NoteId, Utxo},
-    ops::{OpId as _, OpRef, channel::deposit::DepositOp},
-};
-use logos_blockchain_http_api_common::{
-    bodies::{
-        channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
-        wallet::transfer_funds::WalletTransferFundsRequestBody,
+use logos_blockchain_zone_sdk::{
+    CommonHttpClient,
+    core::mantle::{
+        Note, Value,
+        gas::GasCost,
+        ledger::{Inputs, NoteId, Utxo},
+        ops::{OpId as _, OpRef, channel::deposit::DepositOp},
     },
-    paths::CHANNEL_DEPOSIT,
+    http_api_common::{
+        bodies::{
+            channel::{ChannelDepositRequestBody, ChannelDepositResponseBody},
+            wallet::transfer_funds::WalletTransferFundsRequestBody,
+        },
+        paths::CHANNEL_DEPOSIT,
+    },
+    node_types::ApiBlock,
 };
-use logos_blockchain_zone_sdk::{CommonHttpClient, node_types::ApiBlock};
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
     MultiZoneTestContextBuilder, ZoneTestContextBuilder,
@@ -297,11 +300,12 @@ async fn submit_bedrock_deposit(
     let note_id = note_id.context("The Bedrock wallet never held a note of the deposit amount")?;
 
     // Bounded per era now; a recipient is far under any era's limit.
-    let metadata = logos_blockchain_core::mantle::ops::channel::deposit::Metadata::new_unchecked(
-        borsh::to_vec(&DepositMetadata {
-            recipient: DepositRecipient::Identified(PublicAccountEvidence::Key(recipient)),
-        })?,
-    );
+    let metadata =
+        logos_blockchain_zone_sdk::core::mantle::ops::channel::deposit::Metadata::new_unchecked(
+            borsh::to_vec(&DepositMetadata {
+                recipient: DepositRecipient::Identified(PublicAccountEvidence::Key(recipient)),
+            })?,
+        );
     let deposit = DepositOp {
         channel_id: bedrock_channel_id(),
         inputs: Inputs::new(note_id),
@@ -680,7 +684,7 @@ async fn a_bedrock_deposit_is_minted_exactly_once() -> anyhow::Result<()> {
 //             let mut stream = std::pin::pin!(stream);
 
 //             while let Some(message) = stream.next().await {
-//                 log::info!("Observed zone message {message:?}");
+//                 tracing::info!(?message, "Observed zone message");
 
 //                 if let ZoneMessage::Withdraw(withdraw) = message {
 //                     released_notes.extend(withdraw.inputs.iter().copied());

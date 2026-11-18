@@ -41,7 +41,7 @@ async fn main() -> Result<()> {
         refund_to,
     };
 
-    env_logger::init();
+    logging::init();
 
     let config_path = fetch_config_path().context("Could not fetch config path")?;
     let storage_path =

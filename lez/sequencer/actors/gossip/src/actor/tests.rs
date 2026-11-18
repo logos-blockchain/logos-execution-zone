@@ -15,8 +15,10 @@ use kameo::{
 };
 use lee::privacy_preserving_transaction::circuit::{Proof, ProofDigest};
 use libp2p::{request_response, swarm::SwarmEvent};
-use logos_blockchain_core::proofs::channel_multi_sig_proof::IndexedSignature;
-use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
+use logos_blockchain_zone_sdk::{
+    core::proofs::channel_multi_sig_proof::IndexedSignature,
+    key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey},
+};
 use mempool::{MemPool, MemPoolHandle};
 use sequencer_channel_signing_actor::protocol::{Signature, Wire};
 use sequencer_core::{
@@ -25,11 +27,15 @@ use sequencer_core::{
 };
 use sequencer_slasher_actor::protocol::{Approval, Offence};
 use sequencer_stake_core::SequencerKey;
+use system_upgrader_core::SignedApproval;
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 use tokio::sync::mpsc;
 
-use super::{GossipActor, IngestSubmit, MAILBOX_CAPACITY, peer_id_from_ed25519, proof_exchange};
-use crate::protocol::{FetchProof, GetConnectedPeers, PublishConfig, PublishTransaction};
+use super::{
+    GossipActor, IngestSubmit, MAILBOX_CAPACITY, SystemApprovalSubmit, peer_id_from_ed25519,
+    proof_exchange,
+};
+use crate::protocol::{FetchProof, GetConnectedPeers, Publish, PublishConfig};
 
 const CHANNEL: [u8; 32] = [1; 32];
 
@@ -46,6 +52,7 @@ struct NodeSinks {
     approvals: mpsc::UnboundedReceiver<Approval>,
     configs: mpsc::UnboundedReceiver<Wire>,
     proofs: ProofStore,
+    system_approvals: mpsc::UnboundedReceiver<SignedApproval>,
 }
 
 /// Forwards every approval the gossip actor delivers into a channel the
@@ -104,7 +111,7 @@ impl TestNode {
 
     fn publish(&self, tx: LeeTransaction) {
         self.actor_ref
-            .tell(PublishTransaction(tx))
+            .tell(Publish::Transaction(Box::new(tx)))
             .try_send()
             .expect("gossip mailbox should accept the publish");
     }
@@ -114,6 +121,13 @@ impl TestNode {
             .tell(approval)
             .try_send()
             .expect("gossip mailbox should accept the approval publish");
+    }
+
+    fn publish_system_approval(&self, signed: SignedApproval) {
+        self.actor_ref
+            .tell(Publish::SystemApproval(signed))
+            .try_send()
+            .expect("gossip mailbox should accept the system approval publish");
     }
 
     fn publish_config(&self, message: Wire) {
@@ -157,6 +171,17 @@ fn pubkey(secret: [u8; 32]) -> Ed25519PublicKey {
 }
 
 /// An [`IngestSubmit`] that pushes straight into `mempool` unscreened.
+/// Forwards every `system_upgrader` approval the gossip actor accepts into a channel; stands in for
+/// the executor's approval pool.
+fn channel_system_approval_submit(
+    sink: mpsc::UnboundedSender<SignedApproval>,
+) -> SystemApprovalSubmit {
+    Arc::new(move |signed| {
+        let sink = sink.clone();
+        Box::pin(async move { sink.send(signed).context("the test dropped its receiver") })
+    })
+}
+
 fn unscreened_mempool_submit(
     mempool: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
 ) -> IngestSubmit {
@@ -227,6 +252,7 @@ async fn start_node(secret: [u8; 32], bootstrap: Vec<libp2p::Multiaddr>) -> (Tes
     let mempool_handle = mempool.handle().clone();
     let (approval_tx, approvals) = mpsc::unbounded_channel();
     let (config_tx, configs) = mpsc::unbounded_channel();
+    let (system_approval_tx, system_approvals) = mpsc::unbounded_channel();
     let sink_ref = ApprovalSink::spawn(ApprovalSink(approval_tx));
     let config_sink_ref = ConfigSink::spawn(ConfigSink(config_tx));
     let proofs = ProofStore::new(PROOF_STORE_CAPACITY);
@@ -238,6 +264,7 @@ async fn start_node(secret: [u8; 32], bootstrap: Vec<libp2p::Multiaddr>) -> (Tes
         unscreened_mempool_submit(mempool_handle),
         proofs.clone(),
         config_sink_ref.recipient(),
+        channel_system_approval_submit(system_approval_tx),
     )
     .await
     .expect("node should start");
@@ -255,6 +282,7 @@ async fn start_node(secret: [u8; 32], bootstrap: Vec<libp2p::Multiaddr>) -> (Tes
             approvals,
             configs,
             proofs,
+            system_approvals,
         },
     )
 }
@@ -362,6 +390,7 @@ async fn new_binds_and_reports_listen_addr() {
         unscreened_mempool_submit(test_mempool_handle()),
         ProofStore::new(PROOF_STORE_CAPACITY),
         test_config_sink(),
+        channel_system_approval_submit(mpsc::unbounded_channel().0),
     )
     .await
     .unwrap();
@@ -381,6 +410,7 @@ async fn kill_stops_the_swarm_and_frees_the_socket() {
         unscreened_mempool_submit(test_mempool_handle()),
         ProofStore::new(PROOF_STORE_CAPACITY),
         test_config_sink(),
+        channel_system_approval_submit(mpsc::unbounded_channel().0),
     )
     .await
     .unwrap();
@@ -406,6 +436,7 @@ async fn kill_stops_the_swarm_and_frees_the_socket() {
         unscreened_mempool_submit(test_mempool_handle()),
         ProofStore::new(PROOF_STORE_CAPACITY),
         test_config_sink(),
+        channel_system_approval_submit(mpsc::unbounded_channel().0),
     )
     .await
     .expect("freed listen address should be rebindable");
@@ -489,7 +520,7 @@ async fn transaction_submitted_to_one_node_reaches_others() {
 
 #[tokio::test]
 async fn invalid_transaction_is_not_propagated() {
-    // `PublishTransaction` only carries a `LeeTransaction`, so genuinely
+    // `Publish::Transaction` only carries a `LeeTransaction`, so genuinely
     // undecodable bytes are not reachable through the public API; instead we
     // publish a structurally well-formed transaction with an invalid
     // signature, which still exercises the real gossip pipeline's rejection
@@ -571,6 +602,56 @@ async fn slash_approval_published_by_one_node_reaches_others() {
         "C never received the gossiped approval"
     );
     drop((node_a, node_b, node_c));
+}
+
+#[tokio::test]
+async fn a_system_approval_published_by_one_node_reaches_the_others() {
+    use sequencer_stake_core::ed25519_dalek::{Signer as _, SigningKey};
+    use system_upgrader_core::{Approval, Proposal, SystemProgramName, approval_message};
+
+    let secrets = [[60; 32], [61; 32]];
+    let (node_a, _sinks_a) = start_node(secrets[0], vec![]).await;
+    let (node_b, mut sinks_b) = start_node(secrets[1], vec![node_a.listen_addrs[0].clone()]).await;
+    assert!(
+        wait_for(Duration::from_secs(30), async || {
+            node_a.connected_peers().await.contains(&pubkey(secrets[1]))
+        })
+        .await,
+        "A never connected to B"
+    );
+
+    let proposal = Proposal::Schedule {
+        name: SystemProgramName::new(b"clock"),
+        first_segment: lee::AccountId::new([9; 32]),
+        image_id: [7; 8],
+        immutable: false,
+        activation_height: 50,
+    };
+    let key = SigningKey::from_bytes(&[62; 32]);
+    let sent = SignedApproval {
+        proposal,
+        approval: Approval {
+            signer: SequencerKey::new(key.verifying_key().to_bytes()).expect("valid key"),
+            valid_until: 40,
+            signature: key
+                .sign(&approval_message(CHANNEL, &proposal, 40))
+                .to_bytes()
+                .to_vec(),
+        },
+    };
+    node_a.publish_system_approval(sent.clone());
+
+    assert!(
+        wait_for(Duration::from_secs(30), async || {
+            sinks_b
+                .system_approvals
+                .try_recv()
+                .is_ok_and(|got| got == sent)
+        })
+        .await,
+        "B never received the gossiped system approval"
+    );
+    drop((node_a, node_b));
 }
 
 #[tokio::test]

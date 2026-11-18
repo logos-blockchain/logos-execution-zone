@@ -4,16 +4,18 @@ use anyhow::{Context as _, Result, ensure};
 use chain_state::{BlockIngestError, StallReason, Tip, apply::validate_link, chain::SettledBlock};
 use common::{
     HashType,
-    block::{BedrockStatus, Block, BlockHeader},
+    block::{BedrockStatus, Block, BlockHeader, TransactionReceipt},
     transaction::{LeeTransaction, TxEvents},
 };
 use lee::{Account, AccountId, Actor, V03State};
 use lee_core::BlockId;
-use log::warn;
-use logos_blockchain_core::{header::HeaderId, mantle::ops::channel::MsgId};
-use logos_blockchain_zone_sdk::Slot;
+use logos_blockchain_zone_sdk::{
+    Slot,
+    core::{header::HeaderId, mantle::ops::channel::MsgId},
+};
 use storage::indexer::RocksDBIO;
 use tokio::sync::RwLock;
+use tracing::{error, info, warn};
 
 use crate::{event_filter::EventFilter, status::CrossZoneHalt};
 
@@ -68,9 +70,9 @@ impl IndexerStore {
         // sequencer's by construction (fingerprint below is the diagnostic). Tests
         // seed the producer's reward account, which no genesis block of theirs
         // stakes.
-        log::info!(
-            "Genesis fingerprint: {}",
-            hex::encode(initial_state.genesis_fingerprint())
+        info!(
+            fingerprint = %hex::encode(initial_state.genesis_fingerprint()),
+            "Genesis fingerprint computed"
         );
         let dbio = RocksDBIO::open_or_create(location, &initial_state)?;
         // Presence cannot change on a chain: an existing store keeps its seeded
@@ -78,9 +80,11 @@ impl IndexerStore {
         if let Some(stored) = dbio.get_breakpoint_opt(0)?
             && stored.genesis_fingerprint() != initial_state.genesis_fingerprint()
         {
-            log::error!(
-                "Stored genesis fingerprint {} does not match the configured one; the store keeps running on its own genesis. Did cross_zone presence change since this chain was created?",
-                hex::encode(stored.genesis_fingerprint())
+            error!(
+                stored_fingerprint = %hex::encode(stored.genesis_fingerprint()),
+                "Stored genesis fingerprint does not match the configured one; the store keeps \
+                 running on its own genesis. Did cross_zone presence change since this chain was \
+                 created?"
             );
         }
 
@@ -140,6 +144,23 @@ impl IndexerStore {
     }
 
     pub fn get_transaction_by_hash(&self, tx_hash: [u8; 32]) -> Result<Option<LeeTransaction>> {
+        Ok(self
+            .block_with_transaction(tx_hash)?
+            .map(|(mut block, position)| block.body.transactions.swap_remove(position)))
+    }
+
+    /// `None` also for the trailing fee and clock transactions, which have no receipt.
+    pub fn get_transaction_receipt_by_hash(
+        &self,
+        tx_hash: [u8; 32],
+    ) -> Result<Option<TransactionReceipt>> {
+        Ok(self
+            .block_with_transaction(tx_hash)?
+            .and_then(|(block, position)| block.body.receipts.get(position).copied()))
+    }
+
+    /// The block holding `tx_hash`, and the transaction's position in it.
+    fn block_with_transaction(&self, tx_hash: [u8; 32]) -> Result<Option<(Block, usize)>> {
         let Some(block_id) = self.dbio.get_block_id_by_tx_hash(tx_hash)? else {
             return Ok(None);
         };
@@ -149,8 +170,9 @@ impl IndexerStore {
         Ok(block
             .body
             .transactions
-            .into_iter()
-            .find(|enc_tx| enc_tx.hash().0 == tx_hash))
+            .iter()
+            .position(|tx| tx.hash().0 == tx_hash)
+            .map(|position| (block, position)))
     }
 
     pub fn get_events_for_block(&self, block_id: BlockId) -> Result<Option<Vec<TxEvents>>> {
@@ -368,7 +390,10 @@ impl IndexerStore {
         // Best-effort: the block is durably applied, so a failed stall clear must not
         // fail the apply. It self-heals on the next clear.
         if let Err(err) = self.clear_stall_if_present() {
-            warn!("Failed to clear stall marker after applying block: {err:#}");
+            warn!(
+                error = format_args!("{err:#}"),
+                "Failed to clear stall marker after applying block"
+            );
         }
         Ok(Stored::Written)
     }
@@ -414,7 +439,7 @@ fn reconcile_filter_segments(
     };
     if let Some(change) = change {
         dbio.put_event_filter_segments_bytes(&borsh::to_vec(&segments)?)?;
-        log::info!("Event filter changed: {change} segment, effective from block {seam}");
+        info!(%change, from_block = seam, "Event filter changed");
     }
     Ok(segments)
 }
@@ -520,7 +545,7 @@ pub(crate) fn settled_test_block(
         transaction::{FeePayee, LeeTransaction, clock_invocation, fee_invocation},
     };
     let timestamp = id.saturating_mul(100);
-    let (summary, payout, reverted) =
+    let (summary, payout, receipts) =
         chain_state::apply::derive_block_summary(state, &txs, id, timestamp)
             .expect("test transactions settle");
     let producer = producer_account_for_testing();
@@ -532,7 +557,7 @@ pub(crate) fn settled_test_block(
     )));
     transactions.push(LeeTransaction::Public(clock_invocation(id, timestamp)));
     let block = HashableBlockData {
-        reverted,
+        receipts,
         block_id: id,
         prev_block_hash: prev_hash.unwrap_or_default(),
         timestamp,
@@ -987,6 +1012,20 @@ mod tests {
             .and_then(|rows| rows.into_iter().find(|row| row.tx_hash == invoke_hash))
             .expect("tx-hash lookup must find the group");
         assert_eq!(group, groups[0]);
+
+        let block = store.get_block_at_id(3).unwrap().unwrap();
+        assert_eq!(
+            store
+                .get_transaction_receipt_by_hash(invoke_hash.0)
+                .unwrap(),
+            Some(block.body.receipts[0]),
+        );
+        let clock_hash = block.body.transactions.last().unwrap().hash();
+        assert_eq!(
+            store.get_transaction_receipt_by_hash(clock_hash.0).unwrap(),
+            None,
+            "the clock transaction has no receipt",
+        );
     }
 
     #[tokio::test]
@@ -1325,7 +1364,7 @@ mod accept_tests {
             prev_block_hash: prev,
             timestamp: 0,
             transactions: vec![],
-            reverted: Vec::new(),
+            receipts: Vec::new(),
         }
         .into_pending_block()
     }

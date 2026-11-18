@@ -31,15 +31,16 @@ RUN ARCH=$(uname -m); \
         echo "Using quick install for $ARCH"; \
         curl -L https://risczero.com/install | bash; \
         export PATH="/root/.cargo/bin:/root/.risc0/bin:${PATH}"; \
-        rzup install; \
+        rzup install rust 1.94.1 && \
+        rzup install cpp 2024.1.5 && \
+        rzup install r0vm 3.1.0 && \
+        rzup install cargo-risczero 3.1.0; \
     else \
         echo "Using manual build for $ARCH"; \
-        git clone --depth 1 --branch release-3.0 https://github.com/risc0/risc0.git; \
         git clone --depth 1 --branch risc0-1.94.1 https://github.com/risc0/rust.git; \
-        cd /risc0; \
-        cargo install --locked --path rzup; \
+        cargo install --locked rzup --version 0.6.0; \
         rzup build --path /rust rust --verbose; \
-        cargo install --locked --path risc0/cargo-risczero; \
+        cargo install --locked cargo-risczero --version 3.1.0; \
     fi
 ENV PATH="/root/.cargo/bin:/root/.risc0/bin:${PATH}"
 RUN cp "$(which r0vm)" /usr/local/bin/r0vm

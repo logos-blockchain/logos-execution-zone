@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use kameo::{Actor, message::Message};
 
@@ -7,10 +7,10 @@ use crate::{
     error::Error,
     protocol::{
         AccreditedKeys, ChangeChannelConfig, ChannelReadStream, ChannelSeq, CheckChannelExists,
-        CheckIsOurTurn, CreateChannel, FollowChannel, GetAccreditedKeys, GetChannelNotes,
-        GetChannelTipMessageId, GetChannelTipSlot, InitializeChannelPublisher, MsgId, NoteId,
-        PrepareConfig, PreparePin, PreparedConfig, PreparedPin, PublishBlock, PublishOutcome,
-        PublishPin, ReadChannel, Slot,
+        CheckIsOurTurn, CreateChannel, FilterFinallyAbsent, FollowChannel, GetAccreditedKeys,
+        GetChannelNotes, GetChannelTipMessageId, GetChannelTipSlot, InitializeChannelPublisher,
+        MsgId, NoteId, PrepareConfig, PreparePin, PreparedConfig, PreparedPin, PublishBlock,
+        PublishOutcome, PublishPin, ReadChannel, SequencerKey, Slot,
     },
 };
 
@@ -31,5 +31,6 @@ pub trait BedrockActorTrait:
     + Message<GetChannelTipSlot, Reply = Result<Option<Slot>>>
     + Message<GetChannelTipMessageId, Reply = Result<Option<MsgId>>>
     + Message<ReadChannel, Reply = Result<ChannelReadStream>>
+    + Message<FilterFinallyAbsent, Reply = Result<BTreeSet<SequencerKey>>>
 {
 }

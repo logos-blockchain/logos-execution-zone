@@ -19,6 +19,9 @@ pub fn judge(undecodable: &[(MsgId, Ed25519PublicKey)], judged: &[Judged]) -> Ve
         else {
             return None;
         };
+        if !error.blames_producer() {
+            return None;
+        }
         let fault = if error.is_invalid_block() {
             Fault::InvalidBlock
         } else {
@@ -42,7 +45,7 @@ fn offence(inscription: MsgId, signer: [u8; 32], fault: Fault) -> ReportedOffenc
 mod tests {
     use chain_state::BlockIngestError;
     use common::test_utils::produce_dummy_block;
-    use logos_blockchain_key_management_system_service::keys::Ed25519Key;
+    use logos_blockchain_zone_sdk::key_management_system_service::keys::Ed25519Key;
 
     use super::*;
 
@@ -93,6 +96,15 @@ mod tests {
                 offence(msg(5), signer().to_bytes(), Fault::MisplacedBlock),
             ]
         );
+    }
+
+    #[test]
+    fn a_block_dropped_on_this_nodes_own_state_is_no_offence() {
+        let judged = [judged(
+            1,
+            dropped(BlockIngestError::UndecodableSystemRegistry, true),
+        )];
+        assert!(judge(&[], &judged).is_empty());
     }
 
     #[test]

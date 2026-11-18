@@ -80,6 +80,27 @@ class DiscoverIntegrationTestTargetsTests(unittest.TestCase):
             ],
         )
 
+    def test_keeps_the_module_path_of_a_split_test(self) -> None:
+        summary = {
+            "rust-suites": {
+                "integration_tests::program_deployment": suite(
+                    "program_deployment",
+                    ("deploy_and_execute_program", False, "matches"),
+                    ("system_upgrade::a_cancelled_upgrade", False, "matches"),
+                ),
+            }
+        }
+
+        # The shard filter splits on the first `::` only, so the module path has
+        # to survive into the target or the test it names cannot be found.
+        self.assertEqual(
+            discover_targets(summary),
+            [
+                "program_deployment::deploy_and_execute_program",
+                "program_deployment::system_upgrade::a_cancelled_upgrade",
+            ],
+        )
+
     def test_drops_a_split_binary_with_no_runnable_tests(self) -> None:
         summary = {
             "rust-suites": {

@@ -16,7 +16,7 @@ use kameo::{
     reply::DelegatedReply,
     supervision::RestartPolicy,
 };
-use log::{info, warn};
+use tracing::{Instrument as _, info, warn};
 
 use crate::{
     ShardingKey,
@@ -25,6 +25,9 @@ use crate::{
 
 #[cfg(test)]
 mod tests;
+
+/// The span a message is passed on to its worker in.
+const FORWARD_SPAN: &str = "sharding_pool_forward";
 
 #[derive(Clone, Copy)]
 pub struct RestartConfig {
@@ -69,11 +72,11 @@ pub struct ShardingPoolActor<A: Actor<Error: Display>, K: Key> {
     /// Keys restarted differently from [`Self::restart_config`].
     key_restart_configs: HashMap<K, RestartConfig>,
     ctr: Arc<dyn Fn(K) -> A::Args + Send + Sync + 'static>,
-    on_worker_spawned: Option<WorkerHook<A>>,
+    on_worker_spawned: Option<WorkerHook<A, K>>,
 }
 
-/// Called with a worker, see [`ShardingPoolActor::with_on_worker_spawned`].
-type WorkerHook<A> = Box<dyn Fn(&ActorRef<A>) + Send + Sync + 'static>;
+/// Called with a worker and its key, see [`ShardingPoolActor::with_on_worker_spawned`].
+type WorkerHook<A, K> = Box<dyn Fn(&K, &ActorRef<A>) + Send + Sync + 'static>;
 
 impl<A, K> ShardingPoolActor<A, K>
 where
@@ -107,12 +110,13 @@ where
         self
     }
 
-    /// Calls `hook` with every worker the pool spawns, once: a restarted worker keeps its
-    /// [`ActorRef`] and mailbox, while a reset key gets a new worker.
+    /// Calls `hook` with every worker the pool spawns and its key, once: a restarted worker
+    /// keeps its [`ActorRef`] and mailbox, while a reset key gets a new worker. The worker may
+    /// already be running when it is called.
     #[must_use]
     pub fn with_on_worker_spawned<F>(mut self, hook: F) -> Self
     where
-        F: Fn(&ActorRef<A>) + Send + Sync + 'static,
+        F: Fn(&K, &ActorRef<A>) + Send + Sync + 'static,
     {
         self.on_worker_spawned = Some(Box::new(hook));
         self
@@ -149,7 +153,7 @@ where
                     .spawn()
                     .await;
                 if let Some(on_worker_spawned) = &self.on_worker_spawned {
-                    on_worker_spawned(&actor);
+                    on_worker_spawned(&key, &actor);
                 }
                 let actor = vacant.insert(actor);
 
@@ -242,33 +246,35 @@ where
         reason: ActorStopReason,
     ) -> Result<ControlFlow<ActorStopReason>, Self::Error> {
         if matches!(reason, ActorStopReason::SupervisorRestart) {
-            warn!("Sharded actor with id {id} is being restarted");
+            warn!(%id, "Sharded actor is being restarted");
             return Ok(ControlFlow::Continue(()));
         }
 
         let (key, restarted) = self.give_up_worker(id);
         match &reason {
             ActorStopReason::Normal => {
-                info!("Sharded actor with key {key} and id {id} stopped normally");
+                info!(%key, %id, "Sharded actor stopped normally");
             }
             ActorStopReason::SupervisorRestart => unreachable!("Handled above"),
             ActorStopReason::Killed => {
-                warn!("Sharded actor with key {key} and id {id} was killed");
+                warn!(%key, %id, "Sharded actor was killed");
             }
             ActorStopReason::Panicked(err) => {
                 let panic_reason = err.reason();
                 let downcasted = err
                     .with_downcast_ref(|err: &A::Error| {
                         warn!(
-                            "Sharded actor with key {key} and id {id} panicked with reason \"{panic_reason}\" and error \"{err:#}\""
+                            %key,
+                            %id,
+                            reason = %panic_reason,
+                            error = format_args!("{err:#}"),
+                            "Sharded actor panicked"
                         );
                     })
                     .is_some();
 
                 if !downcasted {
-                    warn!(
-                        "Sharded actor with key {key} and id {id} panicked with reason \"{panic_reason}\""
-                    );
+                    warn!(%key, %id, reason = %panic_reason, "Sharded actor panicked");
                 }
             }
             ActorStopReason::LinkDied {
@@ -276,7 +282,11 @@ where
                 reason,
             } => {
                 warn!(
-                    "Sharded actor with key {key} and id {id} died because its link with id {died_link_id} died with reason \"{reason}\""
+                    %key,
+                    %id,
+                    link_id = %died_link_id,
+                    %reason,
+                    "Sharded actor died because its link died"
                 );
             }
         }
@@ -405,8 +415,12 @@ where
             .expect("Worker meta must exist")
             .restart_sender
             .subscribe();
+        // Not inside the handler's span, which would stay open, and timed,
+        // until the worker answers.
+        let forward = tracing::info_span!(parent: None, FORWARD_SPAN);
+        forward.follows_from(tracing::Span::current());
 
-        ctx.spawn(async move {
+        let reply = async move {
             loop {
                 match actor.ask(msg.clone()).await {
                     Ok(resp) => return Ok(resp),
@@ -440,6 +454,7 @@ where
                     ) => return Err(err),
                 }
             }
-        })
+        };
+        ctx.spawn(reply.instrument(forward))
     }
 }

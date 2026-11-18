@@ -113,8 +113,9 @@ impl KeycardWallet {
     ) -> Result<T, KeycardWalletError> {
         match op(self) {
             Err(KeycardWalletError::Keycard(keycard_rs::Error::Io(io_err))) => {
-                log::warn!(
-                    "transport error during keycard operation ({io_err}), reconnecting and retrying once"
+                tracing::warn!(
+                    error = %io_err,
+                    "Transport error during keycard operation, reconnecting and retrying once"
                 );
                 *self = Self::new()?;
                 op(self)

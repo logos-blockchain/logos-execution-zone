@@ -7,9 +7,9 @@ use lee_core::CommitmentPosition;
 use sequencer_executor_actor::protocol::{
     GetAccount, GetAccountBalance, GetAccountNonces, GetAccountView, GetBlock, GetBlockRange,
     GetFeeQuote, GetLastBlockId, GetProofsAndRoot, GetPublications, GetRecoveryBinding,
-    GetTransaction, Transaction, TransactionOrigin,
+    GetTransaction, GetTransactionReceipt, Transaction, TransactionOrigin,
 };
-use sequencer_gossip_actor::protocol::PublishTransaction;
+use sequencer_gossip_actor::protocol::Publish;
 use wallet::{ExecutionFailureKind, WalletSequencerClient};
 
 use crate::sequencer::SequencerServiceFFI;
@@ -153,6 +153,18 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
             .await?)
     }
 
+    async fn get_transaction_receipt(
+        &self,
+        tx_hash: common::HashType,
+    ) -> Result<Option<common::block::TransactionReceipt>, Self::Error> {
+        Ok(self
+            .0
+            .executor_ref()
+            .ask(GetTransactionReceipt { tx_hash })
+            .send()
+            .await?)
+    }
+
     async fn send_transaction(
         &self,
         tx: common::transaction::LeeTransaction,
@@ -185,7 +197,7 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
 
         if let Some(gossip_ref) = self.0.gossip_ref() {
             gossip_ref
-                .tell(PublishTransaction(authenticated_tx))
+                .tell(Publish::Transaction(Box::new(authenticated_tx)))
                 .await?;
         }
 
@@ -261,7 +273,7 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
         &self,
         from_position: CommitmentPosition,
         limit: common::PageLimit,
-    ) -> Result<Vec<(CommitmentPosition, lee::Publication)>, Self::Error> {
+    ) -> Result<lee::PublicationsPage, Self::Error> {
         Ok(self
             .0
             .executor_ref()
@@ -270,7 +282,8 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
                 limit,
             })
             .send()
-            .await?)
+            .await?
+            .page)
     }
 
     async fn get_recovery_binding(

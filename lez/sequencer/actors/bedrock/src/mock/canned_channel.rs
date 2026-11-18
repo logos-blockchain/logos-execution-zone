@@ -1,13 +1,13 @@
 //! A [`MockBedrockActor`] serving a canned channel.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     sync::{Arc, Mutex, MutexGuard},
 };
 
 use anyhow::anyhow;
 use common::block::Block;
-use logos_blockchain_core::mantle::ledger::{Inputs, NoteId, Utxo};
+use logos_blockchain_zone_sdk::core::mantle::ledger::{Inputs, NoteId, Utxo};
 use sequencer_storage_actor::protocol::ZoneAnchorRecord;
 
 use super::MockBedrockActor;
@@ -15,9 +15,10 @@ use crate::{
     Result,
     error::Error,
     protocol::{
-        AccreditedKeys, Batch, ChannelReadStream, ChannelSeq, CreateChannel, HeaderId,
-        InitializeChannelPublisher, MsgId, PreparePin, PreparedPin, PublishBlock, PublishOutcome,
-        PublishPin, ReadChannel, SequencerCheckpoint, Slot, WithdrawArg, ZoneMessage,
+        AccreditedKeys, Batch, ChannelReadStream, ChannelSeq, CreateChannel, FilterFinallyAbsent,
+        HeaderId, InitializeChannelPublisher, MsgId, PreparePin, PreparedPin, PublishBlock,
+        PublishOutcome, PublishPin, ReadChannel, SequencerCheckpoint, SequencerKey, Slot,
+        WithdrawArg, ZoneMessage,
     },
 };
 
@@ -46,6 +47,8 @@ pub struct CannedChannel {
     pub channel_notes: HashSet<NoteId>,
     /// The deposit notes each publish pinned, in publish order.
     pub pins: Arc<Mutex<Vec<Vec<NoteId>>>>,
+    /// Keys whose removal config is reported not yet final; every other key's is.
+    pub pending_removals: BTreeSet<SequencerKey>,
     /// Channel sequence the last publish left the channel at.
     pub seq: u64,
     /// [`InitializeChannelPublisher::replayed_up_to`] of the last publisher initialized.
@@ -145,6 +148,15 @@ impl SharedChannel {
         mock.expect_handle_get_channel_notes().returning({
             let channel = self.clone();
             move |_msg, _ctx| Ok(channel.lock().channel_notes.clone())
+        });
+        mock.expect_handle_filter_finally_absent().returning({
+            let channel = self.clone();
+            move |FilterFinallyAbsent { keys, .. }, _ctx| {
+                Ok(keys
+                    .difference(&channel.lock().pending_removals)
+                    .copied()
+                    .collect())
+            }
         });
         mock.expect_handle_read_channel().returning({
             let channel = self.clone();

@@ -9,7 +9,8 @@ use lee_core::{
 pub const CLOCK_PROGRAM_ACCOUNT_ID: AccountId =
     AccountId::new(*b"/LEZ/ClockProgramAccount/0000000");
 
-pub const CLOCK_NAME: [u8; 5] = *b"clock";
+pub const CLOCK_NAME: lee_core::program::SystemProgramName =
+    lee_core::program::SystemProgramName::new(b"clock");
 
 /// The message type for the Clock Program. The sequencer ticks the clock as the last transaction
 /// of every block, so every other transaction sees the previous block's ID and timestamp.
@@ -93,7 +94,7 @@ impl ClockAccountData {
 
 #[must_use]
 pub fn clock_account_id() -> AccountId {
-    AccountId::from_builtin_program_name(&CLOCK_NAME)
+    AccountId::from_system_program_name(&CLOCK_NAME)
 }
 
 /// The clock's actor, which sends every [`Reply`].

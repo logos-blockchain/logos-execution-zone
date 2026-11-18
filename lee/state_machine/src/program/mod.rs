@@ -4,9 +4,10 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{AccountId, ActorState, Cycles},
     from_frame,
-    program::{MessageData, ProgramId, ReceiveInput, Transition, get_program_via},
+    program::{MessageData, ProgramId, ReceiveInput, Transition},
     to_frame,
 };
+use program_loader_core::get_program_via;
 #[cfg(not(feature = "prove"))]
 use risc0_zkvm::default_executor;
 use risc0_zkvm::{ExecutorEnv, ExecutorEnvBuilder, ExitCode};

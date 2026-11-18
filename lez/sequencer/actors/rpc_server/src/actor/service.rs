@@ -10,26 +10,28 @@ use kameo::{
     actor::{ActorRef, Recipient},
     error::{Infallible, SendError},
 };
-use log::debug;
 use sequencer_executor_actor::ExecutorActorTrait;
-use sequencer_gossip_actor::protocol::PublishTransaction;
+use sequencer_gossip_actor::protocol::Publish;
 use sequencer_service_protocol::{
     Account, AccountId, Actor, Block, BlockId, ChannelId, Commitment, CommitmentPosition,
     CommitmentSetDigest, CrossZoneDeadLetter, CrossZoneDeadLetterReport,
-    CrossZoneDeadLetterRequeue, EncryptedNote, FeeStateQuote, HashType, MembershipProof, Nonce,
-    PageLimit, ProgramId, Proof, ProofDigest, Publication, SequencerStatus,
+    CrossZoneDeadLetterRequeue, EncryptedNote, FeeStateQuote, HashType, HexBytes, MembershipProof,
+    Nonce, PageLimit, ProgramId, Proof, ProofDigest, PublicationsPage, SequencerPublicKey,
+    SequencerStatus, SystemProposal, SystemProposalApproval, SystemProposalReport,
+    TransactionReceipt,
 };
+use tracing::debug;
 
 pub struct Service<E: ExecutorActorTrait> {
     executor_ref: ActorRef<E>,
-    gossip: Option<Recipient<PublishTransaction>>,
+    gossip: Option<Recipient<Publish>>,
     proof_store: ProofStore,
 }
 
 impl<E: ExecutorActorTrait> Service<E> {
     pub fn new(
         executor_ref: ActorRef<E>,
-        gossip: Option<Recipient<PublishTransaction>>,
+        gossip: Option<Recipient<Publish>>,
         proof_store: ProofStore,
     ) -> Self {
         sequencer_rpc_server_actor_metrics::init();
@@ -79,7 +81,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         let authenticated_tx = res.await.inspect_err(|err| {
             sequencer_rpc_server_actor_metrics::increment_before_mempool_failed_transactions_total(
             );
-            debug!("Transaction failed before reaching mempool: {err:#?}");
+            debug!(error = ?err, "Transaction failed before reaching mempool");
         })?;
 
         self
@@ -100,9 +102,11 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         // Non-blocking: a full gossip mailbox sheds the publish instead of
         // stalling the RPC response.
         if let Some(gossip) = &self.gossip
-            && let Err(err) = gossip.tell(PublishTransaction(authenticated_tx)).try_send()
+            && let Err(err) = gossip
+                .tell(Publish::Transaction(Box::new(authenticated_tx)))
+                .try_send()
         {
-            log::warn!("Dropping local tx publish: gossip mailbox full or closed: {err}");
+            tracing::warn!(error = %err, "Dropping local tx publish: gossip mailbox full or closed");
         }
 
         Ok(tx_hash)
@@ -181,6 +185,16 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
             .map_err(map_executor_error)
     }
 
+    async fn get_transaction_receipt(
+        &self,
+        tx_hash: HashType,
+    ) -> Result<Option<TransactionReceipt>, ErrorObjectOwned> {
+        self.executor_ref
+            .ask(sequencer_executor_actor::protocol::GetTransactionReceipt { tx_hash })
+            .await
+            .map_err(map_executor_error)
+    }
+
     async fn get_accounts_nonces(
         &self,
         account_ids: Vec<AccountId>,
@@ -207,13 +221,14 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         &self,
         from_position: CommitmentPosition,
         limit: PageLimit,
-    ) -> Result<Vec<(CommitmentPosition, Publication)>, ErrorObjectOwned> {
+    ) -> Result<PublicationsPage, ErrorObjectOwned> {
         self.executor_ref
             .ask(sequencer_executor_actor::protocol::GetPublications {
                 from_position,
                 limit,
             })
             .await
+            .map(|reply| reply.page)
             .map_err(map_executor_error)
     }
 
@@ -365,6 +380,63 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
             DeadLetterRequeue::NotRetained => CrossZoneDeadLetterRequeue::NotRetained,
         })
     }
+
+    async fn get_system_proposals(&self) -> Result<SystemProposalReport, ErrorObjectOwned> {
+        let sequencer_executor_actor::protocol::GetSystemProposalsReply {
+            threshold,
+            proposals,
+        } = self
+            .executor_ref
+            .ask(sequencer_executor_actor::protocol::GetSystemProposals)
+            .await
+            .map_err(map_executor_error)?;
+
+        Ok(SystemProposalReport {
+            threshold: u32::try_from(threshold).unwrap_or(u32::MAX),
+            proposals: proposals
+                .into_iter()
+                .map(|held| SystemProposal {
+                    proposal_hash: HashType(held.proposal.hash()),
+                    proposal: HexBytes(held.proposal.to_bytes()),
+                    approvals: held
+                        .approvals
+                        .into_iter()
+                        .map(|approval| SystemProposalApproval {
+                            signer: SequencerPublicKey(approval.signer.to_bytes()),
+                            valid_until: approval.valid_until,
+                        })
+                        .collect(),
+                })
+                .collect(),
+        })
+    }
+
+    async fn submit_system_approval(&self, approval: HexBytes) -> Result<(), ErrorObjectOwned> {
+        let signed: system_upgrader_core::SignedApproval =
+            borsh::from_slice(&approval.0).map_err(|err| {
+                ErrorObjectOwned::owned(
+                    ErrorCode::InvalidParams.code(),
+                    format!("the approval does not decode: {err}"),
+                    None::<()>,
+                )
+            })?;
+
+        self.executor_ref
+            .ask(sequencer_executor_actor::protocol::SubmitSystemApproval {
+                approval: signed.clone(),
+            })
+            .await
+            .map_err(map_executor_error)?;
+
+        // Published only once accepted, like a transaction, so peers aren't fed what this node
+        // refused.
+        if let Some(gossip) = &self.gossip
+            && let Err(err) = gossip.tell(Publish::SystemApproval(signed)).try_send()
+        {
+            tracing::warn!(error = %err, "Dropping local approval publish: gossip mailbox full or closed");
+        }
+        Ok(())
+    }
 }
 
 #[expect(clippy::needless_pass_by_value, reason = "More convenient mapping")]
@@ -389,6 +461,13 @@ fn map_executor_error<M>(
 ) -> ErrorObjectOwned {
     match err {
         SendError::HandlerError(handle_err) => match handle_err {
+            refused @ sequencer_executor_actor::error::Error::SystemApprovalRefused(_) => {
+                ErrorObjectOwned::owned(
+                    ErrorCode::InvalidParams.code(),
+                    format!("{refused:#}"),
+                    None::<()>,
+                )
+            }
             // A reserve the head fee outgrew gets its own code: priced again, it may pass.
             below @ sequencer_executor_actor::error::Error::PrivateFeeBelowHead { .. } => {
                 ErrorObjectOwned::owned(
@@ -423,6 +502,7 @@ fn map_executor_error<M>(
             | sequencer_executor_actor::error::Error::SlasherRequestFailed(_)
             | sequencer_executor_actor::error::Error::CrossZoneDeadLettersUnavailable(_)
             | sequencer_executor_actor::error::Error::CrossZoneDeadLetterRequeueFailed(_)
+            | sequencer_executor_actor::error::Error::SystemProposalsUnavailable(_)
             | sequencer_executor_actor::error::Error::SequencerStartFailed(_)
             | sequencer_executor_actor::error::Error::StoreAndChannelDivergence(_)
             | sequencer_executor_actor::error::Error::StorageInconsistency(_)

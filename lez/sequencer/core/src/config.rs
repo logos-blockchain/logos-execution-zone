@@ -10,8 +10,9 @@ pub use bridge_core::DepositRecipient;
 use common::{config::BasicAuth, transaction::LeeTransaction};
 pub use cross_zone::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use humantime_serde;
-use logos_blockchain_core::mantle::ops::channel::ChannelId;
-use logos_blockchain_key_management_system_service::keys::ZkPublicKey;
+use logos_blockchain_zone_sdk::{
+    core::mantle::ops::channel::ChannelId, key_management_system_service::keys::ZkPublicKey,
+};
 pub use sequencer_genesis::GenesisAction;
 use sequencer_genesis::GenesisSpec;
 pub use sequencer_stake_core::ChannelParams;
@@ -34,6 +35,10 @@ pub const MAX_PUBLISHABLE_BLOCK_SIZE: u64 = 0x001C_0000;
 /// The largest transaction RPC and gossip admit in full form, proofs included. Blocks carry
 /// proof digests, so this bounds transport only; it is what the largest block could hold.
 pub const MAX_TRANSACTION_SIZE: u64 = MAX_PUBLISHABLE_BLOCK_SIZE.saturating_sub(BLOCK_OVERHEAD);
+const _: () = assert!(
+    sequencer_stake_core::MAX_MAX_BLOCK_SIZE == MAX_PUBLISHABLE_BLOCK_SIZE,
+    "the sequencer_stake program must bound max_block_size at Bedrock's inscription limit"
+);
 
 /// The largest Bedrock transaction, 2 MiB.
 ///
@@ -139,7 +144,7 @@ pub struct BedrockConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GenesisConfig {
-    /// Fixed for the chain's life; every other node reads them from the chain.
+    /// The chain's initial params; every other node reads them from the chain.
     pub channel_params: ChannelParams,
     #[serde(default)]
     pub actions: Vec<GenesisAction>,
@@ -324,7 +329,7 @@ pub const fn default_backfill_batch_slots() -> NonZero<u64> {
     chain_state::zone_indexer::DEFAULT_BACKFILL_BATCH_SLOTS
 }
 
-/// Production defaults for the values genesis fixes.
+/// Production defaults for the values genesis sets.
 #[must_use]
 pub const fn default_channel_params() -> ChannelParams {
     ChannelParams {
@@ -332,8 +337,8 @@ pub const fn default_channel_params() -> ChannelParams {
         posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
         posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
         skip_window: system_accounts::DEFAULT_SKIP_WINDOW,
-        exit_delay: system_accounts::DEFAULT_SEQUENCER_EXIT_DELAY,
         max_block_size: system_accounts::DEFAULT_MAX_BLOCK_SIZE,
+        finality_depth: system_accounts::DEFAULT_FINALITY_DEPTH,
     }
 }
 
@@ -343,7 +348,6 @@ mod tests {
         PrivacyPreservingTransaction,
         privacy_preserving_transaction::{Message, WitnessSet, circuit::Proof},
     };
-    use logos_blockchain_node::config::deployment::{DeploymentSettings, era::ruleset::EraRuleset};
 
     use super::*;
 
@@ -352,31 +356,6 @@ mod tests {
             Message::default(),
             WitnessSet::from_raw_parts(vec![], Proof::from_inner(proof)),
         ))
-    }
-
-    #[test]
-    fn bedrock_size_limits_match_the_node_default_deployment() {
-        let deployment = DeploymentSettings::default();
-        let eras: Vec<_> = deployment
-            .era_schedule()
-            .iter()
-            .map(|era| {
-                let EraRuleset::V1(parameters) = &era.parameters.ruleset;
-                &parameters.cryptarchia
-            })
-            .collect();
-
-        let smallest_op_data_size = eras.iter().map(|era| era.max_op_data_size()).min();
-        let smallest_transactions_size = eras.iter().map(|era| era.max_transactions_size).min();
-
-        assert_eq!(
-            smallest_op_data_size.map(u64::from),
-            Some(MAX_PUBLISHABLE_BLOCK_SIZE)
-        );
-        assert_eq!(
-            smallest_transactions_size.map(u64::from),
-            Some(MAX_BEDROCK_TX_SIZE)
-        );
     }
 
     #[test]

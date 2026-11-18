@@ -20,7 +20,7 @@ use lee::{
     AccountId, Actor, PublicAccountEvidence, PublicTransaction, public_transaction::Message,
 };
 use lee_core::account::Nonce;
-use logos_blockchain_core::mantle::ops::channel::ChannelId;
+use logos_blockchain_zone_sdk::core::mantle::ops::channel::ChannelId;
 use ping_core::{
     CrossZoneEmission, ReceiverMessage, SenderMessage, ping_record_pda, receiver_config_account_id,
     sender_config_account_id,

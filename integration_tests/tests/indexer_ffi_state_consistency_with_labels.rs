@@ -1,6 +1,7 @@
 #![expect(
     clippy::shadow_unrelated,
     clippy::tests_outside_test_module,
+    clippy::arithmetic_side_effects,
     reason = "We don't care about these in tests"
 )]
 
@@ -53,7 +54,7 @@ fn indexer_ffi_state_consistency_with_labels() -> Result<()> {
 
     ctx.block_on_mut(|ctx| wallet::cli::execute_subcommand(ctx.wallet_mut(), command))?;
 
-    log::info!("Waiting for next block creation");
+    tracing::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     let acc_1_balance = ctx.block_on(|ctx| {
@@ -80,7 +81,7 @@ fn indexer_ffi_state_consistency_with_labels() -> Result<()> {
         "the sender must pay a positive fee within the protocol ceiling, got {fee}",
     );
 
-    log::info!("Waiting for indexer to parse blocks");
+    tracing::info!("Waiting for indexer to parse blocks");
     std::thread::sleep(L2_TO_L1_TIMEOUT);
 
     let acc1_ind_state = indexer_ffi_helpers::indexed_account(
@@ -97,7 +98,7 @@ fn indexer_ffi_state_consistency_with_labels() -> Result<()> {
 
     assert_eq!(acc1_ind_state, acc1_seq_state.map(Account::from));
 
-    log::info!("Indexer state is consistent after label-based transfer");
+    tracing::info!("Indexer state is consistent after label-based transfer");
 
     Ok(())
 }

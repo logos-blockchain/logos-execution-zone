@@ -1,8 +1,7 @@
 //! The skip rule folded over a channel's L1-final entries by structure alone.
 
 use common::block::DigestedBlock;
-use logos_blockchain_core::mantle::ops::channel::MsgId;
-use logos_blockchain_zone_sdk::Slot;
+use logos_blockchain_zone_sdk::{Slot, core::mantle::ops::channel::MsgId};
 
 use crate::{
     ChannelEntry, Tip,

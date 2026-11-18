@@ -1,21 +1,21 @@
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 
 use chain_state::{AnchorConsistencyCheck, ChainConsistency, ChainState, ChannelEntry, Verdict};
 use common::HashType;
-use log::warn;
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
     protocol::{
-        BlockData, DepositInfo, Ed25519Key, Ed25519PublicKey, FinalizedBlock, FinalizedUpTo, MsgId,
-        Slot, WithdrawInfo,
+        BlockData, DepositInfo, Ed25519Key, Ed25519PublicKey, FinalizedBlock, FinalizedUpTo,
+        L1Position, MsgId, Slot, WithdrawInfo,
     },
 };
-use sequencer_core::{config::SequencerConfig, faults};
+use sequencer_core::{config::SequencerConfig, faults, release_finality};
 use sequencer_slasher_actor::protocol::{Report, ReportedOffence};
 use sequencer_storage_actor::{
     StorageActorTrait,
     protocol::{AtomicUpdate, ZoneAnchorRecord},
 };
+use tracing::warn;
 
 use crate::{
     Result,
@@ -88,9 +88,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
                 // An offence the channel already carries, so replaying it must not
                 // be fatal: the entry carries no block, and the lineage moves past it.
                 warn!(
-                    "Skipping an undecodable inscription {:?} at slot {}",
-                    finalized.msg_id,
-                    finalized.slot.into_inner(),
+                    msg_id = ?finalized.msg_id,
+                    slot = finalized.slot.into_inner(),
+                    "Skipping an undecodable inscription"
                 );
                 None
             }
@@ -108,6 +108,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
             signer: finalized.signer.map(|signer| signer.to_bytes()),
             slot: Some(finalized.slot),
             block: block.cloned(),
+            finally_absent_keys: BTreeSet::new(),
         };
         self.parent = finalized.msg_id;
         let undecodable: Vec<_> = match (&finalized.block, finalized.signer) {
@@ -139,9 +140,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
 
         if !self.on_lineage {
             warn!(
-                "Bootstrapping never re-read the stored final entry {}, so it left the lineage \
-                 untouched; the Bedrock node's finality may lag behind it",
-                self.stored_final
+                stored_final = %self.stored_final,
+                "Bootstrapping never re-read the stored final entry, so it left the lineage \
+                 untouched; the Bedrock node's finality may lag behind it"
             );
         }
         Ok(State::Online(
@@ -193,10 +194,23 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
     /// prove before that.
     async fn apply_finalized_entry(
         &mut self,
-        entry: Option<ChannelEntry>,
+        mut entry: Option<ChannelEntry>,
         undecodable: &[(MsgId, Ed25519PublicKey)],
         lib_slot: Slot,
     ) -> Result<()> {
+        // A replayed entry is final, so its release keys are judged at its own slot.
+        if let Some(read) = &mut entry
+            && let (Some(block), Some(slot)) = (&read.block, read.slot)
+        {
+            read.finally_absent_keys = release_finality::finally_absent_keys(
+                &self.actors.bedrock_pool_ref,
+                self.config.bedrock_config.channel_id,
+                L1Position::FinalSlot(slot.into_inner()),
+                block,
+                release_finality::finality_depth(self.chain.final_state()),
+            )
+            .await;
+        }
         let head_before: HashSet<HashType> = self
             .chain
             .head_blocks()
@@ -287,9 +301,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
                     if let Some(Verdict::Dropped { error, .. }) =
                         judged.map(|judged_entry| &judged_entry.verdict)
                     {
+                        let err = anyhow::anyhow!(error.clone());
                         warn!(
-                            "Finalized channel block {block_id} does not apply, skipping it: {:#}",
-                            anyhow::anyhow!(error.clone())
+                            block_id,
+                            error = format_args!("{err:#}"),
+                            "Finalized channel block does not apply, skipping it"
                         );
                     }
                 }

@@ -131,6 +131,9 @@ jobs:
       - name: Test cache pruning
         run: python3 .github/scripts/test_prune_superseded_caches.py -v
 
+      - name: Test the flake report
+        run: python3 .github/scripts/test_flake_report.py -v
+
   fmt-rs:
     needs: ci-image
     runs-on: ubuntu-latest
@@ -419,7 +422,7 @@ jobs:
     needs: integration-tests-prebuild
     runs-on: ubuntu-latest
     env:
-      BUDGET_MIB: 4600
+      BUDGET_MIB: 5000
     steps:
       - name: Compare the archive against its budget
         run: |

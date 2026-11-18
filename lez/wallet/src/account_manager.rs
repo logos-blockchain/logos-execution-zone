@@ -660,10 +660,11 @@ impl AccountManager {
             .saturating_add(usize::from(self.message_path.is_some()))
             .saturating_add(self.claim_paths.len());
         if action_count > Self::PADDED_PRIVATE_ACTIONS {
-            log::warn!(
-                "private action count {action_count} exceeds PADDED_PRIVATE_ACTIONS ({}); \
-                 padding saturates and the private-action count is not hidden",
-                Self::PADDED_PRIVATE_ACTIONS
+            tracing::warn!(
+                action_count,
+                padded_private_actions = Self::PADDED_PRIVATE_ACTIONS,
+                "Private action count exceeds PADDED_PRIVATE_ACTIONS; padding saturates and the \
+                 private-action count is not hidden"
             );
         }
         self.dummy_inputs(Self::PADDED_PRIVATE_ACTIONS.saturating_sub(action_count))

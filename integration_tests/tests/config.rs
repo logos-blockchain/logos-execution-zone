@@ -32,7 +32,7 @@ async fn modify_config_field() -> Result<()> {
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
-    log::info!("Successfully modified and restored config field");
+    tracing::info!("Successfully modified and restored config field");
 
     Ok(())
 }

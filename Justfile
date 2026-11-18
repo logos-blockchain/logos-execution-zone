@@ -56,8 +56,8 @@ regenerate-test-fixture:
     @just resolve-bedrock-node
     RISC0_DEV_MODE=1 RUST_LOG=info cargo run -p test_fixtures --bin regenerate_test_fixture
 
-# Regenerate the four-node docker devnet's shared sequencer config and per-node keys (the genesis
-# stakes the whole committee, so the signatures are resigned; commit the result).
+# Regenerate the four-node docker devnet's shared sequencer config and per-node keys. The genesis
+# stakes the whole committee, so its stake signatures are re-signed; existing keys are kept.
 regenerate-devnet-configs:
     @echo "🕸️  Regenerating devnet sequencer config and keys"
     @cargo run -q -p devnet_configs
@@ -70,6 +70,7 @@ regenerate-dashboards:
     @cargo run -q -p dashboard_gen -- sequencer > monitoring/grafana/dashboards/sequencer.json
     @cargo run -q -p dashboard_gen -- network > monitoring/grafana/dashboards/network.json
     @cargo run -q -p dashboard_gen -- actors > monitoring/grafana/dashboards/actors.json
+    @cargo run -q -p dashboard_gen -- messages > monitoring/grafana/dashboards/messages.json
 
 # Run criterion benches: fast crypto primitives, then the slow PPE verify (real proving setup).
 bench:
@@ -109,12 +110,12 @@ resolve-host-bedrock-node:
         --output-directory bedrock/.resolved-host \
         --target-directory target/bedrock-node-host
 
-# Run Prometheus, Loki (fed by Alloy) and Grafana in docker. Grafana: http://localhost:3000
-# (anonymous admin), Prometheus: http://localhost:9090, Loki: http://localhost:3100. Scrapes the sequencers' /metrics and
-# collects the stack's container logs.
+# Run Prometheus, Loki and Tempo (fed by Alloy) and Grafana in docker. Grafana: http://localhost:3000
+# (anonymous admin), Prometheus: http://localhost:9090, Loki: http://localhost:3100, Tempo: http://localhost:3200.
+# Scrapes the sequencers' /metrics, collects the stack's container logs, and takes traces over OTLP on :4318.
 run-monitoring:
-    @echo "📊 Running Prometheus (http://localhost:9090), Loki (http://localhost:3100) + Grafana (http://localhost:3000)"
-    docker compose --profile monitoring up prometheus loki alloy grafana
+    @echo "📊 Running Prometheus (http://localhost:9090), Loki (http://localhost:3100), Tempo (http://localhost:3200) + Grafana (http://localhost:3000)"
+    docker compose --profile monitoring up prometheus loki tempo alloy grafana
 
 # ---- Decentralized sequencing tools ----
 

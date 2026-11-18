@@ -14,15 +14,18 @@
 // Styling vocabularies passed to the optional `styling` setters are part of the
 // public API (and are used by this module's `Panel` fields and `finalize`).
 use schema::{
-    AlignValue, BarGaugeDisplay, BarGaugeOptions, BarGaugeSizing, BarGaugeValueMode, Calc, Custom,
-    CustomConfig, CustomVariable, DashboardLink, DashboardLinkKind, DataLink, Datasource, Defaults,
-    DrawStyle, EmptyList, FieldConfig, Fill, GaugeOptions, GraphMode, GridPos, Legend,
-    LegendDisplay, LineStyle, LogsOptions, LogsSortOrder, Matcher, MatcherKind, NamePlacement,
-    Options, Orientation, OverrideProperty, PanelLink, PanelModel, PanelType, Placement,
-    PropertyId, PropertyValue, QueryVariable, ReduceOptions, ShowValue, SortOrder, Stacking,
-    StatColorMode, StatOptions, StateTimelineOptions, StatusHistoryOptions, Templating, TimeRange,
-    TimeSeriesOptions, TimelineCustom, Tooltip, TooltipMode, ValueMapping, ValueMappingKind,
-    ValueMappingResult, VariableHide, VariableOption, VariableRefresh, VariableSort,
+    AlignValue, BarGaugeDisplay, BarGaugeOptions, BarGaugeSizing, BarGaugeValueMode, Calc,
+    CalculateField, CalculateMode, CellHeight, Custom, CustomConfig, CustomVariable, DashboardLink,
+    DashboardLinkKind, DashboardPanel, DataLink, Datasource, Defaults, DrawStyle, EmptyList,
+    FieldConfig, Fill, GaugeOptions, GraphMode, GridPos, Legend, LegendDisplay, LineStyle,
+    LogsOptions, LogsSortOrder, Matcher, MatcherKind, NamePlacement, NoOptions, NodeGraphOptions,
+    NodeGraphStats, Options, Organize, Orientation, OverrideProperty, PanelLink, PanelModel,
+    PanelType, Placement, PropertyId, PropertyValue, QueryType, QueryVariable, ReduceOptions,
+    RenameByRegex, RowModel, RowReduce, ShowValue, SortOrder, Stacking, StatColorMode, StatOptions,
+    StateTimelineOptions, StatusHistoryOptions, TableFooter, TableOptions, TableSort, TableType,
+    TargetFormat, Templating, TextboxVariable, TimeRange, TimeSeriesOptions, TimelineCustom,
+    Tooltip, TooltipMode, Transformation, ValueMapping, ValueMappingKind, ValueMappingResult,
+    VariableHide, VariableOption, VariableRefresh, VariableSort, ZoomMode,
 };
 pub use schema::{
     AxisPlacement, Color, GradientMode, LineInterpolation, ShowPoints, StackingMode, Thresholds,
@@ -42,6 +45,13 @@ pub const DATASOURCE_UID: &str = "prometheus";
 
 /// Datasource uid of the logs every [`Target::logs`] queries.
 pub const LOGS_DATASOURCE_UID: &str = "loki";
+
+/// Datasource uid of the traces every [`Target::spans`] and [`Target::trace`]
+/// query.
+pub const TRACES_DATASOURCE_UID: &str = "tempo";
+
+/// Traces a [`Target::spans`] search returns at most.
+const TRACES_LIMIT: u32 = 200;
 
 /// Window every rate query — counter and histogram alike — rates over.
 /// `$__rate_interval` tracks the panel's zoom, so the window always covers the
@@ -121,36 +131,133 @@ impl std::fmt::Display for Selector {
     }
 }
 
-/// A single Prometheus query within a panel.
+/// A single query within a panel: of metrics or logs in `expr`, of traces in
+/// `query`.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Target {
     datasource: Datasource,
-    expr: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expr: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    format: Option<TargetFormat>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     instant: Option<bool>,
-    #[serde(rename = "legendFormat")]
-    legend: String,
+    #[serde(
+        default,
+        rename = "legendFormat",
+        skip_serializing_if = "Option::is_none"
+    )]
+    legend: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    limit: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    query: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    query_type: Option<QueryType>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     range: Option<bool>,
     ref_id: String,
+    /// Spans shown per trace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    spss: Option<u32>,
+    /// What a [`Target::trace_metrics`] counts each point over.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    step: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    table_type: Option<TableType>,
+    /// Kept as the `ref_id`, which is otherwise the target's letter.
+    #[serde(skip)]
+    name: Option<String>,
+    /// Whether it returns a series per value of some label, whatever its
+    /// legend.
+    #[serde(skip)]
+    fans_out: bool,
 }
 
 impl Target {
     pub fn new(expr: impl Into<String>) -> Self {
         Self {
             datasource: Datasource::prometheus(),
-            expr: expr.into(),
+            expr: Some(expr.into()),
+            format: None,
             instant: None,
-            legend: String::new(),
+            legend: Some(String::new()),
+            limit: None,
+            query: None,
+            query_type: None,
             range: None,
             ref_id: ref_letter(0),
+            spss: None,
+            step: None,
+            table_type: None,
+            name: None,
+            fans_out: false,
         }
     }
 
     #[must_use]
     pub fn legend(mut self, legend: impl Into<String>) -> Self {
-        self.legend = legend.into();
+        self.legend = Some(legend.into());
+        self
+    }
+
+    /// A `TraceQL` search, e.g. `{ span.actor = "$actor" }`, for a
+    /// [`Panel::table`] of one row per span it matches, newest first, up to
+    /// one per trace and 200 traces ([`Target::limit`] changes that). Grafana names the columns:
+    /// `Trace Name`, `Start time` and `Duration`, the trace's id in `traceIdHidden`, and each
+    /// attribute the query selects by its own name.
+    pub fn spans(traceql: impl Into<String>) -> Self {
+        Self {
+            datasource: Datasource::tempo(),
+            expr: None,
+            legend: None,
+            limit: Some(TRACES_LIMIT),
+            query: Some(format!("{} with(most_recent=true)", traceql.into())),
+            query_type: Some(QueryType::TraceQl),
+            spss: Some(1),
+            table_type: Some(TableType::Spans),
+            ..Self::new(String::new())
+        }
+    }
+
+    /// The trace whose id is `id`, e.g. `$trace`, for a [`Panel::trace`].
+    pub fn trace(id: impl Into<String>) -> Self {
+        Self {
+            datasource: Datasource::tempo(),
+            expr: None,
+            legend: None,
+            query: Some(id.into()),
+            query_type: Some(QueryType::TraceQl),
+            ..Self::new(String::new())
+        }
+    }
+
+    /// A `TraceQL` metrics query, e.g. `{ span.actor = "$actor" } | rate()
+    /// by (name)`, for a [`Panel::timeseries`]: a series per value of what
+    /// it groups `by`, named like `{name="ExecutorActor.ProduceBlock"}`
+    /// ([`Panel::rename_series`] cuts that down), with exemplars, the traces
+    /// of some of the spans it counted, drawn as points.
+    pub fn trace_metrics(traceql: impl Into<String>) -> Self {
+        Self {
+            fans_out: true,
+            ..Self::trace(traceql)
+        }
+    }
+
+    /// The most traces a [`Target::spans`] search returns, rather than 200.
+    #[must_use]
+    pub const fn limit(mut self, traces: u32) -> Self {
+        self.limit = Some(traces);
+        self
+    }
+
+    /// What a [`Target::trace_metrics`] counts each point over, e.g. `30s`,
+    /// rather than the few seconds Tempo picks. A fixed duration: Grafana
+    /// fills in no `$__interval` here.
+    #[must_use]
+    pub fn step(mut self, step: impl Into<String>) -> Self {
+        self.step = Some(step.into());
         self
     }
 
@@ -170,6 +277,15 @@ impl Target {
         self.instant = Some(true);
         self.range = Some(false);
         self
+    }
+
+    /// Evaluate once into a table of one row per series, its labels in
+    /// columns, named `name`: a [`Panel::node_graph`]'s `nodes` and `edges`.
+    #[must_use]
+    pub fn table(mut self, name: impl Into<String>) -> Self {
+        self.format = Some(TargetFormat::Table);
+        self.name = Some(name.into());
+        self.instant()
     }
 }
 
@@ -222,6 +338,50 @@ impl FieldOverride {
         });
         self
     }
+
+    /// A link on every value; `url` may use Grafana's data link variables,
+    /// e.g. `${__data.fields.traceIdHidden}` for another column of the row.
+    #[must_use]
+    pub fn link(mut self, title: impl Into<String>, url: impl Into<String>) -> Self {
+        self.properties.push(OverrideProperty {
+            id: PropertyId::Links,
+            value: PropertyValue::Links(vec![DataLink {
+                title: title.into(),
+                url: url.into(),
+            }]),
+        });
+        self
+    }
+
+    /// Keep a table's column out of view, its values still there for links.
+    #[must_use]
+    pub fn hidden(mut self) -> Self {
+        self.properties.push(OverrideProperty {
+            id: PropertyId::Hidden,
+            value: PropertyValue::Flag(true),
+        });
+        self
+    }
+
+    /// The unit the matched values are shown in, e.g. a time format.
+    #[must_use]
+    pub fn unit(mut self, unit: Unit) -> Self {
+        self.properties.push(OverrideProperty {
+            id: PropertyId::Unit,
+            value: PropertyValue::Unit(unit),
+        });
+        self
+    }
+
+    /// A table column's width, in pixels.
+    #[must_use]
+    pub fn width(mut self, pixels: u32) -> Self {
+        self.properties.push(OverrideProperty {
+            id: PropertyId::Width,
+            value: PropertyValue::Pixels(pixels),
+        });
+        self
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -233,6 +393,9 @@ enum Kind {
     Logs,
     StateTimeline,
     StatusHistory,
+    NodeGraph,
+    Table,
+    Trace,
 }
 
 /// A dashboard panel builder. Grid position and panel id are assigned by
@@ -264,6 +427,13 @@ pub struct Panel {
     stacking: Option<StackingMode>,
     axis_placement: Option<AxisPlacement>,
     axis_label: Option<String>,
+    /// Series renames, as `(regex, pattern)`.
+    renames: Vec<(String, String)>,
+    // Table layout, set via the column setters.
+    columns: Vec<(String, String)>,
+    dropped_columns: Vec<String>,
+    sorted_by: Option<String>,
+    rows_counted: bool,
 }
 
 impl Panel {
@@ -294,6 +464,11 @@ impl Panel {
             stacking: None,
             axis_placement: None,
             axis_label: None,
+            renames: Vec::new(),
+            columns: Vec::new(),
+            dropped_columns: Vec::new(),
+            sorted_by: None,
+            rows_counted: false,
         }
     }
 
@@ -333,6 +508,65 @@ impl Panel {
     /// heatmap of series over time.
     pub fn status_history(title: impl Into<String>) -> Self {
         Self::new(title, Kind::StatusHistory)
+    }
+
+    /// Nodes and the edges between them, from a `nodes` and an `edges`
+    /// [`Target::table`]. Their rows need an `id`, a node's also a `title` to
+    /// show and an edge's a `source` and a `target` node id. Their value is the
+    /// stat shown, in the panel's [`Panel::unit`].
+    pub fn node_graph(title: impl Into<String>) -> Self {
+        Self::new(title, Kind::NodeGraph)
+    }
+
+    /// The rows of a query's result, its fields in columns, e.g. a
+    /// [`Target::spans`]. Lay them out with [`Panel::column`],
+    /// [`Panel::drop_columns`] and [`Panel::sort_descending`].
+    pub fn table(title: impl Into<String>) -> Self {
+        Self::new(title, Kind::Table)
+    }
+
+    /// The spans of one trace on a timeline, from a [`Target::trace`].
+    pub fn trace(title: impl Into<String>) -> Self {
+        Self::new(title, Kind::Trace)
+    }
+
+    /// Show a table's column `name`, as Grafana names it, titled `title`. The
+    /// columns named this way come first, in the order named. A
+    /// [`FieldOverride`] matches the column by `title`.
+    #[must_use]
+    pub fn column(mut self, name: impl Into<String>, title: impl Into<String>) -> Self {
+        self.columns.push((name.into(), title.into()));
+        self
+    }
+
+    /// Leave a table's columns `names`, as Grafana names them, out.
+    #[must_use]
+    pub fn drop_columns(mut self, names: &[&str]) -> Self {
+        self.dropped_columns
+            .extend(names.iter().map(|&name| name.to_owned()));
+        self
+    }
+
+    /// Count a table's rows, under them.
+    #[must_use]
+    pub const fn count_rows(mut self) -> Self {
+        self.rows_counted = true;
+        self
+    }
+
+    /// Sort a table by its column `title`, largest first.
+    #[must_use]
+    pub fn sort_descending(mut self, title: impl Into<String>) -> Self {
+        self.sorted_by = Some(title.into());
+        self
+    }
+
+    /// Rename the series whose names match `regex` to `pattern`, which may use
+    /// its capture groups, e.g. `$1`.
+    #[must_use]
+    pub fn rename_series(mut self, regex: impl Into<String>, pattern: impl Into<String>) -> Self {
+        self.renames.push((regex.into(), pattern.into()));
+        self
     }
 
     /// Shown behind the `i` next to the title.
@@ -469,18 +703,51 @@ impl Panel {
             .into_iter()
             .enumerate()
             .map(|(i, mut t)| {
-                t.ref_id = ref_letter(i);
+                t.ref_id = t.name.clone().unwrap_or_else(|| ref_letter(i));
                 t
             })
             .collect();
 
         let unit = self.unit.unwrap_or_else(default_unit);
+        // A node graph reads its stat off a field named `mainstat`, and only to
+        // that one applies its unit.
+        let renames = self.renames.into_iter().map(|(regex, rename_pattern)| {
+            Transformation::RenameByRegex(RenameByRegex {
+                regex,
+                rename_pattern,
+            })
+        });
+        let mut transformations = match self.kind {
+            Kind::NodeGraph => vec![Transformation::CalculateField(CalculateField {
+                alias: "mainstat".to_owned(),
+                mode: CalculateMode::ReduceRow,
+                reduce: RowReduce { reducer: Calc::Sum },
+                replace_fields: false,
+                time_series: false,
+            })],
+            Kind::Table if !(self.columns.is_empty() && self.dropped_columns.is_empty()) => {
+                vec![Transformation::Organize(organize(
+                    self.columns,
+                    self.dropped_columns,
+                ))]
+            }
+            Kind::Stat
+            | Kind::TimeSeries
+            | Kind::Gauge
+            | Kind::BarGauge
+            | Kind::Logs
+            | Kind::StateTimeline
+            | Kind::StatusHistory
+            | Kind::Table
+            | Kind::Trace => Vec::new(),
+        };
+        transformations.extend(renames);
         let (defaults, options, panel_type) = match self.kind {
             Kind::Stat => {
                 let defaults = Defaults {
                     color: self.color,
                     custom: None,
-                    unit,
+                    unit: Some(unit),
                     decimals: self.decimals,
                     min: self.min,
                     max: self.max,
@@ -503,7 +770,7 @@ impl Panel {
                 let defaults = Defaults {
                     color: self.color,
                     custom: None,
-                    unit,
+                    unit: Some(unit),
                     decimals: self.decimals,
                     min: self.min,
                     max: self.max,
@@ -540,7 +807,7 @@ impl Panel {
                         axis_placement: self.axis_placement,
                         axis_label: self.axis_label,
                     })),
-                    unit,
+                    unit: Some(unit),
                     decimals: None,
                     min: self.min,
                     max: self.max,
@@ -552,8 +819,14 @@ impl Panel {
                 // a multi-series tooltip; single-series panels stay compact. A
                 // `{{label}}` legend fans one target out into a series per label
                 // value, so it counts as several too.
-                let multi =
-                    targets.len() > 1 || targets.iter().any(|target| target.legend.contains("{{"));
+                let multi = targets.len() > 1
+                    || targets.iter().any(|target| {
+                        target.fans_out
+                            || target
+                                .legend
+                                .as_deref()
+                                .is_some_and(|legend| legend.contains("{{"))
+                    });
                 let options = Options::TimeSeries(TimeSeriesOptions {
                     legend: Legend {
                         display_mode: if multi {
@@ -583,7 +856,7 @@ impl Panel {
                 let defaults = Defaults {
                     color: self.color,
                     custom: None,
-                    unit,
+                    unit: Some(unit),
                     decimals: self.decimals,
                     min: self.min,
                     max: self.max,
@@ -611,11 +884,60 @@ impl Panel {
                 });
                 (defaults, options, PanelType::BarGauge)
             }
+            Kind::NodeGraph => {
+                let defaults = Defaults {
+                    color: None,
+                    custom: None,
+                    unit: Some(unit.clone()),
+                    decimals: self.decimals,
+                    min: None,
+                    max: None,
+                    thresholds: None,
+                    mappings: Vec::new(),
+                    links: Vec::new(),
+                };
+                let options = Options::NodeGraph(NodeGraphOptions {
+                    edges: NodeGraphStats {
+                        main_stat_unit: unit.clone(),
+                    },
+                    nodes: NodeGraphStats {
+                        main_stat_unit: unit,
+                    },
+                    zoom_mode: ZoomMode::Cooperative,
+                });
+                (defaults, options, PanelType::NodeGraph)
+            }
+            Kind::Table => {
+                let options = Options::Table(TableOptions {
+                    cell_height: CellHeight::Sm,
+                    footer: self.rows_counted.then(|| TableFooter {
+                        count_rows: true,
+                        fields: String::new(),
+                        reducer: vec![Calc::Count],
+                        show: true,
+                    }),
+                    show_header: true,
+                    sort_by: self
+                        .sorted_by
+                        .into_iter()
+                        .map(|display_name| TableSort {
+                            desc: true,
+                            display_name,
+                        })
+                        .collect(),
+                });
+                (Defaults::empty(), options, PanelType::Table)
+            }
+            Kind::Trace => (
+                Defaults::empty(),
+                Options::None(NoOptions {}),
+                PanelType::Traces,
+            ),
             Kind::Logs => {
                 let defaults = Defaults {
                     color: None,
                     custom: None,
-                    unit,
+                    unit: Some(unit),
                     decimals: None,
                     min: None,
                     max: None,
@@ -638,7 +960,7 @@ impl Panel {
                         line_width: 0,
                         fill_opacity: self.fill_opacity.unwrap_or(TIMELINE_FILL_OPACITY),
                     })),
-                    unit,
+                    unit: Some(unit),
                     decimals: self.decimals,
                     min: self.min,
                     max: self.max,
@@ -704,6 +1026,7 @@ impl Panel {
             options,
             targets,
             title: self.title,
+            transformations,
             panel_type,
         }
     }
@@ -718,7 +1041,7 @@ pub struct Dashboard {
     graph_tooltip: u32,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     links: Vec<DashboardLink>,
-    panels: Vec<PanelModel>,
+    panels: Vec<DashboardPanel>,
     refresh: String,
     schema_version: u32,
     tags: Vec<String>,
@@ -798,6 +1121,74 @@ impl Dashboard {
     /// 24 columns evenly.
     #[must_use]
     pub fn row(mut self, height: u32, panels: impl IntoIterator<Item = Panel>) -> Self {
+        let placed = self.place(height, self.cursor_y, panels);
+        self.panels.extend(
+            placed
+                .into_iter()
+                .map(|panel| DashboardPanel::Panel(Box::new(panel))),
+        );
+        self.cursor_y = self.cursor_y.saturating_add(height);
+        self
+    }
+
+    /// A row heading titled `title`, over the panels placed after it up to the
+    /// next one, which a click on it folds away.
+    #[must_use]
+    pub fn heading(mut self, title: impl Into<String>) -> Self {
+        let row = self.row_model(title.into(), false, Vec::new());
+        self.panels.push(DashboardPanel::Row(row));
+        self
+    }
+
+    /// A row of `panels`, `height` high, folded away under a heading titled
+    /// `title`: they run no queries until a click opens it. Once it is open,
+    /// the panels after it up to the next heading fold away with it too, so
+    /// follow it with a [`Dashboard::heading`] unless it comes last.
+    #[must_use]
+    pub fn folded(
+        mut self,
+        title: impl Into<String>,
+        height: u32,
+        panels: impl IntoIterator<Item = Panel>,
+    ) -> Self {
+        let placed = self.place(height, self.cursor_y.saturating_add(1), panels);
+        let row = self.row_model(title.into(), true, placed);
+        self.panels.push(DashboardPanel::Row(row));
+        self
+    }
+
+    /// A heading one unit high at the cursor, which it moves past.
+    const fn row_model(
+        &mut self,
+        title: String,
+        collapsed: bool,
+        panels: Vec<PanelModel>,
+    ) -> RowModel {
+        let row = RowModel {
+            collapsed,
+            grid_pos: GridPos {
+                h: 1,
+                w: 24,
+                x: 0,
+                y: self.cursor_y,
+            },
+            id: self.next_id,
+            panels,
+            title,
+            panel_type: PanelType::Row,
+        };
+        self.next_id = self.next_id.saturating_add(1);
+        self.cursor_y = self.cursor_y.saturating_add(1);
+        row
+    }
+
+    /// `panels` side by side at `y`, `height` high, with their ids.
+    fn place(
+        &mut self,
+        height: u32,
+        y: u32,
+        panels: impl IntoIterator<Item = Panel>,
+    ) -> Vec<PanelModel> {
         let panels: Vec<Panel> = panels.into_iter().collect();
         let specified: u32 = panels.iter().map(|p| p.width).sum();
         let auto_count = u32::try_from(panels.iter().filter(|p| p.width == 0).count()).unwrap_or(0);
@@ -809,32 +1200,28 @@ impl Dashboard {
             .unwrap_or(0);
 
         let mut x = 0;
+        let mut placed = Vec::new();
         for panel in panels {
             let w = if panel.width == 0 {
                 auto_width
             } else {
                 panel.width
             };
-            let grid_pos = GridPos {
-                h: height,
-                w,
-                x,
-                y: self.cursor_y,
-            };
+            let grid_pos = GridPos { h: height, w, x, y };
             let id = self.next_id;
             self.next_id = self.next_id.saturating_add(1);
             x = x.saturating_add(w);
-            self.panels.push(panel.finalize(id, grid_pos));
+            placed.push(panel.finalize(id, grid_pos));
         }
-        self.cursor_y = self.cursor_y.saturating_add(height);
-        self
+        placed
     }
 }
 
 impl Variable {
     /// Cut each fetched choice down to the first capture group of `regex`, a
     /// JavaScript regex with its slashes, e.g. `/^(\w+)/`. The cut is both what
-    /// the dropdown shows and what `$name` holds.
+    /// the dropdown shows and what `$name` holds, unless the groups named `text`
+    /// and `value` set them apart: `${name:text}` holds the shown one.
     ///
     /// Panics on a variable whose choices are not fetched.
     #[must_use]
@@ -844,6 +1231,7 @@ impl Variable {
             Self::Custom(_) => {
                 panic!("a custom variable spells out its choices: no regex to cut them with")
             }
+            Self::Textbox(_) => panic!("a text field has no choices to cut"),
         }
         self
     }
@@ -857,6 +1245,7 @@ impl Variable {
         match &mut self {
             Self::Query(variable) => variable.hide = Some(VariableHide::Variable),
             Self::Custom(_) => panic!("a custom variable is there to be picked from"),
+            Self::Textbox(_) => panic!("a text field is there to be filled in"),
         }
         self
     }
@@ -906,6 +1295,17 @@ pub fn percentile_variable(percentiles: &[u32], default: u32) -> Variable {
     })
 }
 
+/// A text field named `name` (referenced as `$name`), titled `title`, starting
+/// empty: for a value links fill in, e.g. the trace a click picked.
+#[must_use]
+pub fn textbox_variable(name: &str, title: &str) -> Variable {
+    Variable::Textbox(TextboxVariable {
+        label: title.to_owned(),
+        name: name.to_owned(),
+        query: String::new(),
+    })
+}
+
 /// A single-choice dropdown named `name` (referenced as `$name`), titled
 /// `title`, offering every value `label` takes across `metric`'s series.
 #[must_use]
@@ -924,6 +1324,36 @@ pub fn label_values_variable(name: &str, title: &str, metric: &str, label: &str)
         regex: None,
         sort: VariableSort::NaturalAsc,
     })
+}
+
+/// A single-choice dropdown named `name` (referenced as `$name`), titled
+/// `title`, offering a choice per series of the instant query `expr`.
+///
+/// Each is the series as it prints, e.g. `{key="a"} 1 1700000000000`, for
+/// [`Variable::regex`] to cut.
+#[must_use]
+pub fn query_result_variable(name: &str, title: &str, expr: &str) -> Variable {
+    let query = format!("query_result({expr})");
+    Variable::Query(QueryVariable {
+        datasource: Datasource::prometheus(),
+        definition: query.clone(),
+        hide: None,
+        include_all: false,
+        label: title.to_owned(),
+        multi: false,
+        name: name.to_owned(),
+        query,
+        refresh: VariableRefresh::OnTimeRangeChange,
+        regex: None,
+        sort: VariableSort::NaturalAsc,
+    })
+}
+
+/// The quantile the [`percentile_variable`] dropdown holds, e.g. `0.95`, for
+/// queries other than [`selected_percentile`]'s.
+#[must_use]
+pub fn selected_quantile() -> String {
+    format!("${PERCENTILE_VAR}")
 }
 
 /// The legend fragment that renders the dropdown's current choice, e.g. `p95`.
@@ -990,6 +1420,20 @@ pub fn rate_per_min(metric: &Selector, legend: &str) -> Target {
     //`rate` is per-second whatever the window, so `* 60` is per-minute regardless of the panel's
     //`rate` zoom.
     Target::new(format!("rate({metric}[{RATE_WINDOW}]) * 60")).legend(legend)
+}
+
+/// A table's [`Panel::column`]s and [`Panel::drop_columns`] as Grafana's
+/// `organize` step.
+fn organize(columns: Vec<(String, String)>, dropped: Vec<String>) -> Organize {
+    let mut organize = Organize::default();
+    for ((name, title), index) in columns.into_iter().zip(0_u32..) {
+        organize.index_by_name.insert(name.clone(), index);
+        if title != name {
+            organize.rename_by_name.insert(name, title);
+        }
+    }
+    organize.exclude_by_name = dropped.into_iter().map(|name| (name, true)).collect();
+    organize
 }
 
 /// [`Panel::value_mapping`]s as Grafana's single `value` mapping.

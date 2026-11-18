@@ -1,6 +1,6 @@
 //! The chains a mocked store holds when an executor starts.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chain_state::{ChainState, ChannelEntry, ProofStore, Tip};
 use common::{
@@ -114,6 +114,7 @@ pub(in crate::actor) fn with_view(mut store: CannedStore) -> CannedStore {
                 signer: None,
                 slot: None,
                 block: Some(block.digested()),
+                finally_absent_keys: BTreeSet::new(),
             };
             parent = entry.msg;
             entry
@@ -142,7 +143,7 @@ pub(in crate::actor) fn genesis() -> Block {
 /// A valid empty block, like [`produce_dummy_block`] but at `timestamp`.
 pub(in crate::actor) fn block_at(id: u64, prev: HashType, timestamp: u64) -> Block {
     HashableBlockData {
-        reverted: Vec::new(),
+        receipts: Vec::new(),
         block_id: id,
         prev_block_hash: prev,
         timestamp,

@@ -294,19 +294,17 @@ pub const fn alerts_at(attempts: u32) -> bool {
     attempts > 0 && attempts.is_multiple_of(STUCK_SLOT_ALERT_PASSES)
 }
 
-/// The one report both sides log for a differing block at an id the accepted
-/// chain already holds.
-#[must_use]
-pub fn equivocation_report(
-    peer_zone: &ZoneId,
-    block_id: u64,
-    holding: HashType,
-    refusing: HashType,
-) -> String {
-    format!(
-        "Peer zone {} equivocated at block {block_id}: holding {holding}, refusing {refusing}. Nothing at or above block {block_id} can be delivered from until that peer inscribes a block continuing the run verified from its genesis.",
-        hex::encode(peer_zone)
-    )
+/// Logs the one report both sides give for a differing block at an id the
+/// accepted chain already holds.
+pub fn log_equivocation(peer_zone: &ZoneId, block_id: u64, holding: HashType, refusing: HashType) {
+    tracing::error!(
+        peer_zone = %hex::encode(peer_zone),
+        block_id,
+        %holding,
+        %refusing,
+        "Peer zone equivocated. Nothing at or above this block can be delivered from until that \
+         peer inscribes a block continuing the run verified from its genesis."
+    );
 }
 
 /// Whether `block` continues the peer chain pinned by `tip`.

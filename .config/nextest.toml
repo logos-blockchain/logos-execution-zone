@@ -12,10 +12,10 @@ status-level = "slow"
 # Each slashing test runs a Bedrock node and three sequencers, so they run one at a time.
 # The any-program tests deploy a guest through the loader before their delivery,
 # so they hold a node for several finality-bound minutes too. They live as modules
-# of the `cross_zone_ping` binary, so they match by name rather than by binary.
+# of their binary, so they match by name rather than by binary.
 [test-groups]
 slashing = { max-threads = 1 }
 
 [[profile.default.overrides]]
-filter = 'binary(slashing) + test(/^any_program::/)'
+filter = 'binary(slashing) + test(/^any_program::/) + test(/^system_upgrade::/)'
 test-group = 'slashing'

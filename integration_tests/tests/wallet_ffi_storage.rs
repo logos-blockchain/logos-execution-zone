@@ -7,6 +7,7 @@
     clippy::undocumented_unsafe_blocks,
     clippy::multiple_unsafe_ops_per_block,
     clippy::shadow_unrelated,
+    clippy::arithmetic_side_effects,
     reason = "We don't care about these in tests"
 )]
 
@@ -41,7 +42,7 @@ fn wallet_ffi_save_and_load_persistent_storage() -> Result<()> {
         sequencer_home,
     } = sequencer_ffi_helpers::joining_setup(false)?;
 
-    log::info!("Joining sequencer home: {sequencer_home:?}");
+    tracing::info!(?sequencer_home, "Joining sequencer home");
 
     let home = tempfile::tempdir()?;
     // Create a receiving key and save
@@ -145,7 +146,7 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         sequencer_home,
     } = sequencer_ffi_helpers::joining_setup(true)?;
 
-    log::info!("Joining sequencer home: {sequencer_home:?}");
+    tracing::info!(?sequencer_home, "Joining sequencer home");
 
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
@@ -185,9 +186,9 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         wallet_ffi_create_account_public(wallet_ffi_handle, &raw mut public_account_id_2).unwrap();
     }
 
-    log::info!("Accounts created");
+    tracing::info!("Accounts created");
 
-    log::info!("Waiting for next block creation");
+    tracing::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     // Sync private account local storage with onchain encrypted state
@@ -304,12 +305,12 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         wallet_ffi_free_transfer_result(&raw mut transfer_result_4);
     }
 
-    log::info!("Preparation complete, performing keys restoration");
+    tracing::info!("Preparation complete, performing keys restoration");
 
     // Sent by keys, both private credits are pending until the owner receives them.
     receive_pending(wallet_ffi_handle);
 
-    log::info!("Checking balance correctness before restoration");
+    tracing::info!("Checking balance correctness before restoration");
 
     let private_account_id_1_balance = unsafe {
         let mut out_balance: [u8; 16] = [0; 16];
@@ -371,7 +372,7 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
         wallet_ffi_sync_to_block(wallet_ffi_handle, current_height).unwrap();
     };
 
-    log::info!("Checking balance correctness after restoration");
+    tracing::info!("Checking balance correctness after restoration");
 
     let private_account_id_1_balance = unsafe {
         let mut out_balance: [u8; 16] = [0; 16];
@@ -422,7 +423,7 @@ fn restore_keys_from_seed_ffi() -> Result<()> {
     assert_eq!(public_account_id_1_balance, 102);
     assert_eq!(public_account_id_2_balance, 103);
 
-    log::info!("Accounts restored");
+    tracing::info!("Accounts restored");
 
     // SAFETY: sequencer_ffi created by FFI, it is valid.
     unsafe {
@@ -442,7 +443,7 @@ fn a_pending_private_credit_survives_seed_restoration_ffi() -> Result<()> {
         sequencer_home,
     } = sequencer_ffi_helpers::joining_setup(true)?;
 
-    log::info!("Joining sequencer home: {sequencer_home:?}");
+    tracing::info!(?sequencer_home, "Joining sequencer home");
 
     let home = tempfile::tempdir()?;
     let FfiCreateWalletOutput {
@@ -516,7 +517,7 @@ fn a_pending_private_credit_survives_seed_restoration_ffi() -> Result<()> {
 //         .unwrap();
 //     }
 
-//     log::info!("Waiting for next block creation");
+//     tracing::info!("Waiting for next block creation");
 //     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
 //     let from_balance = unsafe {
