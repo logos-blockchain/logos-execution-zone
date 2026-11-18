@@ -9,7 +9,7 @@ use std::{
 
 use anyhow::{Context as _, Result, bail};
 use indexer_service::{ChannelId, IndexerHandle};
-use lee::{AccountId, PrivateKey, PublicKey};
+use lee::signature::{PublicAccountSecret, public_account_id};
 use logos_blockchain_zone_sdk::key_management_system_service::keys::UnsecuredEd25519Key;
 use sequencer_service::{GenesisAction, SequencerConfig, SequencerHandle};
 use sequencer_service_protocol::SequencerStatus;
@@ -562,7 +562,7 @@ pub async fn setup_indexer_at(
 
 pub fn setup_wallet(
     sequencer_addr: &SocketAddr,
-    initial_public_accounts: &[(PrivateKey, u128)],
+    initial_public_accounts: &[(PublicAccountSecret, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
     config_overrides: WalletConfigOverrides,
 ) -> Result<(WalletCore<SequencerClient>, TempDir, String)> {
@@ -582,7 +582,7 @@ pub fn setup_wallet(
 /// Set up the wallet in an explicit home directory owned by the caller.
 pub fn setup_wallet_at(
     sequencer_addr: &SocketAddr,
-    initial_public_accounts: &[(PrivateKey, u128)],
+    initial_public_accounts: &[(PublicAccountSecret, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
     config_overrides: WalletConfigOverrides,
     home: &Path,
@@ -607,11 +607,11 @@ pub fn setup_wallet_at(
     )
     .context("Failed to init wallet")?;
 
-    for (private_key, _balance) in initial_public_accounts {
+    for (secret, _balance) in initial_public_accounts {
         wallet
             .storage_mut()
             .key_chain_mut()
-            .add_imported_public_account(private_key.clone());
+            .add_imported_public_account(secret.clone());
     }
 
     for private_account in initial_private_accounts {
@@ -635,14 +635,12 @@ pub fn setup_wallet_at(
 /// Funds each of the wallet's private accounts from one of its public accounts.
 pub async fn fund_private_accounts(
     wallet: &mut WalletCore<SequencerClient>,
-    initial_public_accounts: &[(PrivateKey, u128)],
+    initial_public_accounts: &[(PublicAccountSecret, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
 ) -> Result<()> {
-    let funder_id = AccountId::from(&PublicKey::new_from_private_key(
-        &initial_public_accounts[config::PRIVATE_FUNDER_INDEX].0,
-    ));
+    let funder_id = public_account_id(&initial_public_accounts[config::PRIVATE_FUNDER_INDEX].0);
 
-    for private_account in initial_private_accounts {
+    for (index, private_account) in initial_private_accounts.iter().enumerate() {
         // The recipient pays the shielding's in-proof fee out of what it receives, so it is
         // shielded the fee on top of its balance.
         wallet.set_private_fee_payer(Some(private_account.account_id()));
@@ -654,10 +652,10 @@ pub async fn fund_private_accounts(
                 to_npk: None,
                 to_vpk: None,
                 to_keys: None,
-                to_pk: None,
+                to_initial_key: None,
                 amount: private_account
                     .balance
-                    .checked_add(config::shield_fee())
+                    .checked_add(config::shield_fee_at(index))
                     .expect("private funding overflow"),
             }),
         )
@@ -673,7 +671,7 @@ pub async fn fund_private_accounts(
         let Some(wallet::DeclaredFee::Private(fee)) = wallet.take_declared_fee() else {
             bail!("The funding shield declared no private fee");
         };
-        if fee.reserve != config::shield_fee() {
+        if fee.reserve != config::shield_fee_at(index) {
             let bytes = fee
                 .reserve
                 .saturating_sub(config::private_fee(0))
@@ -682,7 +680,7 @@ pub async fn fund_private_accounts(
                 "The funding shield paid {}, not the {} its pinned size prices; re-pin \
                  `config::SHIELD_BYTES` to {bytes:?}",
                 fee.reserve,
-                config::shield_fee()
+                config::shield_fee_at(index)
             );
         }
 

@@ -12,6 +12,7 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 indexer_service_protocol.workspace = true
+hex.workspace = true
 
 # Leptos framework
 leptos = "0.8.15"

@@ -22,8 +22,10 @@ use integration_tests::{
     utils::wait_until,
 };
 use lee::{
-    AccountId, Actor, PrivateKey, PublicKey, PublicTransaction,
-    public_transaction::{Message, WitnessSet},
+    AccountId, Actor, PublicTransaction,
+    public_transaction::Message,
+    signature::PublicAccountSecret,
+    test_utils::{TestSigner, witness_for},
 };
 use logos_blockchain_zone_sdk::core::mantle::ops::channel::ChannelId;
 use ping_core::{ReceiverMessage, ping_record_pda, receiver_config_account_id};
@@ -51,12 +53,12 @@ const fn header_seed(tag: u8) -> [u8; 32] {
     seed
 }
 
-fn key_of(seed: [u8; 32]) -> PrivateKey {
-    PrivateKey::try_new(seed).expect("valid key")
+const fn key_of(seed: [u8; 32]) -> PublicAccountSecret {
+    PublicAccountSecret::new(seed)
 }
 
 fn account_of(seed: [u8; 32]) -> AccountId {
-    AccountId::from(&PublicKey::new_from_private_key(&key_of(seed)))
+    TestSigner::from(&key_of(seed)).account_id()
 }
 
 /// Imports `seed`'s key so the loader can sign for the account.
@@ -90,7 +92,7 @@ async fn deploy_chat(
     wallet
         .storage_mut()
         .key_chain_mut()
-        .add_imported_public_account(payer.pub_sign_key);
+        .add_imported_public_account(payer.secret);
     let header = imported_account(wallet, header_seed);
     let mut segments = Vec::new();
     for index in 1..=segment_count {
@@ -141,7 +143,7 @@ fn post_tx(
         common::test_utils::test_fee_declaration(payer.account_id),
     )
     .expect("build Post message");
-    let witness = WitnessSet::for_message(&message, &[&payer.pub_sign_key]);
+    let witness = witness_for(&message, &[&TestSigner::from(&payer.secret)]);
     LeeTransaction::Public(PublicTransaction::new(message, witness))
 }
 

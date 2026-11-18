@@ -18,12 +18,15 @@ use cross_zone_inbox_core::{
 };
 use cross_zone_outbox_core::{OutboxRecord, outbox_pda, outbox_pda_seed};
 use lee::{
-    AccountId, Actor, PrivateKey, PublicAccountEvidence, PublicKey, PublicTransaction, V03State,
-    ValidatedStateDiff,
+    AccountId, Actor, PublicAccountEvidence, PublicTransaction, V03State, ValidatedStateDiff,
     error::{InvalidProgramBehaviorError, LeeError},
     public_transaction::{Message, WitnessSet},
+    test_utils::{TestSigner, witness_for},
 };
-use lee_core::{account::Account, native_token::TransferError, program::SyncMessage};
+use lee_core::{
+    account::Account, native_token::TransferError, program::SyncMessage,
+    signing_key::SIGNATURE_PROGRAM_ID,
+};
 use ping_core::{
     CrossZoneEmission, ReceiverMessage, outbox_bytes, ping_record_pda, ping_record_seed,
     read_outbox, receiver_config_account_id, receiver_config_seed, sender_config_account_id,
@@ -315,27 +318,24 @@ fn rejects_at(state: &V03State, tx: &PublicTransaction, block: u64, expected: &s
 }
 
 /// A top-level authority transaction: the message bytes delivered to `account`'s own actor under
-/// `target`, which forwards them to the target's config, signed by `key` at `nonce`.
+/// `target`, which forwards them to the target's config, signed by `signer` at `nonce`.
 fn signed_tx(
     target: AccountId,
     account: AccountId,
     config_id: AccountId,
     nonce: u128,
     message: Vec<u8>,
-    key: &PrivateKey,
+    signer: &TestSigner,
 ) -> PublicTransaction {
     let root = Actor::new(account, target);
     let message = Message::new_preserialized(
         root,
         message,
         vec![root, Actor::new(config_id, target)],
-        BTreeMap::from([(
-            AccountId::from(&PublicKey::new_from_private_key(key)),
-            nonce.into(),
-        )]),
+        BTreeMap::from([(signer.account_id(), nonce.into())]),
         None,
     );
-    let witness = WitnessSet::for_message(&message, &[key]);
+    let witness = witness_for(&message, &[signer]);
     PublicTransaction::new(message, witness)
 }
 
@@ -574,7 +574,7 @@ fn mint_src_policy(mint_cap: Option<u128>) -> wrapped_token_core::SourcePolicy {
 
 /// The signed `UpdateSources` the configured authority sends at `nonce`.
 fn update_sources_tx(
-    key: &PrivateKey,
+    signer: &TestSigner,
     authority: AccountId,
     nonce: u128,
     sources: Vec<wrapped_token_core::SourcePolicy>,
@@ -590,7 +590,7 @@ fn update_sources_tx(
             via: None,
             sources,
         }),
-        key,
+        signer,
     )
 }
 
@@ -671,15 +671,20 @@ fn an_uncapped_source_counts_but_never_refuses() {
 /// the old counter, so an update cannot re-arm a spent source.
 #[test]
 fn the_counter_survives_a_source_update() {
-    let key = PrivateKey::try_new([7; 32]).expect("valid key");
-    let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let authority_signer = TestSigner::new(7);
+    let authority = authority_signer.account_id();
     let mut state = capped_mint_state(Some(100), 0, Some(authority));
     let diff = dispatch_mint_on(&state, 60, 0, 1).expect("under the cap");
     state
         .apply_state_diff(diff)
         .expect("the validated diff applies");
 
-    let update = update_sources_tx(&key, authority, 0, vec![mint_src_policy(Some(70))]);
+    let update = update_sources_tx(
+        &authority_signer,
+        authority,
+        0,
+        vec![mint_src_policy(Some(70))],
+    );
     let applied = ValidatedStateDiff::from_public_transaction(&update, &state, 2, 0)
         .expect("the authority updates the cap");
     state
@@ -703,22 +708,27 @@ fn the_counter_survives_a_source_update() {
 /// allowance, which is the authority's call to make.
 #[test]
 fn a_source_removed_and_re_added_restarts_its_counter() {
-    let key = PrivateKey::try_new([7; 32]).expect("valid key");
-    let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let authority_signer = TestSigner::new(7);
+    let authority = authority_signer.account_id();
     let mut state = capped_mint_state(Some(100), 0, Some(authority));
     let diff = dispatch_mint_on(&state, 60, 0, 1).expect("under the cap");
     state
         .apply_state_diff(diff)
         .expect("the validated diff applies");
 
-    let removed = update_sources_tx(&key, authority, 0, vec![]);
+    let removed = update_sources_tx(&authority_signer, authority, 0, vec![]);
     let applied = ValidatedStateDiff::from_public_transaction(&removed, &state, 2, 0)
         .expect("the authority removes the source");
     state
         .apply_state_diff(applied)
         .expect("the validated diff applies");
 
-    let re_added = update_sources_tx(&key, authority, 1, vec![mint_src_policy(Some(100))]);
+    let re_added = update_sources_tx(
+        &authority_signer,
+        authority,
+        1,
+        vec![mint_src_policy(Some(100))],
+    );
     let restored = ValidatedStateDiff::from_public_transaction(&re_added, &state, 3, 0)
         .expect("the authority re-adds the source");
     state
@@ -738,12 +748,12 @@ fn a_source_removed_and_re_added_restarts_its_counter() {
 /// the update outright.
 #[test]
 fn an_update_listing_a_source_twice_is_refused() {
-    let key = PrivateKey::try_new([7; 32]).expect("valid key");
-    let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let authority_signer = TestSigner::new(7);
+    let authority = authority_signer.account_id();
     let state = capped_mint_state(Some(100), 0, Some(authority));
 
     let duplicated = update_sources_tx(
-        &key,
+        &authority_signer,
         authority,
         0,
         vec![mint_src_policy(Some(100)), mint_src_policy(Some(1_000))],
@@ -755,12 +765,17 @@ fn an_update_listing_a_source_twice_is_refused() {
 /// after the authority raises the cap, the very same message delivers.
 #[test]
 fn a_refused_mint_leaves_the_message_deliverable() {
-    let key = PrivateKey::try_new([7; 32]).expect("valid key");
-    let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let authority_signer = TestSigner::new(7);
+    let authority = authority_signer.account_id();
     let mut state = capped_mint_state(Some(50), 0, Some(authority));
     rejects_on_cap(&state, 60, 0, 1);
 
-    let raised = update_sources_tx(&key, authority, 0, vec![mint_src_policy(Some(60))]);
+    let raised = update_sources_tx(
+        &authority_signer,
+        authority,
+        0,
+        vec![mint_src_policy(Some(60))],
+    );
     let applied = ValidatedStateDiff::from_public_transaction(&raised, &state, 2, 0)
         .expect("the authority raises the cap");
     state
@@ -906,15 +921,15 @@ fn lock_escrows_balance_and_emits_to_outbox() {
 
     let mut state = base_state();
 
-    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
-    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let holder_signer = TestSigner::new(7);
+    let holder_id = holder_signer.account_id();
     seed_holding(&mut state, holder_id, INITIAL_BALANCE);
     seed_bridge_lock_config(&mut state);
 
     let payload = mint_payload();
     let escrow_id = bridge_lock_core::escrow_account_id(bridge_lock_id);
     let outbox_record_id = outbox_pda(outbox_id, bridge_lock_id, &zone_b, ordinal);
-    let tx = lock_tx(&holder_key, holder_id, zone_b, ordinal, 0);
+    let tx = lock_tx(&holder_signer, holder_id, zone_b, ordinal, 0);
 
     let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
         .expect("lock must validate and execute");
@@ -955,7 +970,7 @@ fn lock_escrows_balance_and_emits_to_outbox() {
 
 /// A `bridge_lock::Lock` emitting to `(zone_b, ordinal)`, ready to run twice.
 fn lock_tx(
-    holder_key: &PrivateKey,
+    holder_signer: &TestSigner,
     holder_id: AccountId,
     zone_b: [u8; 32],
     ordinal: u32,
@@ -963,7 +978,7 @@ fn lock_tx(
 ) -> PublicTransaction {
     let wrapped_token_id = programs::wrapped_token_account_id();
     lock_tx_to(
-        holder_key,
+        holder_signer,
         holder_id,
         zone_b,
         ordinal,
@@ -991,7 +1006,7 @@ fn mint_target_accounts(wrapped_token_id: AccountId) -> Vec<Actor> {
 /// The same lock aimed at `target_program_id` over `target_accounts`, so a test
 /// can vary what the destination would be asked to do.
 fn lock_tx_to(
-    holder_key: &PrivateKey,
+    holder_signer: &TestSigner,
     holder_id: AccountId,
     zone_b: [u8; 32],
     ordinal: u32,
@@ -1000,7 +1015,7 @@ fn lock_tx_to(
     target_accounts: Vec<Actor>,
 ) -> PublicTransaction {
     signed_lock(
-        holder_key,
+        holder_signer,
         holder_id,
         nonce,
         bridge_lock_core::Message::Lock {
@@ -1031,11 +1046,11 @@ fn lock_slot(zone_b: [u8; 32], ordinal: u32) -> Actor {
     )
 }
 
-/// `lock` received at `holder_id`'s own bridge-lock actor, signed by `key` at `nonce`. It declares
-/// what a lock reaches: the config it checks its route at, the holding it moves into the escrow,
-/// and the outbox slot it emits into.
+/// `lock` received at `holder_id`'s own bridge-lock actor, signed by `signer` at `nonce`. It
+/// declares what a lock reaches: the config it checks its route at, the holding it moves into the
+/// escrow, and the outbox slot it emits into.
 fn signed_lock(
-    key: &PrivateKey,
+    signer: &TestSigner,
     holder_id: AccountId,
     nonce: u128,
     lock: bridge_lock_core::Message,
@@ -1075,15 +1090,12 @@ fn signed_lock(
                 Actor::native_balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
                 *outbox,
             ],
-            BTreeMap::from([(
-                AccountId::from(&PublicKey::new_from_private_key(key)),
-                nonce.into(),
-            )]),
+            BTreeMap::from([(signer.account_id(), nonce.into())]),
             lock,
         )
         .expect("build lock message")
     };
-    let witness = WitnessSet::for_message(&message, &[key]);
+    let witness = witness_for(&message, &[signer]);
     PublicTransaction::new(message, witness)
 }
 
@@ -1096,13 +1108,13 @@ fn a_second_emit_at_the_same_slot_is_rejected() {
     let zone_b = [2_u8; 32];
     let ordinal = 0;
 
-    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
-    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let holder_signer = TestSigner::new(7);
+    let holder_id = holder_signer.account_id();
     let mut state = base_state();
     seed_holding(&mut state, holder_id, INITIAL_BALANCE);
     seed_bridge_lock_config(&mut state);
 
-    let first = lock_tx(&holder_key, holder_id, zone_b, ordinal, 0);
+    let first = lock_tx(&holder_signer, holder_id, zone_b, ordinal, 0);
     let diff = ValidatedStateDiff::from_public_transaction(&first, &state, 1, 0)
         .expect("the first lock executes");
     state
@@ -1113,7 +1125,7 @@ fn a_second_emit_at_the_same_slot_is_rejected() {
     // already holding a record. Matched on the guest's own message rather than
     // any error, or a future change that rejected it earlier for an unrelated
     // reason would keep this passing.
-    let second = lock_tx(&holder_key, holder_id, zone_b, ordinal, 1);
+    let second = lock_tx(&holder_signer, holder_id, zone_b, ordinal, 1);
     let Err(err) = ValidatedStateDiff::from_public_transaction(&second, &state, 2, 0) else {
         panic!("a second emission into a written slot must not execute");
     };
@@ -1124,7 +1136,7 @@ fn a_second_emit_at_the_same_slot_is_rejected() {
 
     // Control: the same second lock into a fresh ordinal executes, so the
     // refusal above is the slot and not the transaction's shape.
-    let elsewhere = lock_tx(&holder_key, holder_id, zone_b, ordinal + 1, 1);
+    let elsewhere = lock_tx(&holder_signer, holder_id, zone_b, ordinal + 1, 1);
     ValidatedStateDiff::from_public_transaction(&elsewhere, &state, 2, 0)
         .expect("a lock into an unwritten slot executes");
 }
@@ -1140,8 +1152,8 @@ fn two_emitters_share_an_ordinal_without_colliding() {
     let zone_b = [2_u8; 32];
     let ordinal = 0;
 
-    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
-    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let holder_signer = TestSigner::new(7);
+    let holder_id = holder_signer.account_id();
     let mut state = base_state();
     seed_holding(&mut state, holder_id, INITIAL_BALANCE);
     seed_ping_sender_config(&mut state);
@@ -1154,7 +1166,7 @@ fn two_emitters_share_an_ordinal_without_colliding() {
         "the same zone and ordinal under two emitters are two slots"
     );
 
-    let lock = lock_tx(&holder_key, holder_id, zone_b, ordinal, 0);
+    let lock = lock_tx(&holder_signer, holder_id, zone_b, ordinal, 0);
     let diff = ValidatedStateDiff::from_public_transaction(&lock, &state, 1, 0)
         .expect("the lock executes");
     state
@@ -1241,15 +1253,15 @@ fn a_send_into_a_foreign_outbox_slot_is_rejected() {
 fn a_lock_naming_another_target_program_is_rejected() {
     let zone_b = [2_u8; 32];
 
-    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
-    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let holder_signer = TestSigner::new(7);
+    let holder_id = holder_signer.account_id();
     let mut state = base_state();
     seed_holding(&mut state, holder_id, INITIAL_BALANCE);
     seed_bridge_lock_config(&mut state);
 
     let elsewhere = programs::ping_receiver_account_id();
     let lock = lock_tx_to(
-        &holder_key,
+        &holder_signer,
         holder_id,
         zone_b,
         0,
@@ -1271,13 +1283,13 @@ fn a_lock_naming_another_target_program_is_rejected() {
 fn a_lock_to_an_unpinned_zone_is_rejected() {
     let unpinned = [0xAA_u8; 32];
 
-    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
-    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let holder_signer = TestSigner::new(7);
+    let holder_id = holder_signer.account_id();
     let mut state = base_state();
     seed_holding(&mut state, holder_id, INITIAL_BALANCE);
     seed_bridge_lock_config(&mut state);
 
-    let lock = lock_tx(&holder_key, holder_id, unpinned, 0, 0);
+    let lock = lock_tx(&holder_signer, holder_id, unpinned, 0, 0);
     rejects_at(
         &state,
         &lock,
@@ -1294,8 +1306,8 @@ fn a_lock_naming_other_mint_accounts_is_rejected() {
     let wrapped_token_id = programs::wrapped_token_account_id();
     let zone_b = [2_u8; 32];
 
-    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
-    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let holder_signer = TestSigner::new(7);
+    let holder_id = holder_signer.account_id();
     let mut state = base_state();
     seed_holding(&mut state, holder_id, INITIAL_BALANCE);
     seed_bridge_lock_config(&mut state);
@@ -1304,7 +1316,7 @@ fn a_lock_naming_other_mint_accounts_is_rejected() {
     // destination would credit to the wrong account if it credited it at all.
     let other_holding = wrapped_token_core::holding_account_id(wrapped_token_id, &[4; 32]);
     let lock = lock_tx_to(
-        &holder_key,
+        &holder_signer,
         holder_id,
         zone_b,
         0,
@@ -1340,8 +1352,7 @@ fn a_lock_naming_other_mint_accounts_is_rejected() {
 #[test]
 fn a_direct_transfer_from_the_holding_is_refused() {
     let bridge_lock_id = programs::bridge_lock_account_id();
-    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
-    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let holder_id = TestSigner::new(7).account_id();
     let mut state = base_state();
     seed_holding(&mut state, holder_id, INITIAL_BALANCE);
 
@@ -1385,13 +1396,13 @@ fn a_direct_transfer_from_the_holding_is_refused() {
 #[test]
 fn lock_debits_the_holding_not_the_holder() {
     let zone_b = [9_u8; 32];
-    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
-    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let holder_signer = TestSigner::new(7);
+    let holder_id = holder_signer.account_id();
     let mut state = base_state().with_public_accounts([(holder_id, Account::funded(55))]);
     seed_holding(&mut state, holder_id, INITIAL_BALANCE);
     seed_bridge_lock_config(&mut state);
 
-    let tx = lock_tx(&holder_key, holder_id, zone_b, 0, 0);
+    let tx = lock_tx(&holder_signer, holder_id, zone_b, 0, 0);
     let diff =
         ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0).expect("the lock executes");
     state
@@ -1421,8 +1432,8 @@ fn lock_debits_the_holding_not_the_holder() {
 /// A zero lock costs nothing yet would emit a real dispatch.
 #[test]
 fn a_zero_amount_lock_is_refused() {
-    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
-    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let holder_signer = TestSigner::new(7);
+    let holder_id = holder_signer.account_id();
     let mut state = base_state();
     seed_holding(&mut state, holder_id, INITIAL_BALANCE);
     seed_bridge_lock_config(&mut state);
@@ -1430,7 +1441,7 @@ fn a_zero_amount_lock_is_refused() {
     let wrapped_token_id = programs::wrapped_token_account_id();
     let zone_b = [9_u8; 32];
     let tx = signed_lock(
-        &holder_key,
+        &holder_signer,
         holder_id,
         0,
         bridge_lock_core::Message::Lock {
@@ -1454,9 +1465,8 @@ fn a_zero_amount_lock_is_refused() {
 /// signature does not authorize.
 #[test]
 fn a_lock_naming_someone_elses_holding_is_refused() {
-    let attacker_key = PrivateKey::try_new([7; 32]).expect("valid key");
-    let victim_key = PrivateKey::try_new([8; 32]).expect("valid key");
-    let victim_id = AccountId::from(&PublicKey::new_from_private_key(&victim_key));
+    let attacker_signer = TestSigner::new(7);
+    let victim_id = TestSigner::new(8).account_id();
     let mut state = base_state().with_public_accounts([(victim_id, Account::default())]);
     seed_holding(&mut state, victim_id, INITIAL_BALANCE);
     seed_bridge_lock_config(&mut state);
@@ -1464,7 +1474,7 @@ fn a_lock_naming_someone_elses_holding_is_refused() {
     let wrapped_token_id = programs::wrapped_token_account_id();
     let zone_b = [9_u8; 32];
     let tx = signed_lock(
-        &attacker_key,
+        &attacker_signer,
         victim_id,
         0,
         bridge_lock_core::Message::Lock {
@@ -1496,12 +1506,12 @@ fn a_lock_naming_someone_elses_holding_is_refused() {
 fn a_lock_before_the_pins_are_set_is_rejected() {
     let zone_b = [2_u8; 32];
 
-    let holder_key = PrivateKey::try_new([7; 32]).expect("valid key");
-    let holder_id = AccountId::from(&PublicKey::new_from_private_key(&holder_key));
+    let holder_signer = TestSigner::new(7);
+    let holder_id = holder_signer.account_id();
     let mut state = base_state();
     seed_holding(&mut state, holder_id, INITIAL_BALANCE);
 
-    let lock = lock_tx(&holder_key, holder_id, zone_b, 0, 0);
+    let lock = lock_tx(&holder_signer, holder_id, zone_b, 0, 0);
     let Err(err) = ValidatedStateDiff::from_public_transaction(&lock, &state, 1, 0) else {
         panic!("a lock with nothing pinned must not execute");
     };
@@ -1750,13 +1760,13 @@ fn the_token_authority_path_holds() {
     let config_id = wrapped_token_core::config_account_id(wrapped_token_id);
     let src_zone = [2_u8; 32];
 
-    let key = PrivateKey::try_new([7; 32]).expect("valid key");
-    let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
-    let other_key = PrivateKey::try_new([8; 32]).expect("valid key");
-    let other = AccountId::from(&PublicKey::new_from_private_key(&other_key));
+    let authority_signer = TestSigner::new(7);
+    let authority = authority_signer.account_id();
+    let other_signer = TestSigner::new(8);
+    let other = other_signer.account_id();
 
     let update = |account: AccountId,
-                  signer: &PrivateKey,
+                  signer: &TestSigner,
                   nonce: u128,
                   sources: Vec<([u8; 32], AccountId)>| {
         signed_tx(
@@ -1772,7 +1782,7 @@ fn the_token_authority_path_holds() {
             signer,
         )
     };
-    let renounce = |account: AccountId, signer: &PrivateKey, nonce: u128| {
+    let renounce = |account: AccountId, signer: &TestSigner, nonce: u128| {
         signed_tx(
             wrapped_token_id,
             account,
@@ -1792,13 +1802,13 @@ fn the_token_authority_path_holds() {
     seed_wrapped_config(&mut unset, None, &[]);
     rejects_at(
         &unset,
-        &update(authority, &key, 0, bridge_source.clone()),
+        &update(authority, &authority_signer, 0, bridge_source.clone()),
         1,
         "fixed at genesis",
     );
     rejects_at(
         &unset,
-        &renounce(authority, &key, 0),
+        &renounce(authority, &authority_signer, 0),
         1,
         "already renounced",
     );
@@ -1809,31 +1819,31 @@ fn the_token_authority_path_holds() {
     seed_wrapped_config(&mut state, Some(authority), &[]);
     rejects_at(
         &state,
-        &update(other, &other_key, 0, bridge_source.clone()),
+        &update(other, &other_signer, 0, bridge_source.clone()),
         1,
         "the signing account must be the configured authority",
     );
     rejects_at(
         &state,
-        &renounce(other, &other_key, 0),
+        &renounce(other, &other_signer, 0),
         1,
         "the signing account must be the configured authority",
     );
     rejects_at(
         &state,
-        &update(authority, &other_key, 0, bridge_source.clone()),
+        &update(authority, &other_signer, 0, bridge_source.clone()),
         1,
         "must authorize a source change",
     );
     rejects_at(
         &state,
-        &renounce(authority, &other_key, 0),
+        &renounce(authority, &other_signer, 0),
         1,
         "must authorize renouncing it",
     );
 
     let diff = ValidatedStateDiff::from_public_transaction(
-        &update(authority, &key, 0, bridge_source.clone()),
+        &update(authority, &authority_signer, 0, bridge_source.clone()),
         &state,
         1,
         0,
@@ -1849,18 +1859,14 @@ fn the_token_authority_path_holds() {
         "the new source is authorized"
     );
     assert!(
-        state
-            .get_account_by_id(authority)
-            .data
-            .actor_states
-            .is_empty(),
+        holds_only_its_key(&state, authority),
         "acting as the authority must not hand the account to wrapped_token"
     );
 
     // Acting again with a different list must replace it, not accumulate.
     let sender_source = vec![(src_zone, programs::ping_sender_account_id())];
     let second = ValidatedStateDiff::from_public_transaction(
-        &update(authority, &key, 1, sender_source.clone()),
+        &update(authority, &authority_signer, 1, sender_source.clone()),
         &state,
         2,
         0,
@@ -1883,9 +1889,13 @@ fn the_token_authority_path_holds() {
 
     // Renouncing is one-way: the sources freeze at their last value and nothing
     // moves afterwards, in either direction.
-    let renounced =
-        ValidatedStateDiff::from_public_transaction(&renounce(authority, &key, 2), &state, 3, 0)
-            .expect("the authority renounces itself");
+    let renounced = ValidatedStateDiff::from_public_transaction(
+        &renounce(authority, &authority_signer, 2),
+        &state,
+        3,
+        0,
+    )
+    .expect("the authority renounces itself");
     state
         .apply_state_diff(renounced)
         .expect("the validated diff applies");
@@ -1903,13 +1913,13 @@ fn the_token_authority_path_holds() {
     );
     rejects_at(
         &state,
-        &update(authority, &key, 3, bridge_source),
+        &update(authority, &authority_signer, 3, bridge_source),
         4,
         "fixed at genesis",
     );
     rejects_at(
         &state,
-        &renounce(authority, &key, 3),
+        &renounce(authority, &authority_signer, 3),
         4,
         "already renounced",
     );
@@ -1975,12 +1985,12 @@ fn the_receiver_authority_path_holds() {
     let src_zone = [2_u8; 32];
     let sender_id = programs::ping_sender_account_id();
 
-    let key = PrivateKey::try_new([7; 32]).expect("valid key");
-    let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
-    let other_key = PrivateKey::try_new([8; 32]).expect("valid key");
-    let other = AccountId::from(&PublicKey::new_from_private_key(&other_key));
+    let authority_signer = TestSigner::new(7);
+    let authority = authority_signer.account_id();
+    let other_signer = TestSigner::new(8);
+    let other = other_signer.account_id();
 
-    let update = |account: AccountId, signer: &PrivateKey, nonce: u128| {
+    let update = |account: AccountId, signer: &TestSigner, nonce: u128| {
         signed_tx(
             receiver_id,
             account,
@@ -1994,7 +2004,7 @@ fn the_receiver_authority_path_holds() {
             signer,
         )
     };
-    let renounce = |account: AccountId, signer: &PrivateKey, nonce: u128| {
+    let renounce = |account: AccountId, signer: &TestSigner, nonce: u128| {
         signed_tx(
             receiver_id,
             account,
@@ -2014,33 +2024,37 @@ fn the_receiver_authority_path_holds() {
     seed_receiver_config(&mut state, Some(authority), vec![]);
     rejects_at(
         &state,
-        &update(other, &other_key, 0),
+        &update(other, &other_signer, 0),
         1,
         "must be the configured authority",
     );
     rejects_at(
         &state,
-        &renounce(other, &other_key, 0),
+        &renounce(other, &other_signer, 0),
         1,
         "must be the configured authority",
     );
     rejects_at(
         &state,
-        &update(authority, &other_key, 0),
+        &update(authority, &other_signer, 0),
         1,
         "must authorize a change",
     );
     rejects_at(
         &state,
-        &renounce(authority, &other_key, 0),
+        &renounce(authority, &other_signer, 0),
         1,
         "must authorize a change",
     );
 
     // The authority itself works, and renouncing is one-way.
-    let diff =
-        ValidatedStateDiff::from_public_transaction(&update(authority, &key, 0), &state, 1, 0)
-            .expect("the configured authority changes sources");
+    let diff = ValidatedStateDiff::from_public_transaction(
+        &update(authority, &authority_signer, 0),
+        &state,
+        1,
+        0,
+    )
+    .expect("the configured authority changes sources");
     state
         .apply_state_diff(diff)
         .expect("the validated diff applies");
@@ -2048,9 +2062,13 @@ fn the_receiver_authority_path_holds() {
     assert_eq!(cfg.sources, vec![(src_zone, sender_id)]);
     assert_eq!(cfg.deliverer, programs::cross_zone_inbox_account_id());
 
-    let renounce_diff =
-        ValidatedStateDiff::from_public_transaction(&renounce(authority, &key, 1), &state, 2, 0)
-            .expect("the authority renounces itself");
+    let renounce_diff = ValidatedStateDiff::from_public_transaction(
+        &renounce(authority, &authority_signer, 1),
+        &state,
+        2,
+        0,
+    )
+    .expect("the authority renounces itself");
     state
         .apply_state_diff(renounce_diff)
         .expect("the validated diff applies");
@@ -2061,10 +2079,15 @@ fn the_receiver_authority_path_holds() {
         vec![(src_zone, sender_id)],
         "renouncing freezes the list it had"
     );
-    rejects_at(&state, &update(authority, &key, 2), 3, "fixed at genesis");
     rejects_at(
         &state,
-        &renounce(authority, &key, 2),
+        &update(authority, &authority_signer, 2),
+        3,
+        "fixed at genesis",
+    );
+    rejects_at(
+        &state,
+        &renounce(authority, &authority_signer, 2),
         3,
         "already renounced",
     );
@@ -2084,8 +2107,7 @@ fn the_inbox_cannot_reach_the_authority_instructions() {
     let self_zone = [1_u8; 32];
     let src_zone = [2_u8; 32];
 
-    let key = PrivateKey::try_new([7; 32]).expect("valid key");
-    let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let authority = TestSigner::new(7).account_id();
 
     let update = || {
         chained_via_inbox(
@@ -2186,11 +2208,7 @@ fn the_governance_path_holds() {
         uncapped_entries(&[(src_zone, programs::bridge_lock_account_id())])
     );
     assert!(
-        state
-            .get_account_by_id(authority)
-            .data
-            .actor_states
-            .is_empty(),
+        holds_only_its_key(&state, authority),
         "acting as the authority must not hand the account to wrapped_token"
     );
 
@@ -2369,11 +2387,7 @@ fn the_receiver_governance_path_holds() {
         vec![(src_zone, programs::ping_sender_account_id())]
     );
     assert!(
-        state
-            .get_account_by_id(authority)
-            .data
-            .actor_states
-            .is_empty(),
+        holds_only_its_key(&state, authority),
         "acting as the authority must not hand the account to ping_receiver"
     );
 }
@@ -2415,11 +2429,7 @@ fn a_shared_authority_serves_both_targets() {
         .apply_state_diff(first)
         .expect("the validated diff applies");
     assert!(
-        state
-            .get_account_by_id(authority)
-            .data
-            .actor_states
-            .is_empty(),
+        holds_only_its_key(&state, authority),
         "a data-free authority is owned by nobody, whichever target uses it first"
     );
 
@@ -2446,11 +2456,7 @@ fn a_shared_authority_serves_both_targets() {
         vec![(src_zone, programs::ping_sender_account_id())]
     );
     assert!(
-        state
-            .get_account_by_id(authority)
-            .data
-            .actor_states
-            .is_empty(),
+        holds_only_its_key(&state, authority),
         "the authority holds no record from either target"
     );
 
@@ -2489,8 +2495,7 @@ fn the_remaining_authority_guards_hold() {
     let self_zone = [1_u8; 32];
     let src_zone = [2_u8; 32];
 
-    let key = PrivateKey::try_new([7; 32]).expect("valid key");
-    let authority = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let authority = TestSigner::new(7).account_id();
 
     let mut state = base_state();
     seed_inbox_config(&mut state, self_zone);
@@ -3084,8 +3089,8 @@ fn a_direct_write_to_the_chat_log_is_refused() {
 /// at the program account, forwarded from there to the config PDA.
 #[test]
 fn a_deployer_signed_claim_at_the_program_account_writes_the_config() {
-    let key = PrivateKey::try_new([77; 32]).expect("valid key");
-    let chat_id = AccountId::from(&PublicKey::new_from_private_key(&key));
+    let signer = TestSigner::new(77);
+    let chat_id = signer.account_id();
     let mut state = base_state().with_programs_at([(chat_id, test_programs::zone_chat(), true)]);
     seed_inbox_config(&mut state, [1_u8; 32]);
 
@@ -3113,7 +3118,7 @@ fn a_deployer_signed_claim_at_the_program_account_writes_the_config() {
         )
         .expect("build InitConfig message")
     };
-    let witness = WitnessSet::for_message(&message, &[&key]);
+    let witness = witness_for(&message, &[&signer]);
     let tx = PublicTransaction::new(message, witness);
 
     let diff = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0)
@@ -3202,4 +3207,14 @@ fn a_chained_post_is_refused_and_a_top_level_post_is_a_no_op() {
     let top_level = PublicTransaction::new(post, WitnessSet::from_raw_parts(vec![]));
     ValidatedStateDiff::from_public_transaction(&top_level, &state, 1, 0)
         .expect("a top-level Post declares the emission and writes nothing");
+}
+
+/// Whether the account holds no actor state but the key its signatures rotated to.
+fn holds_only_its_key(state: &V03State, account: AccountId) -> bool {
+    state
+        .get_account_by_id(account)
+        .data
+        .actor_states
+        .keys()
+        .all(|program| *program == SIGNATURE_PROGRAM_ID)
 }

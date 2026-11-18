@@ -1,5 +1,8 @@
-use lee::{AccountId, FeeDeclaration, PrivateKey, PublicAccountEvidence, PublicKey};
-use lee_core::account::Nonce;
+use lee::{
+    AccountId, FeeDeclaration, PublicAccountEvidence,
+    signature::{Signer, initial_key},
+};
+use lee_core::{account::Nonce, signing_key::KeyType};
 use program_loader_core::MAX_SEGMENT_DATA_LEN;
 use wallet::{
     WalletCore, WalletSequencerClient, max_fee_for, program_facades::program_loader::ProgramLoader,
@@ -61,33 +64,53 @@ pub async fn deploy_or_reuse<C: WalletSequencerClient>(
 
 /// Declares `payer` as the fee payer of a hand-built public transaction.
 ///
-/// Returns the fee declaration together with the payer's current nonce and signing key: the
-/// transaction must list that nonce and be signed with that key, or the sequencer rejects it with
-/// "Incorrect fee".
+/// Returns the fee declaration together with the payer's current nonce and its signer at that
+/// nonce: the transaction must list that nonce and be signed by that signer, or the sequencer
+/// rejects it with "Incorrect fee".
 pub async fn fee_paid_by<C: WalletSequencerClient>(
     wallet_core: &WalletCore<C>,
     payer: AccountId,
-) -> anyhow::Result<(FeeDeclaration, Nonce, PrivateKey)> {
-    let signing_key = wallet_core
-        .get_account_public_signing_key(payer)
-        .ok_or_else(|| anyhow::anyhow!("fee payer {payer} is not a self owned public account"))?
-        .clone();
+) -> anyhow::Result<(FeeDeclaration, Nonce, Signer)> {
     let nonce = wallet_core.get_accounts_nonces(&[payer]).await?[0];
+    let signer = signer_at(wallet_core, payer, nonce)
+        .ok_or_else(|| anyhow::anyhow!("fee payer {payer} is not a self owned public account"))?;
     let gas_limit = wallet_core.config().gas_limit;
     let fee = FeeDeclaration::new(payer, gas_limit, 0, max_fee_for(gas_limit));
-    Ok((fee, nonce, signing_key))
+    Ok((fee, nonce, signer))
+}
+
+/// `account_id`'s signer at `nonce`: its Schnorr key at that nonce, committing to its Schnorr key
+/// at the next nonce, which the account rotates to. `None` if this wallet does not hold the
+/// account's secret.
+pub fn signer_at<C: WalletSequencerClient>(
+    wallet_core: &WalletCore<C>,
+    account_id: AccountId,
+    nonce: Nonce,
+) -> Option<Signer> {
+    let secret = wallet_core
+        .storage()
+        .key_chain()
+        .pub_account_secret(account_id)?;
+    Some(Signer::new(
+        secret,
+        nonce,
+        KeyType::Schnorr,
+        KeyType::Schnorr,
+    ))
 }
 
 /// Admits `account_id` as a public actor of a hand-built transaction if this wallet holds its key.
 ///
 /// An actor that doesn't sign and may not exist on chain yet is only admitted with evidence;
 /// without it the call reverts with `UnadmittedPublicActor`, but is still included and charged.
-/// The evidence is the account's public key, which hashes to its id.
+/// The evidence is the account's initial key, which gives its id.
 pub fn admission_evidence<C: WalletSequencerClient>(
     wallet_core: &WalletCore<C>,
     account_id: AccountId,
 ) -> Option<PublicAccountEvidence> {
     wallet_core
-        .get_account_public_signing_key(account_id)
-        .map(|key| PublicAccountEvidence::Key(PublicKey::new_from_private_key(key)))
+        .storage()
+        .key_chain()
+        .pub_account_secret(account_id)
+        .map(|secret| PublicAccountEvidence::Key(initial_key(secret)))
 }

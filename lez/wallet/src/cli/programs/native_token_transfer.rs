@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Subcommand;
-use lee::PublicKey;
+use lee_core::signing_key::SigningKeyState;
 
 use crate::{
     AccountIdentity, WalletCore, WalletSequencerClient,
@@ -35,9 +35,10 @@ pub enum AuthTransferSubcommand {
         /// and vpk on separate lines. Replaces `--to-npk` and `--to-vpk`.
         #[arg(long, conflicts_with_all = ["to_npk", "to_vpk"])]
         to_keys: Option<String>,
-        /// Recipient's public key, for a public account that has not been used yet.
+        /// Recipient's initial key (hex, as `wallet account show` prints it), for a public
+        /// account that has not been used yet.
         #[arg(long, conflicts_with_all = ["to", "to_npk", "to_vpk", "to_keys"])]
-        to_pk: Option<PublicKey>,
+        to_initial_key: Option<SigningKeyState>,
         /// amount - amount of balance to move.
         #[arg(long)]
         amount: u128,
@@ -56,13 +57,13 @@ impl WalletSubcommand for AuthTransferSubcommand {
                 to_npk,
                 to_vpk,
                 to_keys,
-                to_pk,
+                to_initial_key,
                 amount,
             } => {
                 let storage = wallet_core.storage();
                 let named = to.is_some();
                 let sender = from.signer(storage)?;
-                let recipient = destination(storage, to, to_npk, to_vpk, to_keys, to_pk)?;
+                let recipient = destination(storage, to, to_npk, to_vpk, to_keys, to_initial_key)?;
                 let privacy_id = |identity: &AccountIdentity| {
                     if identity.is_private() {
                         AccountIdWithPrivacy::Private(identity.account_id())

@@ -42,19 +42,15 @@ impl PrivacyPreservingTransaction {
 
     pub fn check_stateless(&self) -> Result<Vec<AccountId>, InvalidTransaction> {
         let signers = self.signer_account_ids();
-        self.message.check_signers(&signers)?;
-        if !self.witness_set.signatures_are_valid_for(&self.message) {
-            return Err(InvalidTransaction::Signature);
+        if self.witness_set.entries().len() != signers.len() {
+            return Err(InvalidTransaction::Nonces);
         }
+        self.message.check_signers()?;
         Ok(signers)
     }
 
     pub(crate) fn signer_account_ids(&self) -> Vec<AccountId> {
-        self.witness_set
-            .signatures_and_public_keys()
-            .iter()
-            .map(|(_, public_key)| AccountId::from(public_key))
-            .collect()
+        self.message.nonces.keys().copied().collect()
     }
 
     #[must_use]
@@ -71,31 +67,28 @@ impl PrivacyPreservingTransaction {
 
 #[cfg(test)]
 mod tests {
+    use lee_core::account::Nonce;
+
     use crate::{
-        AccountId, PrivacyPreservingTransaction, PrivateKey, PublicKey,
+        PrivacyPreservingTransaction,
         privacy_preserving_transaction::{
             circuit::Proof, message::tests::message_for_tests, witness_set::WitnessSet,
         },
+        test_utils::TestSigner,
     };
-
-    fn keys_for_tests() -> (PrivateKey, PrivateKey, AccountId, AccountId) {
-        let key1 = PrivateKey::try_new([1; 32]).unwrap();
-        let key2 = PrivateKey::try_new([2; 32]).unwrap();
-        let addr1 = AccountId::from(&PublicKey::new_from_private_key(&key1));
-        let addr2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
-        (key1, key2, addr1, addr2)
-    }
 
     fn proof_for_tests() -> Proof {
         Proof(vec![1, 2, 3, 4, 5])
     }
 
     fn transaction_for_tests() -> PrivacyPreservingTransaction {
-        let (key1, key2, _, _) = keys_for_tests();
-
         let message = message_for_tests();
 
-        let witness_set = WitnessSet::for_message(&message, proof_for_tests(), &[&key1, &key2]);
+        let entries = [TestSigner::new(1), TestSigner::new(2)]
+            .iter()
+            .map(|signer| signer.entry(Nonce(0), &message.hash()))
+            .collect();
+        let witness_set = WitnessSet::from_raw_parts(entries, proof_for_tests());
         PrivacyPreservingTransaction::new(message, witness_set)
     }
 

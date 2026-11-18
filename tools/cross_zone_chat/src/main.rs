@@ -60,8 +60,9 @@ use cross_zone_outbox_core::{outbox_pda, outbox_pda_seed};
 use lee::{
     AccountId, Actor, PublicAccountEvidence, PublicTransaction,
     public_transaction::{Message, WitnessSet},
+    signature::Signer,
 };
-use lee_core::account::Nonce;
+use lee_core::{account::Nonce, signing_key::KeyType};
 use ping_core::{
     CrossZoneEmission, ReceiverMessage, SenderMessage, ping_record_pda, receiver_config_account_id,
     sender_config_account_id,
@@ -626,7 +627,10 @@ fn build_send_tx(
         program: outbox_id,
         seed: outbox_pda_seed(sender_id, &other_zone, ordinal),
     };
-    let outbox = Actor::new(slot.account_id(), outbox_id);
+    let outbox = Actor::new(
+        slot.account_id().expect("PDA evidence names its account"),
+        outbox_id,
+    );
     let send = SenderMessage::Send {
         outbox,
         emission: CrossZoneEmission {
@@ -653,7 +657,16 @@ fn build_send_tx(
         .expect("build ping_sender message")
     };
 
-    let witness_set = WitnessSet::for_message(&message, &[&payer.pub_sign_key]);
+    // The payer only ever signs with Schnorr keys and rotates to Schnorr keys.
+    let witness_set = WitnessSet::sign(
+        &message,
+        &[Signer::new(
+            &payer.secret,
+            payer_nonce,
+            KeyType::Schnorr,
+            KeyType::Schnorr,
+        )],
+    );
     LeeTransaction::Public(PublicTransaction::new(message, witness_set))
 }
 

@@ -93,6 +93,20 @@ pub enum Error {
     #[error("Incorrect fee")]
     IncorrectFee(#[source] anyhow::Error),
 
+    /// The transaction can never be valid: a signer fails authentication at its account's nonce,
+    /// or its nonce is below its account's.
+    #[error("Invalid transaction")]
+    InvalidTransaction(#[source] lee::error::LeeError),
+
+    /// A signer ahead of its account's nonce fails against the key a pending transaction in
+    /// this node's mempool commits it to.
+    #[error("Fails authentication against a pending transaction")]
+    PendingAuthentication(#[source] lee::error::LeeError),
+
+    /// A slot the transaction claims is already pending, or a signer's account is at its limit.
+    #[error("Refused by the mempool")]
+    PendingSlot(#[source] sequencer_core::pending::PendingRefusal),
+
     /// A privacy-preserving transaction's reserve the head fee outgrew: priced again off a fresh
     /// quote, it may pass.
     #[error(
@@ -111,6 +125,13 @@ pub enum BedrockRequestError {
 impl Error {
     pub fn from_infallible_bedrock_error<M>(err: SendError<M, Infallible>) -> Self {
         Self::BedrockRequestFailed(BedrockRequestError::Infallible(err.erase_message()))
+    }
+
+    /// Whether the transaction can never be valid, whatever the node's head: fee and mempool
+    /// refusals depend on the head, and may pass elsewhere or later.
+    #[must_use]
+    pub const fn is_definitive(&self) -> bool {
+        matches!(self, Self::InvalidTransaction(_))
     }
 }
 

@@ -380,6 +380,35 @@ fn a_header_cannot_be_created_at_the_loader_address() {
 }
 
 #[test]
+#[should_panic(expected = "the signature program has no deployable bytecode")]
+fn a_header_may_not_be_created_for_the_signature_program() {
+    let segment_id = AccountId::new([2; 32]);
+    let message = Message::CreateHeader {
+        first_segment: segment_id,
+        immutable: false,
+    };
+
+    let _transition = handle_message(
+        &input(SIGNATURE_PROGRAM_ID, true, ActorState::empty(), &message),
+        ActorStates::default().read(),
+    );
+}
+
+#[test]
+#[should_panic(expected = "the signature program has no deployable bytecode")]
+fn a_segment_cannot_be_written_at_the_signature_program_address() {
+    let message = Message::WriteSegment {
+        bytecode: vec![0_u8; 32],
+        next_segment: None,
+    };
+
+    let _transition = handle_message(
+        &input(SIGNATURE_PROGRAM_ID, true, ActorState::empty(), &message),
+        ActorStates::default().read(),
+    );
+}
+
+#[test]
 fn build_segments_links_each_chunk_to_the_next_id() {
     let user_elf: Vec<u8> = (0..=u8::MAX)
         .cycle()

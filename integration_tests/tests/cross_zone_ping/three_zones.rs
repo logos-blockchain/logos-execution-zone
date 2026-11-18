@@ -130,8 +130,10 @@ fn build_ping_tx(
         )
         .expect("build ping message")
     };
-    let witness_set =
-        lee::public_transaction::WitnessSet::for_message(&message, &[&payer.pub_sign_key]);
+    let witness_set = lee::test_utils::witness_for(
+        &message,
+        &[&lee::test_utils::TestSigner::from(&payer.secret)],
+    );
     LeeTransaction::Public(PublicTransaction::new(message, witness_set))
 }
 
