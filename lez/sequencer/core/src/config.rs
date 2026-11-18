@@ -185,13 +185,9 @@ impl SequencerConfig {
             let secret =
                 crate::load_or_create_stake_secret(&self.home.join("sequencer_stake_signing_key"))
                     .context("Failed to load or create the stake secret")?;
-            let (ownership_key, _) = lee::signature::signing_key::<lee::signature::Schnorr>(
-                &secret,
-                lee_core::account::Nonce(0),
-            );
             spec.actions.push(sequencer_genesis::self_stake(
                 sequencer_key,
-                &ownership_key,
+                &secret,
                 genesis.channel_params.minimum_sequencer_stake,
             ));
         }

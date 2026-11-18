@@ -76,9 +76,9 @@ async fn main() {
     let caller = Actor::new(pda, caller_account_id);
     let public_actors = vec![caller, Actor::new(pda, callee_account_id)];
     // The fee is charged to `payer`, so the payer's nonce is listed and its key signs the message.
-    let (fee, payer_nonce, payer_key) = fee_paid_by(&wallet_core, payer).await.unwrap();
+    let (fee, payer_nonce, payer_signer) = fee_paid_by(&wallet_core, payer).await.unwrap();
     let nonces = BTreeMap::from([(payer, payer_nonce)]);
-    let signing_keys = [&payer_key];
+    let signing_keys = [payer_signer];
     let message = Message {
         admission_evidence: vec![PublicAccountEvidence::Pda {
             program: caller_account_id,
@@ -86,7 +86,7 @@ async fn main() {
         }],
         ..Message::try_new_with_fees(caller, public_actors, nonces, callee_account_id, fee).unwrap()
     };
-    let witness_set = WitnessSet::for_message(&message, &signing_keys);
+    let witness_set = WitnessSet::sign(&message, &signing_keys);
     let tx = PublicTransaction::new(message, witness_set);
 
     // Submit the transaction

@@ -56,22 +56,12 @@ impl LeeTransaction {
         })
     }
 
-    /// Whether a declared fee is signed by its payer; a transaction declaring none always is.
+    /// Whether a declared fee's payer is a signer; a transaction declaring none always is.
     #[must_use]
     pub fn is_fee_authorized(&self) -> bool {
         match self {
-            Self::Public(tx) => lee::is_fee_authorized(
-                tx.message().fee,
-                &tx.message().nonces,
-                &tx.message().hash(),
-                tx.witness_set().signatures_and_public_keys(),
-            ),
-            Self::PrivacyPreserving(tx) => lee::is_fee_authorized(
-                tx.message().fee,
-                &tx.message().nonces,
-                &tx.message().hash(),
-                tx.witness_set().signatures_and_public_keys(),
-            ),
+            Self::Public(tx) => lee::is_fee_authorized(tx.message()),
+            Self::PrivacyPreserving(tx) => lee::is_fee_authorized(tx.message()),
         }
     }
 
@@ -297,11 +287,7 @@ pub fn is_system_injection(tx: &LeeTransaction) -> bool {
     let LeeTransaction::Public(public_tx) = tx else {
         return false;
     };
-    if !public_tx
-        .witness_set()
-        .signatures_and_public_keys()
-        .is_empty()
-    {
+    if !public_tx.witness_set().entries().is_empty() {
         return false;
     }
     let lee::RootCall { to, message } = &public_tx.message().execution.root;

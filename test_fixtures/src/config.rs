@@ -45,9 +45,9 @@ pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000_000_000, 20_0
 /// The charged bytes of the shield that funds a private account at setup, which genesis must
 /// price before any transaction exists; setup checks it against what the wallet measures.
 ///
-/// It is the fixed `PROOF_BYTES` (223,047) plus the rest of the serialized transaction (13,993),
+/// It is the fixed `PROOF_BYTES` (223,047) plus the rest of the serialized transaction (14,030),
 /// mostly its padded private slots.
-pub const SHIELD_BYTES: u64 = 237_040;
+pub const SHIELD_BYTES: u64 = 237_077;
 
 /// The public account for funding the private accounts' balances at genesis.
 pub(crate) const PRIVATE_FUNDER_INDEX: usize = 0;
@@ -430,14 +430,13 @@ pub fn genesis_sequencer_stakes(
             let public_key = signing_key.public_key();
             let sequencer_key = SequencerKey::new(public_key.to_bytes())
                 .context("Sequencer signing key is not a valid Ed25519 point")?;
-            let (owner, ownership_public_key) = lee::signature::signing_key::<Schnorr>(
-                &founding_stake_owner_secret(index),
-                Nonce(0),
-            );
+            let owner = founding_stake_owner_secret(index);
+            let (_, ownership_public_key) =
+                lee::signature::signing_key::<Schnorr>(&owner, Nonce(0));
             Ok(GenesisAction::StakeSequencer {
                 sequencer_key,
                 ownership_public_key,
-                stake_signature: sign_genesis_stake(index, sequencer_key, &owner, minimum_stake),
+                stake_entry: sign_genesis_stake(index, sequencer_key, &owner, minimum_stake),
             })
         })
         .collect()

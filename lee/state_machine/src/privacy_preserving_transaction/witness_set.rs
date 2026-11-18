@@ -1,50 +1,47 @@
 use borsh::{BorshDeserialize, BorshSerialize};
+use lee_core::signing_key::SigningKeyState;
 
 use crate::{
-    AccountId, PrivateKey, PublicKey, Signature,
+    AccountId, PrivateKey, PublicKey,
     privacy_preserving_transaction::{circuit::Proof, message::Message},
+    public_transaction::WitnessEntry,
+    signature::{KeyScheme as _, Schnorr, SignatureScheme as _},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct WitnessSet {
-    pub(crate) signatures_and_public_keys: Vec<(Signature, PublicKey)>,
+    pub(crate) entries: Vec<WitnessEntry>,
     pub(crate) proof: Proof,
 }
 
 impl WitnessSet {
     #[must_use]
-    pub fn for_message(message: &Message, proof: Proof, private_keys: &[&PrivateKey]) -> Self {
-        let message_hash = message.hash();
-        let mut signatures_and_public_keys: Vec<_> = private_keys
-            .iter()
-            .map(|&key| {
-                (
-                    Signature::new(key, &message_hash),
-                    PublicKey::new_from_private_key(key),
+    pub fn sign(
+        message: &Message,
+        proof: Proof,
+        signers: &[(AccountId, PrivateKey, SigningKeyState)],
+    ) -> Self {
+        let mut signers: Vec<_> = signers.iter().collect();
+        signers.sort_by_key(|(account_id, ..)| *account_id);
+        let next_keys: Vec<_> = signers.iter().map(|(.., next)| *next).collect();
+        let message_with_keys = message.message_with_keys(&next_keys);
+        let entries = signers
+            .into_iter()
+            .map(|(_, key, next)| WitnessEntry {
+                auth_data: Schnorr::auth_data(
+                    &PublicKey::new_from_private_key(key),
+                    &Schnorr::sign(key, &message_with_keys),
                 )
+                .to_vec(),
+                next: *next,
             })
             .collect();
-        signatures_and_public_keys.sort_by_key(|(_, public_key)| AccountId::from(public_key));
-        Self {
-            signatures_and_public_keys,
-            proof,
-        }
+        Self { entries, proof }
     }
 
     #[must_use]
-    pub fn signatures_are_valid_for(&self, message: &Message) -> bool {
-        let message_hash = message.hash();
-        for (signature, public_key) in self.signatures_and_public_keys() {
-            if !signature.is_valid_for(&message_hash, public_key) {
-                return false;
-            }
-        }
-        true
-    }
-
-    #[must_use]
-    pub fn signatures_and_public_keys(&self) -> &[(Signature, PublicKey)] {
-        &self.signatures_and_public_keys
+    pub fn entries(&self) -> &[WitnessEntry] {
+        &self.entries
     }
 
     #[must_use]
@@ -53,18 +50,12 @@ impl WitnessSet {
     }
 
     #[must_use]
-    pub fn into_raw_parts(self) -> (Vec<(Signature, PublicKey)>, Proof) {
-        (self.signatures_and_public_keys, self.proof)
+    pub fn into_raw_parts(self) -> (Vec<WitnessEntry>, Proof) {
+        (self.entries, self.proof)
     }
 
     #[must_use]
-    pub const fn from_raw_parts(
-        signatures_and_public_keys: Vec<(Signature, PublicKey)>,
-        proof: Proof,
-    ) -> Self {
-        Self {
-            signatures_and_public_keys,
-            proof,
-        }
+    pub const fn from_raw_parts(entries: Vec<WitnessEntry>, proof: Proof) -> Self {
+        Self { entries, proof }
     }
 }

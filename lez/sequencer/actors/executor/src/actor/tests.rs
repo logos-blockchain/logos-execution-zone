@@ -13,8 +13,9 @@ use kameo::{
 };
 use kameo_actors::{DeliveryStrategy, broker::Broker, pubsub::PubSub};
 use lee::{
-    Account, AccountId, Actor, PrivateKey, PublicTransaction,
+    Account, AccountId, Actor, PublicTransaction,
     public_transaction::Message,
+    signature::PublicAccountSecret,
     test_utils::{TestSigner, witness_for},
 };
 use lee_core::native_token::Message as NativeMessage;
@@ -97,7 +98,7 @@ pub(super) fn sequencer_config() -> (SequencerConfig, TempDir) {
 }
 
 fn test_transaction() -> LeeTransaction {
-    let signer2 = TestSigner::from(&PrivateKey::new_os_random());
+    let signer2 = TestSigner::from(&PublicAccountSecret::new_os_random());
     let acc2 = signer2.account_id();
 
     // Fees are self-pay: the payer must be a funded initial-state account that
@@ -954,7 +955,7 @@ async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
     // (which prices at least the serialized bytes), so admission's static check
     // rejects it before it reaches the mempool. The fee is declared (so it
     // classifies as charged, not `MissingFeeDeclaration`) but set to 0.
-    let signer2 = TestSigner::from(&PrivateKey::new_os_random());
+    let signer2 = TestSigner::from(&PublicAccountSecret::new_os_random());
     let acc2 = signer2.account_id();
     let accounts = testnet_initial_state::initial_pub_accounts_private_keys();
     let payer = accounts[0].account_id;

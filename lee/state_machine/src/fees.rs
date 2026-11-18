@@ -1,11 +1,8 @@
 //! Fee fields and payer authorization shared by signed message kinds.
 
-use std::collections::BTreeMap;
-
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::account::Nonce;
 
-use crate::{AccountId, Balance, Fee, Gas, PublicKey, Signature};
+use crate::{AccountId, Balance, Fee, Gas, TransactionMessage};
 
 /// The signed fee fields of a charged transaction.
 ///
@@ -34,29 +31,18 @@ impl FeeDeclaration {
     }
 }
 
-/// Whether a fee is authorized: an exempt message's always is; a declared one requires a valid
-/// signature over `message_hash` by its payer.
+/// Whether the transaction's fee is authorized: a fee-exempt message always is;
+/// a charged message requires its designated payer to be a signer.
 ///
-/// Checks only the witness entry at the payer's position in `nonces`: its account id before its
-/// signature, so only the payer's signature is verified.
+/// Checks only that the payer is among `nonces`: it cannot authenticate the
+/// payer without state, and need not, since execution authenticates every
+/// signer and a failure rejects the transaction at ingress and invalidates the
+/// block.
 #[must_use]
-pub fn is_fee_authorized(
-    fee: Option<FeeDeclaration>,
-    nonces: &BTreeMap<AccountId, Nonce>,
-    message_hash: &[u8; 32],
-    signatures_and_public_keys: &[(Signature, PublicKey)],
-) -> bool {
-    let Some(FeeDeclaration { payer, .. }) = fee else {
-        return true;
-    };
-    let Some(position) = nonces.keys().position(|signer| *signer == payer) else {
-        return false;
-    };
-    signatures_and_public_keys
-        .get(position)
-        .is_some_and(|(signature, public_key)| {
-            AccountId::from(public_key) == payer && signature.is_valid_for(message_hash, public_key)
-        })
+pub fn is_fee_authorized<P>(message: &TransactionMessage<P>) -> bool {
+    message
+        .fee
+        .is_none_or(|fee| message.nonces.contains_key(&fee.payer))
 }
 
 #[cfg(test)]
@@ -67,6 +53,8 @@ mod tests {
 
     use super::*;
     use crate::{
+        PublicTransaction, V03State, ValidatedStateDiff,
+        error::LeeError,
         public_transaction::{Message, WitnessSet},
         test_utils::{TestSigner, witness_for},
     };
@@ -106,61 +94,36 @@ mod tests {
     fn self_payer_is_authorized_by_ordinary_signature() {
         let (signer_key, _) = keys();
         let message = charged_message(signer_key.account_id());
-        let witness_set = witness_for(&message, &[&signer_key]);
-        assert!(is_fee_authorized(
-            message.fee,
-            &message.nonces,
-            &message.hash(),
-            witness_set.signatures_and_public_keys()
-        ));
+        assert!(is_fee_authorized(&message));
     }
 
     #[test]
     fn a_co_signing_payer_is_authorized() {
         // The payer need not own an `account_id`; any co-signer may pay.
-        let (signer_key, payer_key) = keys();
+        let (_, payer_key) = keys();
         let mut message = charged_message(payer_key.account_id());
         message.nonces.insert(payer_key.account_id(), Nonce(0));
         message
             .public_context
             .authorized_accounts
             .insert(payer_key.account_id());
-        let witness_set = witness_for(&message, &[&signer_key, &payer_key]);
-        assert!(is_fee_authorized(
-            message.fee,
-            &message.nonces,
-            &message.hash(),
-            witness_set.signatures_and_public_keys()
-        ));
+        assert!(is_fee_authorized(&message));
     }
 
     #[test]
     fn a_payer_outside_the_witness_set_is_unauthorized() {
         // Third-party (non-signing) sponsorship is no longer possible: the
         // payer must be in the witness set.
-        let (signer_key, payer_key) = keys();
+        let (_, payer_key) = keys();
         let message = charged_message(payer_key.account_id());
-        let witness_set = witness_for(&message, &[&signer_key]);
-        assert!(!is_fee_authorized(
-            message.fee,
-            &message.nonces,
-            &message.hash(),
-            witness_set.signatures_and_public_keys()
-        ));
+        assert!(!is_fee_authorized(&message));
     }
 
     #[test]
     fn an_exempt_message_is_always_authorized() {
-        let (signer_key, _) = keys();
         let message = exempt_message();
         assert_eq!(message.fee, None);
-        let witness_set = witness_for(&message, &[&signer_key]);
-        assert!(is_fee_authorized(
-            message.fee,
-            &message.nonces,
-            &message.hash(),
-            witness_set.signatures_and_public_keys()
-        ));
+        assert!(is_fee_authorized(&message));
     }
 
     #[test]
@@ -177,12 +140,13 @@ mod tests {
             .as_mut()
             .expect("charged message has a fee")
             .gas_limit = 999_999;
-        assert!(!witness_set.is_valid_for(&tampered));
-        assert!(!is_fee_authorized(
-            tampered.fee,
-            &tampered.nonces,
-            &tampered.hash(),
-            witness_set.signatures_and_public_keys()
+        let tx = PublicTransaction::new(tampered, witness_set);
+        assert!(matches!(
+            ValidatedStateDiff::from_public_transaction(&tx, &V03State::new(), 1, 0),
+            Err(LeeError::InvalidInput(msg)) if msg == format!(
+                "Signer {} fails authentication: invalid signature",
+                signer_key.account_id()
+            )
         ));
     }
 
@@ -204,14 +168,15 @@ mod tests {
             .public_context
             .authorized_accounts
             .insert(payer_key.account_id());
+        let first = *message.nonces.keys().next().expect("two signers");
         let mut entries = witness_for(&message, &[&signer_key, &payer_key]).into_raw_parts();
         entries.swap(0, 1);
-        let witness_set = WitnessSet::from_raw_parts(entries);
-        assert!(!is_fee_authorized(
-            message.fee,
-            &message.nonces,
-            &message.hash(),
-            witness_set.signatures_and_public_keys()
+        let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(entries));
+        assert!(matches!(
+            ValidatedStateDiff::from_public_transaction(&tx, &V03State::new(), 1, 0),
+            Err(LeeError::InvalidInput(msg)) if msg == format!(
+                "Signer {first} fails authentication: revealed key does not give the account id"
+            )
         ));
     }
 }

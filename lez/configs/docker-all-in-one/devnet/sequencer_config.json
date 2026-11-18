@@ -57,8 +57,11 @@
             132,
             121
           ],
-          "ownership_public_key": "6ce6fdff77fed4616aee83f43c98159aa00c28ef4baa06c2c37c7a84d6220090",
-          "stake_signature": "4a7f15be3c9b564331193ead7756a364a472183a1917afa0fd7e6f653b907b8ec2769992d715fdc080c947a1e19d91e426edb5028e27f6b8145b3357da6f1a87"
+          "ownership_public_key": "44d0006989cef6e155fd9ff26a075591e1819e51d791937550a586ab721528b7",
+          "stake_entry": {
+            "auth_data": "ef17b5660b8b22f5f30a3e9b46c1ec47d397ce74ad6be9eae545f1f1e85683970f5a4f760edd57f57b0b63c8554b8a4ba02e37bf9b6a3f4f86988e69ad15432a44d0006989cef6e155fd9ff26a075591e1819e51d791937550a586ab721528b7",
+            "next": "0041383292149fd02310878aa4728c8184657a71ab10b960de165fcad284b08219"
+          }
         }
       },
       {
@@ -97,8 +100,11 @@
             42,
             251
           ],
-          "ownership_public_key": "feb8fd9fd2f833c34e94ca2455b55ce90b394947b6d0cc41177b8072df1958d8",
-          "stake_signature": "9f458475365665c4e1fcc5c1190766babbfe9b8e4f116f4cf494652a76de77dfd4cd505130875f6f7e43b082f6dd31843dd0fcc0703baf55c71b125c8e9f4c02"
+          "ownership_public_key": "b38f788eb7ecb1c22abc0e41b1a6d70aecbe77b8c6b105706ce20c3fb2923b39",
+          "stake_entry": {
+            "auth_data": "fbc869df414baf45eb0988a6ebfb43fc0d2aef7b11135a1792e1159f50ce0f37398e72694f678f2dd566047f96cbbbbf4e9411f3e1aa7497ef10f16c2b5e62fdb38f788eb7ecb1c22abc0e41b1a6d70aecbe77b8c6b105706ce20c3fb2923b39",
+            "next": "00e2bf94e588892d69594dbcd4e98d2fc7d6c50246e71663b8b7ee64a136263843"
+          }
         }
       },
       {
@@ -137,8 +143,11 @@
             113,
             209
           ],
-          "ownership_public_key": "c2e01aeff160c19d65fb82cfdc5d168cb0fc7598f4dbee6190ace8d5f493af21",
-          "stake_signature": "185b6b28fa71414ec4b33301bb7a7f3b7fde9f3b0b00b32efaa903879774da3a2410af50c29968e89e30a70af87ccfadc946057fc6d7a9efdbf5ca7d2db9ed33"
+          "ownership_public_key": "2564e59a093037bf625f900d1c8efc67a0147c3cbc7fea57a1c5e3ceb0a88616",
+          "stake_entry": {
+            "auth_data": "2fef7e9118f1455481dcd9a256a70cc37ddc9f901f00bee2c6ca8c04120ec2b5d89eaf8cdbe2fdb57d244c0cd8419fe0fe9d3f472ac75abf0a3e631622f2bb8a2564e59a093037bf625f900d1c8efc67a0147c3cbc7fea57a1c5e3ceb0a88616",
+            "next": "0044805de9f98d1d900b4e2a8886f40f48e192c9918a63e1814a469b43c8b99578"
+          }
         }
       },
       {
@@ -177,8 +186,11 @@
             17,
             10
           ],
-          "ownership_public_key": "8fc8458939447f6b42d53e17ca82e5c38e0a62867dc7f6bf2cbbe7de443e3aff",
-          "stake_signature": "9be113e99dd824ced674bdc478f35de4e77ada1d93366d17f299b2097bd307c32c6acac7e87035114511e3380a0d01480b34023169a4851cf4a86f5c4e0fd0f6"
+          "ownership_public_key": "804423d605303851a25fbc40f5f954c2655d259aebb62165d72a5ede7ab58f09",
+          "stake_entry": {
+            "auth_data": "5161f5b050c492c2816932858234390db0294ba141011f174f1a73feb9b641f32a9894fd3773207097243cad5dd5c88153274438d5baa8830f1d0ad0e5f2eab0804423d605303851a25fbc40f5f954c2655d259aebb62165d72a5ede7ab58f09",
+            "next": "0072d4adc873edd6c9ae3b8dcdf2f0a1dcad49b53865a14bddb57690eb0a311beb"
+          }
         }
       },
       {

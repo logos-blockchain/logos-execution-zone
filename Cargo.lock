@@ -3208,6 +3208,7 @@ dependencies = [
  "clap",
  "console_error_panic_hook",
  "console_log",
+ "hex",
  "indexer_service_protocol",
  "indexer_service_rpc",
  "jsonrpsee",
@@ -11850,6 +11851,7 @@ dependencies = [
 name = "sequencer_genesis"
 version = "0.1.0"
 dependencies = [
+ "borsh",
  "bridge_core",
  "bridge_lock_core",
  "chain_state",

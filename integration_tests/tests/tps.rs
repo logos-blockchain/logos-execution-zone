@@ -18,11 +18,12 @@ use anyhow::{Context as _, Result};
 use common::transaction::LeeTransaction;
 use integration_tests::{config::SequencerPartialConfig, no_seal};
 use lee::{
-    Account, AccountId, Actor, PrivacyPreservingTransaction, PrivateKey, ProvingInput,
-    PublicExecutionContext, PublicTransaction, SenderPresentation,
+    Account, AccountId, Actor, PrivacyPreservingTransaction, ProvingInput, PublicExecutionContext,
+    PublicTransaction, SenderPresentation,
     privacy_preserving_transaction::{self as pptx, circuit},
     program::Program,
     public_transaction as putx,
+    signature::PublicAccountSecret,
     test_utils::{TestSigner, privacy_witness_for, witness_for},
 };
 use lee_core::{
@@ -61,7 +62,7 @@ impl TpsTestManager {
             .map(|i| {
                 let mut private_key_bytes = [0_u8; 32];
                 private_key_bytes[..8].copy_from_slice(&i.to_le_bytes());
-                let signer = TestSigner::from(&PrivateKey::try_new(private_key_bytes).unwrap());
+                let signer = TestSigner::from(&PublicAccountSecret::new(private_key_bytes));
                 let account_id = signer.account_id();
                 (signer, account_id)
             })
