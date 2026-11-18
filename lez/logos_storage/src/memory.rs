@@ -2,7 +2,9 @@
 //!
 //! A node's CID is the canonical prefix and the SHA-256 of the bytes, which no real node computes;
 //! within one network every node agrees on it, which is what tests rely on. A dataset's tree is
-//! its one zero-padded block, so a zero-suffixed variant shares it, as on a real node.
+//! its one zero-padded block, so a zero-suffixed variant shares it, as on a real node. As on a
+//! real node, a dataset fetched or stored without advertising stays unserved until advertising is
+//! set, which a later upload does not do.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -22,8 +24,9 @@ pub struct MemoryNetwork(Arc<Mutex<Vec<Arc<Mutex<Node>>>>>);
 #[derive(Default)]
 struct Node {
     objects: HashMap<StorageCid, Vec<u8>>,
-    advertised: HashSet<StorageCid>,
+    unserved: HashSet<StorageCid>,
     online: bool,
+    downloads: usize,
 }
 
 /// One node of a [`MemoryNetwork`].
@@ -58,7 +61,7 @@ impl MemoryNetwork {
             .iter()
             .find_map(|node| {
                 let node = node.lock().unwrap_or_else(PoisonError::into_inner);
-                (node.online && node.advertised.contains(&cid))
+                (node.online && !node.unserved.contains(&cid))
                     .then(|| node.objects.get(&cid).cloned())
                     .flatten()
             })
@@ -77,6 +80,12 @@ impl MemoryStorage {
         self.lock().objects.contains_key(&cid)
     }
 
+    /// How many payloads the node fetched from the network.
+    #[must_use]
+    pub fn downloads(&self) -> usize {
+        self.lock().downloads
+    }
+
     /// The CID any node gives `bytes`.
     #[must_use]
     pub fn cid_of(bytes: &[u8]) -> StorageCid {
@@ -89,8 +98,8 @@ impl MemoryStorage {
         self.node.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// The dataset `cid` names, from the network unless `local`; kept only when `keep`, as a
-    /// manifest fetch keeps no payload.
+    /// The dataset `cid` names, from the network unless `local`; its payload kept only when
+    /// `keep`, as a manifest fetch keeps none. What it fetches it does not serve.
     fn object(&self, cid: StorageCid, local: bool, keep: bool) -> Result<Vec<u8>, Error> {
         if let Some(bytes) = self.lock().objects.get(&cid) {
             return Ok(bytes.clone());
@@ -103,8 +112,11 @@ impl MemoryStorage {
             return Err(not_found());
         }
         let bytes = self.network.find(cid).ok_or_else(not_found)?;
+        let mut node = self.lock();
+        node.unserved.insert(cid);
         if keep {
-            self.lock().objects.insert(cid, bytes.clone());
+            node.downloads = node.downloads.saturating_add(1);
+            node.objects.insert(cid, bytes.clone());
         }
         Ok(bytes)
     }
@@ -116,8 +128,8 @@ impl Storage for MemoryStorage {
         let cid = Self::cid_of(&bytes);
         let mut node = self.lock();
         node.objects.insert(cid, bytes);
-        if advertise {
-            node.advertised.insert(cid);
+        if !advertise {
+            node.unserved.insert(cid);
         }
         Ok(cid)
     }
@@ -153,16 +165,16 @@ impl Storage for MemoryStorage {
     async fn delete(&self, cid: StorageCid) -> Result<(), Error> {
         let mut node = self.lock();
         node.objects.remove(&cid);
-        node.advertised.remove(&cid);
+        node.unserved.remove(&cid);
         Ok(())
     }
 
     async fn set_advertise(&self, cid: StorageCid, advertise: bool) -> Result<(), Error> {
         let mut node = self.lock();
         if advertise {
-            node.advertised.insert(cid);
+            node.unserved.remove(&cid);
         } else {
-            node.advertised.remove(&cid);
+            node.unserved.insert(cid);
         }
         Ok(())
     }

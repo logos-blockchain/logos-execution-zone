@@ -1,6 +1,8 @@
 //! The REST API of the Logos Storage node a LEZ service runs beside, holding each proof in one
 //! canonical form: one dataset of at most one data block, with no filename and no MIME type.
 
+use std::time::Duration;
+
 use async_trait::async_trait;
 use common::storage_cid::StorageCid;
 use reqwest::StatusCode;
@@ -9,6 +11,9 @@ use url::Url;
 
 #[cfg(feature = "test-utils")]
 pub mod memory;
+
+/// How long one request may take, response included.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The block size of the canonical form, 256 KiB; the proof cap fits one block.
 pub const BLOCK_SIZE: u64 = 0x0004_0000;
@@ -115,7 +120,10 @@ impl StorageClient {
     #[must_use]
     pub fn new(api: Url) -> Self {
         Self {
-            http: reqwest::Client::new(),
+            http: reqwest::Client::builder()
+                .timeout(REQUEST_TIMEOUT)
+                .build()
+                .expect("a client with a timeout builds"),
             api,
         }
     }
