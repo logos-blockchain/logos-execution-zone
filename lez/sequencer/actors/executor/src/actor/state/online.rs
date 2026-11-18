@@ -212,7 +212,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                             debug!(%locator, error = %err, "Failed to fetch a proof from its inscribed CID");
                         })
                         .is_ok(),
-                    None => false,
+                    None => proof_objects.get(&digest).await.is_some(),
                 };
                 if !recovered
                     && proof_requests_ref
