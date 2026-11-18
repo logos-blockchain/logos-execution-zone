@@ -680,6 +680,7 @@ mod tests {
                 admission_evidence: admission_evidence(),
                 proven_fee: Some(ProvenFee {
                     refund_to: Some(account_id(70)),
+                    tip: 9,
                     fallback: Some(FeeFallback {
                         action: PrivateAction {
                             nullifier: Nullifier([71; 32]),

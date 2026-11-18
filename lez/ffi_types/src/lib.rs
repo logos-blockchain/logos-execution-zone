@@ -704,6 +704,7 @@ impl From<FfiPrivateAction> for PrivateAction {
 pub struct FfiProvenFee {
     pub has_refund_to: bool,
     pub refund_to: FfiAccountId,
+    pub tip: u64,
     pub has_fallback: bool,
     pub fallback_action: FfiPrivateAction,
     pub fallback_boundary: FfiBoundaryStepList,
@@ -711,7 +712,9 @@ pub struct FfiProvenFee {
 
 impl From<Option<ProvenFee>> for FfiProvenFee {
     fn from(value: Option<ProvenFee>) -> Self {
-        let (refund_to, fallback) = value.map_or((None, None), |fee| (fee.refund_to, fee.fallback));
+        let (refund_to, tip, fallback) = value.map_or((None, 0, None), |fee| {
+            (fee.refund_to, fee.tip, fee.fallback)
+        });
         let has_fallback = fallback.is_some();
         let FeeFallback { action, boundary } = fallback.unwrap_or_else(|| FeeFallback {
             action: PrivateAction::default(),
@@ -720,6 +723,7 @@ impl From<Option<ProvenFee>> for FfiProvenFee {
         Self {
             has_refund_to: refund_to.is_some(),
             refund_to: refund_to.unwrap_or_default().into(),
+            tip,
             has_fallback,
             fallback_action: action.into(),
             fallback_boundary: boundary
@@ -804,6 +808,7 @@ pub fn proven_fee_from_ffi(has_fee: bool, fee: FfiProvenFee) -> Option<ProvenFee
     let FfiProvenFee {
         has_refund_to,
         refund_to,
+        tip,
         has_fallback,
         fallback_action,
         fallback_boundary,
@@ -817,6 +822,7 @@ pub fn proven_fee_from_ffi(has_fee: bool, fee: FfiProvenFee) -> Option<ProvenFee
     };
     has_fee.then(|| ProvenFee {
         refund_to: has_refund_to.then(|| AccountId::from(refund_to)),
+        tip,
         fallback: has_fallback.then_some(fallback),
     })
 }

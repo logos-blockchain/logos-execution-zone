@@ -136,6 +136,7 @@ typedef struct FfiPublicTransactionBody {
 typedef struct FfiProvenFee {
   bool has_refund_to;
   FfiAccountId refund_to;
+  uint64_t tip;
   bool has_fallback;
   FfiPrivateAction fallback_action;
   FfiBoundaryStepList fallback_boundary;

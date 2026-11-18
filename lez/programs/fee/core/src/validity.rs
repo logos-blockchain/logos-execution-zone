@@ -71,6 +71,7 @@ pub fn validate_static_tx(view: &FeeTxView, fee_state: &FeeState) -> Result<(), 
         FeeTxView::Private {
             reserve,
             data_bytes,
+            tip,
             ..
         } => {
             if *data_bytes == 0 || *data_bytes > market::MAX_GAS_STOR {
@@ -83,7 +84,7 @@ pub fn validate_static_tx(view: &FeeTxView, fee_state: &FeeState) -> Result<(), 
                 *data_bytes,
                 fee_state.base_fee_exec,
                 fee_state.base_fee_stor,
-            );
+            ) + u128::from(*tip);
             if *reserve < required {
                 return Err(FeeError::PrivateFeeBelowRequired {
                     required,
@@ -179,19 +180,25 @@ mod tests {
     }
 
     #[test]
-    fn private_view_needs_its_verification_and_storage_in_reserve() {
+    fn private_view_needs_its_verification_storage_and_tip_in_reserve() {
         let state = FeeState::genesis();
         let flat = private_fee_required(0, 1_000, state.base_fee_exec, state.base_fee_stor);
-        let view = |reserve| FeeTxView::Private {
+        let view = |reserve, tip| FeeTxView::Private {
             payer: AccountId::new([7_u8; 32]),
             reserve,
             data_bytes: 1_000,
+            tip,
         };
 
-        assert_eq!(validate_static_tx(&view(flat), &state), Ok(()));
-        assert_eq!(validate_static_tx(&view(flat + 1), &state), Ok(()));
+        assert_eq!(validate_static_tx(&view(flat, 0), &state), Ok(()));
+        assert_eq!(validate_static_tx(&view(flat + 1, 0), &state), Ok(()));
         assert!(matches!(
-            validate_static_tx(&view(flat - 1), &state),
+            validate_static_tx(&view(flat - 1, 0), &state),
+            Err(FeeError::PrivateFeeBelowRequired { .. })
+        ));
+        assert_eq!(validate_static_tx(&view(flat + 5, 5), &state), Ok(()));
+        assert!(matches!(
+            validate_static_tx(&view(flat + 4, 5), &state),
             Err(FeeError::PrivateFeeBelowRequired { .. })
         ));
     }
