@@ -54,8 +54,8 @@ use crate::{
         GetLastBlockId, GetMessagePath, GetProofsAndRoot, GetProofsAndRootReply, GetPublications,
         GetPublicationsReply, GetRecoveryBinding, GetStatus, GetSystemProposals,
         GetSystemProposalsReply, GetTransaction, GetTransactionReceipt, ProduceBlock,
-        RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, SubmitSystemApproval,
-        Transaction,
+        RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, ScreenAnnounced,
+        SubmitSystemApproval, Transaction,
     },
 };
 
@@ -381,7 +381,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
             })
             .await
         {
-            sequencer_core::config::check_inscribed_size(&transaction, max_block_size)
+            sequencer_core::config::check_inscribed_size(&transaction.digested(), max_block_size)
                 .map_err(|err| Error::TransactionTooLarge(err.into()))?;
         }
 
@@ -401,23 +401,56 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
             .sequencer()
             .with_state(|state| sequencer_core::fees::screen(&transaction, state))
             .await
-            .map_err(|err| {
-                if let sequencer_core::fees::Error::FeeCore(FeeError::PrivateFeeBelowRequired {
-                    required,
-                    reserve,
-                }) = err
-                {
-                    Error::PrivateFeeBelowHead { required, reserve }
-                } else {
-                    Error::IncorrectFee(err.into())
-                }
-            })?;
+            .map_err(fee_refusal)?;
 
         online
             .mempool_handle()
             .try_push((origin.into(), transaction))
             .map_err(|_err| Error::MempoolIsFull)?;
         Ok(())
+    }
+}
+
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ScreenAnnounced> for ExecutorActor<S, B> {
+    type Reply = Result<()>;
+
+    async fn handle(
+        &mut self,
+        ScreenAnnounced {
+            transaction,
+            proof_len,
+        }: ScreenAnnounced,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let online = self.state.online()?;
+
+        // Hydrated, the transaction carries the proof's length-prefixed bytes where its digest
+        // form carries the 32-byte digest.
+        let hydrated_len = borsh::object_length(&transaction)
+            .expect("Transaction borsh serialization should not fail")
+            .saturating_sub(32)
+            .saturating_add(4)
+            .saturating_add(proof_len);
+        sequencer_core::config::check_transaction_size(hydrated_len)
+            .map_err(|err| Error::TransactionTooLarge(err.into()))?;
+        if let Some(max_block_size) = online
+            .sequencer()
+            .with_state(|state| {
+                chain_state::stake_config::channel_params(state).map(|params| params.max_block_size)
+            })
+            .await
+        {
+            sequencer_core::config::check_inscribed_size(&transaction, max_block_size)
+                .map_err(|err| Error::TransactionTooLarge(err.into()))?;
+        }
+
+        online
+            .sequencer()
+            .with_state(|state| {
+                sequencer_core::fees::screen_announced(&transaction, proof_len, state)
+            })
+            .await
+            .map_err(fee_refusal)
     }
 }
 
@@ -986,5 +1019,18 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEvent> for Execu
         }
 
         Ok(())
+    }
+}
+
+/// What admission reports for a transaction the fee screen turned away.
+fn fee_refusal(err: sequencer_core::fees::Error) -> Error {
+    if let sequencer_core::fees::Error::FeeCore(FeeError::PrivateFeeBelowRequired {
+        required,
+        reserve,
+    }) = err
+    {
+        Error::PrivateFeeBelowHead { required, reserve }
+    } else {
+        Error::IncorrectFee(err.into())
     }
 }

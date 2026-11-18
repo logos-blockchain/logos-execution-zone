@@ -17,7 +17,7 @@ use common::transaction::{
 };
 use fee_core::{assess::FeeTxView, market};
 use lee::{
-    FeeDeclaration,
+    FeeDeclaration, PrivacyPreservingTransaction,
     privacy_preserving_transaction::{Message as PrivateMessage, circuit::Proof},
 };
 use lee_core::{
@@ -135,7 +135,15 @@ fn private_fee_reserve(message: &PrivateMessage) -> Option<(AccountId, Balance, 
 ///
 /// [`ClassifyError::OversizedProof`] if it is longer.
 pub fn check_proof_size(proof: &Proof) -> Result<(), ClassifyError> {
-    let size = proof.size();
+    check_proof_len(proof.size())
+}
+
+/// Checks that a proof of `size` bytes is no longer than [`market::PROOF_BYTES`].
+///
+/// # Errors
+///
+/// [`ClassifyError::OversizedProof`] if it is longer.
+pub fn check_proof_len(size: usize) -> Result<(), ClassifyError> {
     if u64::try_from(size).map_or(true, |size| size > market::PROOF_BYTES) {
         return Err(ClassifyError::OversizedProof { size });
     }
@@ -172,53 +180,8 @@ pub fn classify(tx: &LeeTransaction, is_genesis: bool) -> Result<FeeClass, Class
     }
     let public_tx = match tx {
         LeeTransaction::PrivacyPreserving(private_tx) => {
-            let execution = &private_tx.message().execution;
-            let count = execution.private_actions.len();
-            if count > market::MAX_PRIVATE_ACTIONS {
-                return Err(ClassifyError::TooManyPrivateActions { count });
-            }
             check_proof_size(private_tx.witness_set().proof())?;
-            // A public signer's declaration pays like a public transaction whose gas limit also
-            // covers the proof's verification.
-            if let Some(fee) = private_tx.message().fee {
-                if execution.proven_fee.is_some()
-                    || inbox_crossings(private_tx.message()).next().is_some()
-                {
-                    return Err(ClassifyError::DoubleFee);
-                }
-                if fee.gas_limit < market::PRIVATE_VERIFY_GAS {
-                    return Err(ClassifyError::GasLimitBelowVerification {
-                        gas_limit: fee.gas_limit,
-                    });
-                }
-                return Ok(FeeClass::Charged(declared_view(fee, tx.charged_bytes()?)));
-            }
-            let Some((payer, reserve, crossing)) = private_fee_reserve(private_tx.message()) else {
-                return Err(ClassifyError::MissingPrivateFee);
-            };
-            // The fallback is applied in place of the proven actions, so it must pay exactly
-            // the reserve priced here: the same crossing, alone.
-            if let Some(fallback) = execution
-                .proven_fee
-                .as_ref()
-                .and_then(|fee| fee.fallback.as_ref())
-                && fallback.boundary
-                    != [
-                        BoundaryStep::PrivateToPublic(crossing.clone()),
-                        BoundaryStep::EndPublicSubtree,
-                    ]
-            {
-                return Err(ClassifyError::InvalidFeeFallback);
-            }
-            if let Some(target) = execution.proven_fee.as_ref().and_then(|fee| fee.refund_to) {
-                validate_reward_target(target)
-                    .map_err(|reason| ClassifyError::InvalidRefundTarget { reason })?;
-            }
-            return Ok(FeeClass::Charged(FeeTxView::Private {
-                payer,
-                reserve,
-                data_bytes: tx.charged_bytes()?,
-            }));
+            return classify_private(private_tx, tx.charged_bytes()?);
         }
         LeeTransaction::Public(public_tx) => public_tx,
     };
@@ -247,6 +210,65 @@ pub fn classify(tx: &LeeTransaction, is_genesis: bool) -> Result<FeeClass, Class
     };
 
     Ok(FeeClass::Charged(declared_view(fee, tx.charged_bytes()?)))
+}
+
+/// Classifies a private transaction charged `data_bytes` by what its message declares.
+///
+/// As [`classify`] does, but its proof's length is checked apart, so a peer's announcement is
+/// classified before its proof is fetched.
+///
+/// # Errors
+///
+/// As [`classify`], but for [`ClassifyError::OversizedProof`] and
+/// [`ClassifyError::Unserializable`].
+pub fn classify_private<P>(
+    tx: &PrivacyPreservingTransaction<P>,
+    data_bytes: u64,
+) -> Result<FeeClass, ClassifyError> {
+    let execution = &tx.message().execution;
+    let count = execution.private_actions.len();
+    if count > market::MAX_PRIVATE_ACTIONS {
+        return Err(ClassifyError::TooManyPrivateActions { count });
+    }
+    // A public signer's declaration pays like a public transaction whose gas limit also covers
+    // the proof's verification.
+    if let Some(fee) = tx.message().fee {
+        if execution.proven_fee.is_some() || inbox_crossings(tx.message()).next().is_some() {
+            return Err(ClassifyError::DoubleFee);
+        }
+        if fee.gas_limit < market::PRIVATE_VERIFY_GAS {
+            return Err(ClassifyError::GasLimitBelowVerification {
+                gas_limit: fee.gas_limit,
+            });
+        }
+        return Ok(FeeClass::Charged(declared_view(fee, data_bytes)));
+    }
+    let Some((payer, reserve, crossing)) = private_fee_reserve(tx.message()) else {
+        return Err(ClassifyError::MissingPrivateFee);
+    };
+    // The fallback is applied in place of the proven actions, so it must pay exactly the reserve
+    // priced here: the same crossing, alone.
+    if let Some(fallback) = execution
+        .proven_fee
+        .as_ref()
+        .and_then(|fee| fee.fallback.as_ref())
+        && fallback.boundary
+            != [
+                BoundaryStep::PrivateToPublic(crossing.clone()),
+                BoundaryStep::EndPublicSubtree,
+            ]
+    {
+        return Err(ClassifyError::InvalidFeeFallback);
+    }
+    if let Some(target) = execution.proven_fee.as_ref().and_then(|fee| fee.refund_to) {
+        validate_reward_target(target)
+            .map_err(|reason| ClassifyError::InvalidRefundTarget { reason })?;
+    }
+    Ok(FeeClass::Charged(FeeTxView::Private {
+        payer,
+        reserve,
+        data_bytes,
+    }))
 }
 
 #[cfg(test)]

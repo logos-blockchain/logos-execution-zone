@@ -41,6 +41,8 @@ pub enum Error {
     Record(anyhow::Error),
     #[error("the dataset is not the proof its digest names")]
     WrongProof,
+    #[error("the proof does not verify")]
+    Unverified,
     #[error("too many proof downloads in flight")]
     Busy,
     #[error("only the reserve for live blocks is free")]
@@ -172,17 +174,38 @@ impl ProofObjects {
         self.store(proof, true, unix_now()).await
     }
 
+    /// The length of the proof the manifest `cid` names declares, read without advertising it and
+    /// bounded as a peer's download is. A manifest of another form is dropped.
+    pub async fn declared_len(&self, cid: StorageCid, peer: PeerId) -> Result<u64, Error> {
+        let _permit = self
+            .downloads
+            .try_acquire()
+            .map_err(|_closed| Error::Busy)?;
+        let _peer = self.claim_peer(peer)?;
+        let manifest = self.storage.manifest(cid).await?;
+        if let Err(err) = manifest.check_canonical(PROOF_BYTES) {
+            self.discard(cid, manifest.tree_cid).await;
+            return Err(err.into());
+        }
+        Ok(manifest.dataset_size)
+    }
+
     /// The proof `digest` names, from the dataset `cid` names unless held already. Only a
-    /// canonical manifest under the proof cap is followed, and only the exact proof is kept: it
-    /// is stored again in the canonical form, so the map takes this node's own CID.
+    /// canonical manifest under the proof cap is followed, and only the exact proof `verify`
+    /// accepts is kept: it is stored again in the canonical form, so the map takes this node's
+    /// own CID.
     pub async fn fetch(
         &self,
         digest: ProofDigest,
         cid: StorageCid,
         admission: Admission,
+        verify: impl FnOnce(&Proof) -> bool + Send,
     ) -> Result<Proof, Error> {
         let advertise = matches!(admission, Admission::Live);
         if let Some(proof) = self.proofs.get(&digest) {
+            if !verify(&proof) {
+                return Err(Error::Unverified);
+            }
             match self.locator(&digest) {
                 None => {
                     self.store(&proof, advertise, unix_now()).await?;
@@ -208,7 +231,16 @@ impl ProofObjects {
         };
         let manifest = self.storage.manifest(cid).await?;
         self.hold(digest);
-        let fetched = match self.download(digest, cid, &manifest).await {
+        let fetched = match self
+            .download(digest, cid, &manifest)
+            .await
+            .and_then(|proof| {
+                if verify(&proof) {
+                    Ok(proof)
+                } else {
+                    Err(Error::Unverified)
+                }
+            }) {
             Ok(proof) => self
                 .store(&proof, advertise, unix_now())
                 .await

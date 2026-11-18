@@ -420,7 +420,7 @@ pub fn run(
                 bedrock_broker_ref: bedrock_broker_ref.clone(),
                 proofs: proof_store.clone(),
                 proof_requests: proof_requests_pubsub_ref,
-                proof_objects,
+                proof_objects: Arc::clone(&proof_objects),
             },
         )
         .await
@@ -446,6 +446,7 @@ pub fn run(
                     *bedrock_config.channel_id.as_ref(),
                     &channel_signing_key_path,
                     proof_store.clone(),
+                    proof_objects,
                     &executor_ref,
                     &slasher_ref,
                     &channel_signer_ref,
@@ -529,6 +530,7 @@ pub async fn setup_gossip(
     channel_id: [u8; 32],
     channel_signing_key_path: &Path,
     proof_store: ProofStore,
+    proof_objects: Arc<ProofObjects>,
     executor_ref: &ActorRef<ExecutorActor>,
     slasher_ref: &ActorRef<SlasherActor<StorageActor>>,
     channel_signer_ref: &ActorRef<ChannelSigningActor>,
@@ -552,6 +554,22 @@ pub async fn setup_gossip(
             executor_submit_ref.ask(message).await.map_err(Into::into)
         })
     });
+
+    // An announced transaction's fee is screened by the executor before its proof is fetched.
+    let screen_ref = executor_ref.clone();
+    let screen: sequencer_gossip_actor::AnnouncementScreen =
+        Arc::new(move |transaction, proof_len| {
+            let executor_screen_ref = screen_ref.clone();
+            Box::pin(async move {
+                executor_screen_ref
+                    .ask(sequencer_executor_actor::protocol::ScreenAnnounced {
+                        transaction,
+                        proof_len,
+                    })
+                    .await
+                    .map_err(Into::into)
+            })
+        });
 
     // Gossiped system_upgrader approvals go to the executor's approval pool, as RPC submissions do.
     let approval_ref = executor_ref.clone();
@@ -578,6 +596,8 @@ pub async fn setup_gossip(
         slasher_ref.clone().recipient(),
         submit,
         proof_store,
+        proof_objects,
+        screen,
         // Screened inbound channel-config messages go straight to the actor.
         channel_signer_ref.clone().recipient(),
         submit_system_approval,

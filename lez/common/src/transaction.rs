@@ -56,6 +56,47 @@ impl<P> LeeTransactionWith<P> {
             Self::PrivacyPreserving(tx) => Some(tx.witness_set().proof()),
         }
     }
+
+    /// Whether a declared fee is signed by its payer; a transaction declaring none always is.
+    #[must_use]
+    pub fn is_fee_authorized(&self) -> bool {
+        match self {
+            Self::Public(tx) => lee::is_fee_authorized(
+                tx.message().fee,
+                &tx.message().hash(),
+                tx.witness_set().signatures_and_public_keys(),
+            ),
+            Self::PrivacyPreserving(tx) => lee::is_fee_authorized(
+                tx.message().fee,
+                &tx.message().hash(),
+                tx.witness_set().signatures_and_public_keys(),
+            ),
+        }
+    }
+}
+
+impl LeeTransactionWith<ProofDigest> {
+    /// The hash of the transaction, which its full form shares.
+    #[must_use]
+    pub fn hash(&self) -> HashType {
+        HashType(match self {
+            Self::Public(tx) => tx.hash(),
+            Self::PrivacyPreserving(tx) => tx.hash(),
+        })
+    }
+
+    /// The storage bytes charged for the transaction: the size of its digest form, and of the
+    /// locator a private one's proof is inscribed with.
+    pub fn charged_bytes(&self) -> borsh::io::Result<u64> {
+        let size = borsh::object_length(self)?;
+        let size = u64::try_from(size).expect("a transaction's size fits u64");
+        Ok(match self {
+            Self::Public(_) => size,
+            Self::PrivacyPreserving(_) => {
+                size.saturating_add(fee_core::market::PROOF_LOCATOR_BYTES)
+            }
+        })
+    }
 }
 
 impl LeeTransaction {
@@ -75,34 +116,9 @@ impl LeeTransaction {
         }
     }
 
-    /// The storage bytes charged for the transaction: the size of its inscribed digest form, and
-    /// of the locator a private one's proof is inscribed with.
+    /// See [`LeeTransactionWith::charged_bytes`].
     pub fn charged_bytes(&self) -> borsh::io::Result<u64> {
-        let size = borsh::object_length(&self.digested())?;
-        let size = u64::try_from(size).expect("a transaction's size fits u64");
-        Ok(match self {
-            Self::Public(_) => size,
-            Self::PrivacyPreserving(_) => {
-                size.saturating_add(fee_core::market::PROOF_LOCATOR_BYTES)
-            }
-        })
-    }
-
-    /// Whether a declared fee is signed by its payer; a transaction declaring none always is.
-    #[must_use]
-    pub fn is_fee_authorized(&self) -> bool {
-        match self {
-            Self::Public(tx) => lee::is_fee_authorized(
-                tx.message().fee,
-                &tx.message().hash(),
-                tx.witness_set().signatures_and_public_keys(),
-            ),
-            Self::PrivacyPreserving(tx) => lee::is_fee_authorized(
-                tx.message().fee,
-                &tx.message().hash(),
-                tx.witness_set().signatures_and_public_keys(),
-            ),
-        }
+        self.digested().charged_bytes()
     }
 
     #[must_use]

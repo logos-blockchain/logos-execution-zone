@@ -1,14 +1,14 @@
 use chain_state::{
     apply::opening_fee_state,
-    classify::{ClassifyError, FeeClass, classify},
+    classify::{ClassifyError, FeeClass, check_proof_len, classify, classify_private},
 };
-use common::transaction::LeeTransaction;
+use common::transaction::{LeeTransaction, LeeTransactionWith};
 use fee_core::{
     assess::{FeeTxView, fee_reserve},
     market,
     validity::{FeeError, validate_static_tx},
 };
-use lee::AccountId;
+use lee::{AccountId, privacy_preserving_transaction::circuit::ProofDigest};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -50,8 +50,35 @@ pub struct FeeStateQuote {
 
 /// Screens a submitted transaction against the head state.
 pub fn screen(tx: &LeeTransaction, state: &lee::V03State) -> Result<()> {
-    let class = classify(tx, false)?;
-    let FeeClass::Charged(view) = class else {
+    screen_class(&classify(tx, false)?, || tx.is_fee_authorized(), state)
+}
+
+/// Screens a transaction a peer announced against the head state, by its digest form and the
+/// length its proof's manifest declares, before the proof is fetched.
+pub fn screen_announced(
+    tx: &LeeTransactionWith<ProofDigest>,
+    proof_len: usize,
+    state: &lee::V03State,
+) -> Result<()> {
+    check_proof_len(proof_len)?;
+    let class = match tx {
+        LeeTransactionWith::PrivacyPreserving(private_tx) => {
+            classify_private(private_tx, tx.charged_bytes().map_err(ClassifyError::from)?)?
+        }
+        // A public transaction is its own digest form.
+        LeeTransactionWith::Public(public_tx) => {
+            classify(&LeeTransaction::Public(public_tx.clone()), false)?
+        }
+    };
+    screen_class(&class, || tx.is_fee_authorized(), state)
+}
+
+fn screen_class(
+    class: &FeeClass,
+    is_fee_authorized: impl FnOnce() -> bool,
+    state: &lee::V03State,
+) -> Result<()> {
+    let &FeeClass::Charged(view) = class else {
         return Ok(());
     };
     let fee_state = opening_fee_state(state);
@@ -63,7 +90,7 @@ pub fn screen(tx: &LeeTransaction, state: &lee::V03State) -> Result<()> {
         FeeTxView::Private { .. } => return Ok(()),
         FeeTxView::Public { payer, .. } => payer,
     };
-    if !tx.is_fee_authorized() {
+    if !is_fee_authorized() {
         return Err(Error::UnauthorizedPayer { payer });
     }
 

@@ -24,6 +24,7 @@ use sequencer_channel_signing_actor::protocol::{Signature, Wire};
 use sequencer_core::{
     TransactionOrigin,
     config::{GossipConfig, PROOF_STORE_CAPACITY},
+    proof_objects::ProofObjects,
 };
 use sequencer_slasher_actor::protocol::{Approval, Offence};
 use sequencer_stake_core::SequencerKey;
@@ -32,8 +33,8 @@ use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_us
 use tokio::sync::mpsc;
 
 use super::{
-    GossipActor, IngestSubmit, MAILBOX_CAPACITY, SystemApprovalSubmit, peer_id_from_ed25519,
-    proof_exchange,
+    AnnouncementScreen, GossipActor, IngestSubmit, MAILBOX_CAPACITY, SystemApprovalSubmit,
+    peer_id_from_ed25519, proof_exchange,
 };
 use crate::protocol::{FetchProof, GetConnectedPeers, Publish, PublishConfig};
 
@@ -182,6 +183,10 @@ fn channel_system_approval_submit(
     })
 }
 
+fn unscreened_announcements() -> AnnouncementScreen {
+    Arc::new(|_transaction, _proof_len| Box::pin(async { Ok(()) }))
+}
+
 fn unscreened_mempool_submit(
     mempool: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
 ) -> IngestSubmit {
@@ -263,6 +268,8 @@ async fn start_node(secret: [u8; 32], bootstrap: Vec<libp2p::Multiaddr>) -> (Tes
         sink_ref.recipient(),
         unscreened_mempool_submit(mempool_handle),
         proofs.clone(),
+        Arc::new(ProofObjects::in_memory(proofs.clone())),
+        unscreened_announcements(),
         config_sink_ref.recipient(),
         channel_system_approval_submit(system_approval_tx),
     )
@@ -389,6 +396,10 @@ async fn new_binds_and_reports_listen_addr() {
         test_approval_sink(),
         unscreened_mempool_submit(test_mempool_handle()),
         ProofStore::new(PROOF_STORE_CAPACITY),
+        Arc::new(ProofObjects::in_memory(ProofStore::new(
+            PROOF_STORE_CAPACITY,
+        ))),
+        unscreened_announcements(),
         test_config_sink(),
         channel_system_approval_submit(mpsc::unbounded_channel().0),
     )
@@ -409,6 +420,10 @@ async fn kill_stops_the_swarm_and_frees_the_socket() {
         test_approval_sink(),
         unscreened_mempool_submit(test_mempool_handle()),
         ProofStore::new(PROOF_STORE_CAPACITY),
+        Arc::new(ProofObjects::in_memory(ProofStore::new(
+            PROOF_STORE_CAPACITY,
+        ))),
+        unscreened_announcements(),
         test_config_sink(),
         channel_system_approval_submit(mpsc::unbounded_channel().0),
     )
@@ -435,6 +450,10 @@ async fn kill_stops_the_swarm_and_frees_the_socket() {
         test_approval_sink(),
         unscreened_mempool_submit(test_mempool_handle()),
         ProofStore::new(PROOF_STORE_CAPACITY),
+        Arc::new(ProofObjects::in_memory(ProofStore::new(
+            PROOF_STORE_CAPACITY,
+        ))),
+        unscreened_announcements(),
         test_config_sink(),
         channel_system_approval_submit(mpsc::unbounded_channel().0),
     )

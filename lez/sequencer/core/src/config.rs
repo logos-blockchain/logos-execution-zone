@@ -7,9 +7,10 @@ use std::{
 
 use anyhow::{Context as _, Result, ensure};
 pub use bridge_core::DepositRecipient;
-use common::{config::BasicAuth, transaction::LeeTransaction};
+use common::{config::BasicAuth, transaction::LeeTransactionWith};
 pub use cross_zone::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use humantime_serde;
+use lee::privacy_preserving_transaction::circuit::ProofDigest;
 use logos_blockchain_zone_sdk::{
     core::mantle::ops::channel::ChannelId, key_management_system_service::keys::ZkPublicKey,
 };
@@ -327,10 +328,10 @@ pub fn check_transaction_size(len: usize) -> Result<(), TransactionTooLarge> {
     Ok(())
 }
 
-/// Refuses `tx` when its digest form, which a block carries, does not fit a block of
+/// Refuses the digest form `tx` when it, with its locator, does not fit a block of
 /// `max_block_size`.
 pub fn check_inscribed_size(
-    tx: &LeeTransaction,
+    tx: &LeeTransactionWith<ProofDigest>,
     max_block_size: u64,
 ) -> Result<(), TransactionTooLarge> {
     let size = tx.charged_bytes().unwrap_or(u64::MAX);
@@ -412,6 +413,7 @@ pub const fn default_channel_params() -> ChannelParams {
 
 #[cfg(test)]
 mod tests {
+    use common::transaction::LeeTransaction;
     use lee::{
         PrivacyPreservingTransaction,
         privacy_preserving_transaction::{Message, WitnessSet, circuit::Proof},
@@ -435,6 +437,6 @@ mod tests {
         assert!(u64::try_from(full_size).unwrap() > max_inscribed_size);
 
         assert!(check_transaction_size(full_size).is_ok());
-        assert!(check_inscribed_size(&tx, max_block_size).is_ok());
+        assert!(check_inscribed_size(&tx.digested(), max_block_size).is_ok());
     }
 }

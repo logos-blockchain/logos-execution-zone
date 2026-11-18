@@ -1,8 +1,11 @@
 use std::ops::RangeInclusive;
 
-use common::{HashType, PageLimit, transaction::LeeTransaction};
+use common::{
+    HashType, PageLimit,
+    transaction::{LeeTransaction, LeeTransactionWith},
+};
 use kameo::Reply;
-use lee::PublicationsPage;
+use lee::{PublicationsPage, privacy_preserving_transaction::circuit::ProofDigest};
 use lee_core::{
     BlockId, Commitment, CommitmentPosition, CommitmentSetDigest, MembershipProof,
     account::{AccountId, Actor},
@@ -30,6 +33,13 @@ pub enum TransactionOrigin {
 pub struct Transaction {
     pub transaction: LeeTransaction,
     pub origin: TransactionOrigin,
+}
+
+/// Screens a transaction a peer announced by its digest form, before its proof of `proof_len`
+/// bytes is fetched: what admission would refuse whatever the proof holds.
+pub struct ScreenAnnounced {
+    pub transaction: LeeTransactionWith<ProofDigest>,
+    pub proof_len: usize,
 }
 
 pub struct GetFeeQuote;

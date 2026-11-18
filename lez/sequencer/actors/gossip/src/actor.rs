@@ -7,7 +7,11 @@ use std::{
 
 use anyhow::{Context as _, Result, anyhow};
 use chain_state::ProofStore;
-use common::{bounded_vec_deque::BoundedVecDeque, transaction::LeeTransaction};
+use common::{
+    HashType,
+    bounded_vec_deque::BoundedVecDeque,
+    transaction::{LeeTransaction, LeeTransactionWith},
+};
 use futures::{StreamExt as _, future::BoxFuture};
 use kameo::{
     Actor,
@@ -34,13 +38,15 @@ use sequencer_channel_signing_actor::protocol::Wire;
 use sequencer_core::{
     StakeConfigUpdate,
     config::{GossipConfig, MAX_BEDROCK_TX_SIZE, MAX_PUBLISHABLE_BLOCK_SIZE, MAX_TRANSACTION_SIZE},
+    proof_objects::{Admission, ProofObjects},
 };
 use sequencer_slasher_actor::protocol::Approval;
 use system_upgrader_core::SignedApproval;
 use tokio::select;
 use tracing::Instrument as _;
 
-use self::seen_cache::SeenCache;
+pub use self::validation::Announcement;
+use self::{seen_cache::SeenCache, validation::AnnouncementEvaluation};
 use crate::protocol::{FetchProof, GetConnectedPeers, Publish, PublishConfig, RetryBootstrap};
 
 mod seen_cache;
@@ -128,6 +134,16 @@ pub struct GossipActor {
     submit: IngestSubmit,
     proof_store: ProofStore,
     proof_fetches: HashMap<request_response::OutboundRequestId, (ProofDigest, HashSet<PeerId>)>,
+    /// Private transactions ride their own topic, by digest form and Logos Storage locator.
+    announcements_topic: gossipsub::IdentTopic,
+    proof_objects: Arc<ProofObjects>,
+    screen: AnnouncementScreen,
+    /// Announced transactions whose admission is under way.
+    admitting: HashSet<HashType>,
+    /// Same as `pending_publish`, for this node's own announcements.
+    pending_announcements: BoundedVecDeque<Announcement>,
+    /// Where an admission or a seeding that ran apart reports back; set on start.
+    myself: Option<WeakActorRef<Self>>,
     /// Configured bootstrap peers, re-dialed while the node is isolated.
     bootstrap: Vec<Multiaddr>,
     /// Local transactions whose publish failed, retried when a peer
@@ -150,6 +166,14 @@ pub struct GossipActor {
 /// local head state, which drifts, so peers legitimately disagree.
 pub type IngestSubmit =
     Arc<dyn Fn(LeeTransaction) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
+
+/// Screens an announced transaction by its digest form and its proof's declared length before the
+/// proof is fetched (the executor actor in production).
+pub type AnnouncementScreen = Arc<
+    dyn Fn(LeeTransactionWith<ProofDigest>, usize) -> BoxFuture<'static, anyhow::Result<()>>
+        + Send
+        + Sync,
+>;
 
 /// Hands a gossiped `system_upgrader` approval to the node's approval pool (the executor actor in
 /// production), which checks it against the head's committee.
@@ -175,6 +199,8 @@ impl GossipActor {
         approval_sink: Recipient<Approval>,
         submit: IngestSubmit,
         proof_store: ProofStore,
+        proof_objects: Arc<ProofObjects>,
+        screen: AnnouncementScreen,
         config_sink: Recipient<Wire>,
         submit_system_approval: SystemApprovalSubmit,
     ) -> Result<Self> {
@@ -199,12 +225,21 @@ impl GossipActor {
         let system_approvals_topic_hash =
             Self::get_system_approvals_topic_for_channel(channel_id).hash();
         let config_topic_hash = Self::get_config_topic_for_channel(channel_id).hash();
+        let announcements_topic_hash = Self::get_announcements_topic_for_channel(channel_id).hash();
         let message_id_fn = move |msg: &gossipsub::Message| {
             if msg.topic == approvals_topic_hash
                 || msg.topic == system_approvals_topic_hash
                 || msg.topic == config_topic_hash
             {
                 return default_message_id(msg);
+            }
+            // An announcement goes by its transaction's hash, which covers the digest form.
+            if msg.topic == announcements_topic_hash {
+                let id = borsh::from_slice::<Announcement>(&msg.data).map_or_else(
+                    |_| common::block::OwnHasher::hash(&msg.data).0.to_vec(),
+                    |announcement| announcement.transaction.hash().0.to_vec(),
+                );
+                return gossipsub::MessageId::from(id);
             }
             // Undecodable messages still need a message-id, but it must be a
             // deterministic digest, not the attacker-controlled bytes
@@ -295,6 +330,13 @@ impl GossipActor {
             .subscribe(&config_topic)
             .context("Failed to subscribe to gossip channel-config topic")?;
 
+        let announcements_topic = Self::get_announcements_topic_for_channel(channel_id);
+        swarm
+            .behaviour_mut()
+            .gossipsub
+            .subscribe(&announcements_topic)
+            .context("Failed to subscribe to gossip private-announcement topic")?;
+
         swarm
             .listen_on(listen_addr)
             .context("Failed to listen on gossip address")?;
@@ -345,6 +387,12 @@ impl GossipActor {
             submit,
             proof_store,
             proof_fetches: HashMap::new(),
+            announcements_topic,
+            proof_objects,
+            screen,
+            admitting: HashSet::new(),
+            pending_announcements: BoundedVecDeque::new(PENDING_PUBLISH_CAPACITY),
+            myself: None,
             bootstrap,
             pending_publish: BoundedVecDeque::new(PENDING_PUBLISH_CAPACITY),
             pending_approvals: BoundedVecDeque::new(PENDING_PUBLISH_CAPACITY),
@@ -366,6 +414,14 @@ impl GossipActor {
     #[must_use]
     pub fn get_topic_for_channel(channel_id: [u8; 32]) -> gossipsub::IdentTopic {
         gossipsub::IdentTopic::new(format!("/lez/{}/v1/txs", hex::encode(channel_id)))
+    }
+
+    #[must_use]
+    pub fn get_announcements_topic_for_channel(channel_id: [u8; 32]) -> gossipsub::IdentTopic {
+        gossipsub::IdentTopic::new(format!(
+            "/lez/{}/v1/private-announcements",
+            hex::encode(channel_id)
+        ))
     }
 
     /// Slash approvals ride their own topic so the tx wire format is untouched.
@@ -480,6 +536,11 @@ impl GossipActor {
                             &message.data,
                         );
                     });
+                } else if message.topic == self.announcements_topic.hash() {
+                    let span = span("gossip.announcement");
+                    span.in_scope(|| {
+                        self.on_announcement(propagation_source, &message_id, &message.data, &span);
+                    });
                 } else {
                     self.on_gossip_message(propagation_source, &message_id, &message.data)
                         .instrument(span("gossip.transaction"))
@@ -505,6 +566,11 @@ impl GossipActor {
                 if topic == self.config_topic.hash() =>
             {
                 self.flush_pending_configs();
+            }
+            GossipBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed { topic, .. })
+                if topic == self.announcements_topic.hash() =>
+            {
+                self.flush_pending_announcements();
             }
             GossipBehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
                 if let Ok(pubkey) = info.public_key.try_into_ed25519()
@@ -614,6 +680,130 @@ impl GossipActor {
             .behaviour_mut()
             .gossipsub
             .report_message_validation_result(message_id, &source, acceptance);
+    }
+
+    /// Validates an inbound announcement and reports the mesh acceptance decision. On first sight
+    /// its admission runs apart, since it waits on Logos Storage.
+    fn on_announcement(
+        &mut self,
+        source: PeerId,
+        message_id: &gossipsub::MessageId,
+        data: &[u8],
+        span: &tracing::Span,
+    ) {
+        let acceptance = match validation::evaluate_announcement(data, self.max_block_size) {
+            AnnouncementEvaluation::Reject(reason) => {
+                tracing::debug!(%source, %reason, "Rejecting gossiped announcement");
+                gossipsub::MessageAcceptance::Reject
+            }
+            AnnouncementEvaluation::Accept(announcement) => {
+                let hash = announcement.transaction.hash();
+                if self.seen.contains(&hash) {
+                    gossipsub::MessageAcceptance::Ignore
+                } else {
+                    // Advisory, as for a gossiped transaction: forwarded either way, and a refused
+                    // one stays unseen so a rebroadcast can retry.
+                    if self.admitting.insert(hash) {
+                        self.admit_announced(source, *announcement, span);
+                    }
+                    gossipsub::MessageAcceptance::Accept
+                }
+            }
+        };
+
+        _ = self
+            .swarm_mut()
+            .behaviour_mut()
+            .gossipsub
+            .report_message_validation_result(message_id, &source, acceptance);
+    }
+
+    /// Admits an announced transaction: screens its fee by the declared proof length, fetches the
+    /// proof within the peer's bounds, verifies it, submits the hydrated transaction and serves
+    /// the proof once admitted.
+    fn admit_announced(&self, source: PeerId, announcement: Announcement, span: &tracing::Span) {
+        let proof_objects = Arc::clone(&self.proof_objects);
+        let screen = Arc::clone(&self.screen);
+        let submit = Arc::clone(&self.submit);
+        let myself = self.myself.clone();
+        tokio::spawn(
+            async move {
+                let hash = announcement.transaction.hash();
+                let admitted =
+                    admit_announced(announcement, source, &proof_objects, &screen, &submit).await;
+                if let Err(err) = &admitted {
+                    tracing::debug!(tx_hash = %hash, error = %format!("{err:#}"), "Not admitting announced tx");
+                }
+                if let Some(actor) = myself.and_then(|myself| myself.upgrade()) {
+                    _ = actor
+                        .tell(AnnouncementSettled {
+                            hash,
+                            admitted: admitted.is_ok(),
+                        })
+                        .await;
+                }
+            }
+            .instrument(span.clone()),
+        );
+    }
+
+    /// Seeds the proof of a locally admitted private transaction, then announces it.
+    fn announce(&self, tx: lee::PrivacyPreservingTransaction) {
+        let proof_objects = Arc::clone(&self.proof_objects);
+        let myself = self.myself.clone();
+        tokio::spawn(async move {
+            match proof_objects.seed(tx.witness_set().proof()).await {
+                Ok(locator) => {
+                    let announcement = Announcement {
+                        transaction: LeeTransactionWith::PrivacyPreserving(tx.digested()),
+                        locator,
+                    };
+                    if let Some(actor) = myself.and_then(|myself| myself.upgrade()) {
+                        _ = actor.tell(PublishAnnouncement(announcement)).await;
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(
+                        tx_hash = %common::HashType(tx.hash()),
+                        error = %err,
+                        "Failed to seed a private transaction's proof, not announcing it"
+                    );
+                }
+            }
+        });
+    }
+
+    /// Publishes this node's own announcement, queued for retry on failure as a transaction is.
+    fn publish_announcement(&mut self, announcement: Announcement) {
+        let hash = announcement.transaction.hash();
+        let bytes =
+            borsh::to_vec(&announcement).expect("announcement borsh serialization should not fail");
+        let topic = self.announcements_topic.clone();
+        match self
+            .swarm_mut()
+            .behaviour_mut()
+            .gossipsub
+            .publish(topic, bytes)
+        {
+            Ok(_) | Err(gossipsub::PublishError::Duplicate) => {
+                self.seen.insert(hash);
+            }
+            Err(err) => {
+                tracing::debug!(tx_hash = %hash, error = %err, "Queueing local announcement for retry");
+                if let Some(dropped) = self.pending_announcements.push_back(announcement) {
+                    tracing::debug!(
+                        tx_hash = %dropped.transaction.hash(),
+                        "Pending announcement queue full, dropping the oldest"
+                    );
+                }
+            }
+        }
+    }
+
+    fn flush_pending_announcements(&mut self) {
+        for announcement in self.pending_announcements.drain_all() {
+            self.publish_announcement(announcement);
+        }
     }
 
     /// Verifies an inbound slash approval and hands it to the slasher.
@@ -907,7 +1097,8 @@ impl Actor for GossipActor {
     type Args = Self;
     type Error = Infallible;
 
-    async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Infallible> {
+    async fn on_start(mut args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self, Infallible> {
+        args.myself = Some(actor_ref.downgrade());
         Ok(args)
     }
 
@@ -986,8 +1177,47 @@ impl Message<Publish> for GossipActor {
 
     async fn handle(&mut self, msg: Publish, _ctx: &mut Context<Self, Self::Reply>) -> Self::Reply {
         match msg {
-            Publish::Transaction(tx) => self.publish_transaction(*tx),
+            Publish::Transaction(tx) => match *tx {
+                LeeTransaction::PrivacyPreserving(tx) => self.announce(tx),
+                tx @ LeeTransaction::Public(_) => self.publish_transaction(tx),
+            },
             Publish::SystemApproval(signed) => self.publish_system_approval(signed),
+        }
+    }
+}
+
+/// This node's announcement, once its proof is seeded.
+struct PublishAnnouncement(Announcement);
+
+impl Message<PublishAnnouncement> for GossipActor {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        PublishAnnouncement(announcement): PublishAnnouncement,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.publish_announcement(announcement);
+    }
+}
+
+/// How the admission of an announced transaction ended.
+struct AnnouncementSettled {
+    hash: HashType,
+    admitted: bool,
+}
+
+impl Message<AnnouncementSettled> for GossipActor {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        AnnouncementSettled { hash, admitted }: AnnouncementSettled,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.admitting.remove(&hash);
+        if admitted {
+            self.seen.insert(hash);
         }
     }
 }
@@ -1041,6 +1271,42 @@ impl Drop for WatchdogGuard {
 }
 
 /// The behaviour the sequencers on `channel_id` fetch proofs from each other over.
+/// See [`GossipActor::admit_announced`].
+async fn admit_announced(
+    Announcement {
+        transaction,
+        locator,
+    }: Announcement,
+    source: PeerId,
+    proof_objects: &ProofObjects,
+    screen: &AnnouncementScreen,
+    submit: &IngestSubmit,
+) -> anyhow::Result<()> {
+    let LeeTransactionWith::PrivacyPreserving(tx) = &transaction else {
+        anyhow::bail!("a public transaction is announced");
+    };
+    let digest = *tx.witness_set().proof();
+    let declared = proof_objects.declared_len(locator, source).await?;
+    screen(
+        transaction.clone(),
+        usize::try_from(declared).unwrap_or(usize::MAX),
+    )
+    .await?;
+    let verifies = |proof: &Proof| {
+        tx.hydrate(proof.clone())
+            .is_some_and(|tx| tx.verify_receipt())
+    };
+    let proof = proof_objects
+        .fetch(digest, locator, Admission::Optional(source), verifies)
+        .await?;
+    let hydrated = tx
+        .hydrate(proof)
+        .context("the fetched proof is not the announced one")?;
+    submit(LeeTransaction::PrivacyPreserving(hydrated)).await?;
+    proof_objects.advertise(&digest).await?;
+    Ok(())
+}
+
 fn proof_exchange(channel_id: [u8; 32]) -> ProofExchange {
     let protocol = format!("/lez/{}/v1/proofs", hex::encode(channel_id));
     request_response::json::Behaviour::with_codec(

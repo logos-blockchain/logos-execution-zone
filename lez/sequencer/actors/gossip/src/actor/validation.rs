@@ -5,7 +5,12 @@
 
 use std::collections::HashSet;
 
-use common::transaction::LeeTransaction;
+use borsh::{BorshDeserialize, BorshSerialize};
+use common::{
+    storage_cid::StorageCid,
+    transaction::{LeeTransaction, LeeTransactionWith},
+};
+use lee::privacy_preserving_transaction::circuit::ProofDigest;
 use sequencer_channel_signing_actor::protocol::Wire;
 use sequencer_core::config::{check_inscribed_size, check_transaction_size};
 use sequencer_slasher_actor::protocol::Approval;
@@ -20,6 +25,21 @@ pub enum TxEvaluation {
     Accept(Box<LeeTransaction>),
     /// Malformed / forbidden; do not forward. `GossipSub` peer scoring is not
     /// configured, so this does not currently penalize the propagating peer.
+    Reject(String),
+}
+
+/// A private transaction a node admitted, by its digest form and where Logos Storage holds its
+/// proof.
+#[derive(Debug, Clone, BorshSerialize, BorshDeserialize)]
+pub struct Announcement {
+    pub transaction: LeeTransactionWith<ProofDigest>,
+    pub locator: StorageCid,
+}
+
+#[derive(Debug)]
+pub enum AnnouncementEvaluation {
+    /// Structurally valid and authenticated; forward, and admit once its proof is fetched.
+    Accept(Box<Announcement>),
     Reject(String),
 }
 
@@ -63,8 +83,11 @@ pub fn evaluate_transaction(data: &[u8], max_block_size: u64) -> TxEvaluation {
         Ok(tx) => tx,
         Err(err) => return TxEvaluation::Reject(format!("undecodable transaction: {err}")),
     };
+    if matches!(tx, LeeTransaction::PrivacyPreserving(_)) {
+        return TxEvaluation::Reject("private transactions travel as announcements".to_owned());
+    }
 
-    if let Err(err) = check_inscribed_size(&tx, max_block_size) {
+    if let Err(err) = check_inscribed_size(&tx.digested(), max_block_size) {
         return TxEvaluation::Reject(err.to_string());
     }
 
@@ -80,6 +103,35 @@ pub fn evaluate_transaction(data: &[u8], max_block_size: u64) -> TxEvaluation {
     }
 
     TxEvaluation::Accept(Box::new(authenticated))
+}
+
+/// Decodes and stateless-checks an announced private transaction: size, then its digest form's
+/// fit in a block and its signatures. Its proof is fetched only once the fee screen passes.
+#[must_use]
+pub fn evaluate_announcement(data: &[u8], max_block_size: u64) -> AnnouncementEvaluation {
+    if let Err(err) = check_transaction_size(data.len()) {
+        return AnnouncementEvaluation::Reject(err.to_string());
+    }
+
+    let announcement: Announcement = match borsh::from_slice(data) {
+        Ok(announcement) => announcement,
+        Err(err) => {
+            return AnnouncementEvaluation::Reject(format!("undecodable announcement: {err}"));
+        }
+    };
+    let LeeTransactionWith::PrivacyPreserving(tx) = &announcement.transaction else {
+        return AnnouncementEvaluation::Reject("a public transaction is announced".to_owned());
+    };
+
+    if let Err(err) = check_inscribed_size(&announcement.transaction, max_block_size) {
+        return AnnouncementEvaluation::Reject(err.to_string());
+    }
+
+    if let Err(err) = tx.check_stateless() {
+        return AnnouncementEvaluation::Reject(format!("stateless check failed: {err:?}"));
+    }
+
+    AnnouncementEvaluation::Accept(Box::new(announcement))
 }
 
 /// Decodes a gossiped slash approval, drops it if the committee does not

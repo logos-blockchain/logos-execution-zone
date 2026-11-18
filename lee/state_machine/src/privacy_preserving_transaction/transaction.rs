@@ -102,6 +102,15 @@ impl PrivacyPreservingTransaction {
     pub fn hash(&self) -> [u8; 32] {
         self.digested().hash()
     }
+
+    /// Whether the proof is a receipt of the privacy-preserving circuit for the message's claim.
+    /// Reads no state: executing the transaction anchors the claim in it.
+    #[must_use]
+    pub fn verify_receipt(&self) -> bool {
+        self.witness_set
+            .proof
+            .is_valid_for(&self.message.public_context, &self.message.execution)
+    }
 }
 
 #[cfg(test)]
