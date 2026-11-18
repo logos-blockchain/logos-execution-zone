@@ -1,0 +1,8 @@
+- provider_id: 59c662860b737f4e2515599adb3434856db8070b373a449ff66955ad3da6b473
+  zk_id: 6a800ed77f1c55fd8b3af1bd0c4b9bd000e404e7ebb5c13864d026ab90b50a1b
+  note_pk: 756b77fcff387d7358943535aca10505f1bda72343ceadf45433c5dbf4e2c903
+  note_stake_pk: 756b77fcff387d7358943535aca10505f1bda72343ceadf45433c5dbf4e2c903
+  locators:
+    - /ip4/65.109.51.37/udp/3400/quic-v1
+  service_type: BN
+  amount: 1000000000

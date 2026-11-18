@@ -73,3 +73,17 @@ The scripts folder contains the existing configuration entrypoints:
     ```bash
     curl -O https://raw.githubusercontent.com/logos-blockchain/logos-blockchain/master/tests/kzgrs/kzgrs_test_params
     ```
+
+## Deployment settings
+
+`deployment-settings.yaml` and its slow-finality variant are generated, genesis
+block included, from the inputs in `genesis/` by the genesis tool of the
+resolved Logos revision. Edit the inputs, not the output, then run:
+
+```bash
+just regenerate-bedrock-settings
+```
+
+The public keys in `genesis/` and `node-config.yaml` are derived from the secret
+keys in `node-config.yaml`, so they change when the node changes its key
+derivation.

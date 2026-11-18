@@ -28,7 +28,7 @@ x-sequencer: &sequencer
 x-sequencer-environment: &sequencer_environment
   SEQUENCER_CONFIG: /etc/sequencer_service/sequencer_config.json
   SEQUENCER_CHANNEL_SIGNING_KEY_FILE: /run/secrets/channel_signing_key
-  SEQUENCER_FUNDING_PUBLIC_KEY: ${LEZ_COMPOSE_FUNDING_PUBLIC_KEY:-2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26}
+  SEQUENCER_FUNDING_PUBLIC_KEY: ${LEZ_COMPOSE_FUNDING_PUBLIC_KEY:-756b77fcff387d7358943535aca10505f1bda72343ceadf45433c5dbf4e2c903}
   SEQUENCER_BEDROCK_NODE_URL: ${LEZ_COMPOSE_SEQUENCER_BEDROCK_NODE_URL:-http://logos-blockchain-node-0:18080}
   # Traces go to Alloy, which runs with `--profile monitoring`. Without it, a sequencer warns once
   # that it cannot export, and drops them. Empty turns exporting off.
