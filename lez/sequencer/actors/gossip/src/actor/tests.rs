@@ -27,6 +27,7 @@ use mempool::{MemPool, MemPoolHandle};
 use sequencer_channel_signing_actor::protocol::{Signature, Wire};
 use sequencer_core::{
     TransactionOrigin,
+    availability::AvailabilityMessage,
     config::{GossipConfig, LogosStorageConfig, PROOF_STORE_CAPACITY},
     proof_objects::{MemoryRecords, ProofObjects},
 };
@@ -80,6 +81,31 @@ impl Message<Approval> for ApprovalSink {
     async fn handle(
         &mut self,
         msg: Approval,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        _ = self.0.send(msg);
+    }
+}
+
+/// Forwards every availability message the gossip actor delivers into a channel the test can
+/// assert on; stands in for the executor.
+struct AvailabilitySink(mpsc::UnboundedSender<AvailabilityMessage>);
+
+impl Actor for AvailabilitySink {
+    type Args = Self;
+    type Error = Infallible;
+
+    async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self, Infallible> {
+        Ok(args)
+    }
+}
+
+impl Message<AvailabilityMessage> for AvailabilitySink {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        msg: AvailabilityMessage,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         _ = self.0.send(msg);
@@ -224,6 +250,10 @@ fn test_approval_sink() -> kameo::actor::Recipient<Approval> {
     ApprovalSink::spawn(ApprovalSink(mpsc::unbounded_channel().0)).recipient()
 }
 
+fn test_availability_sink() -> kameo::actor::Recipient<AvailabilityMessage> {
+    AvailabilitySink::spawn(AvailabilitySink(mpsc::unbounded_channel().0)).recipient()
+}
+
 fn test_config_sink() -> kameo::actor::Recipient<Wire> {
     ConfigSink::spawn(ConfigSink(mpsc::unbounded_channel().0)).recipient()
 }
@@ -290,6 +320,7 @@ async fn start_node_on(
         proofs.clone(),
         Arc::clone(&proof_objects),
         unscreened_announcements(),
+        test_availability_sink(),
         config_sink_ref.recipient(),
         channel_system_approval_submit(system_approval_tx),
     )
@@ -420,6 +451,7 @@ async fn new_binds_and_reports_listen_addr() {
             PROOF_STORE_CAPACITY,
         ))),
         unscreened_announcements(),
+        test_availability_sink(),
         test_config_sink(),
         channel_system_approval_submit(mpsc::unbounded_channel().0),
     )
@@ -444,6 +476,7 @@ async fn kill_stops_the_swarm_and_frees_the_socket() {
             PROOF_STORE_CAPACITY,
         ))),
         unscreened_announcements(),
+        test_availability_sink(),
         test_config_sink(),
         channel_system_approval_submit(mpsc::unbounded_channel().0),
     )
@@ -474,6 +507,7 @@ async fn kill_stops_the_swarm_and_frees_the_socket() {
             PROOF_STORE_CAPACITY,
         ))),
         unscreened_announcements(),
+        test_availability_sink(),
         test_config_sink(),
         channel_system_approval_submit(mpsc::unbounded_channel().0),
     )

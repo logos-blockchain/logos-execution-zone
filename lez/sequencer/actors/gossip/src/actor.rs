@@ -38,6 +38,7 @@ use logos_blockchain_zone_sdk::key_management_system_service::keys::{
 use sequencer_channel_signing_actor::protocol::Wire;
 use sequencer_core::{
     StakeConfigUpdate,
+    availability::AvailabilityMessage,
     config::{GossipConfig, MAX_BEDROCK_TX_SIZE, MAX_PUBLISHABLE_BLOCK_SIZE, MAX_TRANSACTION_SIZE},
     proof_objects::{Admission, ProofObjects},
 };
@@ -48,7 +49,9 @@ use tracing::Instrument as _;
 
 pub use self::validation::Announcement;
 use self::{seen_cache::SeenCache, validation::AnnouncementEvaluation};
-use crate::protocol::{FetchProof, GetConnectedPeers, Publish, PublishConfig, RetryBootstrap};
+use crate::protocol::{
+    FetchProof, GetConnectedPeers, Publish, PublishAvailability, PublishConfig, RetryBootstrap,
+};
 
 mod seen_cache;
 #[cfg(test)]
@@ -140,6 +143,13 @@ pub struct GossipActor {
     admitting: HashSet<HashType>,
     /// Same as `pending_publish`, for this node's own announcements.
     pending_announcements: BoundedVecDeque<Announcement>,
+    /// Candidates of proof-bearing blocks and the approvals of their availability ride their
+    /// own topic.
+    availability_topic: gossipsub::IdentTopic,
+    /// Where accepted inbound candidates and approvals go: the executor.
+    availability_sink: Recipient<AvailabilityMessage>,
+    /// Same as `pending_publish`, for this node's own candidates and approvals.
+    pending_availability: BoundedVecDeque<AvailabilityMessage>,
     /// Where an admission or a seeding that ran apart reports back; set on start.
     myself: Option<WeakActorRef<Self>>,
     /// Configured bootstrap peers, re-dialed while the node is isolated.
@@ -199,6 +209,7 @@ impl GossipActor {
         proof_store: ProofStore,
         proof_objects: Arc<ProofObjects>,
         screen: AnnouncementScreen,
+        availability_sink: Recipient<AvailabilityMessage>,
         config_sink: Recipient<Wire>,
         submit_system_approval: SystemApprovalSubmit,
     ) -> Result<Self> {
@@ -224,10 +235,12 @@ impl GossipActor {
             Self::get_system_approvals_topic_for_channel(channel_id).hash();
         let config_topic_hash = Self::get_config_topic_for_channel(channel_id).hash();
         let announcements_topic_hash = Self::get_announcements_topic_for_channel(channel_id).hash();
+        let availability_topic_hash = Self::get_availability_topic_for_channel(channel_id).hash();
         let message_id_fn = move |msg: &gossipsub::Message| {
             if msg.topic == approvals_topic_hash
                 || msg.topic == system_approvals_topic_hash
                 || msg.topic == config_topic_hash
+                || msg.topic == availability_topic_hash
             {
                 return default_message_id(msg);
             }
@@ -335,6 +348,13 @@ impl GossipActor {
             .subscribe(&announcements_topic)
             .context("Failed to subscribe to gossip private-announcement topic")?;
 
+        let availability_topic = Self::get_availability_topic_for_channel(channel_id);
+        swarm
+            .behaviour_mut()
+            .gossipsub
+            .subscribe(&availability_topic)
+            .context("Failed to subscribe to gossip availability topic")?;
+
         swarm
             .listen_on(listen_addr)
             .context("Failed to listen on gossip address")?;
@@ -391,6 +411,9 @@ impl GossipActor {
             screen,
             admitting: HashSet::new(),
             pending_announcements: BoundedVecDeque::new(PENDING_PUBLISH_CAPACITY),
+            availability_topic,
+            availability_sink,
+            pending_availability: BoundedVecDeque::new(PENDING_PUBLISH_CAPACITY),
             myself: None,
             bootstrap,
             pending_publish: BoundedVecDeque::new(PENDING_PUBLISH_CAPACITY),
@@ -413,6 +436,11 @@ impl GossipActor {
     #[must_use]
     pub fn get_topic_for_channel(channel_id: [u8; 32]) -> gossipsub::IdentTopic {
         gossipsub::IdentTopic::new(format!("/lez/{}/v1/txs", hex::encode(channel_id)))
+    }
+
+    #[must_use]
+    pub fn get_availability_topic_for_channel(channel_id: [u8; 32]) -> gossipsub::IdentTopic {
+        gossipsub::IdentTopic::new(format!("/lez/{}/v1/availability", hex::encode(channel_id)))
     }
 
     #[must_use]
@@ -535,6 +563,15 @@ impl GossipActor {
                             &message.data,
                         );
                     });
+                } else if message.topic == self.availability_topic.hash() {
+                    span("gossip.availability").in_scope(|| {
+                        self.on_availability_message(
+                            propagation_source,
+                            message.source.as_ref(),
+                            &message_id,
+                            &message.data,
+                        );
+                    });
                 } else if message.topic == self.announcements_topic.hash() {
                     let span = span("gossip.announcement");
                     span.in_scope(|| {
@@ -570,6 +607,11 @@ impl GossipActor {
                 if topic == self.announcements_topic.hash() =>
             {
                 self.flush_pending_announcements();
+            }
+            GossipBehaviourEvent::Gossipsub(gossipsub::Event::Subscribed { topic, .. })
+                if topic == self.availability_topic.hash() =>
+            {
+                self.flush_pending_availability();
             }
             GossipBehaviourEvent::Identify(identify::Event::Received { peer_id, info, .. }) => {
                 if let Ok(pubkey) = info.public_key.try_into_ed25519()
@@ -969,6 +1011,71 @@ impl GossipActor {
             .report_message_validation_result(message_id, &source, acceptance);
     }
 
+    /// Validates an inbound candidate or availability approval against the committee the follow
+    /// path last read, hands it to the executor and reports the mesh acceptance decision.
+    fn on_availability_message(
+        &mut self,
+        source: PeerId,
+        origin: Option<&PeerId>,
+        message_id: &gossipsub::MessageId,
+        data: &[u8],
+    ) {
+        use self::validation::{AvailabilityEvaluation, evaluate_availability};
+
+        let evaluation = evaluate_availability(
+            data,
+            self.channel_id,
+            self.accredited_keys.as_ref(),
+            origin.and_then(inlined_ed25519_key),
+        );
+        let acceptance = match evaluation {
+            AvailabilityEvaluation::Reject(reason) => {
+                tracing::debug!(%source, %reason, "Rejecting an availability message");
+                gossipsub::MessageAcceptance::Reject
+            }
+            AvailabilityEvaluation::Ignore(reason) => {
+                tracing::debug!(%source, %reason, "Ignoring an availability message");
+                gossipsub::MessageAcceptance::Ignore
+            }
+            AvailabilityEvaluation::Accept(message) => {
+                if let Err(err) = self.availability_sink.tell(message).try_send() {
+                    tracing::debug!(error = %err, "Dropping an inbound availability message");
+                }
+                gossipsub::MessageAcceptance::Accept
+            }
+        };
+
+        _ = self
+            .swarm_mut()
+            .behaviour_mut()
+            .gossipsub
+            .report_message_validation_result(message_id, &source, acceptance);
+    }
+
+    /// Publishes this node's own candidate or approval, queued and retried like a transaction.
+    fn publish_availability(&mut self, message: AvailabilityMessage) {
+        let topic = self.availability_topic.clone();
+        let bytes = borsh::to_vec(&message).expect("availability message serializes");
+        match self
+            .swarm_mut()
+            .behaviour_mut()
+            .gossipsub
+            .publish(topic, bytes)
+        {
+            Ok(_) | Err(gossipsub::PublishError::Duplicate) => {}
+            Err(err) => {
+                tracing::debug!(error = %err, "Queueing an availability publish for retry");
+                _ = self.pending_availability.push_back(message);
+            }
+        }
+    }
+
+    fn flush_pending_availability(&mut self) {
+        for message in self.pending_availability.drain_all() {
+            self.publish_availability(message);
+        }
+    }
+
     /// Publishes one of this node's own channel-config messages, queued and
     /// retried like a transaction: a candidate has to reach every peer that
     /// might sign it.
@@ -1174,6 +1281,18 @@ impl Message<Approval> for GossipActor {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.publish_approval(msg);
+    }
+}
+
+impl Message<PublishAvailability> for GossipActor {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        PublishAvailability(message): PublishAvailability,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.publish_availability(message);
     }
 }
 

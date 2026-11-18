@@ -80,6 +80,7 @@ use crate::{
     task_group::TaskGroup,
 };
 
+pub mod availability;
 pub mod committee_discovery;
 pub mod config;
 pub mod cross_zone_watcher;

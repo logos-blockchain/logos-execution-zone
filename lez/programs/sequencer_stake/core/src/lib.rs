@@ -14,6 +14,8 @@ const INVALID_KEY: &str = "invalid Ed25519 public key";
 const SEQUENCER_STAKE_CONFIG_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/MinSequencerStake/0000";
 /// Names the fault, so a second fault gets its own domain and its own signatures.
 pub const SLASH_APPROVAL_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/SlashApproval/NonBlock";
+/// Tag of a committee member's approval that it holds and serves a candidate block's proofs.
+pub const AVAILABILITY_APPROVAL_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/AvailabilityApproval/0";
 const SLASH_SINK_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/SlashedStakeSink/00000";
 
 pub const SEQUENCER_STAKE_NAME: lee_core::program::SystemProgramName =
@@ -398,6 +400,33 @@ pub fn slash_approval_message(
     message.extend_from_slice(&channel_id);
     message.extend_from_slice(&sequencer_key.to_bytes());
     message.extend_from_slice(&inscription);
+    message
+}
+
+/// Bytes a committee member signs to approve that it holds and serves a candidate's proofs.
+///
+/// The candidate is the block `candidate_hash` names, which `producer` built on `parent` in the
+/// turn starting at `turn_start_slot`, with its proofs under the Logos Storage CIDs `locators`.
+#[must_use]
+pub fn availability_approval_message(
+    channel_id: [u8; 32],
+    producer: SequencerKey,
+    turn_start_slot: u64,
+    parent: [u8; 32],
+    candidate_hash: [u8; 32],
+    locators: impl IntoIterator<Item = impl AsRef<[u8]>>,
+) -> Vec<u8> {
+    let mut message = Vec::with_capacity(256);
+    message.extend_from_slice(&AVAILABILITY_APPROVAL_DOMAIN);
+    message.extend_from_slice(&channel_id);
+    message.extend_from_slice(&producer.to_bytes());
+    message.extend_from_slice(&turn_start_slot.to_le_bytes());
+    message.extend_from_slice(&parent);
+    message.extend_from_slice(&candidate_hash);
+    // Every field above is fixed-width, so the locators need no count.
+    for locator in locators {
+        message.extend_from_slice(locator.as_ref());
+    }
     message
 }
 

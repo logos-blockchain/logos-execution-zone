@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant},
 };
@@ -21,10 +21,12 @@ use sequencer_bedrock_actor::{
 };
 use sequencer_core::{
     SequencerCore, TransactionOrigin,
+    availability::{AvailabilityApproval, AvailabilityMessage, CandidateId},
     config::SequencerConfig,
     proof_objects::{Admission, ProofObjects},
 };
 use sequencer_gossip_actor::protocol::FetchProof;
+use sequencer_stake_core::SequencerKey;
 use sequencer_storage_actor::{StorageActorTrait, protocol::AtomicUpdate};
 use sharding_pool_actor::ShardingPoolActor;
 use tracing::{debug, info};
@@ -40,6 +42,9 @@ mod skip;
 #[cfg(test)]
 mod tests;
 mod turn;
+
+/// How many of this node's own candidates approvals are kept for.
+const TRACKED_CANDIDATES: usize = 8;
 
 /// The first wait before a missing proof is sought again; it doubles per attempt, up to 64 times.
 const RECOVERY_BACKOFF: Duration = Duration::from_secs(1);
@@ -61,6 +66,8 @@ pub struct OnlineState<S: StorageActorTrait, B: BedrockActorTrait> {
     proof_requests_ref: ActorRef<PubSub<FetchProof>>,
     /// The missing proofs being recovered, each retried with backoff.
     recoveries: Arc<Mutex<BTreeMap<ProofDigest, Recovery>>>,
+    /// The keys that approved this node's own recent candidates, by candidate.
+    availability_approvals: BTreeMap<CandidateId, BTreeSet<SequencerKey>>,
     // TODO: Remove this field
     background_tasks: sequencer_core::task_group::TaskGroup,
 }
@@ -186,6 +193,32 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                         .unwrap_or_else(Instant::now);
                 }
             });
+        }
+    }
+
+    /// Takes in a peer's candidate or availability approval. Only approvals of this node's own
+    /// candidates are kept, for its most recent turns.
+    pub fn on_availability(&mut self, message: AvailabilityMessage) {
+        match message {
+            AvailabilityMessage::Approval(approval) => {
+                if approval.candidate.producer.to_bytes()
+                    != self.sequencer.channel_signing_public_key()
+                {
+                    return;
+                }
+                let AvailabilityApproval {
+                    candidate, signer, ..
+                } = *approval;
+                self.availability_approvals
+                    .entry(candidate)
+                    .or_default()
+                    .insert(signer);
+                // Candidates of one producer order by turn, so the first is the oldest.
+                while self.availability_approvals.len() > TRACKED_CANDIDATES {
+                    self.availability_approvals.pop_first();
+                }
+            }
+            AvailabilityMessage::Candidate(_) => {}
         }
     }
 
@@ -345,6 +378,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             skip_policy: SkipPolicy::default(),
             proof_requests_ref,
             recoveries: Arc::default(),
+            availability_approvals: BTreeMap::new(),
             sequencer,
         })
     }

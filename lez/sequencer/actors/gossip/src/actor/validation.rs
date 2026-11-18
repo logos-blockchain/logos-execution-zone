@@ -12,7 +12,10 @@ use common::{
 };
 use lee::privacy_preserving_transaction::circuit::ProofDigest;
 use sequencer_channel_signing_actor::protocol::Wire;
-use sequencer_core::config::{check_inscribed_size, check_transaction_size};
+use sequencer_core::{
+    availability::AvailabilityMessage,
+    config::{check_inscribed_size, check_transaction_size},
+};
 use sequencer_slasher_actor::protocol::Approval;
 use system_upgrader_core::SignedApproval;
 
@@ -40,6 +43,15 @@ pub struct Announcement {
 pub enum AnnouncementEvaluation {
     /// Structurally valid and authenticated; forward, and admit once its proof is fetched.
     Accept(Box<Announcement>),
+    Reject(String),
+}
+
+#[derive(Debug)]
+pub enum AvailabilityEvaluation {
+    /// From an accredited key and well-formed; forward and hand to the executor.
+    Accept(AvailabilityMessage),
+    /// Nothing this node can use, but not the sender's fault.
+    Ignore(String),
     Reject(String),
 }
 
@@ -132,6 +144,60 @@ pub fn evaluate_announcement(data: &[u8], max_block_size: u64) -> AnnouncementEv
     }
 
     AnnouncementEvaluation::Accept(Box::new(announcement))
+}
+
+/// Decodes a gossiped availability message. A candidate must come from its producer, an
+/// accredited key, and name its own block; an approval must be signed by the accredited key it
+/// names. Accreditation comes first, so a minted key buys no signature check.
+#[must_use]
+pub fn evaluate_availability(
+    data: &[u8],
+    channel_id: [u8; 32],
+    accredited_keys: Option<&HashSet<[u8; 32]>>,
+    source: Option<[u8; 32]>,
+) -> AvailabilityEvaluation {
+    let message: AvailabilityMessage = match borsh::from_slice(data) {
+        Ok(message) => message,
+        Err(err) => {
+            return AvailabilityEvaluation::Reject(format!(
+                "undecodable availability message: {err}"
+            ));
+        }
+    };
+    let accredited = |key: [u8; 32]| accredited_keys.is_none_or(|keys| keys.contains(&key));
+    match &message {
+        AvailabilityMessage::Candidate(candidate) => {
+            let producer = candidate.id.producer.to_bytes();
+            if source != Some(producer) {
+                return AvailabilityEvaluation::Reject(
+                    "candidate not published by its producer".to_owned(),
+                );
+            }
+            if !accredited(producer) {
+                return AvailabilityEvaluation::Ignore(
+                    "producer is not an accredited key".to_owned(),
+                );
+            }
+            if !candidate.is_consistent() {
+                return AvailabilityEvaluation::Reject(
+                    "candidate does not name its block".to_owned(),
+                );
+            }
+        }
+        AvailabilityMessage::Approval(approval) => {
+            if !accredited(approval.signer.to_bytes()) {
+                return AvailabilityEvaluation::Ignore(
+                    "signer is not an accredited key".to_owned(),
+                );
+            }
+            if !approval.verify(channel_id) {
+                return AvailabilityEvaluation::Reject(
+                    "approval signature does not verify".to_owned(),
+                );
+            }
+        }
+    }
+    AvailabilityEvaluation::Accept(message)
 }
 
 /// Decodes a gossiped slash approval, drops it if the committee does not

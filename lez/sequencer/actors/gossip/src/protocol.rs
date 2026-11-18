@@ -17,6 +17,10 @@ pub enum Publish {
 #[cfg(feature = "actor")]
 pub struct PublishConfig(pub sequencer_channel_signing_actor::protocol::Wire);
 
+/// Publish this node's own candidate or availability approval to the mesh.
+#[cfg(feature = "actor")]
+pub struct PublishAvailability(pub sequencer_core::availability::AvailabilityMessage);
+
 /// Re-dial the configured bootstrap peers if the node has no connected
 /// peers; sent periodically by the scheduler.
 #[derive(Copy, Clone)]

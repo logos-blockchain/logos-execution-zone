@@ -40,6 +40,12 @@ impl StorageCid {
     }
 }
 
+impl AsRef<[u8]> for StorageCid {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 /// Bytes that are not a manifest CID of the canonical form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("not a canonical Logos Storage manifest CID")]

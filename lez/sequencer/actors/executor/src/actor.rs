@@ -33,7 +33,10 @@ use sequencer_bedrock_actor::{
     protocol::{ChannelEvent, ChannelEventKind, Ed25519Key, PublisherEvent},
 };
 use sequencer_channel_signing_actor::{ChannelSigningActor, protocol as channel_signing_protocol};
-use sequencer_core::{StakeConfigUpdate, config::SequencerConfig, proof_objects::ProofObjects};
+use sequencer_core::{
+    StakeConfigUpdate, availability::AvailabilityMessage, config::SequencerConfig,
+    proof_objects::ProofObjects,
+};
 use sequencer_gossip_actor::protocol::FetchProof;
 use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::StorageActorTrait;
@@ -408,6 +411,22 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
             .try_push((origin.into(), transaction))
             .map_err(|_err| Error::MempoolIsFull)?;
         Ok(())
+    }
+}
+
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<AvailabilityMessage>
+    for ExecutorActor<S, B>
+{
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        msg: AvailabilityMessage,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        if let State::Online(online) = &mut self.state {
+            online.on_availability(msg);
+        }
     }
 }
 

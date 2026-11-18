@@ -598,6 +598,8 @@ pub async fn setup_gossip(
         proof_store,
         proof_objects,
         screen,
+        // Accepted candidates and availability approvals go to the executor.
+        executor_ref.clone().recipient(),
         // Screened inbound channel-config messages go straight to the actor.
         channel_signer_ref.clone().recipient(),
         submit_system_approval,
