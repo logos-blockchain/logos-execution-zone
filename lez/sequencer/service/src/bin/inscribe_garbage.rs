@@ -21,7 +21,7 @@ use sequencer_bedrock_actor::{
     protocol::{
         ChannelEntry, ChannelEvent, ChannelEventKind, ChannelId, CheckIsOurTurn, FollowChannel,
         GetChannelTipMessageId, InitializeChannelPublisher, MsgId, PublishRawInscription,
-        PublisherEvent, ViewChange,
+        ViewChange,
     },
 };
 use sequencer_storage_actor::mock::MockStorageActor;
@@ -56,10 +56,7 @@ impl Message<ChannelEvent> for BlockWatcherActor {
     type Reply = ();
 
     async fn handle(&mut self, msg: ChannelEvent, _ctx: &mut Context<Self, Self::Reply>) {
-        let ChannelEventKind::Publisher(publisher) = msg.event else {
-            return;
-        };
-        let PublisherEvent::Update(update) = &*publisher else {
+        let ChannelEventKind::Update(update) = msg.event else {
             return;
         };
 
@@ -188,10 +185,7 @@ async fn main() -> Result<()> {
         backfill_batch_slots: config.bedrock_config.backfill_batch_slots,
     });
     bedrock_ref
-        .ask(FollowChannel {
-            channel_id,
-            anchor: None,
-        })
+        .ask(FollowChannel { channel_id })
         .await
         .context("Failed to follow the channel")?;
     bedrock_ref
@@ -202,7 +196,6 @@ async fn main() -> Result<()> {
             priority_fee_percent: config.bedrock_config.priority_fee_percent,
             resubmit_interval: Duration::from_secs(5),
             stale_refund_slots: config.bedrock_config.stale_refund_slots,
-            replayed_up_to: None,
         })
         .await
         .context("Failed to initialize Bedrock channel publisher")?;

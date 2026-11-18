@@ -2,7 +2,7 @@
 
 use chain_state::{ChainMismatch, ingest_error::BlockIngestError};
 use common::{HashType, test_utils::produce_dummy_block};
-use sequencer_bedrock_actor::{mock::CannedChannel, protocol::FinalizedBlock};
+use sequencer_bedrock_actor::{mock::CannedChannel, protocol::Slot};
 use sequencer_storage_actor::{mock::CannedStore, protocol::ZoneAnchorRecord};
 use tokio::test;
 
@@ -10,7 +10,7 @@ use crate::{
     actor::{
         state::State,
         tests::{
-            finalized_at, initialize_state, sequencer_config,
+            Finalized, finalized_at, finalized_updates, initialize_state, sequencer_config,
             stored_chain::{
                 block_at, checkpoint_record, finalized_genesis_store, fresh_store, genesis,
                 with_finalized,
@@ -21,15 +21,16 @@ use crate::{
 };
 
 /// The error starting over `store` and following `history` refuses with. `history` is the
-/// finalized channel entries the Bedrock actor streams from the stored anchor on; its last entry
-/// is the channel tip, and an empty history means there is no channel.
-async fn refusal(store: CannedStore, history: Vec<FinalizedBlock>) -> Error {
+/// finalized channel entries the Bedrock actor reports from the stored checkpoint on; its last
+/// entry is the channel tip, and an empty history means there is no channel.
+async fn refusal(store: CannedStore, history: Vec<Finalized>) -> Error {
     let (config, _home) = sequencer_config();
+    let channel_id = config.bedrock_config.channel_id;
     let channel = history
         .last()
         .map_or_else(CannedChannel::absent, |tip| CannedChannel {
-            tip_slot: Some(tip.slot),
-            tip: Some(tip.msg_id),
+            tip_slot: Some(Slot::from(tip.slot)),
+            tip: Some(tip.msg),
             ..CannedChannel::absent()
         })
         .share();
@@ -37,13 +38,14 @@ async fn refusal(store: CannedStore, history: Vec<FinalizedBlock>) -> Error {
         Ok(state) => state,
         Err(err) => return err,
     };
-    let State::Bootstrapping(bootstrapping) = &mut state else {
-        panic!("a channel to refuse must be bootstrapped from");
-    };
-    for finalized in &history {
-        if let Err(err) = Box::pin(bootstrapping.on_finalized_block(finalized)).await {
-            return err;
-        }
+    for update in finalized_updates(channel_id, history) {
+        let State::Bootstrapping(bootstrapping) = state else {
+            panic!("a channel to refuse must be bootstrapped from");
+        };
+        state = match Box::pin(bootstrapping.on_channel_event(&update.event)).await {
+            Ok(next) => next,
+            Err(err) => return err,
+        };
     }
     panic!("bootstrapping must refuse this channel");
 }

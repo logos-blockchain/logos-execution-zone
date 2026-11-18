@@ -677,19 +677,23 @@ fn bedrock_actor_args(
     use std::sync::{Arc, Mutex};
 
     use sequencer_bedrock_actor::protocol::{
-        AccreditedKeys, ChannelSeq, Checkpoint, HeaderId, MsgId, PublishOutcome, Slot,
+        AccreditedKeys, ChannelSeq, Checkpoint, FollowStart, HeaderId, MsgId, PublishOutcome, Slot,
     };
 
     let mut mock = BedrockActor::default();
 
     mock.expect_handle_initialize_channel_publisher()
-        .returning(|_msg, _ctx| Ok(Some(ChannelSeq::mocked(0))));
+        .returning(|_msg, _ctx| Ok(()));
 
     mock.expect_handle_check_channel_exists()
         .returning(|_msg, _ctx| Ok(false));
 
-    mock.expect_handle_follow_channel()
-        .returning(|_msg, _ctx| Ok(()));
+    mock.expect_handle_follow_channel().returning(|_msg, _ctx| {
+        Ok(FollowStart {
+            seq: ChannelSeq::mocked(0),
+            lib_slot: None,
+        })
+    });
 
     mock.expect_handle_get_channel_tip_slot()
         .returning(|_msg, _ctx| Ok(Some(Slot::from(0))));

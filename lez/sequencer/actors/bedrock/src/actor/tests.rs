@@ -32,8 +32,9 @@ use logos_blockchain_zone_sdk::{
 };
 
 use super::{
-    BlockSummary, NodeReader, keep_newest_block_summaries,
-    publisher::{channel_entries, genesis_config_op, genesis_config_proof},
+    BlockSummary, NodeReader,
+    channel::{channel_entries, genesis_config_op, genesis_config_proof},
+    keep_newest_block_summaries,
 };
 use crate::protocol::ChannelParams;
 

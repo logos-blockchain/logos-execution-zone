@@ -8,7 +8,6 @@ use std::{
 use anyhow::anyhow;
 use common::block::Block;
 use logos_blockchain_zone_sdk::core::mantle::ledger::{Inputs, NoteId, Utxo};
-use sequencer_storage_actor::protocol::ZoneAnchorRecord;
 
 use super::MockBedrockActor;
 use crate::{
@@ -16,9 +15,8 @@ use crate::{
     error::Error,
     protocol::{
         AccreditedKeys, ChannelReadStream, ChannelSeq, CreateChannel, FilterFinallyAbsent,
-        HeaderId, InitializeChannelPublisher, MsgId, PreparePin, PreparedPin, PublishBlock,
-        PublishOutcome, PublishPin, ReadChannel, SequencerCheckpoint, SequencerKey, Slot,
-        WithdrawArg, ZoneMessage,
+        FollowStart, HeaderId, MsgId, PreparePin, PreparedPin, PublishBlock, PublishOutcome,
+        PublishPin, ReadChannel, SequencerCheckpoint, SequencerKey, Slot, WithdrawArg, ZoneMessage,
     },
 };
 
@@ -51,11 +49,10 @@ pub struct CannedChannel {
     pub pending_removals: BTreeSet<SequencerKey>,
     /// Channel sequence the last publish left the channel at.
     pub seq: u64,
-    /// [`InitializeChannelPublisher::replayed_up_to`] of the last publisher initialized.
-    pub replayed_up_to: Option<Slot>,
-    /// [`FollowChannel::anchor`](crate::protocol::FollowChannel::anchor) of every follow, in
-    /// order.
-    pub follows: Vec<Option<ZoneAnchorRecord>>,
+    /// [`FollowStart::lib_slot`] a follow reports.
+    pub lib_slot: Option<Slot>,
+    /// Publishers initialized so far.
+    pub publisher_inits: u32,
 }
 
 impl CannedChannel {
@@ -98,17 +95,20 @@ impl SharedChannel {
         mock.expect_handle_initialize_channel_publisher()
             .returning({
                 let channel = self.clone();
-                move |msg: InitializeChannelPublisher, _ctx| {
+                move |_msg, _ctx| {
                     let mut channel = channel.lock();
-                    channel.replayed_up_to = msg.replayed_up_to;
-                    Ok(Some(ChannelSeq::mocked(channel.seq)))
+                    channel.publisher_inits = channel.publisher_inits.saturating_add(1);
+                    Ok(())
                 }
             });
         mock.expect_handle_follow_channel().returning({
             let channel = self.clone();
-            move |msg, _ctx| {
-                channel.lock().follows.push(msg.anchor);
-                Ok(())
+            move |_msg, _ctx| {
+                let channel = channel.lock();
+                Ok(FollowStart {
+                    seq: ChannelSeq::mocked(channel.seq),
+                    lib_slot: channel.lib_slot,
+                })
             }
         });
         mock.expect_handle_check_channel_exists().returning({

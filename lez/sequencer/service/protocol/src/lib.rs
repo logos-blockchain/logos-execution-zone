@@ -99,11 +99,11 @@ pub enum SequencerStatus {
     /// finalized.
     #[serde(rename_all = "camelCase")]
     Bootstrapping {
-        /// The Bedrock slot bootstrapping completes at: the last one the node had finalized, as
-        /// of the latest batch. [`None`] before the first batch.
+        /// The Bedrock slot bootstrapping completes at: the last one the node had finalized when
+        /// following the channel started. [`None`] if it could not be read.
         target_slot: Option<u64>,
         /// The Bedrock slot the finalized history is replayed up to, [`None`] before the first
-        /// batch.
+        /// update.
         replayed_up_to_slot: Option<u64>,
         /// Height of the chain replayed so far, [`None`] while it is empty.
         height: Option<BlockId>,
