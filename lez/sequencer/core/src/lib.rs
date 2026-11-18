@@ -58,6 +58,7 @@ use sequencer_slasher_actor::{
     SlasherActor,
     protocol::{Propose, Report, ReportedOffence, SetCommittee},
 };
+use sequencer_stake_core::SequencerKey;
 use sequencer_storage_actor::{
     StorageActorTrait,
     protocol::{
@@ -201,6 +202,9 @@ pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
     proofs: ProofStore,
     /// Where this node seeds the proofs of the blocks it produces.
     proof_objects: Arc<proof_objects::ProofObjects>,
+    /// Set while a block is rebuilt without its private transactions, which the builder then
+    /// returns to the mempool.
+    defer_private: bool,
     mempool: MemPool<(TransactionOrigin, LeeTransaction)>,
     sequencer_config: SequencerConfig,
     /// Cross-zone watchers, stopped when this sequencer is dropped. They hold a
@@ -319,6 +323,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             channel_id,
             proofs: chain.proofs().clone(),
             proof_objects,
+            defer_private: false,
             chain: Arc::new(Mutex::new(chain)),
             mempool,
             stake_config: StakeConfigUpdate::default(),
@@ -742,10 +747,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         }
     }
 
-    /// Runs everything this sequencer owes its turn: builds a block from
-    /// mempool transactions, publishes it via zone-sdk, and submits any
-    /// committee-config update the new state calls for.
-    pub async fn run_production_turn(&mut self) -> Result<u64> {
+    /// Runs everything this sequencer owes its turn: builds a block from mempool transactions and
+    /// seeds its proofs. A block that needs no approvals is published via zone-sdk, with any
+    /// committee-config update the new state calls for; a proof-bearing block of a committee is
+    /// parked for its approvals. A failed seeding publishes the public remainder instead.
+    pub async fn produce(&mut self, turn_start_slot: Option<u64>) -> Result<TurnOutcome> {
         // A draft short of signatures is dropped here, before its fee-note
         // reservation lapses and the block below spends that note.
         if self
@@ -757,12 +763,142 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             self.discard_config_draft().await;
         }
 
-        let mut built = self
+        let built = self
             .build_block_from_mempool()
             .await
             .context("Failed to build block from mempool transactions")?;
-        let mut locators = self.seed_proofs(&mut built).await?;
+        if built.block.body.proofs().next().is_none() {
+            return self
+                .publish_built(built, Vec::new(), false)
+                .await
+                .map(TurnOutcome::Published);
+        }
+        let locators = match self.seed_proofs(&built).await {
+            Ok(locators) => locators,
+            Err(err) => {
+                warn!(
+                    error = format_args!("{err:#}"),
+                    "Publishing the block's public remainder instead"
+                );
+                return self
+                    .publish_public_remainder(built)
+                    .await
+                    .map(TurnOutcome::Published);
+            }
+        };
 
+        let committee = self.accredited_committee().await;
+        // A single writer has no one to ask: it publishes once its own copies are seeded.
+        if committee.len() < 2 {
+            return self
+                .publish_built(built, locators, false)
+                .await
+                .map(TurnOutcome::Published);
+        }
+        let Some(turn_start_slot) = turn_start_slot else {
+            warn!("The turn's starting slot is unknown, publishing the block's public remainder");
+            return self
+                .publish_public_remainder(built)
+                .await
+                .map(TurnOutcome::Published);
+        };
+        let own = SequencerKey::new(self.channel_signing_public_key())
+            .expect("a channel signing key is a sequencer key");
+        let candidate = availability::Candidate {
+            id: availability::CandidateId {
+                producer: own,
+                turn_start_slot,
+                parent: built.parent.into(),
+                candidate_hash: built.block.header.hash.0,
+                locators: locators.clone(),
+            },
+            block: built.block.digested(),
+        };
+        Ok(TurnOutcome::Parked(Box::new(ParkedCandidate {
+            threshold: sequencer_stake_core::slash_approval_threshold(committee.len()),
+            built,
+            locators,
+            candidate,
+            committee,
+            own,
+        })))
+    }
+
+    /// [`Self::produce`] in a turn of unknown start, which parks no candidate.
+    #[cfg(test)]
+    pub async fn run_production_turn(&mut self) -> Result<u64> {
+        match self.produce(None).await? {
+            TurnOutcome::Published(block_id) => Ok(block_id),
+            TurnOutcome::Parked(parked) => self.publish_parked(*parked, false).await,
+        }
+    }
+
+    /// Publishes `parked` once its approvals are in, if the head, the pin and the committee it
+    /// was built against still hold; otherwise, or when `approved` is false, publishes the public
+    /// remainder in its place.
+    pub async fn publish_parked(&mut self, parked: ParkedCandidate, approved: bool) -> Result<u64> {
+        let unchanged = {
+            let chain = self.chain.lock().await;
+            chain.pin() == parked.built.parent
+                && chain.head_tip().map(|tip| tip.hash)
+                    == Some(parked.built.block.header.prev_block_hash)
+        } && self.accredited_committee().await == parked.committee;
+        if approved && unchanged {
+            return self
+                .publish_built(parked.built, parked.locators, true)
+                .await;
+        }
+        if approved {
+            warn!(
+                "The head or committee moved past an approved candidate, publishing its public remainder"
+            );
+        } else {
+            warn!("A candidate missed its approvals, publishing its public remainder");
+        }
+        self.publish_public_remainder(parked.built).await
+    }
+
+    /// Returns the transactions of a candidate whose turn ended to the front of the mempool.
+    pub fn drop_parked(&mut self, parked: ParkedCandidate) {
+        self.requeue(parked.built.mempool_transactions);
+    }
+
+    /// The keys accredited in the head state's committee.
+    async fn accredited_committee(&self) -> BTreeSet<SequencerKey> {
+        let chain = self.chain.lock().await;
+        chain_state::stake_config::read_config(chain.head_state())
+            .map(|committee| committee.accredited_committee_members().copied().collect())
+            .unwrap_or_default()
+    }
+
+    /// Puts transactions taken for a block that went nowhere back at the front of the mempool,
+    /// in their order.
+    fn requeue(&mut self, transactions: Vec<(TransactionOrigin, LeeTransaction)>) {
+        for (origin, tx) in transactions.into_iter().rev() {
+            self.mempool.push_front((origin, tx));
+        }
+    }
+
+    /// Builds the block again with its private transactions deferred, back in the mempool in
+    /// their order, and publishes the rest.
+    async fn publish_public_remainder(&mut self, built: BlockWithMeta) -> Result<u64> {
+        self.requeue(built.mempool_transactions);
+        self.defer_private = true;
+        let rebuilt = self.build_block_from_mempool().await;
+        self.defer_private = false;
+        let rebuilt = rebuilt.context("Failed to build block from mempool transactions")?;
+        self.publish_built(rebuilt, Vec::new(), false).await
+    }
+
+    /// Publishes `built` with its proofs under `locators`, pinned on its deposits if it mints
+    /// any, and records it. A failed pin rebuilds the block without its pinned deposits; a
+    /// candidate's approvals do not cover that block, so `approved` rebuilds it public only.
+    async fn publish_built(
+        &mut self,
+        mut built: BlockWithMeta,
+        mut locators: Vec<StorageCid>,
+        approved: bool,
+    ) -> Result<u64> {
         let publish_res = if built.pinned_deposit_notes.is_empty() {
             self.publish_block(&built, &locators).await
         } else {
@@ -797,8 +933,17 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                             "Failed to pin block"
                         );
                     }
-                    built = self.build_block_without_pins(built).await?;
-                    locators = self.seed_proofs(&mut built).await?;
+                    self.defer_private = approved;
+                    let rebuilt = self.build_block_without_pins(built).await;
+                    self.defer_private = false;
+                    built = rebuilt?;
+                    locators = match self.seed_proofs(&built).await {
+                        Ok(seeded) => seeded,
+                        Err(err) => {
+                            self.requeue(std::mem::take(&mut built.mempool_transactions));
+                            return Err(err);
+                        }
+                    };
                     self.publish_block(&built, &locators).await
                 }
             }
@@ -811,9 +956,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
         if publish_res.is_err() {
             // Nothing was inscribed, so the block's transactions go back in front.
-            for (origin, tx) in mempool_transactions.into_iter().rev() {
-                self.mempool.push_front((origin, tx));
-            }
+            self.requeue(mempool_transactions);
         }
         let outcome = match publish_res {
             Ok(outcome) => outcome,
@@ -838,23 +981,16 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     }
 
     /// Stores every proof `built` carries in Logos Storage, served to peers, and returns their
-    /// CIDs in transaction order. On a failure nothing is inscribed, so the block's transactions
-    /// go back in front.
-    async fn seed_proofs(&mut self, built: &mut BlockWithMeta) -> Result<Vec<StorageCid>> {
+    /// CIDs in transaction order.
+    async fn seed_proofs(&self, built: &BlockWithMeta) -> Result<Vec<StorageCid>> {
         let mut locators = Vec::new();
         for proof in built.block.body.proofs() {
-            match self.proof_objects.seed(proof).await {
-                Ok(locator) => locators.push(locator),
-                Err(err) => {
-                    for (origin, tx) in std::mem::take(&mut built.mempool_transactions)
-                        .into_iter()
-                        .rev()
-                    {
-                        self.mempool.push_front((origin, tx));
-                    }
-                    return Err(err).context("Failed to seed the proofs of the block");
-                }
-            }
+            locators.push(
+                self.proof_objects
+                    .seed(proof)
+                    .await
+                    .context("Failed to seed the proofs of the block")?,
+            );
         }
         Ok(locators)
     }
@@ -1571,6 +1707,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         }
         let mut pinned_deposit_notes = Vec::new();
         let mut deferred_withdrawals = Vec::new();
+        let mut deferred_private = Vec::new();
 
         let max_block_size = usize::try_from(
             chain_state::stake_config::channel_params(&working_state)
@@ -1657,6 +1794,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             // cannot carry withdrawals.
             if !pinned_deposit_notes.is_empty() && extract_bridge_withdraw_data(&tx).is_some() {
                 deferred_withdrawals.push((origin, tx));
+                continue;
+            }
+
+            if self.defer_private && matches!(tx, LeeTransaction::PrivacyPreserving(_)) {
+                deferred_private.push((origin, tx));
                 continue;
             }
 
@@ -1858,6 +2000,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         for (origin, tx) in deferred_withdrawals.into_iter().rev() {
             self.mempool.push_front((origin, tx));
         }
+        self.requeue(deferred_private);
 
         // At most one `system_upgrader` transaction, directly before the fee: the due `Apply`
         // first, then changes a threshold of collected approvals carries, then approved changes a
@@ -2369,6 +2512,47 @@ struct BlockWithMeta {
     mempool_transactions: Vec<(TransactionOrigin, LeeTransaction)>,
     /// Notes of the not-yet-final deposits this block mints, to pin on publish.
     pinned_deposit_notes: Vec<NoteId>,
+}
+
+/// What a production turn left to do.
+pub enum TurnOutcome {
+    /// The block went out, with this id.
+    Published(u64),
+    /// A proof-bearing candidate waits for the committee's approvals.
+    Parked(Box<ParkedCandidate>),
+}
+
+/// A proof-bearing block built this turn, whose proofs this node seeded, waiting for two thirds
+/// of the committee at its parent to approve their availability.
+pub struct ParkedCandidate {
+    built: BlockWithMeta,
+    locators: Vec<StorageCid>,
+    candidate: availability::Candidate,
+    /// The keys accredited at the parent, and how many of them must approve.
+    committee: BTreeSet<SequencerKey>,
+    threshold: usize,
+    /// This node, which approves once its seeding succeeded.
+    own: SequencerKey,
+}
+
+impl ParkedCandidate {
+    #[must_use]
+    pub const fn candidate(&self) -> &availability::Candidate {
+        &self.candidate
+    }
+
+    /// Whether `approvers` and this node reach the threshold among the committee at the parent.
+    #[must_use]
+    pub fn is_approved(&self, approvers: &BTreeSet<SequencerKey>) -> bool {
+        let approving = approvers
+            .iter()
+            .chain([&self.own])
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .filter(|key| self.committee.contains(key))
+            .count();
+        approving >= self.threshold
+    }
 }
 
 /// Why a publish, pinned or not, did not go out.

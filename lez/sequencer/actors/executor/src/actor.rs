@@ -48,7 +48,7 @@ use tracing::{Instrument as _, debug, warn};
 
 use crate::{
     ExecutorActorTrait, Result,
-    actor::state::State,
+    actor::state::{State, online::Produced},
     error::Error,
     protocol::{
         ChannelId, ExecutorStatus, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces,
@@ -271,7 +271,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ProduceBlock> for Execu
     async fn handle(
         &mut self,
         ProduceBlock: ProduceBlock,
-        _ctx: &mut Context<Self, Self::Reply>,
+        ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let online = match &mut self.state {
             State::Error(details) => {
@@ -290,6 +290,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ProduceBlock> for Execu
             return Ok(());
         }
 
+        if online.has_parked() {
+            debug!("This turn's candidate is waiting for its approvals");
+            return Ok(());
+        }
+
         if !online.may_produce().await {
             return Ok(());
         }
@@ -299,8 +304,19 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ProduceBlock> for Execu
         // this actor, and the scheduler's interval task gives up for good the
         // first time it finds us not running — the node then looks healthy and
         // never produces again.
-        match online.sequencer_mut().run_production_turn().await {
-            Ok(id) => {
+        match online.produce().await {
+            Ok(Produced::Parked {
+                candidate_hash,
+                cutoff,
+            }) => {
+                let executor = ctx.actor_ref().clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(cutoff).await;
+                    _ = executor.tell(CandidateCutoff { candidate_hash }).await;
+                });
+                tracing::info!("Candidate proposed, waiting for its approvals");
+            }
+            Ok(Produced::Published(id)) => {
                 // The count is how many turns failed in a row, so a success
                 // clears it and the gauge drops to zero, unless it was zero
                 // already.
@@ -428,7 +444,26 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<AvailabilityMessage>
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         if let State::Online(online) = &mut self.state {
-            online.on_availability(msg);
+            log_settled(online.on_availability(msg).await);
+        }
+    }
+}
+
+/// The private cutoff of this node's candidate.
+struct CandidateCutoff {
+    candidate_hash: [u8; 32],
+}
+
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<CandidateCutoff> for ExecutorActor<S, B> {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        CandidateCutoff { candidate_hash }: CandidateCutoff,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        if let State::Online(online) = &mut self.state {
+            log_settled(online.on_cutoff(candidate_hash).await);
         }
     }
 }
@@ -1054,5 +1089,17 @@ fn fee_refusal(err: sequencer_core::fees::Error) -> Error {
         Error::PrivateFeeBelowHead { required, reserve }
     } else {
         Error::IncorrectFee(err.into())
+    }
+}
+
+/// Reports how a parked candidate settled: published, or publishing failed.
+fn log_settled(settled: anyhow::Result<Option<u64>>) {
+    match settled {
+        Ok(Some(block_id)) => tracing::info!(block_id, "Block created"),
+        Ok(None) => {}
+        Err(err) => warn!(
+            error = format_args!("{err:#}"),
+            "Failed to publish a parked candidate"
+        ),
     }
 }

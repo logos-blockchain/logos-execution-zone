@@ -23,7 +23,7 @@ use sequencer_bedrock_actor::{
     protocol::{ChannelId, ChannelSeq, Ed25519Key, Ed25519PublicKey, PublishOutcome, Slot},
 };
 use sequencer_core::{
-    SequencerCore, TransactionOrigin,
+    ParkedCandidate, SequencerCore, TransactionOrigin, TurnOutcome,
     availability::{AvailabilityApproval, AvailabilityMessage, Candidate, CandidateId},
     config::SequencerConfig,
     proof_objects::{Admission, ProofObjects},
@@ -61,6 +61,16 @@ struct Approving {
     superseded: Arc<AtomicBool>,
 }
 
+/// What a production turn did.
+pub enum Produced {
+    Published(u64),
+    /// A candidate waits for its approvals until `cutoff` from now.
+    Parked {
+        candidate_hash: [u8; 32],
+        cutoff: Duration,
+    },
+}
+
 /// One missing proof's recovery.
 struct Recovery {
     in_flight: bool,
@@ -86,6 +96,8 @@ pub struct OnlineState<S: StorageActorTrait, B: BedrockActorTrait> {
     turn_start: Option<Slot>,
     /// The candidate this node is approving.
     approving: Option<Box<Approving>>,
+    /// This node's candidate, waiting for its approvals.
+    parked: Option<Box<ParkedCandidate>>,
     // TODO: Remove this field
     background_tasks: sequencer_core::task_group::TaskGroup,
 }
@@ -145,6 +157,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
 
     pub fn update_turn(&mut self, our_turn_to_write: bool, starting_slot: Option<Slot>) {
         self.turn_start = starting_slot;
+        // A candidate cannot be posted outside its turn.
+        if let Some(parked) = self.parked.take_if(|parked| {
+            !our_turn_to_write
+                || starting_slot.map(Slot::into_inner)
+                    != Some(parked.candidate().id.turn_start_slot)
+        }) {
+            info!("The turn ended before its candidate's approvals came in");
+            self.sequencer.drop_parked(*parked);
+        }
         if self.turn.update(our_turn_to_write, starting_slot) {
             sequencer_executor_actor_metrics::increment_turns_to_write_total();
             self.skip_policy.start_turn();
@@ -215,30 +236,99 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         }
     }
 
+    /// Produces this turn's block, or proposes a proof-bearing candidate to the committee and
+    /// parks it until its approvals are in or the private cutoff passes.
+    pub async fn produce(&mut self) -> anyhow::Result<Produced> {
+        let outcome = self
+            .sequencer
+            .produce(self.turn_start.map(Slot::into_inner))
+            .await?;
+        let parked = match outcome {
+            TurnOutcome::Published(block_id) => return Ok(Produced::Published(block_id)),
+            TurnOutcome::Parked(parked) => parked,
+        };
+        let candidate = parked.candidate().clone();
+        let candidate_hash = candidate.id.candidate_hash;
+        if self
+            .availability_publisher
+            .tell(Publish(AvailabilityMessage::Candidate(Box::new(candidate))))
+            .try_send()
+            .is_err()
+        {
+            debug!("Dropped this node's candidate");
+        }
+        let posting_timeout = self
+            .sequencer
+            .with_state(|state| {
+                chain_state::stake_config::channel_params(state)
+                    .map(|params| params.posting_timeout)
+            })
+            .await
+            .unwrap_or_default();
+        self.parked = Some(parked);
+        Ok(Produced::Parked {
+            candidate_hash,
+            // Half the posting timeout, one slot a second, leaves the rest of the turn to publish
+            // the public remainder in.
+            cutoff: Duration::from_secs(u64::from(posting_timeout.div_ceil(2))),
+        })
+    }
+
+    pub const fn has_parked(&self) -> bool {
+        self.parked.is_some()
+    }
+
+    /// Publishes the public remainder of the parked candidate `candidate_hash` names, if it is
+    /// still parked.
+    pub async fn on_cutoff(&mut self, candidate_hash: [u8; 32]) -> anyhow::Result<Option<u64>> {
+        let Some(parked) = self
+            .parked
+            .take_if(|parked| parked.candidate().id.candidate_hash == candidate_hash)
+        else {
+            return Ok(None);
+        };
+        self.sequencer
+            .publish_parked(*parked, false)
+            .await
+            .map(Some)
+    }
+
     /// Takes in a peer's candidate or availability approval. Only approvals of this node's own
-    /// candidates are kept, for its most recent turns.
-    pub fn on_availability(&mut self, message: AvailabilityMessage) {
+    /// candidates are kept, for its most recent turns; the parked candidate is published once
+    /// they reach the threshold.
+    pub async fn on_availability(
+        &mut self,
+        message: AvailabilityMessage,
+    ) -> anyhow::Result<Option<u64>> {
         match message {
             AvailabilityMessage::Approval(approval) => {
                 if approval.candidate.producer.to_bytes()
                     != self.sequencer.channel_signing_public_key()
                 {
-                    return;
+                    return Ok(None);
                 }
                 let AvailabilityApproval {
                     candidate, signer, ..
                 } = *approval;
-                self.availability_approvals
-                    .entry(candidate)
-                    .or_default()
-                    .insert(signer);
+                let approvers = self
+                    .availability_approvals
+                    .entry(candidate.clone())
+                    .or_default();
+                approvers.insert(signer);
+                let approved = self.parked.as_ref().is_some_and(|parked| {
+                    parked.candidate().id == candidate && parked.is_approved(approvers)
+                });
                 // Candidates of one producer order by turn, so the first is the oldest.
                 while self.availability_approvals.len() > TRACKED_CANDIDATES {
                     self.availability_approvals.pop_first();
                 }
+                if let Some(parked) = self.parked.take_if(|_| approved) {
+                    return self.sequencer.publish_parked(*parked, true).await.map(Some);
+                }
             }
             AvailabilityMessage::Candidate(candidate) => self.on_candidate(*candidate),
         }
+        Ok(None)
     }
 
     /// Approves a peer's candidate for the current turn once this node holds its proofs. One
@@ -443,6 +533,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             availability_publisher,
             turn_start: None,
             approving: None,
+            parked: None,
             sequencer,
         })
     }
