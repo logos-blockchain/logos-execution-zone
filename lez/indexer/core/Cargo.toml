@@ -44,6 +44,7 @@ hex.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+logos_storage = { workspace = true, features = ["test-utils"] }
 chain_state = { workspace = true, features = ["test-utils"] }
 cross_zone = { workspace = true, features = ["test-utils"] }
 jsonrpsee = { workspace = true, features = ["server"] }

@@ -1223,4 +1223,47 @@ mod tests {
             .expect("the later source holds the proof");
         assert_eq!(hydrated.body, block.body);
     }
+
+    #[tokio::test]
+    async fn a_proof_is_read_from_logos_storage_at_its_inscribed_cid_and_not_kept_there() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let network = logos_storage::memory::MemoryNetwork::default();
+        let proof = Proof::from_inner(vec![1; 32]);
+        let locator = network
+            .node()
+            .upload(proof.clone().into_inner(), true)
+            .await
+            .unwrap();
+        let reading = network.node();
+        let mut core = unreachable_core(dir.path());
+        core.storage = Arc::new(reading.clone());
+
+        core.fetch_proofs(&[proof.digest()], |_digest| Some(locator))
+            .await;
+
+        assert_eq!(core.proofs.get(&proof.digest()), Some(proof));
+        assert!(!reading.holds(locator));
+    }
+
+    #[tokio::test]
+    async fn a_wrong_inscribed_cid_falls_back_to_get_proof_by_digest_and_no_source_leaves_it_missing()
+     {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let network = logos_storage::memory::MemoryNetwork::default();
+        let proof = Proof::from_inner(vec![1; 32]);
+        let other = network.node().upload(vec![9; 32], true).await.unwrap();
+        let (source, _sequencer) =
+            proof_source(HashMap::from([(proof.digest(), proof.clone())])).await;
+        let mut core = unreachable_core(dir.path());
+        core.storage = Arc::new(network.node());
+
+        core.fetch_proofs(&[proof.digest()], |_digest| Some(other))
+            .await;
+        assert!(!core.proofs.contains(&proof.digest()));
+
+        core.proof_sources = vec![source];
+        core.fetch_proofs(&[proof.digest()], |_digest| Some(other))
+            .await;
+        assert_eq!(core.proofs.get(&proof.digest()), Some(proof));
+    }
 }
