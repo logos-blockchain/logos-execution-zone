@@ -22,7 +22,7 @@ use sequencer_service_rpc::RpcClient as _;
 use tokio::test;
 
 #[test]
-async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
+async fn public_bridge_deposit_invocation_is_refused() -> anyhow::Result<()> {
     let ctx = TestContext::new().await?;
 
     let recipient_id = ctx.existing_public_accounts()[0];
@@ -55,20 +55,21 @@ async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let bridge_balance_before = account_balance(&ctx, bridge_account_id).await?;
     let recipient_balance_before = account_balance(&ctx, recipient_id).await?;
 
-    let tx_hash = ctx.sequencer_client().send_transaction(attack_tx).await?;
+    // An unsigned deposit is no system transaction, so it is refused at admission.
+    assert!(
+        ctx.sequencer_client()
+            .send_transaction(attack_tx)
+            .await
+            .is_err()
+    );
 
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
     let bridge_balance_after = account_balance(&ctx, bridge_account_id).await?;
     let recipient_balance_after = account_balance(&ctx, recipient_id).await?;
-    let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?;
 
     assert_eq!(bridge_balance_after, bridge_balance_before);
     assert_eq!(recipient_balance_after, recipient_balance_before);
-    assert!(
-        tx_on_chain.is_none(),
-        "Direct public bridge::Deposit invocation should be rejected"
-    );
 
     Ok(())
 }
@@ -113,7 +114,13 @@ async fn public_bridge_deposit_with_zero_amount_is_rejected() -> anyhow::Result<
         .get_account_balance(recipient_id)
         .await?;
 
-    let tx_hash = ctx.sequencer_client().send_transaction(attack_tx).await?;
+    // An unsigned deposit is no system transaction, so it is refused at admission.
+    assert!(
+        ctx.sequencer_client()
+            .send_transaction(attack_tx)
+            .await
+            .is_err()
+    );
 
     tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
 
@@ -125,14 +132,9 @@ async fn public_bridge_deposit_with_zero_amount_is_rejected() -> anyhow::Result<
         .sequencer_client()
         .get_account_balance(recipient_id)
         .await?;
-    let tx_on_chain = ctx.sequencer_client().get_transaction(tx_hash).await?;
 
     assert_eq!(bridge_balance_after, bridge_balance_before);
     assert_eq!(recipient_balance_after, recipient_balance_before);
-    assert!(
-        tx_on_chain.is_none(),
-        "Public bridge::Deposit with zero amount should be rejected"
-    );
 
     Ok(())
 }

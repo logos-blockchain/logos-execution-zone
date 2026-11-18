@@ -284,11 +284,11 @@ pub fn clock_invocation(block_id: BlockId, timestamp: Timestamp) -> lee::PublicT
 
 /// Whether `tx` is a sequencer-injected system transaction.
 ///
-/// Identified by shape: an empty witness set invoking the bridge deposit, the
-/// cross-zone inbox dispatch or `system_upgrader`, the transactions only the
-/// sequencer builds. Fee- and cap-exempt: none has a payer to charge. Shared by
-/// the sequencer (build) and the transition (replay) so the two can never
-/// disagree. An outbound send (`ping_sender::Send`) is deliberately not here:
+/// Identified by shape: an empty witness set invoking the cross-zone inbox
+/// dispatch or `system_upgrader`, the transactions only the sequencer builds. A
+/// bridge deposit is not one: only genesis mints through the bridge. Fee- and cap-exempt: none has
+/// a payer to charge. Shared by the sequencer (build) and the transition (replay) so the two can
+/// never disagree. An outbound send (`ping_sender::Send`) is deliberately not here:
 /// it pays like any user transaction (#799).
 #[must_use]
 pub fn is_system_injection(tx: &LeeTransaction) -> bool {
@@ -304,12 +304,6 @@ pub fn is_system_injection(tx: &LeeTransaction) -> bool {
     }
     let lee::RootCall { to, message } = &public_tx.message().execution.root;
     let program_account_id = to.program_account_id;
-    if program_account_id == programs::bridge_account_id() {
-        return matches!(
-            borsh::from_slice::<bridge_core::Message>(message),
-            Ok(bridge_core::Message::Deposit { .. })
-        );
-    }
     if program_account_id == programs::cross_zone_inbox_account_id() {
         return matches!(
             borsh::from_slice::<cross_zone_inbox_core::Message>(message),
@@ -608,7 +602,7 @@ fn validate_bridge_account_modification(
 }
 
 /// Rejects a diff that writes system state a user transaction may not: the
-/// clock and fee accounts never, the bridge only by a deposit's debit, and any
+/// clock and fee accounts never, the bridge except to credit it, and any
 /// account's inbox actor state only by a dispatch.
 pub fn validate_user_state_modification(
     tx: &LeeTransaction,
@@ -620,9 +614,7 @@ pub fn validate_user_state_modification(
         .public_call()
         .filter(|_| is_system_injection(tx))
         .map(|(to, _)| to.program_account_id);
-    if injected_program != Some(programs::bridge_account_id()) {
-        validate_bridge_account_modification(state, diff, matches!(tx, LeeTransaction::Public(_)))?;
-    }
+    validate_bridge_account_modification(state, diff, matches!(tx, LeeTransaction::Public(_)))?;
     if injected_program != Some(programs::cross_zone_inbox_account_id()) {
         validate_no_inbox_state_modification(state, diff)?;
     }
@@ -994,10 +986,9 @@ mod tests {
     }
 
     #[test]
-    fn only_an_injected_deposit_may_debit_the_bridge() {
+    fn nothing_may_debit_the_bridge() {
         let (state, diff) = bridge_debit();
-        validate_user_state_modification(&injected_deposit(), &state, &diff)
-            .expect("an injected deposit debits the bridge");
+        assert!(validate_user_state_modification(&injected_deposit(), &state, &diff).is_err());
         assert!(validate_user_state_modification(&signed_transfer(), &state, &diff).is_err());
     }
 
