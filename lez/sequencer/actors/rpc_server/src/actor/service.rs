@@ -1,6 +1,5 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 
-use chain_state::ProofStore;
 use common::transaction::LeeTransaction;
 use jsonrpsee::{
     core::async_trait,
@@ -10,6 +9,7 @@ use kameo::{
     actor::{ActorRef, Recipient},
     error::{Infallible, SendError},
 };
+use sequencer_core::proof_objects::ProofObjects;
 use sequencer_executor_actor::ExecutorActorTrait;
 use sequencer_gossip_actor::protocol::Publish;
 use sequencer_service_protocol::{
@@ -25,21 +25,21 @@ use tracing::debug;
 pub struct Service<E: ExecutorActorTrait> {
     executor_ref: ActorRef<E>,
     gossip: Option<Recipient<Publish>>,
-    proof_store: ProofStore,
+    proof_objects: Arc<ProofObjects>,
 }
 
 impl<E: ExecutorActorTrait> Service<E> {
     pub fn new(
         executor_ref: ActorRef<E>,
         gossip: Option<Recipient<Publish>>,
-        proof_store: ProofStore,
+        proof_objects: Arc<ProofObjects>,
     ) -> Self {
         sequencer_rpc_server_actor_metrics::init();
 
         Self {
             executor_ref,
             gossip,
-            proof_store,
+            proof_objects,
         }
     }
 }
@@ -132,7 +132,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
     }
 
     async fn get_proof(&self, digest: ProofDigest) -> Result<Option<Proof>, ErrorObjectOwned> {
-        Ok(self.proof_store.get(&digest.0).map(Proof))
+        Ok(self.proof_objects.get(&digest.0).await.map(Proof))
     }
 
     async fn get_block(&self, block_id: BlockId) -> Result<Option<Block>, ErrorObjectOwned> {
@@ -537,6 +537,7 @@ fn internal_error(err: impl std::fmt::Display) -> ErrorObjectOwned {
 
 #[cfg(test)]
 mod tests {
+    use chain_state::ProofStore;
     use kameo::actor::Spawn as _;
     use lee::privacy_preserving_transaction::circuit;
     use sequencer_executor_actor::mock::MockExecutorActor;
@@ -547,7 +548,11 @@ mod tests {
     #[tokio::test]
     async fn health_fails_once_the_executor_actor_is_stopped() {
         let executor_ref = MockExecutorActor::spawn(MockExecutorActor::new());
-        let service = Service::new(executor_ref.clone(), None, ProofStore::new(0));
+        let service = Service::new(
+            executor_ref.clone(),
+            None,
+            Arc::new(ProofObjects::in_memory(ProofStore::new(0))),
+        );
 
         assert!(service.check_health().await.is_ok());
 
@@ -580,7 +585,7 @@ mod tests {
         let service = Service::new(
             MockExecutorActor::spawn(MockExecutorActor::new()),
             None,
-            store.clone(),
+            Arc::new(ProofObjects::in_memory(store.clone())),
         );
         let held = circuit::Proof::from_inner(vec![1; 32]);
         let unknown = circuit::Proof::from_inner(vec![2; 32]);

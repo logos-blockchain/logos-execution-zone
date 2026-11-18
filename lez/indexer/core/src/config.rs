@@ -34,8 +34,13 @@ pub struct IndexerConfig {
     #[serde(with = "humantime_serde")]
     pub consensus_info_polling_interval: Duration,
     pub bedrock_config: ClientConfig,
-    /// The sequencers proofs are fetched from, tried in order.
+    /// The sequencers proofs are fetched from by digest, tried in order, when Logos Storage does
+    /// not serve them.
     pub proof_sources: Vec<ClientConfig>,
+    /// The REST API of the Logos Storage node proofs are fetched through, by the CIDs blocks
+    /// inscribe.
+    #[serde(default = "default_logos_storage_api_url")]
+    pub logos_storage_api_url: Url,
     pub channel_id: ChannelId,
     /// Presence selects the genesis program set, must match the sequencer's, and
     /// cannot change on an existing chain. `None` also disables the verifier; a
@@ -175,6 +180,13 @@ pub(crate) const fn default_peer_block_cache_window() -> NonZeroU32 {
 #[must_use]
 pub const fn default_backfill_batch_slots() -> NonZero<u64> {
     DEFAULT_BACKFILL_BATCH_SLOTS
+}
+
+#[must_use]
+pub fn default_logos_storage_api_url() -> Url {
+    "http://127.0.0.1:8080/"
+        .parse()
+        .expect("hardcoded default Logos Storage API URL is a valid URL")
 }
 
 #[cfg(test)]

@@ -350,6 +350,7 @@ pub fn indexer_config(
             .into_iter()
             .map(|addr| ClientConfig { addr, auth: None })
             .collect(),
+        logos_storage_api_url: indexer_service::default_logos_storage_api_url(),
         channel_id,
         cross_zone,
         peer_block_cache_window: NonZeroU32::new(1024).expect("1024 is nonzero"),

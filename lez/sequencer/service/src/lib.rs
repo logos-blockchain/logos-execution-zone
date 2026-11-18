@@ -446,7 +446,7 @@ pub fn run(
                     *bedrock_config.channel_id.as_ref(),
                     &channel_signing_key_path,
                     proof_store.clone(),
-                    proof_objects,
+                    Arc::clone(&proof_objects),
                     &executor_ref,
                     &slasher_ref,
                     &channel_signer_ref,
@@ -462,13 +462,13 @@ pub fn run(
             listen_addr,
             executor_ref.clone(),
             gossip_publisher,
-            proof_store,
+            proof_objects,
         )
         .await?;
         // Nothing binds the address in this build, and with no RPC server there
         // is nobody left to publish the transactions it would have accepted.
         #[cfg(not(feature = "rpc"))]
-        drop((listen_addr, gossip_publisher, proof_store));
+        drop((listen_addr, gossip_publisher, proof_objects));
 
         scheduler_ref
             .tell(
@@ -715,11 +715,12 @@ async fn setup_rpc_server(
     listen_addr: SocketAddr,
     executor_ref: ActorRef<ExecutorActor>,
     gossip_publisher: Option<Recipient<Publish>>,
-    proof_store: ProofStore,
+    proof_objects: Arc<ProofObjects>,
 ) -> Result<RpcServer> {
-    let rpc_server = RpcServerActor::new(listen_addr, executor_ref, gossip_publisher, proof_store)
-        .await
-        .context("Failed to initialize RPC Server Actor")?;
+    let rpc_server =
+        RpcServerActor::new(listen_addr, executor_ref, gossip_publisher, proof_objects)
+            .await
+            .context("Failed to initialize RPC Server Actor")?;
     let addr = rpc_server.addr();
     let rpc_server_ref = RpcServerActor::spawn(rpc_server);
     info!("RPC Server Actor spawned");

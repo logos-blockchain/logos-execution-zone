@@ -11,13 +11,17 @@ use chain_state::{
     chain::SettledBlock, zone_indexer::ZoneIndexer,
 };
 pub use chain_state::{BlockIngestError, StallReason, timeout_node::TimeoutNode};
-use common::block::{Block, InscribedBlock};
+use common::{
+    block::{Block, InscribedBlock},
+    storage_cid::StorageCid,
+};
 // TODO: Remove after testnet
 use futures::StreamExt as _;
-use lee::privacy_preserving_transaction::circuit::ProofDigest;
+use lee::privacy_preserving_transaction::circuit::{Proof, ProofDigest};
 use logos_blockchain_zone_sdk::{
     CommonHttpClient, Slot, ZoneMessage, adapter::NodeHttpClient, core::mantle::ops::channel::MsgId,
 };
+use logos_storage::{Storage, StorageClient};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient, SequencerClientBuilder};
 use tracing::{error, info, warn};
 
@@ -75,7 +79,9 @@ pub struct IndexerCore {
     /// Option B cross-zone verifier; `None` when cross-zone messaging is disabled.
     pub verifier: Option<CrossZoneVerifier>,
     pub proof_sources: Vec<SequencerClient>,
-    /// The proofs the fold hydrates blocks with, fetched from `proof_sources`.
+    /// Where the proofs blocks inscribe CIDs for are read first.
+    pub storage: Arc<dyn Storage>,
+    /// The proofs the fold hydrates blocks with, fetched from Logos Storage or `proof_sources`.
     pub proofs: ProofStore,
 }
 
@@ -217,6 +223,8 @@ impl IndexerCore {
             }
         };
 
+        let storage = Arc::new(StorageClient::new(config.logos_storage_api_url.clone()));
+
         Ok(Self {
             zone_indexer: Arc::new(zone_indexer),
             store,
@@ -225,6 +233,7 @@ impl IndexerCore {
             status: Arc::new(ArcSwap::from_pointee(initial_status)),
             verifier,
             proof_sources,
+            storage,
             proofs: ProofStore::new(PROOF_STORE_CAPACITY),
         })
     }
@@ -452,10 +461,20 @@ impl IndexerCore {
         true
     }
 
-    /// Fetches each of `digests` into the proof store from the first proof
-    /// source holding it, checked against its digest.
-    async fn fetch_proofs(&self, digests: &[ProofDigest]) {
+    /// Fetches each of `digests` into the proof store, checked against its digest: from Logos
+    /// Storage at the CID its block inscribes, else from the first proof source holding it.
+    async fn fetch_proofs(
+        &self,
+        digests: &[ProofDigest],
+        locator: impl Fn(&ProofDigest) -> Option<StorageCid>,
+    ) {
         for digest in digests {
+            if let Some(locator) = locator(digest)
+                && let Some(proof) = self.read_from_storage(locator, digest).await
+            {
+                self.proofs.insert(&proof);
+                continue;
+            }
             for source in &self.proof_sources {
                 match source
                     .get_proof(sequencer_service_protocol::ProofDigest(*digest))
@@ -468,6 +487,34 @@ impl IndexerCore {
                     Ok(_) => {}
                     Err(err) => warn!("Failed to fetch a proof from a proof source: {err}"),
                 }
+            }
+        }
+    }
+
+    /// The proof `digest` names, read from the dataset `locator` names when its manifest is of
+    /// the canonical form. The node keeps nothing: it serves no peer.
+    async fn read_from_storage(&self, locator: StorageCid, digest: &ProofDigest) -> Option<Proof> {
+        let read = async {
+            let manifest = self.storage.manifest(locator).await?;
+            manifest.check_canonical(fee_core::market::PROOF_BYTES)?;
+            self.storage
+                .download(locator, manifest.dataset_size, false)
+                .await
+        }
+        .await;
+        if let Err(err) = self.storage.delete(locator).await
+            && !err.is_not_found()
+        {
+            warn!(%locator, error = %err, "Failed to drop a proof read from Logos Storage");
+        }
+        match read {
+            Ok(bytes) => {
+                let proof = Proof::from_inner(bytes);
+                (proof.digest() == *digest).then_some(proof)
+            }
+            Err(err) => {
+                warn!(%locator, error = %err, "Failed to read a proof from Logos Storage");
+                None
             }
         }
     }
@@ -519,7 +566,8 @@ impl IndexerCore {
         ingest.process_finalized_entries(entries, lib);
         let mut missing = ingest.chain.missing_proofs();
         while !missing.is_empty() && missing != ingest.unserved {
-            self.fetch_proofs(&missing).await;
+            self.fetch_proofs(&missing, |digest| ingest.chain.inscribed_locator(digest))
+                .await;
             if !ingest.chain.hydrate() {
                 ingest.unserved = ingest.chain.missing_proofs();
                 let lacking = ingest.unserved.len();
@@ -833,6 +881,7 @@ mod tests {
                 auth: None,
             },
             proof_sources: Vec::new(),
+            logos_storage_api_url: crate::config::default_logos_storage_api_url(),
             channel_id: ChannelId::from([1; 32]),
             allow_chain_reset: false,
             cross_zone: None,
@@ -1135,7 +1184,7 @@ mod tests {
                 .copied()
                 .collect()
         };
-        core.fetch_proofs(&missing()).await;
+        core.fetch_proofs(&missing(), |_digest| None).await;
         missing()
     }
 

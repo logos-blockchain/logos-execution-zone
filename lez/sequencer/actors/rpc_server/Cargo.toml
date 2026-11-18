@@ -9,7 +9,6 @@ workspace = true
 
 [dependencies]
 lee.workspace = true
-chain_state.workspace = true
 common.workspace = true
 sequencer_core.workspace = true
 sequencer_service_protocol.workspace = true
@@ -28,5 +27,7 @@ system_upgrader_core.workspace = true
 bytesize.workspace = true
 
 [dev-dependencies]
+chain_state.workspace = true
+sequencer_core = { workspace = true, features = ["test-utils"] }
 sequencer_executor_actor = { workspace = true, features = ["mock"] }
 tokio = { workspace = true, features = ["macros", "rt"] }

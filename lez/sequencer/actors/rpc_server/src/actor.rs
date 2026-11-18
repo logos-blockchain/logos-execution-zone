@@ -1,7 +1,6 @@
-use std::net::SocketAddr;
+use std::{net::SocketAddr, sync::Arc};
 
 use bytesize::ByteSize;
-use chain_state::ProofStore;
 use jsonrpsee::server::{ServerHandle, middleware::rpc::RpcServiceBuilder};
 use kameo::{
     Actor,
@@ -9,6 +8,7 @@ use kameo::{
     error::ActorStopReason,
     mailbox::{MailboxReceiver, Signal},
 };
+use sequencer_core::proof_objects::ProofObjects;
 use sequencer_executor_actor::ExecutorActorTrait;
 use sequencer_gossip_actor::protocol::Publish;
 use sequencer_service_rpc::RpcServer as _;
@@ -32,7 +32,7 @@ impl RpcServerActor {
         listen_addr: SocketAddr,
         executor_ref: ActorRef<E>,
         gossip: Option<Recipient<Publish>>,
-        proof_store: ProofStore,
+        proof_objects: Arc<ProofObjects>,
     ) -> Result<Self> {
         let server = jsonrpsee::server::ServerBuilder::with_config(
             jsonrpsee::server::ServerConfigBuilder::new()
@@ -53,7 +53,7 @@ impl RpcServerActor {
 
         info!(%addr, "Starting RPC server");
 
-        let service = service::Service::new(executor_ref, gossip, proof_store);
+        let service = service::Service::new(executor_ref, gossip, proof_objects);
         let server_handle = server.start(service.into_rpc());
 
         Ok(Self {

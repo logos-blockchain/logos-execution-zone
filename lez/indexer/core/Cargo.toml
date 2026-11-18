@@ -24,6 +24,8 @@ programs.workspace = true
 sequencer_service_protocol.workspace = true
 sequencer_service_rpc = { workspace = true, features = ["client"] }
 storage.workspace = true
+logos_storage.workspace = true
+fee_core.workspace = true
 testnet_initial_state.workspace = true
 
 anyhow.workspace = true

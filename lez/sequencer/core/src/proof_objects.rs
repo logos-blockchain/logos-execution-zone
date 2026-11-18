@@ -168,6 +168,17 @@ impl ProofObjects {
         self.lock().objects.get(digest).map(|object| object.cid)
     }
 
+    /// The proof `digest` names, from memory or else from the object this node holds.
+    pub async fn get(&self, digest: &ProofDigest) -> Option<Proof> {
+        if let Some(proof) = self.proofs.get(digest) {
+            return Some(proof);
+        }
+        let cid = self.locator(digest)?;
+        let bytes = self.storage.download(cid, PROOF_BYTES, true).await.ok()?;
+        let proof = Proof::from_inner(bytes);
+        (proof.digest() == *digest).then_some(proof)
+    }
+
     /// Stores `proof` in the canonical form, served to peers, and returns its CID. The proof
     /// enters the proof store, which holds the object.
     pub async fn seed(&self, proof: &Proof) -> Result<StorageCid, Error> {
