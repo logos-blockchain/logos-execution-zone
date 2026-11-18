@@ -2085,6 +2085,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         self.proofs.clone()
     }
 
+    #[must_use]
+    pub fn proof_objects(&self) -> Arc<proof_objects::ProofObjects> {
+        Arc::clone(&self.proof_objects)
+    }
+
     /// This node's channel signing public key, as the entries it signs carry it.
     #[must_use]
     pub fn channel_signing_public_key(&self) -> [u8; 32] {

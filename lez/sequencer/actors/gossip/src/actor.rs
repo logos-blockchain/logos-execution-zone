@@ -10,6 +10,7 @@ use chain_state::ProofStore;
 use common::{
     HashType,
     bounded_vec_deque::BoundedVecDeque,
+    storage_cid::StorageCid,
     transaction::{LeeTransaction, LeeTransactionWith},
 };
 use futures::{StreamExt as _, future::BoxFuture};
@@ -73,27 +74,21 @@ pub const BOOTSTRAP_RETRY_INTERVAL: Duration = Duration::from_secs(30);
 /// Local transactions whose publish failed (e.g. `InsufficientPeers` while
 /// the mesh is still forming), kept for republish once a peer subscribes.
 const PENDING_PUBLISH_CAPACITY: usize = 256;
-/// The largest proof request: a proof digest, as a base64 JSON string.
-const MAX_PROOF_REQUEST_SIZE: u64 = 64;
-/// The largest proof response: a proof a transaction can carry, borsh-encoded, as a base64 JSON
-/// string.
-const MAX_PROOF_RESPONSE_SIZE: u64 = MAX_TRANSACTION_SIZE
-    .saturating_add(4)
-    .div_ceil(3)
-    .saturating_mul(4)
-    .saturating_add(2);
+/// The largest locator request: a proof digest, as a base64 JSON string.
+const MAX_LOCATOR_REQUEST_SIZE: u64 = 64;
+/// The largest locator response: a Logos Storage CID, as a hex JSON string, or `null`.
+const MAX_LOCATOR_RESPONSE_SIZE: u64 = 128;
 
-type ProofExchange = request_response::json::Behaviour<
-    sequencer_service_protocol::ProofDigest,
-    Option<sequencer_service_protocol::Proof>,
->;
+/// Names the Logos Storage CID of a proof by its digest.
+type LocatorExchange =
+    request_response::json::Behaviour<sequencer_service_protocol::ProofDigest, Option<StorageCid>>;
 
 #[derive(NetworkBehaviour)]
 struct GossipBehaviour {
     gossipsub: gossipsub::Behaviour,
     identify: identify::Behaviour,
     kademlia: kad::Behaviour<kad::store::MemoryStore>,
-    proof_exchange: ProofExchange,
+    locator_exchange: LocatorExchange,
     #[cfg(feature = "mdns")]
     mdns: mdns::tokio::Behaviour,
 }
@@ -133,7 +128,10 @@ pub struct GossipActor {
     max_block_size: u64,
     submit: IngestSubmit,
     proof_store: ProofStore,
-    proof_fetches: HashMap<request_response::OutboundRequestId, (ProofDigest, HashSet<PeerId>)>,
+    /// Locator lookups in flight, with the peers asked so far.
+    locator_lookups: HashMap<request_response::OutboundRequestId, (ProofDigest, HashSet<PeerId>)>,
+    /// Proofs being fetched from the CID a peer named, with the peers asked so far.
+    named_fetches: HashMap<ProofDigest, HashSet<PeerId>>,
     /// Private transactions ride their own topic, by digest form and Logos Storage locator.
     announcements_topic: gossipsub::IdentTopic,
     proof_objects: Arc<ProofObjects>,
@@ -293,7 +291,7 @@ impl GossipActor {
                 gossipsub: gossipsub_behaviour,
                 identify: identify_behaviour,
                 kademlia: kademlia_behaviour,
-                proof_exchange: proof_exchange(channel_id),
+                locator_exchange: locator_exchange(channel_id),
                 #[cfg(feature = "mdns")]
                 mdns: mdns_behaviour,
             })
@@ -386,7 +384,8 @@ impl GossipActor {
             max_block_size: MAX_PUBLISHABLE_BLOCK_SIZE,
             submit,
             proof_store,
-            proof_fetches: HashMap::new(),
+            locator_lookups: HashMap::new(),
+            named_fetches: HashMap::new(),
             announcements_topic,
             proof_objects,
             screen,
@@ -589,41 +588,39 @@ impl GossipActor {
                         .add_address(&peer_id, addr);
                 }
             }
-            GossipBehaviourEvent::ProofExchange(request_response::Event::Message {
+            GossipBehaviourEvent::LocatorExchange(request_response::Event::Message {
                 peer,
                 message,
                 ..
             }) => match message {
+                // Only a CID this node's own upload of the verified proof returned.
                 request_response::Message::Request {
                     request, channel, ..
                 } => {
-                    let proof = self
-                        .proof_store
-                        .get(&request.0)
-                        .map(sequencer_service_protocol::Proof);
+                    let locator = self.proof_objects.locator(&request.0);
                     if self
                         .swarm_mut()
                         .behaviour_mut()
-                        .proof_exchange
-                        .send_response(channel, proof)
+                        .locator_exchange
+                        .send_response(channel, locator)
                         .is_err()
                     {
-                        tracing::debug!("Failed to answer a proof request from {peer}");
+                        tracing::debug!("Failed to answer a locator request from {peer}");
                     }
                 }
                 request_response::Message::Response {
                     request_id,
                     response,
-                } => self.on_proof_response(request_id, response.map(|proof| proof.0)),
+                } => self.on_locator_response(request_id, response),
             },
-            GossipBehaviourEvent::ProofExchange(request_response::Event::OutboundFailure {
+            GossipBehaviourEvent::LocatorExchange(request_response::Event::OutboundFailure {
                 peer,
                 request_id,
                 error,
                 ..
             }) => {
-                tracing::debug!("Proof request to {peer} failed: {error}");
-                self.on_proof_response(request_id, None);
+                tracing::debug!("Locator request to {peer} failed: {error}");
+                self.on_locator_response(request_id, None);
             }
             #[cfg(feature = "mdns")]
             GossipBehaviourEvent::Mdns(mdns::Event::Discovered(peers)) => {
@@ -1054,42 +1051,63 @@ impl GossipActor {
         _ = self.swarm_mut().behaviour_mut().kademlia.bootstrap();
     }
 
+    /// Asks a connected peer not `tried` yet for the CID of the proof `digest` names.
     fn fetch_proof(&mut self, digest: ProofDigest, mut tried: HashSet<PeerId>) {
         if self.proof_store.contains(&digest)
+            || self.named_fetches.contains_key(&digest)
             || self
-                .proof_fetches
+                .locator_lookups
                 .values()
                 .any(|(in_flight, _)| *in_flight == digest)
         {
             return;
         }
         let Some(peer) = self.connected.difference(&tried).next().copied() else {
-            tracing::debug!("No connected peer left to fetch proof {digest:?} from");
+            tracing::debug!("No connected peer left to ask for proof {digest:?}");
             return;
         };
         tried.insert(peer);
         let request_id = self
             .swarm_mut()
             .behaviour_mut()
-            .proof_exchange
+            .locator_exchange
             .send_request(&peer, sequencer_service_protocol::ProofDigest(digest));
-        self.proof_fetches.insert(request_id, (digest, tried));
+        self.locator_lookups.insert(request_id, (digest, tried));
     }
 
-    fn on_proof_response(
+    /// Fetches the proof from the CID a peer named, or asks the next peer. A named CID is a hint:
+    /// only the exact proof is kept, under this node's own CID.
+    fn on_locator_response(
         &mut self,
         request_id: request_response::OutboundRequestId,
-        proof: Option<Proof>,
+        locator: Option<StorageCid>,
     ) {
-        let Some((digest, tried)) = self.proof_fetches.remove(&request_id) else {
+        let Some((digest, tried)) = self.locator_lookups.remove(&request_id) else {
             return;
         };
-        match proof {
-            Some(proof) if proof.digest() == digest => {
-                self.proof_store.insert(&proof);
+        let Some(locator) = locator else {
+            self.fetch_proof(digest, tried);
+            return;
+        };
+        self.named_fetches.insert(digest, tried);
+        let proof_objects = Arc::clone(&self.proof_objects);
+        let myself = self.myself.clone();
+        tokio::spawn(async move {
+            let fetched = proof_objects
+                .fetch(digest, locator, Admission::Live, |_proof| true)
+                .await;
+            if let Err(err) = &fetched {
+                tracing::debug!(%locator, error = %err, "Failed to fetch a proof from a named CID");
             }
-            _ => self.fetch_proof(digest, tried),
-        }
+            if let Some(actor) = myself.and_then(|myself| myself.upgrade()) {
+                _ = actor
+                    .tell(NamedFetchDone {
+                        digest,
+                        fetched: fetched.is_ok(),
+                    })
+                    .await;
+            }
+        });
     }
 }
 
@@ -1252,6 +1270,27 @@ impl Message<StakeConfigUpdate> for GossipActor {
     }
 }
 
+/// How a fetch from a CID a peer named ended.
+struct NamedFetchDone {
+    digest: ProofDigest,
+    fetched: bool,
+}
+
+impl Message<NamedFetchDone> for GossipActor {
+    type Reply = ();
+
+    async fn handle(
+        &mut self,
+        NamedFetchDone { digest, fetched }: NamedFetchDone,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let tried = self.named_fetches.remove(&digest).unwrap_or_default();
+        if !fetched {
+            self.fetch_proof(digest, tried);
+        }
+    }
+}
+
 impl Message<FetchProof> for GossipActor {
     type Reply = ();
 
@@ -1307,12 +1346,12 @@ async fn admit_announced(
     Ok(())
 }
 
-fn proof_exchange(channel_id: [u8; 32]) -> ProofExchange {
-    let protocol = format!("/lez/{}/v1/proofs", hex::encode(channel_id));
+fn locator_exchange(channel_id: [u8; 32]) -> LocatorExchange {
+    let protocol = format!("/lez/{}/v1/proof-locators", hex::encode(channel_id));
     request_response::json::Behaviour::with_codec(
         request_response::json::codec::Codec::default()
-            .set_request_size_maximum(MAX_PROOF_REQUEST_SIZE)
-            .set_response_size_maximum(MAX_PROOF_RESPONSE_SIZE),
+            .set_request_size_maximum(MAX_LOCATOR_REQUEST_SIZE)
+            .set_response_size_maximum(MAX_LOCATOR_RESPONSE_SIZE),
         [(
             StreamProtocol::try_from_owned(protocol).expect("the protocol starts with a slash"),
             request_response::ProtocolSupport::Full,

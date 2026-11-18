@@ -508,6 +508,16 @@ impl ChainState {
             .filter_map(|placed| self.hydrated.get(&placed.entry))
     }
 
+    /// The locator a view entry's inscription names for the proof `digest`, if one does.
+    #[must_use]
+    pub fn inscribed_locator(&self, digest: &ProofDigest) -> Option<StorageCid> {
+        self.view.iter().rev().find_map(|entry| {
+            let block = entry.block.as_ref()?;
+            let index = block.body.proofs().position(|proof| proof == digest)?;
+            entry.locators.get(index).copied()
+        })
+    }
+
     #[must_use]
     pub fn missing_proofs(&self) -> Vec<ProofDigest> {
         let pending = self.pending().and_then(|idx| self.view[idx].block.as_ref());

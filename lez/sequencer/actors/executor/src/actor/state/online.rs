@@ -1,3 +1,9 @@
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex, PoisonError},
+    time::{Duration, Instant},
+};
+
 use chain_state::{ChainState, ChannelEntry};
 use common::{
     block::{BedrockStatus, Block},
@@ -6,6 +12,7 @@ use common::{
 };
 use kameo::actor::ActorRef;
 use kameo_actors::pubsub::{PubSub, Publish};
+use lee::privacy_preserving_transaction::circuit::ProofDigest;
 use mempool::{MemPool, MemPoolHandle};
 use sequencer_actors_common::SendErrorExt;
 use sequencer_bedrock_actor::{
@@ -13,7 +20,9 @@ use sequencer_bedrock_actor::{
     protocol::{ChannelId, ChannelSeq, Ed25519Key, Ed25519PublicKey, PublishOutcome, Slot},
 };
 use sequencer_core::{
-    SequencerCore, TransactionOrigin, config::SequencerConfig, proof_objects::ProofObjects,
+    SequencerCore, TransactionOrigin,
+    config::SequencerConfig,
+    proof_objects::{Admission, ProofObjects},
 };
 use sequencer_gossip_actor::protocol::FetchProof;
 use sequencer_storage_actor::{StorageActorTrait, protocol::AtomicUpdate};
@@ -32,14 +41,26 @@ mod skip;
 mod tests;
 mod turn;
 
+/// The first wait before a missing proof is sought again; it doubles per attempt, up to 64 times.
+const RECOVERY_BACKOFF: Duration = Duration::from_secs(1);
+
+/// One missing proof's recovery.
+struct Recovery {
+    in_flight: bool,
+    attempts: u32,
+    next_attempt: Instant,
+}
+
 pub struct OnlineState<S: StorageActorTrait, B: BedrockActorTrait> {
     sequencer: SequencerCore<S, B>,
     mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
     /// Whose turn it is to write: blocks are only produced in ours.
     turn: Turn,
     skip_policy: SkipPolicy,
-    /// Where this node requests the proofs its chain state lacks.
+    /// Where this node asks its peers for the CIDs of the proofs its chain state lacks.
     proof_requests_ref: ActorRef<PubSub<FetchProof>>,
+    /// The missing proofs being recovered, each retried with backoff.
+    recoveries: Arc<Mutex<BTreeMap<ProofDigest, Recovery>>>,
     // TODO: Remove this field
     background_tasks: sequencer_core::task_group::TaskGroup,
 }
@@ -105,17 +126,66 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         sequencer_executor_actor_metrics::record_turn_to_write(self.turn.is_ours());
     }
 
-    /// Refolds on the proofs that arrived, then requests those still missing.
+    /// Refolds on the proofs that arrived, then recovers those still missing: from the CID their
+    /// block inscribes, then from one a peer names.
     pub async fn fetch_proofs(&mut self) {
-        for digest in self.sequencer.hydrate().await {
-            if self
-                .proof_requests_ref
-                .tell(Publish(FetchProof(digest)))
-                .try_send()
-                .is_err()
-            {
-                debug!("Dropped a request for proof {digest:?}");
+        let missing = self.sequencer.hydrate().await;
+        let located: Vec<_> = self
+            .sequencer
+            .with_chain(|chain| {
+                missing
+                    .iter()
+                    .map(|digest| (*digest, chain.inscribed_locator(digest)))
+                    .collect()
+            })
+            .await;
+        let now = Instant::now();
+        let mut recoveries = self
+            .recoveries
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        recoveries.retain(|digest, _| missing.contains(digest));
+        for (digest, locator) in located {
+            let recovery = recoveries.entry(digest).or_insert(Recovery {
+                in_flight: false,
+                attempts: 0,
+                next_attempt: now,
+            });
+            if recovery.in_flight || now < recovery.next_attempt {
+                continue;
             }
+            recovery.in_flight = true;
+            let proof_objects = self.sequencer.proof_objects();
+            let proof_requests_ref = self.proof_requests_ref.clone();
+            let shared = Arc::clone(&self.recoveries);
+            tokio::spawn(async move {
+                let recovered = match locator {
+                    Some(locator) => proof_objects
+                        .fetch(digest, locator, Admission::Live, |_proof| true)
+                        .await
+                        .inspect_err(|err| {
+                            debug!(%locator, error = %err, "Failed to fetch a proof from its inscribed CID");
+                        })
+                        .is_ok(),
+                    None => false,
+                };
+                if !recovered
+                    && proof_requests_ref
+                        .tell(Publish(FetchProof(digest)))
+                        .try_send()
+                        .is_err()
+                {
+                    debug!("Dropped a request for proof {digest:?}");
+                }
+                let mut held = shared.lock().unwrap_or_else(PoisonError::into_inner);
+                if let Some(done) = held.get_mut(&digest) {
+                    done.in_flight = false;
+                    done.attempts = done.attempts.saturating_add(1);
+                    done.next_attempt = Instant::now()
+                        .checked_add(RECOVERY_BACKOFF.saturating_mul(1 << done.attempts.min(6)))
+                        .unwrap_or_else(Instant::now);
+                }
+            });
         }
     }
 
@@ -274,6 +344,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             turn: Turn::new(is_our_turn),
             skip_policy: SkipPolicy::default(),
             proof_requests_ref,
+            recoveries: Arc::default(),
             sequencer,
         })
     }

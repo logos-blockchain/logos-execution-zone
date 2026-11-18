@@ -12219,6 +12219,7 @@ dependencies = [
  "lee",
  "libp2p 0.57.1",
  "logos-blockchain-zone-sdk",
+ "logos_storage",
  "mempool",
  "sequencer_channel_signing_actor",
  "sequencer_core",
