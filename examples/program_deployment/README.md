@@ -55,8 +55,12 @@ export PAYER=CbgR6tj5kWx5oziiFptM7jMvrQeYY3Mzaao6ciuhSr2r
 # 2. Compile the example programs
 In a second terminal, from the `logos-execution-zone` root directory, compile the example Risc0 programs:
 ```bash
-cargo risczero build --manifest-path examples/program_deployment/methods/guest/Cargo.toml
+RISC0_DOCKER_CONTAINER_TAG=r0.1.91.1 cargo risczero build --manifest-path examples/program_deployment/methods/guest/Cargo.toml
 ```
+
+> [!NOTE]
+> The tag pins the Docker image that builds the programs to the one the [`Justfile`](../../Justfile) uses. Without it, `cargo risczero build` uses the image of your `cargo-risczero` version, whose Rust toolchain can be too old for the programs' dependencies (for example `ruint requires rustc 1.90`).
+
 Because this repository is organized as a Cargo workspace, build artifacts are written to the
 shared `target/` directory at the workspace root by default. The compiled `.bin` files will
 appear under:
