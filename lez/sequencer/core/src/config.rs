@@ -140,6 +140,16 @@ pub struct LogosStorageConfig {
     /// leaves free.
     #[serde(default = "default_live_reserve_bytes")]
     pub live_reserve_bytes: u64,
+    /// How often a held proof is uploaded again, which renews its expiry; under the node's
+    /// block TTL.
+    #[serde(with = "humantime_serde", default = "default_renewal_interval")]
+    pub renewal_interval: Duration,
+    /// Proof downloads in flight at once.
+    #[serde(default = "default_max_downloads")]
+    pub max_downloads: usize,
+    /// Proof downloads one peer's announcements keep in flight at once.
+    #[serde(default = "default_max_downloads_per_peer")]
+    pub max_downloads_per_peer: usize,
 }
 
 impl Default for LogosStorageConfig {
@@ -148,6 +158,9 @@ impl Default for LogosStorageConfig {
             api_url: default_logos_storage_api_url(),
             serving_window: default_serving_window(),
             live_reserve_bytes: default_live_reserve_bytes(),
+            renewal_interval: default_renewal_interval(),
+            max_downloads: default_max_downloads(),
+            max_downloads_per_peer: default_max_downloads_per_peer(),
         }
     }
 }
@@ -346,6 +359,18 @@ const fn default_serving_window() -> Duration {
 
 const fn default_live_reserve_bytes() -> u64 {
     0x4000_0000
+}
+
+const fn default_renewal_interval() -> Duration {
+    Duration::from_hours(24)
+}
+
+const fn default_max_downloads() -> usize {
+    16
+}
+
+const fn default_max_downloads_per_peer() -> usize {
+    2
 }
 
 #[expect(clippy::unnecessary_wraps, reason = "Required by serde")]
