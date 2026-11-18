@@ -1,4 +1,9 @@
-use tokio::sync::mpsc::{Receiver, Sender};
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
+
+use tokio::sync::mpsc::{Receiver, Sender, error::TrySendError};
 
 pub struct MemPool<T> {
     receiver: Receiver<T>,
@@ -10,7 +15,10 @@ impl<T> MemPool<T> {
     #[must_use]
     pub fn new(max_size: usize) -> Self {
         let (sender, receiver) = tokio::sync::mpsc::channel(max_size);
-        let handle = MemPoolHandle::new(sender);
+        let handle = MemPoolHandle {
+            sender,
+            front_len: Arc::default(),
+        };
 
         Self {
             receiver,
@@ -43,6 +51,7 @@ impl<T> MemPool<T> {
 
         // First check if there are any items in the front buffer (LIFO)
         if let Some(item) = self.front_buffer.pop() {
+            self.handle.front_len.fetch_sub(1, Ordering::Relaxed);
             return Some(item);
         }
 
@@ -59,34 +68,38 @@ impl<T> MemPool<T> {
 
     /// Push an item to the front of the mempool (will be popped first).
     pub fn push_front(&mut self, item: T) {
+        self.handle.front_len.fetch_add(1, Ordering::Relaxed);
         self.front_buffer.push(item);
     }
 }
 
 pub struct MemPoolHandle<T> {
     sender: Sender<T>,
+    /// Items pushed back to the front, which take room from admission.
+    front_len: Arc<AtomicUsize>,
 }
 
 impl<T> Clone for MemPoolHandle<T> {
     fn clone(&self) -> Self {
         Self {
             sender: self.sender.clone(),
+            front_len: Arc::clone(&self.front_len),
         }
     }
 }
 
 impl<T> MemPoolHandle<T> {
-    const fn new(sender: Sender<T>) -> Self {
-        Self { sender }
-    }
-
     /// Send an item to the mempool blocking if max size is reached.
     pub async fn push(&self, item: T) -> Result<(), tokio::sync::mpsc::error::SendError<T>> {
         self.sender.send(item).await
     }
 
-    /// Send an item to the mempool, failing _immediately_ if it is full.
-    pub fn try_push(&self, item: T) -> Result<(), tokio::sync::mpsc::error::TrySendError<T>> {
+    /// Send an item to the mempool, failing _immediately_ if it is full, the items pushed back to
+    /// the front counted.
+    pub fn try_push(&self, item: T) -> Result<(), TrySendError<T>> {
+        if self.front_len.load(Ordering::Relaxed) >= self.sender.capacity() {
+            return Err(TrySendError::Full(item));
+        }
         self.sender.try_send(item)
     }
 }

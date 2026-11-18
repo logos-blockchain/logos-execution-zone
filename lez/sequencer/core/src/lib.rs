@@ -747,11 +747,16 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         }
     }
 
-    /// Runs everything this sequencer owes its turn: builds a block from mempool transactions and
-    /// seeds its proofs. A block that needs no approvals is published via zone-sdk, with any
-    /// committee-config update the new state calls for; a proof-bearing block of a committee is
-    /// parked for its approvals. A failed seeding publishes the public remainder instead.
-    pub async fn produce(&mut self, turn_start_slot: Option<u64>) -> Result<TurnOutcome> {
+    /// Runs everything this sequencer owes its turn: builds a block from mempool transactions. A
+    /// public block is published via zone-sdk, with any committee-config update the new state
+    /// calls for. A proof-bearing block is seeded by `deadline`: a single writer then publishes
+    /// it, a committee's producer parks it for its approvals until `deadline`. A seeding that fails
+    /// or runs late publishes the public remainder instead.
+    pub async fn produce(
+        &mut self,
+        turn_start_slot: Option<u64>,
+        deadline: tokio::time::Instant,
+    ) -> Result<TurnOutcome> {
         // A draft short of signatures is dropped here, before its fee-note
         // reservation lapses and the block below spends that note.
         if self
@@ -769,16 +774,29 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .context("Failed to build block from mempool transactions")?;
         if built.block.body.proofs().next().is_none() {
             return self
-                .publish_built(built, Vec::new(), false)
+                .publish_built(built, Vec::new())
                 .await
                 .map(TurnOutcome::Published);
         }
-        let locators = match self.seed_proofs(&built).await {
-            Ok(locators) => locators,
-            Err(err) => {
+        let seeded = tokio::time::timeout_at(deadline, self.seed_proofs(&built))
+            .await
+            .unwrap_or_else(|_elapsed| Err(anyhow!("seeding ran past the private cutoff")));
+        let own = SequencerKey::new(self.channel_signing_public_key())
+            .expect("a channel signing key is a sequencer key");
+        let committee = self.accredited_committee().await;
+        let (locators, turn_start_slot) = match (seeded, turn_start_slot) {
+            // A single writer has no one to ask: it publishes once its own copies are seeded.
+            (Ok(locators), _) if committee == BTreeSet::from([own]) => {
+                return self
+                    .publish_built(built, locators)
+                    .await
+                    .map(TurnOutcome::Published);
+            }
+            (Ok(locators), Some(slot)) if committee.len() > 1 => (locators, slot),
+            (seeded, _) => {
                 warn!(
-                    error = format_args!("{err:#}"),
-                    "Publishing the block's public remainder instead"
+                    error = seeded.err().map(|err| format!("{err:#}")),
+                    "No approvals can come in, publishing the block's public remainder"
                 );
                 return self
                     .publish_public_remainder(built)
@@ -786,24 +804,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     .map(TurnOutcome::Published);
             }
         };
-
-        let committee = self.accredited_committee().await;
-        // A single writer has no one to ask: it publishes once its own copies are seeded.
-        if committee.len() < 2 {
-            return self
-                .publish_built(built, locators, false)
-                .await
-                .map(TurnOutcome::Published);
-        }
-        let Some(turn_start_slot) = turn_start_slot else {
-            warn!("The turn's starting slot is unknown, publishing the block's public remainder");
-            return self
-                .publish_public_remainder(built)
-                .await
-                .map(TurnOutcome::Published);
-        };
-        let own = SequencerKey::new(self.channel_signing_public_key())
-            .expect("a channel signing key is a sequencer key");
         let candidate = availability::Candidate {
             id: availability::CandidateId {
                 producer: own,
@@ -814,48 +814,58 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             },
             block: built.block.digested(),
         };
-        Ok(TurnOutcome::Parked(Box::new(ParkedCandidate {
+        let mut parked = ParkedCandidate {
             threshold: sequencer_stake_core::slash_approval_threshold(committee.len()),
             built,
             locators,
             candidate,
             committee,
-            own,
-        })))
+            approvers: BTreeSet::new(),
+            deadline,
+        };
+        parked.approve(own);
+        Ok(TurnOutcome::Parked(Box::new(parked)))
     }
 
     /// [`Self::produce`] in a turn of unknown start, which parks no candidate.
     #[cfg(test)]
     pub async fn run_production_turn(&mut self) -> Result<u64> {
-        match self.produce(None).await? {
+        let deadline = tokio::time::Instant::now()
+            .checked_add(std::time::Duration::from_secs(3600))
+            .expect("an hour from now is representable");
+        match self.produce(None, deadline).await? {
             TurnOutcome::Published(block_id) => Ok(block_id),
-            TurnOutcome::Parked(parked) => self.publish_parked(*parked, false).await,
+            TurnOutcome::Parked(_) => Err(anyhow!("a turn of unknown start parked a candidate")),
         }
     }
 
-    /// Publishes `parked` once its approvals are in, if the head, the pin and the committee it
-    /// was built against still hold; otherwise, or when `approved` is false, publishes the public
-    /// remainder in its place.
-    pub async fn publish_parked(&mut self, parked: ParkedCandidate, approved: bool) -> Result<u64> {
+    /// Publishes `parked` once `approved`, or else its public remainder. A candidate whose head,
+    /// pin or committee moved goes back to the mempool instead, for the next turn to build on the
+    /// new head.
+    pub async fn publish_parked(
+        &mut self,
+        parked: ParkedCandidate,
+        approved: bool,
+    ) -> Result<Option<u64>> {
         let unchanged = {
             let chain = self.chain.lock().await;
             chain.pin() == parked.built.parent
                 && chain.head_tip().map(|tip| tip.hash)
                     == Some(parked.built.block.header.prev_block_hash)
         } && self.accredited_committee().await == parked.committee;
-        if approved && unchanged {
-            return self
-                .publish_built(parked.built, parked.locators, true)
-                .await;
+        if !unchanged {
+            info!("The head or committee moved past a candidate, building on the new head");
+            self.drop_parked(parked);
+            return Ok(None);
         }
         if approved {
-            warn!(
-                "The head or committee moved past an approved candidate, publishing its public remainder"
-            );
-        } else {
-            warn!("A candidate missed its approvals, publishing its public remainder");
+            return self
+                .publish_built(parked.built, parked.locators)
+                .await
+                .map(Some);
         }
-        self.publish_public_remainder(parked.built).await
+        warn!("A candidate missed its approvals, publishing its public remainder");
+        self.publish_public_remainder(parked.built).await.map(Some)
     }
 
     /// Returns the transactions of a candidate whose turn ended to the front of the mempool.
@@ -887,17 +897,16 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let rebuilt = self.build_block_from_mempool().await;
         self.defer_private = false;
         let rebuilt = rebuilt.context("Failed to build block from mempool transactions")?;
-        self.publish_built(rebuilt, Vec::new(), false).await
+        self.publish_built(rebuilt, Vec::new()).await
     }
 
     /// Publishes `built` with its proofs under `locators`, pinned on its deposits if it mints
-    /// any, and records it. A failed pin rebuilds the block without its pinned deposits; a
-    /// candidate's approvals do not cover that block, so `approved` rebuilds it public only.
+    /// any, and records it. A failed pin rebuilds the block without its pinned deposits and
+    /// without private transactions, which neither seeding nor approvals covered.
     async fn publish_built(
         &mut self,
         mut built: BlockWithMeta,
         mut locators: Vec<StorageCid>,
-        approved: bool,
     ) -> Result<u64> {
         let publish_res = if built.pinned_deposit_notes.is_empty() {
             self.publish_block(&built, &locators).await
@@ -933,17 +942,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                             "Failed to pin block"
                         );
                     }
-                    self.defer_private = approved;
+                    self.defer_private = true;
                     let rebuilt = self.build_block_without_pins(built).await;
                     self.defer_private = false;
                     built = rebuilt?;
-                    locators = match self.seed_proofs(&built).await {
-                        Ok(seeded) => seeded,
-                        Err(err) => {
-                            self.requeue(std::mem::take(&mut built.mempool_transactions));
-                            return Err(err);
-                        }
-                    };
+                    locators = Vec::new();
                     self.publish_block(&built, &locators).await
                 }
             }
@@ -980,17 +983,25 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         Ok(block_id)
     }
 
-    /// Stores every proof `built` carries in Logos Storage, served to peers, and returns their
-    /// CIDs in transaction order.
+    /// Stores every distinct proof `built` carries in Logos Storage, served to peers, and returns
+    /// their CIDs in transaction order.
     async fn seed_proofs(&self, built: &BlockWithMeta) -> Result<Vec<StorageCid>> {
+        let mut seeded = BTreeMap::new();
         let mut locators = Vec::new();
         for proof in built.block.body.proofs() {
-            locators.push(
-                self.proof_objects
+            let digest = proof.digest();
+            let locator = if let Some(locator) = seeded.get(&digest) {
+                *locator
+            } else {
+                let locator = self
+                    .proof_objects
                     .seed(proof)
                     .await
-                    .context("Failed to seed the proofs of the block")?,
-            );
+                    .context("Failed to seed the proofs of the block")?;
+                seeded.insert(digest, locator);
+                locator
+            };
+            locators.push(locator);
         }
         Ok(locators)
     }
@@ -2020,7 +2031,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             )
             .collect::<VecDeque<_>>();
         while let Some((origin, tx, proposal)) = candidates.pop_front() {
-            let block_size = borsh::to_vec(&HashableBlockData {
+            let block_size = HashableBlockData {
                 block_id: new_block_height,
                 transactions: [
                     valid_transactions.as_slice(),
@@ -2038,9 +2049,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     .copied()
                     .chain([TransactionReceipt::EXEMPT])
                     .collect(),
-            })
-            .context("Failed to serialize block for size check")?
-            .len();
+            }
+            .inscription_len()
+            .context("Failed to serialize block for size check")?;
             if block_size > max_block_size {
                 warn!(
                     tx_hash = %tx.hash(),
@@ -2244,7 +2255,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             Arc::clone(&self.chain),
             Arc::clone(&self.proof_objects),
             self.channel_signing_key.clone(),
-            *self.channel_id.as_ref(),
+            self.bedrock_pool_ref.clone(),
+            self.channel_id,
         )
     }
 
@@ -2531,8 +2543,10 @@ pub struct ParkedCandidate {
     /// The keys accredited at the parent, and how many of them must approve.
     committee: BTreeSet<SequencerKey>,
     threshold: usize,
-    /// This node, which approves once its seeding succeeded.
-    own: SequencerKey,
+    /// The committee members that approved, this node first once its seeding succeeded.
+    approvers: BTreeSet<SequencerKey>,
+    /// When the candidate gives way to its public remainder.
+    deadline: tokio::time::Instant,
 }
 
 impl ParkedCandidate {
@@ -2541,17 +2555,18 @@ impl ParkedCandidate {
         &self.candidate
     }
 
-    /// Whether `approvers` and this node reach the threshold among the committee at the parent.
     #[must_use]
-    pub fn is_approved(&self, approvers: &BTreeSet<SequencerKey>) -> bool {
-        let approving = approvers
-            .iter()
-            .chain([&self.own])
-            .collect::<BTreeSet<_>>()
-            .into_iter()
-            .filter(|key| self.committee.contains(key))
-            .count();
-        approving >= self.threshold
+    pub const fn deadline(&self) -> tokio::time::Instant {
+        self.deadline
+    }
+
+    /// Counts `signer`'s approval if the committee at the parent accredits it; returns whether the
+    /// approvals reach the threshold.
+    pub fn approve(&mut self, signer: SequencerKey) -> bool {
+        if self.committee.contains(&signer) {
+            self.approvers.insert(signer);
+        }
+        self.approvers.len() >= self.threshold
     }
 }
 

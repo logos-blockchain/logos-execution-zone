@@ -1,9 +1,6 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::{
-        Arc, Mutex, PoisonError,
-        atomic::{AtomicBool, Ordering},
-    },
+    collections::BTreeMap,
+    sync::{Arc, Mutex, PoisonError},
     time::{Duration, Instant},
 };
 
@@ -24,12 +21,11 @@ use sequencer_bedrock_actor::{
 };
 use sequencer_core::{
     ParkedCandidate, SequencerCore, TransactionOrigin, TurnOutcome,
-    availability::{AvailabilityApproval, AvailabilityMessage, Candidate, CandidateId},
+    availability::{AvailabilityMessage, Candidate},
     config::SequencerConfig,
-    proof_objects::{Admission, ProofObjects},
+    proof_objects::Admission,
 };
 use sequencer_gossip_actor::protocol::FetchProof;
-use sequencer_stake_core::SequencerKey;
 use sequencer_storage_actor::{StorageActorTrait, protocol::AtomicUpdate};
 use sharding_pool_actor::ShardingPoolActor;
 use tracing::{debug, info};
@@ -46,28 +42,22 @@ mod skip;
 mod tests;
 mod turn;
 
-/// How many of this node's own candidates approvals are kept for.
-const TRACKED_CANDIDATES: usize = 8;
-
 /// The first wait before a missing proof is sought again; it doubles per attempt, up to 64 times.
 const RECOVERY_BACKOFF: Duration = Duration::from_secs(1);
 
-/// A candidate's producer, turn and parent.
-type ApprovalKey = (SequencerKey, u64, [u8; 32]);
-
-/// The candidate this node is approving, and whether a newer one superseded it.
+/// The candidate this node is approving, and the work that approves it.
 struct Approving {
-    key: ApprovalKey,
-    superseded: Arc<AtomicBool>,
+    candidate_hash: [u8; 32],
+    work: tokio::task::JoinHandle<()>,
 }
 
 /// What a production turn did.
 pub enum Produced {
     Published(u64),
-    /// A candidate waits for its approvals until `cutoff` from now.
+    /// A candidate waits for its approvals until `deadline`.
     Parked {
         candidate_hash: [u8; 32],
-        cutoff: Duration,
+        deadline: tokio::time::Instant,
     },
 }
 
@@ -88,8 +78,6 @@ pub struct OnlineState<S: StorageActorTrait, B: BedrockActorTrait> {
     proof_requests_ref: ActorRef<PubSub<FetchProof>>,
     /// The missing proofs being recovered, each retried with backoff.
     recoveries: Arc<Mutex<BTreeMap<ProofDigest, Recovery>>>,
-    /// The keys that approved this node's own recent candidates, by candidate.
-    availability_approvals: BTreeMap<CandidateId, BTreeSet<SequencerKey>>,
     /// Where this node publishes its own candidates and availability approvals.
     availability_publisher: ActorRef<PubSub<AvailabilityMessage>>,
     /// The slot the current turn started at, whoever's it is, as Bedrock last told us.
@@ -98,6 +86,9 @@ pub struct OnlineState<S: StorageActorTrait, B: BedrockActorTrait> {
     approving: Option<Box<Approving>>,
     /// This node's candidate, waiting for its approvals.
     parked: Option<Box<ParkedCandidate>>,
+    /// Since when this node's turn has gone without a post of its own: the turn's start, or its
+    /// last publish.
+    idle_since: tokio::time::Instant,
     // TODO: Remove this field
     background_tasks: sequencer_core::task_group::TaskGroup,
 }
@@ -156,6 +147,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
     }
 
     pub fn update_turn(&mut self, our_turn_to_write: bool, starting_slot: Option<Slot>) {
+        // A candidate is approved within its turn only.
+        if self.turn_start != starting_slot
+            && let Some(approving) = self.approving.take()
+        {
+            approving.work.abort();
+        }
         self.turn_start = starting_slot;
         // A candidate cannot be posted outside its turn.
         if let Some(parked) = self.parked.take_if(|parked| {
@@ -167,6 +164,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             self.sequencer.drop_parked(*parked);
         }
         if self.turn.update(our_turn_to_write, starting_slot) {
+            self.idle_since = tokio::time::Instant::now();
             sequencer_executor_actor_metrics::increment_turns_to_write_total();
             self.skip_policy.start_turn();
         }
@@ -238,13 +236,33 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
 
     /// Produces this turn's block, or proposes a proof-bearing candidate to the committee and
     /// parks it until its approvals are in or the private cutoff passes.
+    ///
+    /// The cutoff falls three quarters of the posting timeout, one slot a second, after the turn
+    /// last saw a post of this node's, so the public remainder still goes out before the turn
+    /// passes on. It bounds the seeding as well as the approvals.
     pub async fn produce(&mut self) -> anyhow::Result<Produced> {
+        let posting_timeout = self
+            .sequencer
+            .with_state(|state| {
+                chain_state::stake_config::channel_params(state)
+                    .map(|params| params.posting_timeout)
+            })
+            .await
+            .unwrap_or_default();
+        let budget = posting_timeout.saturating_sub(posting_timeout.div_ceil(4));
+        let deadline = self
+            .idle_since
+            .checked_add(Duration::from_secs(u64::from(budget)))
+            .unwrap_or(self.idle_since);
         let outcome = self
             .sequencer
-            .produce(self.turn_start.map(Slot::into_inner))
+            .produce(self.turn_start.map(Slot::into_inner), deadline)
             .await?;
         let parked = match outcome {
-            TurnOutcome::Published(block_id) => return Ok(Produced::Published(block_id)),
+            TurnOutcome::Published(block_id) => {
+                self.idle_since = tokio::time::Instant::now();
+                return Ok(Produced::Published(block_id));
+            }
             TurnOutcome::Parked(parked) => parked,
         };
         let candidate = parked.candidate().clone();
@@ -257,20 +275,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         {
             debug!("Dropped this node's candidate");
         }
-        let posting_timeout = self
-            .sequencer
-            .with_state(|state| {
-                chain_state::stake_config::channel_params(state)
-                    .map(|params| params.posting_timeout)
-            })
-            .await
-            .unwrap_or_default();
         self.parked = Some(parked);
         Ok(Produced::Parked {
             candidate_hash,
-            // Half the posting timeout, one slot a second, leaves the rest of the turn to publish
-            // the public remainder in.
-            cutoff: Duration::from_secs(u64::from(posting_timeout.div_ceil(2))),
+            deadline,
         })
     }
 
@@ -279,7 +287,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
     }
 
     /// Publishes the public remainder of the parked candidate `candidate_hash` names, if it is
-    /// still parked.
+    /// still parked and this turn may still produce.
     pub async fn on_cutoff(&mut self, candidate_hash: [u8; 32]) -> anyhow::Result<Option<u64>> {
         let Some(parked) = self
             .parked
@@ -287,43 +295,40 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         else {
             return Ok(None);
         };
-        self.sequencer
-            .publish_parked(*parked, false)
-            .await
-            .map(Some)
+        if !self.may_produce().await {
+            self.sequencer.drop_parked(*parked);
+            return Ok(None);
+        }
+        self.settle(*parked, false).await
     }
 
-    /// Takes in a peer's candidate or availability approval. Only approvals of this node's own
-    /// candidates are kept, for its most recent turns; the parked candidate is published once
-    /// they reach the threshold.
+    async fn settle(
+        &mut self,
+        parked: ParkedCandidate,
+        approved: bool,
+    ) -> anyhow::Result<Option<u64>> {
+        let published = self.sequencer.publish_parked(parked, approved).await?;
+        if published.is_some() {
+            self.idle_since = tokio::time::Instant::now();
+        }
+        Ok(published)
+    }
+
+    /// Takes in a peer's candidate or availability approval. The parked candidate is published
+    /// once its approvals reach the threshold before its deadline.
     pub async fn on_availability(
         &mut self,
         message: AvailabilityMessage,
     ) -> anyhow::Result<Option<u64>> {
         match message {
             AvailabilityMessage::Approval(approval) => {
-                if approval.candidate.producer.to_bytes()
-                    != self.sequencer.channel_signing_public_key()
-                {
-                    return Ok(None);
-                }
-                let AvailabilityApproval {
-                    candidate, signer, ..
-                } = *approval;
-                let approvers = self
-                    .availability_approvals
-                    .entry(candidate.clone())
-                    .or_default();
-                approvers.insert(signer);
-                let approved = self.parked.as_ref().is_some_and(|parked| {
-                    parked.candidate().id == candidate && parked.is_approved(approvers)
+                let approved = self.parked.as_mut().is_some_and(|parked| {
+                    parked.candidate().id == approval.candidate
+                        && parked.approve(approval.signer)
+                        && tokio::time::Instant::now() < parked.deadline()
                 });
-                // Candidates of one producer order by turn, so the first is the oldest.
-                while self.availability_approvals.len() > TRACKED_CANDIDATES {
-                    self.availability_approvals.pop_first();
-                }
                 if let Some(parked) = self.parked.take_if(|_| approved) {
-                    return self.sequencer.publish_parked(*parked, true).await.map(Some);
+                    return self.settle(*parked, true).await;
                 }
             }
             AvailabilityMessage::Candidate(candidate) => self.on_candidate(*candidate),
@@ -332,7 +337,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
     }
 
     /// Approves a peer's candidate for the current turn once this node holds its proofs. One
-    /// candidate per producer, turn and parent is approved at a time; a newer one supersedes it.
+    /// candidate is approved at a time: a newer one cancels the work on the older, and a failed
+    /// one may be retried.
     fn on_candidate(&mut self, candidate: Candidate) {
         let id = &candidate.id;
         if id.producer.to_bytes() == self.sequencer.channel_signing_public_key()
@@ -341,26 +347,16 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         {
             return;
         }
-        let key = (id.producer, id.turn_start_slot, id.parent);
-        if self
-            .approving
-            .as_ref()
-            .is_some_and(|approving| approving.key == key)
-        {
+        let candidate_hash = id.candidate_hash;
+        if self.approving.as_ref().is_some_and(|approving| {
+            approving.candidate_hash == candidate_hash && !approving.work.is_finished()
+        }) {
             return;
-        }
-        let superseded = Arc::new(AtomicBool::new(false));
-        if let Some(older) = self.approving.replace(Box::new(Approving {
-            key,
-            superseded: Arc::clone(&superseded),
-        })) {
-            older.superseded.store(true, Ordering::Relaxed);
         }
         let approval = self.sequencer.candidate_approval(candidate);
         let publisher = self.availability_publisher.clone();
-        tokio::spawn(async move {
+        let work = tokio::spawn(async move {
             match approval.await {
-                Ok(_) if superseded.load(Ordering::Relaxed) => {}
                 Ok(approval) => {
                     let message = AvailabilityMessage::Approval(Box::new(approval));
                     if publisher.tell(Publish(message)).try_send().is_err() {
@@ -370,6 +366,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                 Err(err) => debug!(error = %format!("{err:#}"), "Not approving a candidate"),
             }
         });
+        if let Some(older) = self.approving.replace(Box::new(Approving {
+            candidate_hash,
+            work,
+        })) {
+            older.work.abort();
+        }
     }
 
     /// Whether this turn may build on the head tip, which skips the block past it, if any.
@@ -445,7 +447,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                     own_sequencer_key,
                     &storage_ref,
                     &bedrock_pool_ref,
-                    &proof_objects,
                 )
                 .await?
             } else {
@@ -529,11 +530,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             skip_policy: SkipPolicy::default(),
             proof_requests_ref,
             recoveries: Arc::default(),
-            availability_approvals: BTreeMap::new(),
             availability_publisher,
             turn_start: None,
             approving: None,
             parked: None,
+            idle_since: tokio::time::Instant::now(),
             sequencer,
         })
     }
@@ -583,7 +584,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         own_sequencer_key: sequencer_stake_core::SequencerKey,
         storage_ref: &ActorRef<S>,
         bedrock_pool_ref: &ActorRef<ShardingPoolActor<B, ChannelId>>,
-        proof_objects: &ProofObjects,
     ) -> Result<Option<ChannelSeq>> {
         let mut pending_blocks = storage_ref
             .ask(sequencer_storage_actor::protocol::GetAllBlocks)
@@ -623,41 +623,35 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             own_sequencer_key,
             Vec::new(),
         )];
-        for block in descendants {
-            let mut locators = Vec::new();
-            for proof in block.body.proofs() {
-                locators.push(
-                    proof_objects
-                        .seed(proof)
-                        .await
-                        .map_err(Error::ProofSeedingFailed)?,
-                );
-            }
+        // A private block would need its committee's approvals, which no one can give a channel
+        // being created: it and the blocks after it are dropped with the stale store.
+        for block in descendants
+            .iter()
+            .take_while(|block| block.body.proofs().next().is_none())
+        {
             outcome = bedrock_pool_ref
                 .ask(sequencer_bedrock_actor::protocol::PublishBlock {
                     channel_id: config.bedrock_config.channel_id,
                     block: block.clone(),
-                    locators: locators.clone(),
+                    locators: Vec::new(),
                     withdrawals: Vec::new(),
                     parent: None,
                     expected_seq: None,
                 })
                 .await
                 .map_err(SendErrorExt::flatten)?;
-            for proof in block.body.proofs() {
-                chain.proofs().insert(proof);
-            }
             published.push(published_entry(
                 &outcome,
                 block,
                 own_sequencer_key,
-                locators,
+                Vec::new(),
             ));
         }
 
         // These blocks are already stored, so only the view and the sdk's
-        // pending set moved. Checkpoints are cumulative, so the last one
-        // covers every publish above.
+        // pending set moved, and the store drops what lies past them.
+        // Checkpoints are cumulative, so the last one covers every publish
+        // above.
         chain.replace_unfinalized_view(published);
         storage_ref
             .ask(AtomicUpdate {

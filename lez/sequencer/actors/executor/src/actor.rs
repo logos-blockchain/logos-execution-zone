@@ -307,11 +307,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ProduceBlock> for Execu
         match online.produce().await {
             Ok(Produced::Parked {
                 candidate_hash,
-                cutoff,
+                deadline,
             }) => {
                 let executor = ctx.actor_ref().clone();
                 tokio::spawn(async move {
-                    tokio::time::sleep(cutoff).await;
+                    tokio::time::sleep_until(deadline).await;
                     _ = executor.tell(CandidateCutoff { candidate_hash }).await;
                 });
                 tracing::info!("Candidate proposed, waiting for its approvals");
