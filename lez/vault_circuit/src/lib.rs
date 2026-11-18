@@ -13,10 +13,12 @@ use ark_bn254::{Bn254, Fr};
 use ark_ec::{AffineRepr as _, CurveGroup as _};
 use ark_ed_on_bn254::{EdwardsAffine, Fr as Scalar};
 use ark_ff::{BigInteger as _, PrimeField as _};
-use ark_groth16::{Groth16, Proof, ProvingKey};
+use ark_groth16::{Groth16, Proof, ProvingKey, VerifyingKey};
 use ark_relations::r1cs::SynthesisError;
+use logos_blockchain_groth16::{CompressedGroth16VerificationKey, Groth16VerificationKey};
 use logos_blockchain_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
-use rand::{CryptoRng, RngCore};
+use rand::{CryptoRng, RngCore, SeedableRng as _};
+use rand_chacha::ChaCha20Rng;
 use sha2::{Digest as _, Sha512};
 
 pub use crate::circuit::VaultCircuit;
@@ -31,6 +33,13 @@ pub const MAX_OUTPUTS: usize = 8;
 pub const MAX_SIGNERS: usize = 4;
 /// The most program deposits one step consumes.
 pub const MAX_DEPOSITS: usize = 4;
+/// The size of a program key in Bedrock's encoding.
+pub const VERIFICATION_KEY_SIZE: usize = 352;
+/// The verification key of [`demo_proving_key`], as `PROGRAM_REGISTER` takes it.
+pub const DEMO_VERIFICATION_KEY: &[u8; VERIFICATION_KEY_SIZE] =
+    include_bytes!("../demo_verification_key.bin");
+
+const DEMO_SETUP_SEED: u64 = 0x4c45_5a5f_5641_554c;
 
 const STEP_ID_DST: &[u8] = b"PROGRAM_STEP_ID_V1";
 const DEPOSITS_DST: &[u8] = b"PROGRAM_DEPOSITS_V1";
@@ -260,6 +269,30 @@ pub fn setup(rng: &mut (impl RngCore + CryptoRng)) -> Result<ProvingKey<Bn254>, 
     Groth16::<Bn254>::generate_random_parameters_with_reduction(blank, rng)
 }
 
+/// The keys of a setup whose randomness is public: anyone can forge proofs under them. For
+/// demos and tests only.
+#[must_use]
+pub fn demo_proving_key() -> ProvingKey<Bn254> {
+    setup(&mut ChaCha20Rng::seed_from_u64(DEMO_SETUP_SEED)).expect("the circuit has a setup")
+}
+
+/// A verification key in the encoding `PROGRAM_REGISTER` takes.
+#[must_use]
+pub fn verification_key_bytes(key: &VerifyingKey<Bn254>) -> [u8; VERIFICATION_KEY_SIZE] {
+    let key = Groth16VerificationKey {
+        alpha_1: key.alpha_g1,
+        beta_2: key.beta_g2,
+        gamma_2: key.gamma_g2,
+        delta_2: key.delta_g2,
+        ic: key.gamma_abc_g1.clone(),
+    };
+    CompressedGroth16VerificationKey::try_from(&key)
+        .expect("the points of a setup compress")
+        .to_bytes()
+        .try_into()
+        .expect("a key of three public inputs has the size of a program key")
+}
+
 pub fn prove(
     proving_key: &ProvingKey<Bn254>,
     circuit: VaultCircuit,
@@ -305,9 +338,8 @@ mod tests {
             program_step_id,
         },
     };
-    use logos_blockchain_groth16::{CompressedGroth16Proof, Groth16Proof, Groth16VerificationKey};
+    use logos_blockchain_groth16::{CompressedGroth16Proof, Groth16Proof};
     use logos_blockchain_key_management_system_keys::keys::ZkPublicKey;
-    use rand::{SeedableRng as _, rngs::StdRng};
 
     use super::*;
 
@@ -642,24 +674,23 @@ mod tests {
         assert!(!is_satisfied(circuit(step, vec![deposit])));
     }
 
+    /// Run with `UPDATE_DEMO_KEY=1` after changing the circuit.
     #[test]
-    fn proof_verifies_with_bedrock_verifier() {
-        let mut rng = StdRng::seed_from_u64(1);
-        let proving_key = setup(&mut rng).unwrap();
+    fn demo_key_is_current_and_proves_for_bedrock() {
+        let proving_key = demo_proving_key();
+        let key_bytes = verification_key_bytes(&proving_key.vk);
+        if std::env::var_os("UPDATE_DEMO_KEY").is_some() {
+            let path = concat!(env!("CARGO_MANIFEST_DIR"), "/demo_verification_key.bin");
+            std::fs::write(path, key_bytes).unwrap();
+        }
+        assert_eq!(&key_bytes, DEMO_VERIFICATION_KEY);
+
         let circuit = circuit(withdraw_step(), vec![]);
         let public = circuit.public.to_array();
-
-        let proof = prove(&proving_key, circuit, &mut rng).unwrap();
+        let proof = prove(&proving_key, circuit, &mut ChaCha20Rng::seed_from_u64(1)).unwrap();
 
         let program = RegisteredProgram::new(
-            ProgramVerificationKey::try_from(&Groth16VerificationKey {
-                alpha_1: proving_key.vk.alpha_g1,
-                beta_2: proving_key.vk.beta_g2,
-                gamma_2: proving_key.vk.gamma_g2,
-                delta_2: proving_key.vk.delta_g2,
-                ic: proving_key.vk.gamma_abc_g1.clone(),
-            })
-            .unwrap(),
+            ProgramVerificationKey::try_from_bytes(DEMO_VERIFICATION_KEY).unwrap(),
         )
         .unwrap();
         let proof = CompressedGroth16Proof::try_from(&Groth16Proof {

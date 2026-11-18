@@ -12056,6 +12056,7 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+ "vault_circuit",
 ]
 
 [[package]]
@@ -14750,6 +14751,7 @@ dependencies = [
  "logos-blockchain-key-management-system-keys",
  "logos-blockchain-poseidon2",
  "rand 0.8.6",
+ "rand_chacha 0.3.1",
  "sha2 0.10.9",
 ]
 

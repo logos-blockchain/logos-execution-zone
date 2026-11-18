@@ -16,8 +16,10 @@ ark-groth16.workspace = true
 ark-r1cs-std.workspace = true
 ark-relations.workspace = true
 jf-poseidon2.workspace = true
+logos-blockchain-groth16.workspace = true
 logos-blockchain-poseidon2.workspace = true
 rand.workspace = true
+rand_chacha.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]

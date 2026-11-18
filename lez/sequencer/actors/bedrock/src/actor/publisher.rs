@@ -13,19 +13,23 @@ use logos_blockchain_zone_sdk::{
             channel::{SlotTimeframe, SlotTimeout},
             gas::GasCost,
             ops::{
-                ChannelInscribeProof,
+                ChannelInscribeProof, NoOpProof,
                 channel::{
                     VerifiedChannelKeys,
                     config::ChannelConfigOp,
                     inscribe::{InscriptionOp, MiniBlocks},
                 },
+                program::ProgramRegisterOp,
             },
             traits::Hashable as _,
             transactions::{MantleTxBuilder, OpProofs},
         },
         proofs::channel_multi_sig_proof::ChannelMultiSigProof,
     },
-    node_types::{Inscription, WalletFundRequestBody, WalletFundResponseBody},
+    node_types::{
+        Inscription, ProgramVerificationKey, WalletFundRequestBody, WalletFundResponseBody,
+        derive_program_id,
+    },
     sequencer::{
         ChannelUpdate as SdkChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FinalizedTx,
         FundingConfig, InscriptionInfo, SequencerConfig, ZoneSequencer,
@@ -369,8 +373,17 @@ impl Publisher {
         };
         let msg_id = inscribe_op.id();
 
+        // Registering a program already registered has no effect, so every zone can do it.
+        let vault_key =
+            ProgramVerificationKey::try_from_bytes(vault_circuit::DEMO_VERIFICATION_KEY)
+                .expect("the vault key is a valid program key");
+        let vault_program = derive_program_id(&vault_key);
+
         let funded = self
             .fund_ops([
+                Op::ProgramRegister(ProgramRegisterOp {
+                    verification_key: vault_key,
+                }),
                 Op::ChannelConfig(config_op),
                 Op::ChannelInscribe(inscribe_op),
             ])
@@ -381,10 +394,15 @@ impl Publisher {
             .channel_signing_key
             .sign_payload(mantle_tx.hash().as_signing_bytes().as_ref());
 
-        let mut op_proofs = OpProofs::from([OpProof::ChannelMultiSigProof(genesis_config_proof())]);
-        op_proofs
-            .try_push(inscribe_proof(signature))
-            .map_err(|err| Error::TooManyOperationProofs(err.into()))?;
+        let mut op_proofs = OpProofs::from([OpProof::None(NoOpProof)]);
+        for proof in [
+            OpProof::ChannelMultiSigProof(genesis_config_proof()),
+            inscribe_proof(signature),
+        ] {
+            op_proofs
+                .try_push(proof)
+                .map_err(|err| Error::TooManyOperationProofs(err.into()))?;
+        }
         if let Some(transfer_proof) = funded.transfer_proof {
             op_proofs
                 .try_push(transfer_proof)
@@ -393,7 +411,8 @@ impl Publisher {
 
         info!(
             accredited_keys = key_count,
-            "Creating the channel, genesis block bundled"
+            vault_program = %vault_program,
+            "Creating the channel, genesis block and vault program registration bundled"
         );
 
         let tx = SignedOps::from_parts(mantle_tx, op_proofs)?;

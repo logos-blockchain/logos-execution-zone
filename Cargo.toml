@@ -277,6 +277,7 @@ rocksdb = { version = "0.24.0", default-features = false, features = [
   "bindgen-runtime",
 ] }
 rand = { version = "0.8.5", features = ["std", "std_rng", "getrandom"] }
+rand_chacha = "0.3.1"
 pcsc = "2"
 k256 = { version = "0.13.3", features = [
   "ecdsa-core",
