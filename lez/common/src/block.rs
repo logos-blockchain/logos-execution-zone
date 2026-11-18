@@ -566,4 +566,114 @@ mod tests {
         assert_eq!(measured, inscribed.len());
         assert!(measured < borsh::to_vec(&block).unwrap().len());
     }
+
+    fn other_locator() -> StorageCid {
+        StorageCid::try_from([&STORAGE_CID_PREFIX[..], &[8; 32]].concat().as_slice()).unwrap()
+    }
+
+    /// A block of two private transactions around a public one, and its digest form.
+    fn two_private() -> super::DigestedBlock {
+        block_data_with(vec![
+            private_transaction(vec![1; 64]),
+            test_utils::produce_dummy_empty_transaction(),
+            private_transaction(vec![2; 64]),
+        ])
+        .into_pending_block()
+        .digested()
+    }
+
+    #[test]
+    fn locators_follow_the_digest_form_one_per_private_transaction_in_order() {
+        let block = two_private();
+
+        let inscription = block.to_inscription(&[locator(), other_locator()]).unwrap();
+
+        let body = borsh::to_vec(&block).unwrap();
+        assert_eq!(inscription[..body.len()], body[..]);
+        assert_eq!(
+            inscription[body.len()..],
+            [locator().as_bytes().as_slice(), other_locator().as_bytes()].concat()[..]
+        );
+        let decoded = InscribedBlock::decode(&inscription).unwrap();
+        assert_eq!(decoded.block, block);
+        assert_eq!(
+            decoded.locators,
+            Locators::Valid(vec![locator(), other_locator()])
+        );
+    }
+
+    #[test]
+    fn a_block_cannot_be_inscribed_with_a_locator_count_other_than_its_private_transactions() {
+        let block = two_private();
+
+        assert!(block.to_inscription(&[locator()]).is_err());
+        assert!(
+            block
+                .to_inscription(&[locator(), locator(), locator()])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_malformed_locator_section_leaves_the_block_readable() {
+        let block = two_private();
+        let inscription = block.to_inscription(&[locator(), other_locator()]).unwrap();
+        let mut wrong_prefix = inscription.clone();
+        let last = wrong_prefix.len() - 38;
+        wrong_prefix[last] = 0x00;
+
+        for malformed in [
+            inscription[..inscription.len() - 1].to_vec(),
+            [inscription.as_slice(), &[0]].concat(),
+            inscription[..inscription.len() - 38].to_vec(),
+            wrong_prefix,
+        ] {
+            let decoded = InscribedBlock::decode(&malformed).unwrap();
+            assert_eq!(decoded.block, block);
+            assert_eq!(decoded.locators, Locators::Malformed);
+            assert!(decoded.locators.into_valid().is_empty());
+        }
+    }
+
+    #[test]
+    fn a_body_that_does_not_decode_is_no_block_whatever_follows() {
+        let inscription = two_private()
+            .to_inscription(&[locator(), other_locator()])
+            .unwrap();
+
+        assert!(InscribedBlock::decode(&inscription[..10]).is_err());
+    }
+
+    #[test]
+    fn a_public_block_inscribes_no_locator_and_measures_its_digest_form() {
+        let data = block_data_with(vec![test_utils::produce_dummy_empty_transaction()]);
+        let block = data.clone().into_pending_block().digested();
+
+        let inscription = block.to_inscription(&[]).unwrap();
+
+        assert_eq!(inscription, borsh::to_vec(&block).unwrap());
+        assert_eq!(data.inscription_len().unwrap(), inscription.len());
+        assert_eq!(
+            InscribedBlock::decode(&inscription).unwrap().locators,
+            Locators::Valid(Vec::new())
+        );
+    }
+
+    #[test]
+    fn inscription_len_counts_a_locator_per_occurrence_of_a_repeated_proof() {
+        let proof = non_repeating_proof();
+        let data = block_data_with(vec![
+            private_transaction(proof.clone()),
+            private_transaction(proof),
+        ]);
+        let block = data.clone().into_pending_block().digested();
+
+        let inscription = block.to_inscription(&[locator(), locator()]).unwrap();
+
+        assert_eq!(data.inscription_len().unwrap(), inscription.len());
+        assert_eq!(
+            inscription.len(),
+            borsh::to_vec(&block).unwrap().len() + 2 * 38
+        );
+    }
 }

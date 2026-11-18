@@ -439,4 +439,17 @@ mod tests {
         assert!(check_transaction_size(full_size).is_ok());
         assert!(check_inscribed_size(&tx.digested(), max_block_size).is_ok());
     }
+
+    #[test]
+    fn a_private_transaction_fits_a_block_up_to_its_locator() {
+        let tx = private_transaction(vec![7; 64]).digested();
+        let charged = tx.charged_bytes().unwrap();
+        let fitting = charged + BLOCK_OVERHEAD;
+
+        assert!(check_inscribed_size(&tx, fitting).is_ok());
+        assert!(matches!(
+            check_inscribed_size(&tx, fitting - 1),
+            Err(TransactionTooLarge::Inscribed { size, .. }) if size == charged
+        ));
+    }
 }

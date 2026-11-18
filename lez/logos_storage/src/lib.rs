@@ -249,3 +249,110 @@ fn number<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u64, D::E
         Number::Text(text) => text.parse().map_err(serde::de::Error::custom),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use common::storage_cid::{STORAGE_CID_PREFIX, StorageCid};
+
+    use super::*;
+
+    fn cid(fill: u8) -> StorageCid {
+        StorageCid::try_from([&STORAGE_CID_PREFIX[..], &[fill; 32]].concat().as_slice()).unwrap()
+    }
+
+    #[test]
+    fn a_cid_round_trips_through_its_base58btc_text() {
+        let text = text(cid(9));
+
+        assert!(text.starts_with('z'));
+        assert_eq!(parse(&text).unwrap(), cid(9));
+        assert_eq!(parse(&format!("{text}\n")).unwrap(), cid(9));
+    }
+
+    #[test]
+    fn a_cid_parses_from_any_multibase_text() {
+        let base32 = multibase::encode(multibase::Base::Base32Lower, cid(4).as_bytes());
+
+        assert_eq!(parse(&base32).unwrap(), cid(4));
+    }
+
+    #[test]
+    fn a_cid_of_another_codec_or_hash_is_refused() {
+        // A CIDv1 of the `dag-pb` codec, and one of a manifest under another multihash.
+        let dag_pb = [&[0x01, 0x70, 0x12, 0x20][..], &[1; 32]].concat();
+        let other_hash = [&[0x01, 0x81, 0x9A, 0x03, 0x13, 0x20][..], &[1; 32]].concat();
+
+        for bytes in [dag_pb, other_hash] {
+            let text = multibase::encode(multibase::Base::Base58Btc, &bytes);
+            assert!(matches!(parse(&text), Err(Error::Cid(_))));
+        }
+    }
+
+    #[test]
+    fn a_manifest_of_another_form_is_refused() {
+        let canonical = Manifest {
+            tree_cid: String::new(),
+            block_size: BLOCK_SIZE,
+            dataset_size: 100,
+            filename: None,
+            mimetype: None,
+            manifest_version: 0,
+        };
+        assert!(canonical.check_canonical(100).is_ok());
+
+        for (manifest, max) in [
+            (
+                Manifest {
+                    manifest_version: 1,
+                    ..canonical.clone()
+                },
+                100,
+            ),
+            (
+                Manifest {
+                    block_size: 0x1_0000,
+                    ..canonical.clone()
+                },
+                100,
+            ),
+            (
+                Manifest {
+                    filename: Some("proof".to_owned()),
+                    ..canonical.clone()
+                },
+                100,
+            ),
+            (
+                Manifest {
+                    mimetype: Some("text/plain".to_owned()),
+                    ..canonical.clone()
+                },
+                100,
+            ),
+        ] {
+            assert!(matches!(
+                manifest.check_canonical(max),
+                Err(Error::NonCanonical(_))
+            ));
+        }
+        assert!(matches!(
+            canonical.check_canonical(99),
+            Err(Error::TooLong { max: 99 })
+        ));
+    }
+
+    #[test]
+    fn a_manifest_reads_its_sizes_as_numbers_or_decimal_strings() {
+        #[derive(Deserialize)]
+        struct Content {
+            manifest: Manifest,
+        }
+        let json = r#"{"cid":"z","manifest":{"treeCid":"t","blockSize":"262144","datasetSize":5,"manifestVersion":0}}"#;
+
+        let manifest = serde_json::from_str::<Content>(json).unwrap().manifest;
+
+        assert_eq!(manifest.block_size, BLOCK_SIZE);
+        assert_eq!(manifest.dataset_size, 5);
+        assert!(manifest.filename.is_none());
+    }
+}

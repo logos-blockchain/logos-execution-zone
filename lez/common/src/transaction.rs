@@ -1150,4 +1150,55 @@ mod tests {
         ));
         assert!(!super::is_system_injection(&tx));
     }
+
+    fn private(proof: Vec<u8>) -> super::LeeTransaction {
+        super::LeeTransaction::PrivacyPreserving(lee::PrivacyPreservingTransaction::new(
+            lee::privacy_preserving_transaction::Message::default(),
+            lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(
+                vec![],
+                lee::privacy_preserving_transaction::circuit::Proof::from_inner(proof),
+            ),
+        ))
+    }
+
+    #[test]
+    fn a_private_transaction_is_charged_its_digest_form_and_one_locator_whatever_its_proof() {
+        for proof in [Vec::new(), vec![7; 1024]] {
+            let tx = private(proof);
+            let digested = tx.digested();
+            let digest_form = u64::try_from(borsh::object_length(&digested).unwrap()).unwrap();
+
+            assert_eq!(
+                tx.charged_bytes().unwrap(),
+                digest_form + fee_core::market::PROOF_LOCATOR_BYTES
+            );
+            assert_eq!(
+                digested.charged_bytes().unwrap(),
+                tx.charged_bytes().unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn a_public_transaction_is_charged_its_size_alone() {
+        let tx = create_transaction_native_token_transfer(
+            AccountId::new([1; 32]),
+            0,
+            AccountId::new([2; 32]),
+            1,
+            &PrivateKey::try_new([3; 32]).unwrap(),
+        );
+
+        assert_eq!(
+            tx.charged_bytes().unwrap(),
+            u64::try_from(borsh::object_length(&tx).unwrap()).unwrap()
+        );
+    }
+
+    #[test]
+    fn a_digest_form_shares_its_full_forms_hash() {
+        let tx = private(vec![7; 64]);
+
+        assert_eq!(tx.digested().hash(), tx.hash());
+    }
 }
