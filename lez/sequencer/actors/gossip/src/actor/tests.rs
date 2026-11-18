@@ -888,3 +888,131 @@ async fn a_proof_that_does_not_match_the_requested_digest_is_refused() {
 
     assert!(!store.contains(&wrong.digest()));
 }
+
+/// A private transaction carrying `proof`, whose receipt verifies for nothing.
+fn unprovable_private_transaction(proof: Vec<u8>) -> LeeTransaction {
+    LeeTransaction::PrivacyPreserving(lee::PrivacyPreservingTransaction::new(
+        lee::privacy_preserving_transaction::Message::default(),
+        lee::privacy_preserving_transaction::WitnessSet::from_raw_parts(
+            vec![],
+            Proof::from_inner(proof),
+        ),
+    ))
+}
+
+/// An announcement of `tx` under the CID `node` stored its proof at.
+async fn announced(tx: &LeeTransaction, node: &MemoryStorage) -> super::Announcement {
+    let proof = tx.proof().expect("a private transaction").clone();
+    super::Announcement {
+        transaction: tx.digested(),
+        locator: node.upload(proof.into_inner(), true).await.unwrap(),
+    }
+}
+
+/// Admission that records what reaches the mempool.
+fn recording_submit(admitted: Arc<std::sync::Mutex<Vec<LeeTransaction>>>) -> IngestSubmit {
+    Arc::new(move |tx| {
+        admitted.lock().unwrap().push(tx);
+        Box::pin(async { Ok(()) })
+    })
+}
+
+#[tokio::test]
+async fn an_announcement_the_fee_screen_refuses_downloads_no_payload() {
+    let network = MemoryNetwork::default();
+    let tx = unprovable_private_transaction(vec![5; 64]);
+    let announcement = announced(&tx, &network.node()).await;
+    let locator = announcement.locator;
+    let fetching = network.node();
+    let objects = ProofObjects::new(
+        Arc::new(fetching.clone()),
+        ProofStore::new(PROOF_STORE_CAPACITY),
+        Arc::new(MemoryRecords::default()),
+        &LogosStorageConfig::default(),
+    );
+    let refusing: AnnouncementScreen =
+        Arc::new(|_transaction, _proof_len| Box::pin(async { Err(anyhow::anyhow!("fee")) }));
+    let admitted = Arc::default();
+
+    let result = super::admit_announced(
+        announcement,
+        libp2p::PeerId::random(),
+        &objects,
+        &refusing,
+        &recording_submit(Arc::clone(&admitted)),
+    )
+    .await;
+
+    assert!(result.unwrap_err().to_string().contains("fee"));
+    assert!(!fetching.holds(locator));
+    assert!(admitted.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn an_announced_proof_that_does_not_verify_is_neither_admitted_nor_served() {
+    let network = MemoryNetwork::default();
+    let tx = unprovable_private_transaction(vec![5; 64]);
+    let announcement = announced(&tx, &network.node()).await;
+    let fetching = network.node();
+    let objects = ProofObjects::new(
+        Arc::new(fetching.clone()),
+        ProofStore::new(PROOF_STORE_CAPACITY),
+        Arc::new(MemoryRecords::default()),
+        &LogosStorageConfig::default(),
+    );
+    let admitted = Arc::default();
+    let locator = announcement.locator;
+
+    let result = super::admit_announced(
+        announcement,
+        libp2p::PeerId::random(),
+        &objects,
+        &unscreened_announcements(),
+        &recording_submit(Arc::clone(&admitted)),
+    )
+    .await;
+
+    assert!(result.unwrap_err().to_string().contains("does not verify"));
+    assert!(admitted.lock().unwrap().is_empty());
+    assert_eq!(objects.locator(&tx.proof().unwrap().digest()), None);
+    assert!(!fetching.holds(locator));
+}
+
+#[test]
+fn a_private_transaction_is_refused_on_the_transaction_topic() {
+    let data = borsh::to_vec(&unprovable_private_transaction(vec![5; 64])).unwrap();
+
+    assert!(matches!(
+        super::validation::evaluate_transaction(&data, 1 << 20),
+        super::validation::TxEvaluation::Reject(reason) if reason.contains("announcements")
+    ));
+}
+
+#[tokio::test]
+async fn an_announcement_is_accepted_by_its_digest_form_alone_and_refused_when_public_or_too_big() {
+    let node = MemoryNetwork::default().node();
+    let private = announced(&unprovable_private_transaction(vec![5; 64]), &node).await;
+    let public = super::Announcement {
+        transaction: valid_transaction().digested(),
+        locator: private.locator,
+    };
+    let evaluate = |announcement: &super::Announcement, max_block_size| {
+        super::validation::evaluate_announcement(
+            &borsh::to_vec(announcement).unwrap(),
+            max_block_size,
+        )
+    };
+
+    assert!(matches!(
+        evaluate(&private, 1 << 20),
+        super::validation::AnnouncementEvaluation::Accept(_)
+    ));
+    assert!(matches!(
+        evaluate(&public, 1 << 20),
+        super::validation::AnnouncementEvaluation::Reject(_)
+    ));
+    assert!(matches!(
+        evaluate(&private, sequencer_core::config::BLOCK_OVERHEAD + 1),
+        super::validation::AnnouncementEvaluation::Reject(_)
+    ));
+}

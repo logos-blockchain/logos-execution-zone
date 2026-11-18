@@ -89,7 +89,9 @@ impl MemoryStorage {
         self.node.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn object(&self, cid: StorageCid, local: bool) -> Result<Vec<u8>, Error> {
+    /// The dataset `cid` names, from the network unless `local`; kept only when `keep`, as a
+    /// manifest fetch keeps no payload.
+    fn object(&self, cid: StorageCid, local: bool, keep: bool) -> Result<Vec<u8>, Error> {
         if let Some(bytes) = self.lock().objects.get(&cid) {
             return Ok(bytes.clone());
         }
@@ -101,7 +103,9 @@ impl MemoryStorage {
             return Err(not_found());
         }
         let bytes = self.network.find(cid).ok_or_else(not_found)?;
-        self.lock().objects.insert(cid, bytes.clone());
+        if keep {
+            self.lock().objects.insert(cid, bytes.clone());
+        }
         Ok(bytes)
     }
 }
@@ -119,7 +123,7 @@ impl Storage for MemoryStorage {
     }
 
     async fn manifest(&self, cid: StorageCid) -> Result<Manifest, Error> {
-        let bytes = self.object(cid, false)?;
+        let bytes = self.object(cid, false, false)?;
         let block = bytes
             .iter()
             .rposition(|byte| *byte != 0)
@@ -135,7 +139,7 @@ impl Storage for MemoryStorage {
     }
 
     async fn download(&self, cid: StorageCid, max_len: u64, local: bool) -> Result<Vec<u8>, Error> {
-        let bytes = self.object(cid, local)?;
+        let bytes = self.object(cid, local, true)?;
         if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_len {
             return Err(Error::TooLong { max: max_len });
         }
