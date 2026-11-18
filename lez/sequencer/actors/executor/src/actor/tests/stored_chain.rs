@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use chain_state::{ChainState, ChannelEntry, Tip};
 use common::{
     HashType,
-    block::{Block, BlockMeta, HashableBlockData},
+    block::{Block, BlockMeta, HashableBlockData, TransactionReceipt},
     test_utils::{producer_account_for_testing, producer_seed},
     transaction::{FeePayee, LeeTransaction, clock_invocation, fee_invocation},
 };
@@ -133,7 +133,7 @@ fn finalized_genesis_over(state: V03State) -> CannedStore {
     }
 }
 
-/// Genesis the way a stakeless node seeds it: only the fee and clock tail.
+/// Genesis the way a stakeless node seeds it: only the clock and fee transactions.
 pub(in crate::actor) fn genesis() -> Block {
     block_at(1, HashType([0; 32]), 0)
 }
@@ -141,17 +141,17 @@ pub(in crate::actor) fn genesis() -> Block {
 /// A valid empty block, like [`produce_dummy_block`] but at `timestamp`.
 pub(in crate::actor) fn block_at(id: u64, prev: HashType, timestamp: u64) -> Block {
     HashableBlockData {
-        receipts: Vec::new(),
+        receipts: vec![TransactionReceipt::EXEMPT],
         block_id: id,
         prev_block_hash: prev,
         timestamp,
         transactions: vec![
+            LeeTransaction::Public(clock_invocation(id, timestamp)),
             LeeTransaction::Public(fee_invocation(
                 fee_core::BlockFeeSummary::default(),
                 0,
                 FeePayee::Present(producer_account_for_testing()),
             )),
-            LeeTransaction::Public(clock_invocation(id, timestamp)),
         ],
     }
     .into_pending_block()

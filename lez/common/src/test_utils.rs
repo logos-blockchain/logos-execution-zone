@@ -60,10 +60,10 @@ pub fn state_and_diff(
 
 // Dummy producers
 
-/// Produce dummy block from the provided transactions, appending the fee and
-/// clock tail transactions at the end (in that order).
+/// Produce dummy block from the provided transactions, with the clock
+/// transaction before them and the fee transaction after them.
 ///
-/// The fee tail carries `BlockFeeSummary::default()`, so this helper is only
+/// The fee transaction carries `BlockFeeSummary::default()`, so this helper is only
 /// valid for blocks whose `transactions` settle to the default summary — i.e.
 /// fee-exempt txs. Passing charged transactions builds a block that fails the
 /// byte-for-byte fee-summary check in `apply_block_to_state`.
@@ -80,35 +80,38 @@ pub fn produce_dummy_block(
     produce_dummy_block_with_reverted(id, prev_hash, transactions, &[])
 }
 
-/// Like [`produce_dummy_block`], with the transactions at the `reverted` indices reverted.
+/// Like [`produce_dummy_block`], with the transactions at the `reverted` indices of
+/// `transactions` reverted.
 #[must_use]
 pub fn produce_dummy_block_with_reverted(
     id: u64,
     prev_hash: Option<HashType>,
-    mut transactions: Vec<LeeTransaction>,
+    transactions: Vec<LeeTransaction>,
     reverted: &[u64],
 ) -> Block {
-    let receipts = (0..transactions.len())
-        .map(|index| TransactionReceipt {
+    let receipts = std::iter::once(TransactionReceipt::EXEMPT)
+        .chain((0..transactions.len()).map(|index| TransactionReceipt {
             success: !reverted.contains(&u64::try_from(index).expect("index fits u64")),
             ..TransactionReceipt::EXEMPT
-        })
+        }))
         .collect();
-    transactions.push(LeeTransaction::Public(fee_invocation(
+    let body = std::iter::once(LeeTransaction::Public(clock_invocation(
+        id,
+        id.saturating_mul(100),
+    )))
+    .chain(transactions)
+    .chain([LeeTransaction::Public(fee_invocation(
         fee_core::BlockFeeSummary::default(),
         0,
         FeePayee::Present(producer_account_for_testing()),
-    )));
-    transactions.push(LeeTransaction::Public(clock_invocation(
-        id,
-        id.saturating_mul(100),
-    )));
+    ))])
+    .collect();
 
     let block_data = HashableBlockData {
         block_id: id,
         prev_block_hash: prev_hash.unwrap_or_default(),
         timestamp: id.saturating_mul(100),
-        transactions,
+        transactions: body,
         receipts,
     };
 

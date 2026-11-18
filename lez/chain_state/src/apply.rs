@@ -158,10 +158,10 @@ pub fn apply_judged_block_to_state(
     state: &mut V03State,
     finally_absent_keys: Option<&BTreeSet<SequencerKey>>,
 ) -> Result<Vec<TxEvents>, BlockIngestError> {
-    let (clock_entry, front) = block
+    let (clock_entry, rest) = block
         .body
         .transactions
-        .split_last()
+        .split_first()
         .ok_or(BlockIngestError::EmptyBlock)?;
 
     let LeeTransaction::Public(clock_tx) = clock_entry else {
@@ -171,7 +171,7 @@ pub fn apply_judged_block_to_state(
         return Err(BlockIngestError::InvalidClockTransaction);
     }
 
-    let (fee_entry, user_txs) = front
+    let (fee_entry, user_txs) = rest
         .split_last()
         .ok_or(BlockIngestError::InvalidFeeTransaction)?;
     let LeeTransaction::Public(fee_tx) = fee_entry else {
@@ -181,11 +181,11 @@ pub fn apply_judged_block_to_state(
     // settled: its summary is derived from their execution.
 
     // At most one `system_upgrader` transaction, directly before the fee: a change takes effect
-    // after every transaction in its block except the fee and clock transactions, which already
-    // run the new code.
-    let last_index = user_txs.len().checked_sub(1);
-    if let Some(tx_index) = user_txs.iter().enumerate().position(|(index, tx)| {
-        common::system_upgrades::is_system_upgrader_tx(tx) && Some(index) != last_index
+    // after every transaction in its block except the fee transaction, which already runs the new
+    // code.
+    let upgrader_slot = user_txs.len();
+    if let Some((tx_index, _)) = (1_usize..).zip(user_txs).find(|&(tx_index, tx)| {
+        common::system_upgrades::is_system_upgrader_tx(tx) && tx_index != upgrader_slot
     }) {
         return Err(BlockIngestError::MisplacedSystemUpgraderTransaction {
             tx_index: tx_index.try_into().expect("tx index fits in u64"),
@@ -195,10 +195,20 @@ pub fn apply_judged_block_to_state(
     let opening = opening_fee_state(state);
     let mut summary = BlockFeeSummary::default();
     let mut block_events = Vec::new();
-    let mut receipts = Vec::with_capacity(user_txs.len());
+
+    // The clock ticks first, so every other transaction sees this block's ID and timestamp.
+    let clock_events = state
+        .transition_from_public_transaction(clock_tx, block.header.block_id, block.header.timestamp)
+        .map_err(|err| BlockIngestError::StateTransition {
+            tx_index: 0,
+            reason: format!("{:#}", anyhow::Error::from(err)),
+        })?;
+    collect_tx_events(&mut block_events, 0, clock_entry, clock_events);
+    let mut receipts = Vec::with_capacity(block.body.transactions.len());
+    receipts.push(TransactionReceipt::EXEMPT);
 
     let is_genesis = block.header.block_id == GENESIS_BLOCK_ID;
-    for (tx_index, transaction) in user_txs.iter().enumerate() {
+    for (tx_index, transaction) in (1_usize..).zip(user_txs) {
         let tx_index_u64 = u64::try_from(tx_index).expect("tx index fits in u64");
         let state_transition = |err: anyhow::Error| BlockIngestError::StateTransition {
             tx_index: tx_index_u64,
@@ -282,30 +292,14 @@ pub fn apply_judged_block_to_state(
     common::transaction::validate_reward_target(payee.producer())
         .map_err(|reason| BlockIngestError::InvalidRewardTarget { reason })?;
 
+    let fee_index = block.body.transactions.len().saturating_sub(1);
     let fee_events = state
         .transition_from_public_transaction(fee_tx, block.header.block_id, block.header.timestamp)
         .map_err(|err| BlockIngestError::StateTransition {
-            tx_index: user_txs.len().try_into().expect("tx index fits in u64"),
+            tx_index: fee_index.try_into().expect("tx index fits in u64"),
             reason: format!("{:#}", anyhow::Error::from(err)),
         })?;
-    collect_tx_events(&mut block_events, user_txs.len(), fee_entry, fee_events);
-
-    // Clock events are collected separately. The clock program currently emits
-    // none; this future-proofs the design with no bearing on current semantics.
-    let clock_events = state
-        .transition_from_public_transaction(clock_tx, block.header.block_id, block.header.timestamp)
-        .map_err(|err| BlockIngestError::StateTransition {
-            tx_index: (user_txs.len().saturating_add(1))
-                .try_into()
-                .expect("tx index fits in u64"),
-            reason: format!("{:#}", anyhow::Error::from(err)),
-        })?;
-    collect_tx_events(
-        &mut block_events,
-        user_txs.len().saturating_add(1),
-        clock_entry,
-        clock_events,
-    );
+    collect_tx_events(&mut block_events, fee_index, fee_entry, fee_events);
 
     Ok(block_events)
 }
@@ -353,8 +347,8 @@ pub fn block_payout(opening: &FeeState, summary: &BlockFeeSummary) -> u128 {
     opening.clone().apply_block(summary)
 }
 
-/// The fee summary, producer payout and receipts a block of `transactions` settles to on
-/// `state`.
+/// The fee summary, producer payout and receipts a block carrying `transactions` between its
+/// clock and fee transactions settles to on `state`; the receipts start with the clock's.
 pub fn derive_block_summary(
     state: &V03State,
     transactions: &[LeeTransaction],
@@ -363,10 +357,20 @@ pub fn derive_block_summary(
 ) -> Result<(BlockFeeSummary, u128, Vec<TransactionReceipt>), BlockIngestError> {
     let mut scratch = state.clone();
     let opening = opening_fee_state(&scratch);
+    scratch
+        .transition_from_public_transaction(
+            &clock_invocation(block_id, timestamp),
+            block_id,
+            timestamp,
+        )
+        .map_err(|err| BlockIngestError::StateTransition {
+            tx_index: 0,
+            reason: format!("{:#}", anyhow::Error::from(err)),
+        })?;
     let mut summary = BlockFeeSummary::default();
-    let mut receipts = Vec::with_capacity(transactions.len());
-    for (tx_index, transaction) in transactions.iter().enumerate() {
-        let tx_index = u64::try_from(tx_index).expect("tx index fits in u64");
+    let mut receipts = Vec::with_capacity(transactions.len().saturating_add(1));
+    receipts.push(TransactionReceipt::EXEMPT);
+    for (tx_index, transaction) in (1_u64..).zip(transactions) {
         let (_events, receipt) = settle_transaction(
             transaction,
             &mut scratch,
@@ -981,15 +985,15 @@ mod tests {
     #[test]
     fn missing_fee_tx_is_invalid_fee() {
         let mut state = initial_state(true);
-        // Correct clock tail but no fee tx before it.
+        // Correct clock but no fee tx after it.
         let block = HashableBlockData {
-            receipts: Vec::new(),
+            receipts: vec![TransactionReceipt::EXEMPT],
             block_id: 1,
             prev_block_hash: HashType([0_u8; 32]),
             timestamp: 100,
             transactions: vec![
-                produce_dummy_empty_transaction(),
                 LeeTransaction::Public(clock_invocation(1, 100)),
+                produce_dummy_empty_transaction(),
             ],
         }
         .into_pending_block();
@@ -1005,17 +1009,17 @@ mod tests {
             ..fee_core::BlockFeeSummary::default()
         };
         let block = HashableBlockData {
-            receipts: Vec::new(),
+            receipts: vec![TransactionReceipt::EXEMPT],
             block_id: 1,
             prev_block_hash: HashType([0_u8; 32]),
             timestamp: 100,
             transactions: vec![
+                LeeTransaction::Public(clock_invocation(1, 100)),
                 LeeTransaction::Public(fee_invocation(
                     bad_summary,
                     0,
                     FeePayee::Present(producer_account_for_testing()),
                 )),
-                LeeTransaction::Public(clock_invocation(1, 100)),
             ],
         }
         .into_pending_block();
@@ -1042,14 +1046,15 @@ mod tests {
             0,
             FeePayee::Present(producer_account_for_testing()),
         ));
-        let receipts = vec![TransactionReceipt::EXEMPT; transactions.len()];
+        let receipts = vec![TransactionReceipt::EXEMPT; transactions.len().saturating_add(1)];
         HashableBlockData {
             block_id: 1,
             prev_block_hash: HashType([0_u8; 32]),
             timestamp: 100,
             transactions: [
+                vec![LeeTransaction::Public(clock_invocation(1, 100))],
                 transactions,
-                vec![fee, LeeTransaction::Public(clock_invocation(1, 100))],
+                vec![fee],
             ]
             .concat(),
             receipts,
@@ -1068,7 +1073,7 @@ mod tests {
         let err = apply_block(None, &block, &mut state).expect_err("should reject");
         assert!(matches!(
             err,
-            BlockIngestError::MisplacedSystemUpgraderTransaction { tx_index: 0 }
+            BlockIngestError::MisplacedSystemUpgraderTransaction { tx_index: 1 }
         ));
     }
 
@@ -1080,7 +1085,7 @@ mod tests {
         let err = apply_block(None, &block, &mut state).expect_err("should reject");
         assert!(matches!(
             err,
-            BlockIngestError::MisplacedSystemUpgraderTransaction { tx_index: 0 }
+            BlockIngestError::MisplacedSystemUpgraderTransaction { tx_index: 1 }
         ));
     }
 
@@ -1116,7 +1121,7 @@ mod tests {
     }
 
     #[test]
-    fn a_clock_upgrade_runs_its_own_activation_blocks_tick() {
+    fn a_clock_upgrade_ticks_from_the_next_block() {
         use program_loader_core::LoaderActorState as _;
         use system_upgrader_core::{
             Message, Registry, ScheduledUpgrade, loader_actor, registry_account_id, registry_actor,
@@ -1170,11 +1175,15 @@ mod tests {
             public_transaction::WitnessSet::from_raw_parts(vec![]),
         ));
 
+        let activation = block_with(vec![apply]);
+        apply_block(None, &activation, &mut state)
+            .expect("the old clock ticks the activation block");
+        let next = produce_dummy_block(2, Some(activation.header.hash), vec![]);
         let err =
-            apply_block(None, &block_with(vec![apply]), &mut state).expect_err("should reject");
+            apply_block(Some(&tip_of(&activation)), &next, &mut state).expect_err("should reject");
         assert!(
-            matches!(err, BlockIngestError::StateTransition { tx_index: 2, .. }),
-            "the Apply and the fee settle; the clock's tick fails: {err:?}"
+            matches!(err, BlockIngestError::StateTransition { tx_index: 0, .. }),
+            "the new clock's first tick fails: {err:?}"
         );
     }
 
@@ -1192,15 +1201,37 @@ mod tests {
     }
 
     #[test]
-    fn missing_clock_tail_is_invalid_clock() {
+    fn missing_clock_is_invalid_clock() {
         let mut state = initial_state(true);
-        // Last tx is not the expected clock invocation for the timestamp.
+        // First tx is not the expected clock invocation for the timestamp.
         let block = HashableBlockData {
             receipts: Vec::new(),
             block_id: 1,
             prev_block_hash: HashType([0_u8; 32]),
             timestamp: 50,
             transactions: vec![produce_dummy_empty_transaction()],
+        }
+        .into_pending_block();
+        let err = apply_block(None, &block, &mut state).expect_err("should reject");
+        assert!(matches!(err, BlockIngestError::InvalidClockTransaction));
+    }
+
+    #[test]
+    fn a_block_with_its_clock_last_is_invalid_clock() {
+        let mut state = initial_state(true);
+        let block = HashableBlockData {
+            receipts: Vec::new(),
+            block_id: 1,
+            prev_block_hash: HashType([0_u8; 32]),
+            timestamp: 100,
+            transactions: vec![
+                LeeTransaction::Public(fee_invocation(
+                    fee_core::BlockFeeSummary::default(),
+                    0,
+                    FeePayee::Present(producer_account_for_testing()),
+                )),
+                LeeTransaction::Public(clock_invocation(1, 100)),
+            ],
         }
         .into_pending_block();
         let err = apply_block(None, &block, &mut state).expect_err("should reject");
@@ -1360,15 +1391,15 @@ mod tests {
         let payer_key = accounts[0].pub_sign_key.clone();
         let payer_nonce = state.get_account_by_id(payer).nonce;
         let clock = system_accounts::clock_actor();
-        // A tick for block 2 passes the clock's own check, so only the restricted-account guard
-        // can reject the block.
+        // Block 2's own tick runs first, so a tick for block 3 passes the clock's own check and
+        // only the restricted-account guard can reject the block.
         let message = public_transaction::Message::try_new_with_fees(
             clock,
             vec![clock],
             BTreeMap::from([(payer, payer_nonce)]),
             clock_core::Message::Tick {
-                timestamp: 200,
-                block_id: 2,
+                timestamp: 300,
+                block_id: 3,
             },
             test_fee_declaration(payer),
         )
@@ -1382,7 +1413,7 @@ mod tests {
         assert!(
             matches!(
                 &err,
-                BlockIngestError::RestrictedAccountModification { tx_index: 0, reason }
+                BlockIngestError::RestrictedAccountModification { tx_index: 1, reason }
                     if reason.contains(&clock_id)
             ),
             "expected RestrictedAccountModification on the clock, got {err:?}",
@@ -2655,7 +2686,7 @@ mod tests {
             &accounts[0].pub_sign_key,
         );
         let block = settled_block(2, tip.hash, vec![tx], &state);
-        let receipt = block.body.receipts[0];
+        let receipt = block.body.receipts[1];
         assert!(receipt.success);
         apply_block(Some(&tip), &block, &mut state.clone()).expect("the honest block applies");
 
@@ -2672,11 +2703,23 @@ mod tests {
         };
         let exempt = TransactionReceipt::EXEMPT;
         for (receipts, tx_index, listed, settled) in [
-            (vec![wrong_fee], 0, Some(wrong_fee), Some(receipt)),
-            (vec![wrong_status], 0, Some(wrong_status), Some(receipt)),
-            (vec![exempt], 0, Some(exempt), Some(receipt)),
-            (vec![], 0, None, Some(receipt)),
-            (vec![receipt, receipt], 1, Some(receipt), None),
+            (vec![exempt, wrong_fee], 1, Some(wrong_fee), Some(receipt)),
+            (
+                vec![exempt, wrong_status],
+                1,
+                Some(wrong_status),
+                Some(receipt),
+            ),
+            (vec![exempt, exempt], 1, Some(exempt), Some(receipt)),
+            (vec![exempt], 1, None, Some(receipt)),
+            (vec![exempt, receipt, receipt], 2, Some(receipt), None),
+            (vec![receipt], 0, Some(receipt), Some(exempt)),
+            (
+                vec![wrong_status, receipt],
+                0,
+                Some(wrong_status),
+                Some(exempt),
+            ),
         ] {
             let tampered = HashableBlockData {
                 receipts,
@@ -2821,10 +2864,10 @@ mod tests {
         let (summary, payout, receipts) =
             super::derive_block_summary(state, &transactions, id, timestamp)
                 .expect("test transactions settle");
+        transactions.insert(0, LeeTransaction::Public(clock_invocation(id, timestamp)));
         transactions.push(LeeTransaction::Public(fee_invocation(
             summary, payout, reward,
         )));
-        transactions.push(LeeTransaction::Public(clock_invocation(id, timestamp)));
         HashableBlockData {
             block_id: id,
             prev_block_hash: prev_hash,

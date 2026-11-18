@@ -3637,7 +3637,7 @@ mod tests {
                         .lock()
                         .unwrap()
                         .as_ref()
-                        .map(|block| (block.body.transactions[0].clone(), 2_u64)),
+                        .map(|block| (block.body.transactions[1].clone(), 2_u64)),
                 )
             })
             .unwrap();
@@ -3648,7 +3648,7 @@ mod tests {
                         .lock()
                         .unwrap()
                         .as_ref()
-                        .and_then(|block| block.body.receipts.first().copied()),
+                        .and_then(|block| block.body.receipts.get(1).copied()),
                 )
             })
             .unwrap();
@@ -3678,7 +3678,7 @@ mod tests {
                 &initialized,
             ),
         );
-        let tx_hash = block.body.transactions[0].hash();
+        let tx_hash = block.body.transactions[1].hash();
         *included.lock().unwrap() = Some(block);
 
         assert!(matches!(

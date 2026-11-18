@@ -35,19 +35,20 @@ fn settled_block(
         // Genesis transactions are fee-exempt
         let summary = fee_core::BlockFeeSummary::default();
         let payout = chain_state::apply::opening_fee_state(state).apply_block(&summary);
-        let receipts = vec![common::block::TransactionReceipt::EXEMPT; transactions.len()];
+        let receipts =
+            vec![common::block::TransactionReceipt::EXEMPT; transactions.len().saturating_add(1)];
         (summary, payout, receipts)
     } else {
         chain_state::apply::derive_block_summary(state, &transactions, id, timestamp)
             .expect("test transactions settle")
     };
     let producer = common::test_utils::producer_account_for_testing();
+    transactions.insert(0, LeeTransaction::Public(clock_invocation(id, timestamp)));
     transactions.push(LeeTransaction::Public(fee_invocation(
         summary,
         payout,
         FeePayee::Present(producer),
     )));
-    transactions.push(LeeTransaction::Public(clock_invocation(id, timestamp)));
     common::block::HashableBlockData {
         block_id: id,
         prev_block_hash: prev_hash,

@@ -100,8 +100,8 @@ pub fn build_initial_state(cross_zone: bool) -> lee::V03State {
 #[must_use]
 pub fn genesis_block_and_state(spec: &GenesisSpec) -> (Block, lee::V03State, Vec<TxEvents>) {
     let (genesis_state, genesis_txs, genesis_events) = build_genesis_state(spec);
-    // Every genesis transaction but the trailing fee and clock ones is exempt.
-    let receipts = vec![TransactionReceipt::EXEMPT; genesis_txs.len().saturating_sub(2)];
+    // Every genesis transaction but the trailing fee one is exempt.
+    let receipts = vec![TransactionReceipt::EXEMPT; genesis_txs.len().saturating_sub(1)];
     let genesis_block = HashableBlockData {
         receipts,
         block_id: GENESIS_BLOCK_ID,
@@ -216,19 +216,21 @@ pub fn build_genesis_state(
     let genesis_summary = fee_core::BlockFeeSummary::default();
     let genesis_payout = chain_state::apply::block_payout(&genesis_opening, &genesis_summary);
 
-    let genesis_txs: Vec<_> = std::iter::once(build_init_channel_params_transaction(
-        spec.channel_params,
-        spec.channel_id,
-    ))
-    .chain(cross_zone_config_txs)
-    .chain(inbox_config_tx)
-    .chain(supply_txs)
-    .chain(bootstrap_stake_txs)
-    .chain([
-        fee_invocation(genesis_summary, genesis_payout, FeePayee::Present(producer)),
-        clock_invocation(GENESIS_BLOCK_ID, 0),
-    ])
-    .collect();
+    let genesis_txs: Vec<_> = std::iter::once(clock_invocation(GENESIS_BLOCK_ID, 0))
+        .chain([build_init_channel_params_transaction(
+            spec.channel_params,
+            spec.channel_id,
+        )])
+        .chain(cross_zone_config_txs)
+        .chain(inbox_config_tx)
+        .chain(supply_txs)
+        .chain(bootstrap_stake_txs)
+        .chain([fee_invocation(
+            genesis_summary,
+            genesis_payout,
+            FeePayee::Present(producer),
+        )])
+        .collect();
 
     let events = genesis_txs
         .iter()

@@ -207,8 +207,7 @@ impl FromStr for Signature {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct BlockBody {
     pub transactions: Vec<Transaction>,
-    /// One per user transaction, parallel to `transactions`; the trailing fee and clock
-    /// transactions have none.
+    /// One per transaction, parallel to `transactions`; the trailing fee transaction has none.
     pub receipts: Vec<TransactionReceipt>,
 }
 

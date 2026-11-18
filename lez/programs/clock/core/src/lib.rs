@@ -12,8 +12,8 @@ pub const CLOCK_PROGRAM_ACCOUNT_ID: AccountId =
 pub const CLOCK_NAME: lee_core::program::SystemProgramName =
     lee_core::program::SystemProgramName::new(b"clock");
 
-/// The message type for the Clock Program. The sequencer ticks the clock as the last transaction
-/// of every block, so every other transaction sees the previous block's ID and timestamp.
+/// The message type for the Clock Program. The sequencer ticks the clock as the first transaction
+/// of every block, so every other transaction sees its own block's ID and timestamp.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub enum Message {
     Tick {

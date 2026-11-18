@@ -96,7 +96,7 @@ pub trait Rpc {
         tx_hash: HashType,
     ) -> Result<Option<Transaction>, ErrorObjectOwned>;
 
-    /// `None` for an unknown transaction, and for a block's trailing fee and clock transactions.
+    /// `None` for an unknown transaction, and for a block's trailing fee transaction.
     #[method(name = "getTransactionReceipt")]
     async fn get_transaction_receipt(
         &self,

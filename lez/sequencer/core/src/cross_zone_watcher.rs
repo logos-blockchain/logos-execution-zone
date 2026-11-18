@@ -812,7 +812,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use common::test_utils::produce_dummy_block;
-    use cross_zone::test_utils::{linked_chain_to, ping_emission};
+    use cross_zone::test_utils::{FIRST_USER_TX_INDEX, linked_chain_to, ping_emission};
     use futures::stream;
     use kameo::{actor::Spawn as _, supervision::RestartPolicy};
     use lee::GENESIS_BLOCK_ID;
@@ -1160,7 +1160,10 @@ mod tests {
             Some(Slot::from(1)),
             "the cursor must be durable, not just in memory"
         );
-        let mut expected = vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)];
+        let mut expected = vec![
+            message_key(&PEER_ZONE, 1, FIRST_USER_TX_INDEX),
+            message_key(&PEER_ZONE, 2, FIRST_USER_TX_INDEX),
+        ];
         expected.sort_unstable();
         assert_eq!(recorded_keys(&storage_ref).await, expected);
     }
@@ -1330,7 +1333,7 @@ mod tests {
         assert_eq!(outcome, PassOutcome::Drained);
         assert_eq!(
             recorded_keys(&storage_ref).await,
-            vec![message_key(&PEER_ZONE, 1, 0)],
+            vec![message_key(&PEER_ZONE, 1, FIRST_USER_TX_INDEX)],
             "a registered emitter's emission is recorded like a builtin's"
         );
     }
@@ -1343,7 +1346,10 @@ mod tests {
         let emitter = lee_core::account::AccountId::new([8; 32]);
         for (until_src_block, expected) in [
             (Some(0), vec![]),
-            (Some(1), vec![message_key(&PEER_ZONE, 1, 0)]),
+            (
+                Some(1),
+                vec![message_key(&PEER_ZONE, 1, FIRST_USER_TX_INDEX)],
+            ),
         ] {
             let peer = PeerContext {
                 emitters: BTreeMap::from([(
@@ -1450,7 +1456,7 @@ mod tests {
         assert_eq!(records.len(), 1, "the delivery must be recorded");
         assert_eq!(
             records[0].message_key,
-            message_key(&PEER_ZONE, 1, 0),
+            message_key(&PEER_ZONE, 1, FIRST_USER_TX_INDEX),
             "the record is keyed by the message it delivers, so a replay is not double-tracked"
         );
         assert!(
@@ -1590,9 +1596,9 @@ mod tests {
         .await;
 
         let mut expected = vec![
-            message_key(&PEER_ZONE, 1, 0),
-            message_key(&PEER_ZONE, 2, 0),
-            message_key(&PEER_ZONE, 3, 0),
+            message_key(&PEER_ZONE, 1, FIRST_USER_TX_INDEX),
+            message_key(&PEER_ZONE, 2, FIRST_USER_TX_INDEX),
+            message_key(&PEER_ZONE, 3, FIRST_USER_TX_INDEX),
         ];
         expected.sort_unstable();
         assert_eq!(
@@ -1638,7 +1644,7 @@ mod tests {
         );
         assert_eq!(
             recorded_keys(&storage_ref).await,
-            vec![message_key(&PEER_ZONE, 1, 0)],
+            vec![message_key(&PEER_ZONE, 1, FIRST_USER_TX_INDEX)],
             "the block after the failure is unread"
         );
     }
@@ -1671,7 +1677,7 @@ mod tests {
         );
         assert_eq!(
             recorded_keys(&storage_ref).await,
-            vec![message_key(&PEER_ZONE, 1, 0)]
+            vec![message_key(&PEER_ZONE, 1, FIRST_USER_TX_INDEX)]
         );
     }
 
@@ -1702,7 +1708,7 @@ mod tests {
 
         assert_eq!(
             recorded_keys(&storage_ref).await,
-            vec![message_key(&PEER_ZONE, 1, 0)],
+            vec![message_key(&PEER_ZONE, 1, FIRST_USER_TX_INDEX)],
             "no pass reads past the slot it cannot decode"
         );
         assert_eq!(
@@ -1719,8 +1725,8 @@ mod tests {
     async fn a_block_claiming_an_id_ahead_of_the_chain_is_not_delivered_from() {
         // The #677 suppression, end to end. The peer inscribes a block claiming
         // id 5 while its chain is at 1. Delivered, it would burn
-        // message_key(PEER_ZONE, 5, 0), and the honest block 5 carrying a real
-        // message at index 0 would then be refused by the inbox as a replay,
+        // message_key(PEER_ZONE, 5, FIRST_USER_TX_INDEX), and the honest block 5 carrying a real
+        // message at that index would then be refused by the inbox as a replay,
         // with the funds behind it already escrowed on the peer.
         //
         // The honest blocks behind it still deliver: stopping here would cost
@@ -1746,9 +1752,9 @@ mod tests {
 
         assert_eq!(outcome, PassOutcome::Drained);
         let mut expected = vec![
-            message_key(&PEER_ZONE, 1, 0),
-            message_key(&PEER_ZONE, 2, 0),
-            message_key(&PEER_ZONE, 3, 0),
+            message_key(&PEER_ZONE, 1, FIRST_USER_TX_INDEX),
+            message_key(&PEER_ZONE, 2, FIRST_USER_TX_INDEX),
+            message_key(&PEER_ZONE, 3, FIRST_USER_TX_INDEX),
         ];
         expected.sort_unstable();
         assert_eq!(
@@ -1761,7 +1767,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_second_block_at_a_delivered_id_is_not_delivered_from() {
-        // Both claim id 2, so on chain both deliveries key on (PEER_ZONE, 2, 0)
+        // Both claim id 2, so on chain both deliveries key on (PEER_ZONE, 2, FIRST_USER_TX_INDEX)
         // and the second is a replay the inbox refuses.
         let (_dir, storage_ref) = store().await;
         let mut cursor = None;
@@ -1786,7 +1792,10 @@ mod tests {
             PassOutcome::Drained,
             "a peer equivocating about its own chain is not this node's failure"
         );
-        let mut expected = vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)];
+        let mut expected = vec![
+            message_key(&PEER_ZONE, 1, FIRST_USER_TX_INDEX),
+            message_key(&PEER_ZONE, 2, FIRST_USER_TX_INDEX),
+        ];
         expected.sort_unstable();
         assert_eq!(
             recorded_keys(&storage_ref).await,
@@ -1819,7 +1828,10 @@ mod tests {
         .await;
 
         assert_eq!(outcome, PassOutcome::Drained);
-        let mut expected = vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)];
+        let mut expected = vec![
+            message_key(&PEER_ZONE, 1, FIRST_USER_TX_INDEX),
+            message_key(&PEER_ZONE, 2, FIRST_USER_TX_INDEX),
+        ];
         expected.sort_unstable();
         assert_eq!(
             recorded_keys(&storage_ref).await,
@@ -1924,7 +1936,10 @@ mod tests {
         .await;
 
         assert_eq!(outcome, PassOutcome::Drained);
-        let mut expected = vec![message_key(&PEER_ZONE, 1, 0), message_key(&PEER_ZONE, 2, 0)];
+        let mut expected = vec![
+            message_key(&PEER_ZONE, 1, FIRST_USER_TX_INDEX),
+            message_key(&PEER_ZONE, 2, FIRST_USER_TX_INDEX),
+        ];
         expected.sort_unstable();
         assert_eq!(recorded_keys(&storage_ref).await, expected);
         assert_eq!(tip, Some(tip_at(2)));

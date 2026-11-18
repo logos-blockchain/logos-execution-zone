@@ -239,7 +239,7 @@ pub fn PrivacyPreservingTxDetails(
     }
 }
 
-/// The transaction's receipt; a block's fee and clock transactions have none.
+/// The transaction's receipt; a block's fee transaction has none.
 #[component]
 fn ReceiptRows(receipt: Option<TransactionReceipt>) -> impl IntoView {
     let Some(receipt) = receipt else {

@@ -282,12 +282,7 @@ async fn recorded_transaction_receipt_is_looked_up_by_hash() {
     let dir = tempfile::tempdir().expect("Failed to create temp dir");
     let transaction = produce_dummy_empty_transaction();
     let block = produce_dummy_block_with_reverted(1, None, vec![transaction.clone()], &[0]);
-    let clock_hash = block
-        .body
-        .transactions
-        .last()
-        .expect("has a clock tx")
-        .hash();
+    let fee_hash = block.body.transactions.last().expect("has a fee tx").hash();
     let storage_ref =
         spawn_with_blocks(dir.path(), vec![produce_dummy_block(0, None, vec![])]).await;
     storage_ref
@@ -306,16 +301,16 @@ async fn recorded_transaction_receipt_is_looked_up_by_hash() {
             })
             .await
             .expect("Failed to look the receipt up"),
-        Some(block.body.receipts[0]),
+        Some(block.body.receipts[1]),
     );
-    assert!(!block.body.receipts[0].success);
+    assert!(!block.body.receipts[1].success);
     assert_eq!(
         storage_ref
-            .ask(GetTransactionReceiptByHash { hash: clock_hash })
+            .ask(GetTransactionReceiptByHash { hash: fee_hash })
             .await
             .expect("Failed to look the receipt up"),
         None,
-        "the clock transaction has no receipt",
+        "the fee transaction has no receipt",
     );
 }
 
