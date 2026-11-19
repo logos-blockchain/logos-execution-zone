@@ -72,12 +72,19 @@ impl VaultDeposit {
         if deposit.value == 0 {
             return Err(Error::InvalidVaultDeposit("it pays nothing"));
         }
-        if deposit.inputs.is_empty() {
-            return Err(Error::InvalidVaultDeposit("it spends no note"));
+        // Bedrock refuses the whole inscription over a note spent twice.
+        if deposit.inputs.iter().enumerate().any(|(at, input)| {
+            deposit
+                .inputs
+                .iter()
+                .take(at)
+                .any(|earlier| earlier == input)
+        }) {
+            return Err(Error::InvalidVaultDeposit("it spends a note twice"));
         }
         let intent = Deposit {
             value: deposit.value,
-            recipient: recipient_element(&recipient),
+            recipient: recipient_element(&deposit, &recipient)?,
         }
         .intent(committee.id());
         if deposit.intent != intent {
@@ -167,6 +174,7 @@ impl VaultStep {
     ) -> Result<Vec<StepProof>> {
         let public = self.public_inputs(op)?;
         let (inputs, outputs) = self.spend_fields()?;
+        let signatures = self.threshold_of(&public, signatures)?;
 
         let circuit = VaultCircuit {
             committee: self.committee.clone(),
@@ -194,11 +202,13 @@ impl VaultStep {
             deposits: self
                 .deposits
                 .iter()
-                .map(|deposit| Deposit {
-                    value: deposit.deposit.value,
-                    recipient: recipient_element(&deposit.recipient),
+                .map(|deposit| {
+                    Ok(Deposit {
+                        value: deposit.deposit.value,
+                        recipient: recipient_element(&deposit.deposit, &deposit.recipient)?,
+                    })
                 })
-                .collect(),
+                .collect::<Result<_>>()?,
             public,
             signatures: signatures.clone(),
             successor: self.committee.clone(),
@@ -277,6 +287,32 @@ impl VaultStep {
             .collect())
     }
 
+    /// The valid ones among `signatures`, cut down to the committee's threshold: the circuit
+    /// takes exactly that many.
+    fn threshold_of(
+        &self,
+        public: &PublicInputs,
+        signatures: Vec<Option<Signature>>,
+    ) -> Result<Vec<Option<Signature>>> {
+        let mut missing = self.committee.threshold;
+        let kept = self
+            .committee
+            .signers
+            .iter()
+            .zip(signatures)
+            .map(|(signer, signature)| {
+                let signature =
+                    signature.filter(|signed| missing > 0 && signed.verify(signer, public))?;
+                missing = missing.saturating_sub(1);
+                Some(signature)
+            })
+            .collect();
+        if missing > 0 {
+            return Err(Error::InvalidVaultStep("its committee has not signed it"));
+        }
+        Ok(kept)
+    }
+
     fn program_step(&self) -> Result<ProgramStep> {
         let (inputs, outputs) = self.spend_fields()?;
         let (kept, payouts) = self.outputs()?;
@@ -353,6 +389,14 @@ impl VaultStep {
                 "it moves more notes than a step holds",
             ));
         }
+        let committee = self.committee.id();
+        if self.inputs.iter().any(|(note, _)| {
+            note.program != *VAULT_PROGRAM || note.public_key != *PK0 || note.data != committee
+        }) {
+            return Err(Error::InvalidVaultStep(
+                "it consumes a note that is not its vault's",
+            ));
+        }
         Ok((
             std::array::from_fn(|slot| {
                 self.inputs
@@ -410,9 +454,17 @@ pub fn vault_key() -> ProgramVerificationKey {
         .expect("the vault key is a valid program key")
 }
 
-/// The recipient as the deposit's intent commits to it.
-fn recipient_element(recipient: &DepositRecipient) -> Fr {
-    Deposit::recipient_element(recipient.account_id().value())
+/// The recipient as the intent of `deposit` commits to it.
+fn recipient_element(deposit: &ProgramDeposit, recipient: &DepositRecipient) -> Result<Fr> {
+    let nullifier = deposit
+        .inputs
+        .iter()
+        .next()
+        .ok_or(Error::InvalidVaultDeposit("it spends no note"))?;
+    Ok(Deposit::recipient_element(
+        recipient.account_id().value(),
+        nullifier.0,
+    ))
 }
 
 fn commitments<'note>(notes: impl Iterator<Item = &'note Note>) -> OutputCommitments {
@@ -525,8 +577,13 @@ mod tests {
     /// A deposit of a note worth 1000 to the vault of `committee`, with the note and the root
     /// of the set holding it alone.
     fn deposit(committee: &Committee) -> (VaultDeposit, Note, Fr) {
+        deposit_of(committee, Fr::from(11_u64))
+    }
+
+    /// [`deposit`], of the holder's note with `nonce`.
+    fn deposit_of(committee: &Committee, nonce: Fr) -> (VaultDeposit, Note, Fr) {
         let holder = Fr::from(1_u64);
-        let note = Note::new(1_000, Fr::from(11_u64), ZkKey::new(holder).to_public_key());
+        let note = Note::new(1_000, nonce, ZkKey::new(holder).to_public_key());
         let (mmr, path) = CommitmentMmr::new()
             .push_with_paths(note.commitment(), &mut [])
             .unwrap();
@@ -534,19 +591,20 @@ mod tests {
         let metadata = DepositMetadata {
             recipient: recipient(),
         };
+        let nullifier =
+            derive_note_nullifier(&note.commitment(), &ZkKey::new(holder).nullifier_key());
         let deposit = ProgramDeposit {
             program_id: *VAULT_PROGRAM,
-            inputs: [derive_note_nullifier(
-                &note.commitment(),
-                &ZkKey::new(holder).nullifier_key(),
-            )]
-            .into(),
+            inputs: [nullifier].into(),
             outputs: OutputCommitments::default(),
             commitment_merkle_root: root,
             value: 1_000,
             intent: Deposit {
                 value: 1_000,
-                recipient: recipient_element(&recipient()),
+                recipient: Deposit::recipient_element(
+                    recipient().account_id().value(),
+                    nullifier.0,
+                ),
             }
             .intent(committee.id()),
             inscription: Inscription::try_from(borsh::to_vec(&metadata).unwrap()).unwrap(),
@@ -602,6 +660,96 @@ mod tests {
                 &deposit.deposit.inputs.iter().next().unwrap().0
             ))
         );
+    }
+
+    #[test]
+    fn a_deposit_spending_a_note_twice_is_refused() {
+        let (mut deposit, _, _) = deposit(&committee());
+        let nullifier = *deposit.deposit.inputs.iter().next().unwrap();
+        deposit.deposit.inputs = [nullifier, nullifier].into();
+
+        assert!(matches!(
+            VaultDeposit::admit(&submitted(&deposit), &channel(), &committee()),
+            Err(Error::InvalidVaultDeposit("it spends a note twice"))
+        ));
+    }
+
+    #[test]
+    fn equal_deposits_into_an_empty_vault_make_different_notes() {
+        let kept_note = |nonce: u64| {
+            let (deposit, _, root) = deposit_of(&committee(), Fr::from(nonce));
+            let vault = VaultStep {
+                committee: committee(),
+                inputs: vec![],
+                deposits: vec![deposit],
+                payouts: vec![],
+                commitment_merkle_root: root,
+                tx_commitment_root: root,
+            };
+            vault.program_step().unwrap().program_outputs
+        };
+
+        // The same value to the same recipient: only the notes paid in differ.
+        assert_ne!(kept_note(11), kept_note(12));
+    }
+
+    #[test]
+    fn a_step_its_committee_has_not_signed_is_not_proven() {
+        let (deposit, _, root) = deposit(&committee());
+        let vault = VaultStep {
+            committee: committee(),
+            inputs: vec![],
+            deposits: vec![deposit],
+            payouts: vec![],
+            commitment_merkle_root: root,
+            tx_commitment_root: root,
+        };
+        let op = InscriptionOp {
+            channel_id: channel(),
+            inscription: Inscription::default(),
+            parent: MsgId::root(),
+            signer: Ed25519Key::from_bytes(&SEED).public_key().into_unverified(),
+            mini_blocks: [vault.mini_block().unwrap()].into(),
+        };
+        let stranger = SigningKey::from_channel_seed(&[16; 32]);
+        let signature = stranger.sign(&vault.public_inputs(&op).unwrap());
+
+        for signatures in [vec![], vec![None], vec![Some(signature)]] {
+            assert!(matches!(
+                vault.prove(&op, signatures),
+                Err(Error::InvalidVaultStep("its committee has not signed it"))
+            ));
+        }
+    }
+
+    #[test]
+    fn a_step_consuming_a_note_of_another_committee_is_refused() {
+        let held = Note {
+            value: 100,
+            nonce: Fr::from(21_u64),
+            public_key: *PK0,
+            stake_public_key: ZkPublicKey::zero(),
+            program: *VAULT_PROGRAM,
+            data: Fr::from(3_u64),
+        };
+        let (_, path) = CommitmentMmr::new()
+            .push_with_paths(held.commitment(), &mut [])
+            .unwrap();
+        let vault = VaultStep {
+            committee: committee(),
+            inputs: vec![(held, path)],
+            deposits: vec![],
+            payouts: vec![],
+            commitment_merkle_root: Fr::from(0_u64),
+            tx_commitment_root: Fr::from(0_u64),
+        };
+
+        assert!(matches!(
+            vault.mini_block(),
+            Err(Error::InvalidVaultStep(
+                "it consumes a note that is not its vault's"
+            ))
+        ));
     }
 
     #[test]
@@ -674,7 +822,7 @@ mod tests {
 
         assert!(matches!(
             vault.mini_block(),
-            Err(Error::InvalidVaultStep(_))
+            Err(Error::InvalidVaultStep("it pays out more than it holds"))
         ));
     }
 }

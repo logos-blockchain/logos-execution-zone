@@ -925,7 +925,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             // Gossiped transactions arrive from untrusted peers, same as
             // user-submitted ones, so they get the same full state validation.
             TransactionOrigin::User | TransactionOrigin::Gossip => {
-                // Only the sequencer mints deposits, from their L1 events.
+                // Only genesis mints through the bridge.
                 if extract_bridge_deposit_id(tx).is_some() {
                     if matches!(origin, TransactionOrigin::Gossip) {
                         debug!(%tx_hash, "Dropping gossiped bridge deposit");
@@ -1002,17 +1002,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     panic!("Sequencer may only generate Public transactions, found {tx:#?}");
                 };
 
-                // Bridge deposits are deduped by their receipt PDA in chain
-                // state (drained only when unminted, refused on replay), so no
-                // node-local guard is needed here.
-                //
-                // Skip-and-log rather than propagate: a drained deposit is
-                // re-fed from the store every turn and only finality removes it,
-                // so a `?` here would let a single unexecutable mint (e.g. a
-                // bridge escrow under-funded relative to the L1 deposit, which
-                // every sequencer hits identically) abort production on all of
-                // them forever. Skipping keeps the record queued for retry
-                // without halting the node.
+                // Skip-and-log rather than propagate: a record drained from the
+                // store is re-fed every turn, so a `?` here would let a single
+                // unexecutable one, which every sequencer hits identically, abort
+                // production on all of them forever.
                 if let Err(err) =
                     state.transition_from_public_transaction(public_tx, block_height, timestamp)
                 {
@@ -2221,8 +2214,8 @@ fn build_finalize_unstake_tx(
 }
 
 /// User transactions of an orphaned block to return to the mempool: everything
-/// except the trailing clock tx, sequencer-generated bridge deposits (replayed
-/// from their own bedrock events) and sequencer-only txs — cross-zone dispatches
+/// except the trailing clock tx, bridge deposits (only genesis mints them) and
+/// sequencer-only txs — cross-zone dispatches
 /// (replayed by the watcher), the fee tx (regenerated every block; the ingress
 /// guard rejects them as `User`) and `system_upgrader`'s `Apply` (rebuilt from
 /// the registry). An approved `system_upgrader` change can't be rebuilt, so it
