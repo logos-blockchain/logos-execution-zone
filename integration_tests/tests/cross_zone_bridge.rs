@@ -259,7 +259,7 @@ fn build_lock_tx(
         ],
         ..Message::try_new(
             holder,
-            accounts,
+            lee::test_utils::signed_by(accounts, [holder_id]),
             BTreeMap::from([(holder_id, 0_u128.into())]),
             lock,
         )

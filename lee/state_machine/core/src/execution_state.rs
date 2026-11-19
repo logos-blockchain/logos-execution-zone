@@ -58,26 +58,13 @@ pub struct PublicExecutionContext {
 }
 
 impl PublicExecutionContext {
-    /// Marks every declared actor of an authorized account [`Authority::Signer`].
     pub fn new(
-        actors: impl IntoIterator<Item = Actor>,
+        actors: impl IntoIterator<Item = (Actor, Authority)>,
         authorized_accounts: impl IntoIterator<Item = AccountId>,
     ) -> Self {
-        let authorized_accounts: BTreeSet<AccountId> = authorized_accounts.into_iter().collect();
-        let actors = actors
-            .into_iter()
-            .map(|actor| {
-                let authority = if authorized_accounts.contains(&actor.account_id) {
-                    Authority::Signer
-                } else {
-                    Authority::None
-                };
-                (actor, authority)
-            })
-            .collect();
         Self {
-            actors,
-            authorized_accounts,
+            actors: actors.into_iter().collect(),
+            authorized_accounts: authorized_accounts.into_iter().collect(),
             ..Self::default()
         }
     }

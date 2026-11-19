@@ -109,7 +109,10 @@ fn test_transaction() -> LeeTransaction {
     let nonces = BTreeMap::from([(payer, 0_u128.into()), (acc2, 0_u128.into())]);
     let message = Message::try_new_with_fees(
         Actor::native_balance(payer),
-        vec![Actor::native_balance(payer), Actor::native_balance(acc2)],
+        lee::test_utils::signed_by(
+            vec![Actor::native_balance(payer), Actor::native_balance(acc2)],
+            nonces.keys().copied(),
+        ),
         nonces,
         transfer_to(acc2),
         common::test_utils::test_fee_declaration(payer),
@@ -960,7 +963,10 @@ async fn handle_transaction_rejects_a_fee_invalid_submission() -> Result<()> {
     let payer_key = accounts[0].pub_sign_key.clone();
     let message = Message::try_new_with_fees(
         Actor::native_balance(payer),
-        vec![Actor::native_balance(payer), Actor::native_balance(acc2)],
+        lee::test_utils::signed_by(
+            vec![Actor::native_balance(payer), Actor::native_balance(acc2)],
+            [payer, acc2],
+        ),
         BTreeMap::from([(payer, 0_u128.into()), (acc2, 0_u128.into())]),
         transfer_to(acc2),
         lee::FeeDeclaration::new(payer, 2_000_000, 0, 0),
@@ -1001,7 +1007,12 @@ async fn handle_transaction_rejects_a_transaction_too_large_for_any_block() -> R
     let payload = vec![0_u8; usize::try_from(expected_max)? + 1];
     let target =
         Actor::native_balance(testnet_initial_state::initial_public_user_accounts()[0].account_id);
-    let message = Message::try_new(target, vec![target], BTreeMap::new(), payload)?;
+    let message = Message::try_new(
+        target,
+        lee::test_utils::signed_by(vec![target], []),
+        BTreeMap::new(),
+        payload,
+    )?;
     let tx: LeeTransaction =
         PublicTransaction::new(message, WitnessSet::from_raw_parts(Vec::new())).into();
 

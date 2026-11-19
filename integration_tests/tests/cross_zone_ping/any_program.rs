@@ -123,7 +123,7 @@ fn post_tx(
     let root = Actor::new(emitter, emitter);
     let message = Message::try_new_with_fees(
         root,
-        vec![root],
+        lee::test_utils::signed_by(vec![root], [payer.account_id]),
         BTreeMap::from([(payer.account_id, nonce)]),
         ChatMessage::post(CrossZoneEmission {
             target_zone,

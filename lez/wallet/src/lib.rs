@@ -1789,7 +1789,22 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 .collect(),
             public_context: PublicExecutionContext {
                 promotions: public,
-                ..PublicExecutionContext::new(acc_manager.public_actors(), acc_manager.signers())
+                ..{
+                    let signers = acc_manager.signers();
+                    let actors: Vec<_> = acc_manager
+                        .public_actors()
+                        .into_iter()
+                        .map(|actor| {
+                            let authority = if signers.contains(&actor.account_id) {
+                                Authority::Signer
+                            } else {
+                                Authority::None
+                            };
+                            (actor, authority)
+                        })
+                        .collect();
+                    PublicExecutionContext::new(actors, signers)
+                }
             },
             private_witnesses: acc_manager.private_witnesses()?,
             dummy_inputs: acc_manager.dummy_inputs_default(),
@@ -2574,6 +2589,17 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             .unwrap_or(self.config.gas_limit)
             .min(fee_core::market::MAX_GAS_EXEC);
         // Signed later: the fee is filled in once measured, and its fields are fixed width.
+        let public_actors: Vec<_> = public_actors
+            .into_iter()
+            .map(|actor| {
+                let authority = if nonces.contains_key(&actor.account_id) {
+                    Authority::Signer
+                } else {
+                    Authority::None
+                };
+                (actor, authority)
+            })
+            .collect();
         let mut message = lee::public_transaction::Message::new(
             to,
             message,

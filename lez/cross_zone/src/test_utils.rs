@@ -33,7 +33,7 @@ pub fn emitter_instruction(emitter: AccountId, instruction: Vec<u8>) -> LeeTrans
     let message = Message::new_preserialized(
         root,
         instruction,
-        vec![root],
+        vec![(root, lee::Authority::None)],
         std::collections::BTreeMap::new(),
         None,
     );
@@ -100,7 +100,10 @@ pub fn ping_emission(
         admission_evidence: vec![slot],
         ..Message::try_new(
             config,
-            [config, outbox],
+            [
+                (config, lee::Authority::None),
+                (outbox, lee::Authority::None),
+            ],
             std::collections::BTreeMap::new(),
             send,
         )

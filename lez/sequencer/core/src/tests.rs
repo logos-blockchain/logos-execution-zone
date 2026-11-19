@@ -568,11 +568,14 @@ fn create_charged_bridge_deposit(
         }],
         ..lee::public_transaction::Message::try_new_with_fees(
             receipt,
-            vec![
-                receipt,
-                Actor::native_balance(system_accounts::bridge_account_id()),
-                Actor::native_balance(recipient_id),
-            ],
+            lee::test_utils::signed_by(
+                vec![
+                    receipt,
+                    Actor::native_balance(system_accounts::bridge_account_id()),
+                    Actor::native_balance(recipient_id),
+                ],
+                [payer],
+            ),
             BTreeMap::from([(payer, payer_nonce.into())]),
             bridge_core::Message::Deposit {
                 l1_deposit_op_id: op_id,
@@ -656,11 +659,16 @@ async fn a_reverted_withdraw_releases_nothing_on_l1() {
     let root = Actor::new(payer.account_id, programs::bridge_account_id());
     let message = lee::public_transaction::Message::try_new_with_fees(
         root,
-        vec![
-            root,
-            Actor::native_balance(payer.account_id),
-            Actor::native_balance(system_accounts::bridge_account_id()),
-        ],
+        lee::test_utils::signed_by(
+            vec![
+                root,
+                Actor::native_balance(payer.account_id),
+                Actor::native_balance(system_accounts::bridge_account_id()),
+            ],
+            signer_nonces(&[&payer.pub_sign_key], vec![Nonce(0)])
+                .keys()
+                .copied(),
+        ),
         signer_nonces(&[&payer.pub_sign_key], vec![Nonce(0)]),
         bridge_core::Message::Withdraw {
             amount: u64::MAX,
@@ -933,7 +941,10 @@ async fn settlement_rejects_a_dispatch_a_user_signed() {
         admission_evidence: public.message().admission_evidence.clone(),
         ..lee::public_transaction::Message::try_new_with_fees(
             *to,
-            public.message().public_context.actors.keys().copied(),
+            lee::test_utils::signed_by(
+                public.message().public_context.actors.keys().copied(),
+                [payer],
+            ),
             BTreeMap::from([(payer, state.get_account_by_id(payer).nonce)]),
             borsh::from_slice::<cross_zone_inbox_core::Message>(dispatch)
                 .expect("a dispatch message decodes"),
@@ -1259,7 +1270,7 @@ async fn a_mempool_transaction_too_large_for_any_block_is_dropped() {
     );
     let message = lee::public_transaction::Message::try_new(
         segment,
-        vec![segment],
+        lee::test_utils::signed_by(vec![segment], []),
         BTreeMap::new(),
         program_loader_core::Message::WriteSegment {
             bytecode: vec![0; 8192],
@@ -2051,7 +2062,15 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     let segment = Actor::new(segment_id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID);
     let segment_message = lee::public_transaction::Message::try_new_with_fees(
         segment,
-        vec![segment],
+        lee::test_utils::signed_by(
+            vec![segment],
+            signer_nonces(
+                &[&segment_key, &payer.pub_sign_key],
+                vec![lee_core::account::Nonce(0), lee_core::account::Nonce(0)],
+            )
+            .keys()
+            .copied(),
+        ),
         signer_nonces(
             &[&segment_key, &payer.pub_sign_key],
             vec![lee_core::account::Nonce(0), lee_core::account::Nonce(0)],
@@ -2083,7 +2102,15 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     );
     let header_message = lee::public_transaction::Message::try_new_with_fees(
         header,
-        vec![header],
+        lee::test_utils::signed_by(
+            vec![header],
+            signer_nonces(
+                &[&header_key, &payer.pub_sign_key],
+                vec![lee_core::account::Nonce(0), lee_core::account::Nonce(1)],
+            )
+            .keys()
+            .copied(),
+        ),
         signer_nonces(
             &[&header_key, &payer.pub_sign_key],
             vec![lee_core::account::Nonce(0), lee_core::account::Nonce(1)],
@@ -2115,7 +2142,12 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     let user_tx = |clock_message: &clock_core::Message| {
         let message = lee::public_transaction::Message::try_new_with_fees(
             caller,
-            vec![caller, clock],
+            lee::test_utils::signed_by(
+                vec![caller, clock],
+                signer_nonces(&[&payer.pub_sign_key], vec![lee_core::account::Nonce(2)])
+                    .keys()
+                    .copied(),
+            ),
             signer_nonces(&[&payer.pub_sign_key], vec![lee_core::account::Nonce(2)]),
             clock_message,
             common::test_utils::test_fee_declaration(payer.account_id),
@@ -2226,11 +2258,14 @@ fn time_locked_transfer_transaction(
     let payer = Actor::new(from, program_id);
     let message = lee::public_transaction::Message::try_new(
         payer,
-        vec![
-            payer,
-            Actor::native_balance(from),
-            Actor::native_balance(to),
-        ],
+        lee::test_utils::signed_by(
+            vec![
+                payer,
+                Actor::native_balance(from),
+                Actor::native_balance(to),
+            ],
+            [from],
+        ),
         BTreeMap::from([(from, Nonce(from_nonce))]),
         (amount, deadline, to),
     )
@@ -2342,7 +2377,7 @@ fn clock_reply_to_guest(
     state.force_insert_account(reader.account_id, Account::default());
     let tx_message = lee::public_transaction::Message::try_new(
         reader,
-        vec![reader, system_accounts::clock_actor()],
+        lee::test_utils::signed_by(vec![reader, system_accounts::clock_actor()], []),
         BTreeMap::new(),
         message,
     )
@@ -2396,7 +2431,7 @@ fn cooldown_transaction(state_id: AccountId) -> PublicTransaction {
     let state = Actor::new(state_id, program_id);
     let message = lee::public_transaction::Message::try_new(
         state,
-        vec![state, system_accounts::clock_actor()],
+        lee::test_utils::signed_by(vec![state, system_accounts::clock_actor()], []),
         BTreeMap::new(),
         (),
     )
@@ -2508,7 +2543,7 @@ fn resubmittable_txs_drops_clock_and_bridge_deposits() {
         );
         let message = lee::public_transaction::Message::try_new(
             bridge,
-            vec![bridge],
+            lee::test_utils::signed_by(vec![bridge], []),
             BTreeMap::new(),
             bridge_core::Message::Withdraw {
                 amount: 1,
@@ -4594,12 +4629,17 @@ fn diag_sequencer_stake_writes_the_ownership_account_record() {
         admission_evidence: vec![stake_funds_evidence(&ownership_id)],
         ..lee::public_transaction::Message::try_new(
             ownership,
-            vec![
-                ownership,
-                Actor::native_balance(system_accounts::stake_funds_account_id(&ownership_id)),
-                Actor::native_balance(funding_id),
-                Actor::new(config_id, sequencer_stake_program_id),
-            ],
+            lee::test_utils::signed_by(
+                vec![
+                    ownership,
+                    Actor::native_balance(system_accounts::stake_funds_account_id(&ownership_id)),
+                    Actor::native_balance(funding_id),
+                    Actor::new(config_id, sequencer_stake_program_id),
+                ],
+                signer_nonces(&[&funding_key, &ownership_key], vec![Nonce(0), Nonce(0)])
+                    .keys()
+                    .copied(),
+            ),
             signer_nonces(&[&funding_key, &ownership_key], vec![Nonce(0), Nonce(0)]),
             sequencer_stake_core::Message::Stake {
                 sequencer_key,
@@ -4670,15 +4710,26 @@ fn stake_transaction(
         admission_evidence: vec![stake_funds_evidence(&ownership_id)],
         ..lee::public_transaction::Message::try_new(
             ownership,
-            vec![
-                ownership,
-                Actor::native_balance(system_accounts::stake_funds_account_id(&ownership_id)),
-                Actor::native_balance(funding_id),
-                Actor::new(
-                    system_accounts::sequencer_stake_config_account_id(),
-                    sequencer_stake_program_id,
-                ),
-            ],
+            lee::test_utils::signed_by(
+                vec![
+                    ownership,
+                    Actor::native_balance(system_accounts::stake_funds_account_id(&ownership_id)),
+                    Actor::native_balance(funding_id),
+                    Actor::new(
+                        system_accounts::sequencer_stake_config_account_id(),
+                        sequencer_stake_program_id,
+                    ),
+                ],
+                signer_nonces(
+                    &[funding_key, ownership_key],
+                    vec![
+                        state.get_account_by_id(funding_id).nonce,
+                        state.get_account_by_id(ownership_id).nonce,
+                    ],
+                )
+                .keys()
+                .copied(),
+            ),
             signer_nonces(
                 &[funding_key, ownership_key],
                 vec![
@@ -4759,13 +4810,16 @@ fn unstake_request_transaction(
     let ownership = Actor::new(ownership_id, sequencer_stake_program_id);
     let message = lee::public_transaction::Message::try_new(
         ownership,
-        vec![
-            ownership,
-            Actor::new(
-                system_accounts::sequencer_stake_config_account_id(),
-                sequencer_stake_program_id,
-            ),
-        ],
+        lee::test_utils::signed_by(
+            vec![
+                ownership,
+                Actor::new(
+                    system_accounts::sequencer_stake_config_account_id(),
+                    sequencer_stake_program_id,
+                ),
+            ],
+            [ownership_id],
+        ),
         BTreeMap::from([(ownership_id, state.get_account_by_id(ownership_id).nonce)]),
         sequencer_stake_core::Message::UnstakeRequest {
             sequencer_key,
@@ -4838,10 +4892,13 @@ fn an_unstake_request_cannot_exceed_the_tracked_stake() {
     let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
     let message = lee::public_transaction::Message::try_new(
         Actor::native_balance(funding_id),
-        vec![
-            Actor::native_balance(funding_id),
-            Actor::native_balance(funds_id),
-        ],
+        lee::test_utils::signed_by(
+            vec![
+                Actor::native_balance(funding_id),
+                Actor::native_balance(funds_id),
+            ],
+            [funding_id],
+        ),
         BTreeMap::from([(funding_id, state.get_account_by_id(funding_id).nonce)]),
         lee_core::native_token::Message::Transfer {
             to: funds_id,
@@ -4916,10 +4973,13 @@ fn dust_credited_before_a_stake_neither_blocks_nor_inflates_it() {
     let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
     let message = lee::public_transaction::Message::try_new(
         Actor::native_balance(griefer_id),
-        vec![
-            Actor::native_balance(griefer_id),
-            Actor::native_balance(funds_id),
-        ],
+        lee::test_utils::signed_by(
+            vec![
+                Actor::native_balance(griefer_id),
+                Actor::native_balance(funds_id),
+            ],
+            [griefer_id],
+        ),
         BTreeMap::from([(griefer_id, state.get_account_by_id(griefer_id).nonce)]),
         lee_core::native_token::Message::Transfer {
             to: funds_id,
@@ -5114,13 +5174,16 @@ fn a_fully_exited_ownership_account_can_stake_again() {
     let ownership = Actor::new(ownership_id, sequencer_stake_program_id);
     let message = lee::public_transaction::Message::try_new(
         ownership,
-        vec![
-            ownership,
-            Actor::new(
-                system_accounts::sequencer_stake_config_account_id(),
-                sequencer_stake_program_id,
-            ),
-        ],
+        lee::test_utils::signed_by(
+            vec![
+                ownership,
+                Actor::new(
+                    system_accounts::sequencer_stake_config_account_id(),
+                    sequencer_stake_program_id,
+                ),
+            ],
+            [ownership_id],
+        ),
         BTreeMap::from([(ownership_id, state.get_account_by_id(ownership_id).nonce)]),
         sequencer_stake_core::Message::UnstakeRequest {
             sequencer_key,
@@ -5274,13 +5337,18 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
     let ownership = Actor::new(stake_id, sequencer_stake_program_id);
     let message = lee::public_transaction::Message::try_new(
         ownership,
-        vec![
-            ownership,
-            Actor::new(
-                system_accounts::sequencer_stake_config_account_id(),
-                sequencer_stake_program_id,
-            ),
-        ],
+        lee::test_utils::signed_by(
+            vec![
+                ownership,
+                Actor::new(
+                    system_accounts::sequencer_stake_config_account_id(),
+                    sequencer_stake_program_id,
+                ),
+            ], // The genesis Stake transaction already signed once with this account.
+            signer_nonces(&[&bootstrap_stake_key(&config)], vec![Nonce(1)])
+                .keys()
+                .copied(),
+        ),
         // The genesis Stake transaction already signed once with this account.
         signer_nonces(&[&bootstrap_stake_key(&config)], vec![Nonce(1)]),
         sequencer_stake_core::Message::UnstakeRequest {
@@ -5847,7 +5915,10 @@ fn prove_and_settle(
         lee::ProvingInput {
             claims: Vec::new(),
             root,
-            public_context: lee::PublicExecutionContext::new(public_actors, []),
+            public_context: lee::PublicExecutionContext::new(
+                lee::test_utils::signed_by(public_actors, []),
+                [],
+            ),
             private_witnesses,
             dummy_inputs: Vec::new(),
             ciphertext_padding: None,
@@ -7354,8 +7425,13 @@ fn state_with_clock_upgrade_due_at(activation_height: lee_core::BlockId) -> lee:
 fn system_upgrader_tx(message: &system_upgrader_core::Message) -> LeeTransaction {
     let registry = system_upgrader_core::registry_actor();
     LeeTransaction::Public(PublicTransaction::new(
-        lee::public_transaction::Message::try_new(registry, [registry], BTreeMap::new(), message)
-            .unwrap(),
+        lee::public_transaction::Message::try_new(
+            registry,
+            lee::test_utils::signed_by([registry], []),
+            BTreeMap::new(),
+            message,
+        )
+        .unwrap(),
         lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
     ))
 }
@@ -7374,7 +7450,7 @@ fn a_due_system_upgrade_gets_an_apply() {
     let expected = LeeTransaction::Public(lee::PublicTransaction::new(
         lee::public_transaction::Message::try_new(
             registry_actor(),
-            [registry_actor(), loader_actor(&programs::CLOCK_NAME)],
+            lee::test_utils::signed_by([registry_actor(), loader_actor(&programs::CLOCK_NAME)], []),
             BTreeMap::new(),
             system_upgrader_core::Message::Apply {
                 name: programs::CLOCK_NAME,
@@ -7422,10 +7498,13 @@ fn an_approved_change_is_built_with_its_approvals_and_actors() {
     let expected = LeeTransaction::Public(PublicTransaction::new(
         lee::public_transaction::Message::try_new(
             system_upgrader_core::registry_actor(),
-            [
-                system_upgrader_core::registry_actor(),
-                system_upgrader_core::committee_actor(),
-            ],
+            lee::test_utils::signed_by(
+                [
+                    system_upgrader_core::registry_actor(),
+                    system_upgrader_core::committee_actor(),
+                ],
+                [],
+            ),
             BTreeMap::new(),
             message,
         )

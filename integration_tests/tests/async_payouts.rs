@@ -127,11 +127,14 @@ fn prove_trade(
             }),
             // The fee inbox is declared so the reserve crosses to it rather than being published.
             public_context: PublicExecutionContext::new(
-                [
-                    payer,
-                    Actor::native_balance(custody),
-                    Actor::native_balance(system_accounts::fee_inbox_account_id()),
-                ],
+                lee::test_utils::signed_by(
+                    [
+                        payer,
+                        Actor::native_balance(custody),
+                        Actor::native_balance(system_accounts::fee_inbox_account_id()),
+                    ],
+                    [],
+                ),
                 [],
             ),
             private_witnesses: vec![witness],

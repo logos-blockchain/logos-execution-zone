@@ -170,11 +170,14 @@ fn deposit_tx(
         }],
         ..Message::try_new(
             receipt,
-            vec![
-                receipt,
-                Actor::native_balance(system_accounts::bridge_account_id()),
-                Actor::native_balance(recipient),
-            ],
+            lee::test_utils::signed_by(
+                vec![
+                    receipt,
+                    Actor::native_balance(system_accounts::bridge_account_id()),
+                    Actor::native_balance(recipient),
+                ],
+                [],
+            ),
             BTreeMap::new(),
             bridge_core::Message::Deposit {
                 l1_deposit_op_id: op_id,

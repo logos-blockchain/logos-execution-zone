@@ -541,7 +541,10 @@ fn prove_init_with_commitment_root(
                 })?,
             }),
             fee: None,
-            public_context: PublicExecutionContext::new(vec![sender], [sender_id]),
+            public_context: PublicExecutionContext::new(
+                lee::test_utils::signed_by(vec![sender], [sender_id]),
+                [sender_id],
+            ),
             private_witnesses: vec![PrivateWitness {
                 vpk,
                 random_seed: [0; 32],

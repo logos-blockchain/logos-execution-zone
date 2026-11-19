@@ -620,7 +620,7 @@ mod tests {
             let to = Actor::new(segment_ids[i], loader);
             let segment_message = lee::public_transaction::Message::try_new_with_fees(
                 to,
-                vec![to],
+                vec![(to, lee::Authority::Signer)],
                 BTreeMap::from([
                     (segment_ids[i], lee_core::account::Nonce(0)),
                     (payer.account_id, lee_core::account::Nonce(payer_nonce)),
@@ -646,7 +646,7 @@ mod tests {
         let header_to = Actor::new(header_id, loader);
         let header_message = lee::public_transaction::Message::try_new_with_fees(
             header_to,
-            vec![header_to],
+            vec![(header_to, lee::Authority::Signer)],
             BTreeMap::from([
                 (header_id, lee_core::account::Nonce(0)),
                 (payer.account_id, lee_core::account::Nonce(payer_nonce)),
@@ -685,7 +685,7 @@ mod tests {
         let to = Actor::new(header_id, header_id);
         let message = lee::public_transaction::Message::try_new_with_fees(
             to,
-            vec![to],
+            vec![(to, lee::Authority::None)],
             BTreeMap::from([(payer.account_id, payer_nonce.into())]),
             test_guest_core::Script {
                 response: Response {
@@ -1805,7 +1805,7 @@ mod accept_tests {
             );
             let message = lee::public_transaction::Message::try_new(
                 to,
-                vec![to],
+                vec![(to, lee::Authority::None)],
                 std::collections::BTreeMap::new(),
                 bridge_core::Message::Deposit {
                     l1_deposit_op_id: [7_u8; 32],

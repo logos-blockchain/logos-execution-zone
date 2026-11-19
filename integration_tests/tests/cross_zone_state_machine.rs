@@ -293,7 +293,7 @@ fn dispatch_tx(
         }],
         ..Message::try_new(
             inbox_config_actor(inbox_id),
-            public_actors,
+            lee::test_utils::signed_by(public_actors, []),
             BTreeMap::new(),
             InboxMessage::Dispatch(msg),
         )
@@ -328,7 +328,10 @@ fn signed_tx(
     let message = Message::new_preserialized(
         root,
         message,
-        vec![root, Actor::new(config_id, target)],
+        lee::test_utils::signed_by(
+            vec![root, Actor::new(config_id, target)],
+            [AccountId::from(&PublicKey::new_from_private_key(key))],
+        ),
         BTreeMap::from([(
             AccountId::from(&PublicKey::new_from_private_key(key)),
             nonce.into(),
@@ -364,8 +367,13 @@ fn via_proxy(
             program: proxy_id,
             seed: authority_seed,
         }],
-        ..Message::try_new(caller, vec![caller, entry, config], BTreeMap::new(), script)
-            .expect("build proxy message")
+        ..Message::try_new(
+            caller,
+            lee::test_utils::signed_by(vec![caller, entry, config], []),
+            BTreeMap::new(),
+            script,
+        )
+        .expect("build proxy message")
     };
     PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
 }
@@ -425,8 +433,13 @@ fn send_tx(
     };
     let message = Message {
         admission_evidence,
-        ..Message::try_new(config, vec![config, outbox], BTreeMap::new(), send)
-            .expect("build ping_sender message")
+        ..Message::try_new(
+            config,
+            lee::test_utils::signed_by(vec![config, outbox], []),
+            BTreeMap::new(),
+            send,
+        )
+        .expect("build ping_sender message")
     };
     PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]))
 }
@@ -1065,16 +1078,19 @@ fn signed_lock(
         ],
         ..Message::try_new(
             holder,
-            vec![
-                holder,
-                Actor::new(
-                    bridge_lock_core::config_account_id(bridge_lock_id),
-                    bridge_lock_id,
-                ),
-                Actor::native_balance(holding_id_of(holder_id)),
-                Actor::native_balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
-                *outbox,
-            ],
+            lee::test_utils::signed_by(
+                vec![
+                    holder,
+                    Actor::new(
+                        bridge_lock_core::config_account_id(bridge_lock_id),
+                        bridge_lock_id,
+                    ),
+                    Actor::native_balance(holding_id_of(holder_id)),
+                    Actor::native_balance(bridge_lock_core::escrow_account_id(bridge_lock_id)),
+                    *outbox,
+                ],
+                [AccountId::from(&PublicKey::new_from_private_key(key))],
+            ),
             BTreeMap::from([(
                 AccountId::from(&PublicKey::new_from_private_key(key)),
                 nonce.into(),
@@ -1349,7 +1365,7 @@ fn a_direct_transfer_from_the_holding_is_refused() {
     let escrow = Actor::native_balance(bridge_lock_core::escrow_account_id(bridge_lock_id));
     let message = Message::try_new(
         holding,
-        vec![holding, escrow],
+        lee::test_utils::signed_by(vec![holding, escrow], []),
         BTreeMap::new(),
         lee_core::native_token::Message::Transfer {
             to: escrow.account_id,
@@ -1529,7 +1545,7 @@ fn the_bridge_pins_are_written_once_and_replayable() {
             }],
             ..Message::try_new(
                 config,
-                vec![config],
+                lee::test_utils::signed_by(vec![config], []),
                 BTreeMap::new(),
                 bridge_lock_core::Message::InitConfig {
                     outbox_account_id: outbox,
@@ -1693,7 +1709,7 @@ fn the_outbox_pin_is_written_once_and_replayable() {
             }],
             ..Message::try_new(
                 config,
-                vec![config],
+                lee::test_utils::signed_by(vec![config], []),
                 BTreeMap::new(),
                 ping_core::SenderMessage::InitConfig {
                     outbox_account_id: outbox,
@@ -2607,13 +2623,16 @@ fn a_top_level_mint_is_refused() {
     );
     let message = Message::try_new(
         config,
-        vec![
-            config,
-            Actor::new(
-                wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
-                wrapped_token_id,
-            ),
-        ],
+        lee::test_utils::signed_by(
+            vec![
+                config,
+                Actor::new(
+                    wrapped_token_core::holding_account_id(wrapped_token_id, &RECIPIENT),
+                    wrapped_token_id,
+                ),
+            ],
+            [],
+        ),
         BTreeMap::new(),
         wrapped_token_core::Message::MintFrom {
             deliverer: inbox_id,
@@ -2969,7 +2988,7 @@ fn chat_init_config_tx(chat_id: AccountId, to: Actor) -> PublicTransaction {
         }],
         ..Message::try_new(
             to,
-            vec![to],
+            lee::test_utils::signed_by(vec![to], []),
             BTreeMap::new(),
             ChatMessage::InitConfig(ping_core::ReceiverConfig {
                 deliverer: programs::cross_zone_inbox_account_id(),
@@ -3067,7 +3086,7 @@ fn a_direct_write_to_the_chat_log_is_refused() {
         }],
         ..Message::try_new(
             log,
-            vec![log],
+            lee::test_utils::signed_by(vec![log], []),
             BTreeMap::new(),
             ChatMessage::WriteLog {
                 src_zone: [2; 32],
@@ -3107,7 +3126,7 @@ fn a_deployer_signed_claim_at_the_program_account_writes_the_config() {
         }],
         ..Message::try_new(
             program,
-            vec![program, config],
+            lee::test_utils::signed_by(vec![program, config], [chat_id]),
             BTreeMap::from([(chat_id, 0_u128.into())]),
             ChatMessage::InitConfig(claimed.clone()),
         )
@@ -3183,8 +3202,13 @@ fn a_chained_post_is_refused_and_a_top_level_post_is_a_no_op() {
             program: proxy_id,
             seed,
         }],
-        ..Message::try_new(caller, vec![caller, entry], BTreeMap::new(), script)
-            .expect("build proxy message")
+        ..Message::try_new(
+            caller,
+            lee::test_utils::signed_by(vec![caller, entry], []),
+            BTreeMap::new(),
+            script,
+        )
+        .expect("build proxy message")
     };
     let chained = PublicTransaction::new(message, WitnessSet::from_raw_parts(vec![]));
     // The delivery branch claims a program-origin call, so a chained Post dies
@@ -3194,7 +3218,7 @@ fn a_chained_post_is_refused_and_a_top_level_post_is_a_no_op() {
 
     let post = Message::try_new(
         entry,
-        vec![entry],
+        lee::test_utils::signed_by(vec![entry], []),
         BTreeMap::new(),
         ChatMessage::post(emission),
     )

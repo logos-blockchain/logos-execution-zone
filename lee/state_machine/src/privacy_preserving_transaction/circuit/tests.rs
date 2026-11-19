@@ -30,6 +30,7 @@ use crate::{
             update_witness,
         },
     },
+    test_utils::signed_by,
     validated_state_diff::ValidatedStateDiff,
 };
 
@@ -106,7 +107,10 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_accounts() {
     let root_transfer = transfer(recipient_account_id, balance_to_move);
     let (output, proof) = execute_and_prove(
         ProvingInput {
-            public_context: PublicExecutionContext::new(vec![sender], [sender_id]),
+            public_context: PublicExecutionContext::new(
+                signed_by(vec![sender], [sender_id]),
+                [sender_id],
+            ),
             private_witnesses: vec![init_witness(&recipient_keys)],
             ..proving_input(root(sender, &root_transfer))
         },
@@ -431,7 +435,10 @@ fn prove_pda_spend(
     let recipient = Actor::native_balance(AccountId::new([0; 32]));
     execute_and_prove(
         ProvingInput {
-            public_context: PublicExecutionContext::new(vec![recipient], [recipient.account_id]),
+            public_context: PublicExecutionContext::new(
+                signed_by(vec![recipient], [recipient.account_id]),
+                [recipient.account_id],
+            ),
             private_witnesses: vec![witness],
             ..proving_input(root(
                 Actor::new(handle_account, scripted_id()),
@@ -597,7 +604,10 @@ fn the_prover_never_reads_a_public_actor_state() {
     // proof.
     let (output, proof) = execute_and_prove(
         ProvingInput {
-            public_context: PublicExecutionContext::new(vec![root_actor, callee], []),
+            public_context: PublicExecutionContext::new(
+                signed_by(vec![root_actor, callee], []),
+                [],
+            ),
             ..proving_input(root(root_actor, &script))
         },
         &Simulation::default(),

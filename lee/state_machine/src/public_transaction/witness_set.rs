@@ -61,7 +61,7 @@ mod tests {
     use lee_core::account::{Actor, Nonce};
 
     use super::*;
-    use crate::AccountId;
+    use crate::{AccountId, Authority};
 
     #[test]
     fn for_message_constructor() {
@@ -75,7 +75,10 @@ mod tests {
         let instruction = vec![1, 2, 3, 4];
         let message = Message::try_new(
             Actor::new(addr1, AccountId::from_builtin_program([0; 8])),
-            vec![Actor::native_balance(addr1), Actor::native_balance(addr2)],
+            vec![
+                (Actor::native_balance(addr1), Authority::Signer),
+                (Actor::native_balance(addr2), Authority::Signer),
+            ],
             nonces,
             instruction,
         )

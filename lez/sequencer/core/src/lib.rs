@@ -2605,7 +2605,10 @@ fn build_approved_txs(
 fn system_upgrader_tx(message: system_upgrader_core::Message) -> Result<LeeTransaction> {
     let message = Message::try_new(
         system_upgrader_core::registry_actor(),
-        message.actors(),
+        message
+            .actors()
+            .into_iter()
+            .map(|actor| (actor, lee::Authority::None)),
         BTreeMap::new(),
         message,
     )
@@ -2662,7 +2665,8 @@ fn build_finalize_unstake_tx(
             Actor::native_balance(system_accounts::stake_funds_account_id(&ownership_id)),
         ]
         .into_iter()
-        .chain(admitted.then_some(Actor::native_balance(destination))),
+        .chain(admitted.then_some(Actor::native_balance(destination)))
+        .map(|actor| (actor, lee::Authority::None)),
         BTreeMap::new(),
         sequencer_stake_core::Message::FinalizeUnstake { sequencer_key },
     )

@@ -44,7 +44,7 @@ async fn reject_oversized_transaction() -> Result<()> {
     let segment = Actor::new(segment_id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID);
     let message = lee::public_transaction::Message::try_new(
         segment,
-        vec![segment],
+        lee::test_utils::signed_by(vec![segment], [segment_id]),
         BTreeMap::from([(segment_id, Nonce(0))]),
         program_loader_core::Message::WriteSegment {
             bytecode: oversized_binary,
@@ -104,7 +104,7 @@ async fn accept_transaction_within_limit() -> Result<()> {
     let segment = Actor::new(segment_id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID);
     let message = lee::public_transaction::Message::try_new_with_fees(
         segment,
-        vec![segment],
+        lee::test_utils::signed_by(vec![segment], [segment_id, payer.account_id]),
         BTreeMap::from([(segment_id, Nonce(0)), (payer.account_id, payer_nonce)]),
         program_loader_core::Message::WriteSegment {
             bytecode: small_binary,
@@ -179,7 +179,7 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
         let segment = Actor::new(segment_id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID);
         let message = lee::public_transaction::Message::try_new_with_fees(
             segment,
-            vec![segment],
+            lee::test_utils::signed_by(vec![segment], [segment_id, payer.account_id]),
             BTreeMap::from([(segment_id, Nonce(0)), (payer.account_id, nonce_for_payer)]),
             program_loader_core::Message::WriteSegment {
                 bytecode,

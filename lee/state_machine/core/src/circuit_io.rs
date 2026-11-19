@@ -968,7 +968,7 @@ mod tests {
             private.account_id.blinded(&[6; 32]),
             private.program_account_id,
         );
-        let public_context = PublicExecutionContext::new(vec![public], []);
+        let public_context = PublicExecutionContext::new(vec![(public, Authority::None)], []);
         let call = |to| {
             TransactionEntry::Sync(RootCall {
                 to,

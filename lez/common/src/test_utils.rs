@@ -167,11 +167,15 @@ pub fn create_transaction_native_token_transfer_with_fees(
     signing_key: &lee::PrivateKey,
     fee_declaration: lee::FeeDeclaration,
 ) -> LeeTransaction {
-    let public_actors = vec![Actor::native_balance(from), Actor::native_balance(to)];
+    let nonces = signer_nonce(signing_key, nonce);
+    let public_actors = lee::test_utils::signed_by(
+        [Actor::native_balance(from), Actor::native_balance(to)],
+        nonces.keys().copied(),
+    );
     let message = lee::public_transaction::Message::try_new_with_fees(
         Actor::native_balance(from),
         public_actors,
-        signer_nonce(signing_key, nonce),
+        nonces,
         native_transfer(to, balance_to_move),
         fee_declaration,
     )
@@ -195,10 +199,14 @@ pub fn create_transaction_native_token_transfer_without_fee(
     balance_to_move: u128,
     signing_key: &lee::PrivateKey,
 ) -> LeeTransaction {
+    let nonces = signer_nonce(signing_key, nonce);
     let message = lee::public_transaction::Message::try_new(
         Actor::native_balance(from),
-        vec![Actor::native_balance(from), Actor::native_balance(to)],
-        signer_nonce(signing_key, nonce),
+        lee::test_utils::signed_by(
+            [Actor::native_balance(from), Actor::native_balance(to)],
+            nonces.keys().copied(),
+        ),
+        nonces,
         native_transfer(to, balance_to_move),
     )
     .unwrap();

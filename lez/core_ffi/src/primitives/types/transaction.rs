@@ -852,7 +852,7 @@ mod tests {
                 ..lee::public_transaction::Message::new_preserialized(
                     actor(4, 7),
                     vec![8],
-                    [actor(5, 6)],
+                    lee::test_utils::signed_by([actor(5, 6)], [account_id(9)]),
                     BTreeMap::from([(account_id(9), Nonce(10))]),
                     fee,
                 )

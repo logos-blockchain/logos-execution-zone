@@ -166,7 +166,7 @@ fn build_ping_tx(
         }],
         ..Message::try_new_with_fees(
             config,
-            vec![config, outbox],
+            lee::test_utils::signed_by(vec![config, outbox], [payer.account_id]),
             BTreeMap::from([(payer.account_id, payer_nonce)]),
             send,
             common::test_utils::test_fee_declaration(payer.account_id),

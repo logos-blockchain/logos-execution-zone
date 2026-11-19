@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 
 use common::transaction::LeeTransaction;
 use lee::{
-    AccountId, Actor, PublicAccountEvidence, PublicTransaction,
+    AccountId, Actor, Authority, PublicAccountEvidence, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
 use lee_core::program::PdaSeed;
@@ -74,7 +74,10 @@ async fn main() {
     // The caller's actor on the PDA receives the message and sends the greeting, with the PDA seed,
     // to the callee's actor on the same account, so both are declared.
     let caller = Actor::new(pda, caller_account_id);
-    let public_actors = vec![caller, Actor::new(pda, callee_account_id)];
+    let public_actors = vec![
+        (caller, Authority::None),
+        (Actor::new(pda, callee_account_id), Authority::None),
+    ];
     // The fee is charged to `payer`, so the payer's nonce is listed and its key signs the message.
     let (fee, payer_nonce, payer_key) = fee_paid_by(&wallet_core, payer).await.unwrap();
     let nonces = BTreeMap::from([(payer, payer_nonce)]);

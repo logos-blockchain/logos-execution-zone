@@ -10,8 +10,8 @@ use lee_core::{
     RecoveryBinding, RootCall, Timestamp,
     account::{Account, AccountId, Actor, ActorState, Cycles, Nonce},
     execution_state::{
-        BoundaryStep, PublicExecutionContext, PublicOutcome, PublicPart, TransactionEntry,
-        TransitionView, WholeExecution,
+        Authority, BoundaryStep, PublicExecutionContext, PublicOutcome, PublicPart,
+        TransactionEntry, TransitionView, WholeExecution,
     },
     program::{PROGRAM_LOADER_ACCOUNT_ID, Publication, ReceiveInput, TransactionEvent, Transition},
 };
@@ -198,7 +198,7 @@ impl ValidatedStateDiff {
     pub fn from_fee_settlement_invocation(
         to: Actor,
         message: &[u8],
-        public_actors: impl IntoIterator<Item = Actor>,
+        public_actors: impl IntoIterator<Item = (Actor, Authority)>,
         authorized: &HashSet<AccountId>,
         state: &V03State,
         block_id: BlockId,

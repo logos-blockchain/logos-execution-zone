@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use common::transaction::LeeTransaction;
 use lee::{
-    AccountId, Actor, PublicTransaction,
+    AccountId, Actor, Authority, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
 use program_deployment::{deploy_program, fee_paid_by};
@@ -88,7 +88,14 @@ async fn main() {
         signing_keys.push(&payer_key);
     }
     let hello = Actor::new(account_id, program_account_id);
-    let message = Message::try_new_with_fees(hello, vec![hello], nonces, greeting, fee).unwrap();
+    let message = Message::try_new_with_fees(
+        hello,
+        vec![(hello, Authority::Signer)],
+        nonces,
+        greeting,
+        fee,
+    )
+    .unwrap();
     // Pass the signing key to sign the message. This will be used by the node
     // to flag the pre_state as `is_authorized` when executing the program
     let witness_set = WitnessSet::for_message(&message, &signing_keys);

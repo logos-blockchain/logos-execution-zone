@@ -25,7 +25,7 @@
 )]
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     path::PathBuf,
     time::Instant,
 };
@@ -265,12 +265,21 @@ impl Case {
             fixtures,
             message,
         } = self;
+        let signers: BTreeSet<AccountId> = fixtures
+            .iter()
+            .filter(|f| f.is_authorized)
+            .map(|f| f.actor.account_id)
+            .collect();
         let public_context = PublicExecutionContext::new(
-            fixtures.iter().map(|f| f.actor),
-            fixtures
-                .iter()
-                .filter(|f| f.is_authorized)
-                .map(|f| f.actor.account_id),
+            fixtures.iter().map(|f| {
+                let authority = if signers.contains(&f.actor.account_id) {
+                    lee::Authority::Signer
+                } else {
+                    lee::Authority::None
+                };
+                (f.actor, authority)
+            }),
+            signers.clone(),
         );
         let mut meter = Meter {
             label,

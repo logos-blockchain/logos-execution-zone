@@ -322,7 +322,9 @@ fn build_inbox_dispatch_tx(
         }],
         ..lee::public_transaction::Message::try_new(
             config,
-            public_actors,
+            public_actors
+                .into_iter()
+                .map(|actor| (actor, lee::Authority::None)),
             BTreeMap::new(),
             Message::Dispatch(msg.clone()),
         )
@@ -549,8 +551,13 @@ fn genesis_public_tx<M: borsh::BorshSerialize>(
     let root = Actor::new(AccountId::for_public_pda(&program, &seed), program);
     let message = lee::public_transaction::Message {
         admission_evidence: vec![lee::PublicAccountEvidence::Pda { program, seed }],
-        ..lee::public_transaction::Message::try_new(root, [root], BTreeMap::new(), message)
-            .expect("genesis message must serialize")
+        ..lee::public_transaction::Message::try_new(
+            root,
+            [(root, lee::Authority::None)],
+            BTreeMap::new(),
+            message,
+        )
+        .expect("genesis message must serialize")
     };
     lee::PublicTransaction::new(
         message,

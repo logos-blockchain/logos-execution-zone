@@ -645,7 +645,10 @@ fn build_send_tx(
         admission_evidence: vec![slot],
         ..Message::try_new_with_fees(
             config,
-            vec![config, outbox],
+            vec![
+                (config, lee::Authority::None),
+                (outbox, lee::Authority::None),
+            ],
             BTreeMap::from([(payer.account_id, payer_nonce)]),
             send,
             common::test_utils::test_fee_declaration(payer.account_id),

@@ -36,7 +36,7 @@ impl PrivateRoot {
             .get_proof_for_commitment(&Commitment::new(&self.account_id, &self.pre_account))
             .expect("the account's commitment must be in state");
         ProvingInput {
-            public_context: PublicExecutionContext::new(public_actors, []),
+            public_context: PublicExecutionContext::new(signed_by(public_actors, []), []),
             private_witnesses: vec![update_witness(
                 &self.keys,
                 self.pre_account.clone(),
@@ -76,7 +76,7 @@ impl NestedBoundary {
         let (outer, inner) = nested_actors();
         let proven = execute_and_prove_with_cross_messages(
             ProvingInput {
-                public_context: PublicExecutionContext::new(vec![outer, inner], []),
+                public_context: PublicExecutionContext::new(signed_by(vec![outer, inner], []), []),
                 private_witnesses: vec![init_witness(&keys)],
                 ..proving_input(root(outer, outer_script))
             },
@@ -375,7 +375,10 @@ fn a_failing_public_transition_leaves_the_state_untouched() {
     let script = Script::write(vec![1]).send_sync(sender, &transfer(recipient_id, overdraft));
     let proven = execute_and_prove(
         ProvingInput {
-            public_context: PublicExecutionContext::new(vec![own, sender], [sender_id]),
+            public_context: PublicExecutionContext::new(
+                signed_by(vec![own, sender], [sender_id]),
+                [sender_id],
+            ),
             private_witnesses: vec![init_witness(&recipient_keys)],
             ..proving_input(root(own, &script))
         },
@@ -504,7 +507,7 @@ fn an_unauthorized_public_debit_proves_but_is_refused_at_settlement() {
     // An honest prover would refuse the debit; this one assumes its credit without running it.
     let proven = execute_and_prove_with_cross_messages(
         ProvingInput {
-            public_context: PublicExecutionContext::new(vec![sender], []),
+            public_context: PublicExecutionContext::new(signed_by(vec![sender], []), []),
             private_witnesses: vec![init_witness(&recipient_keys)],
             ..proving_input(root(sender, &transfer(recipient_id, 10)))
         },

@@ -94,7 +94,7 @@ impl TpsTestManager {
                 let recipient = Actor::native_balance(pair[1].1);
                 let message = putx::Message::try_new_with_fees(
                     sender,
-                    vec![sender, recipient],
+                    lee::test_utils::signed_by(vec![sender, recipient], [pair[0].1]),
                     BTreeMap::from([(pair[0].1, Nonce(0_u128))]),
                     lee_core::native_token::Message::Transfer {
                         to: recipient.account_id,

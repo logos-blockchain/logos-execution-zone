@@ -105,7 +105,7 @@ fn a_private_account_may_act_under_two_actor_states_in_one_transaction() {
 
     let (output, _proof) = execute_and_prove(
         ProvingInput {
-            public_context: PublicExecutionContext::new(vec![recipient], []),
+            public_context: PublicExecutionContext::new(signed_by(vec![recipient], []), []),
             private_witnesses: vec![update_witness(&keys, pre_account.clone(), membership_proof)],
             ..proving_input(root(
                 Actor::new(sender_id, program_id),
@@ -292,7 +292,10 @@ fn prove_public_outputs(
     // Assumes each public output delivers nothing back, without running it.
     execute_and_prove_with_cross_messages(
         ProvingInput {
-            public_context: PublicExecutionContext::new(public_actors, signers),
+            public_context: PublicExecutionContext::new(
+                signed_by(public_actors, signers.clone()),
+                signers,
+            ),
             private_witnesses: vec![init_witness(&keys)],
             ..proving_input(root(Actor::new(keys.account_id(), scripted_id()), script))
         },
@@ -685,7 +688,10 @@ fn two_private_pda_family_members_receive_and_spend() {
     let shield = |from: Actor, witness: PrivateWitness, pda_id: AccountId| {
         execute_and_prove(
             ProvingInput {
-                public_context: PublicExecutionContext::new(vec![from], [from.account_id]),
+                public_context: PublicExecutionContext::new(
+                    signed_by(vec![from], [from.account_id]),
+                    [from.account_id],
+                ),
                 private_witnesses: vec![witness],
                 ..proving_input(root(from, &transfer(pda_id, amount)))
             },
@@ -704,7 +710,10 @@ fn two_private_pda_family_members_receive_and_spend() {
     let spend = |witness: PrivateWitness, pda_id: AccountId, signers: HashSet<AccountId>| {
         execute_and_prove(
             ProvingInput {
-                public_context: PublicExecutionContext::new(vec![recipient], signers),
+                public_context: PublicExecutionContext::new(
+                    signed_by(vec![recipient], signers.clone()),
+                    signers,
+                ),
                 private_witnesses: vec![witness],
                 ..proving_input(root(
                     Actor::new(pda_id, proxy_id),
@@ -1009,7 +1018,7 @@ fn a_shadow_programs_public_effect_is_refused_at_settlement() {
 
     let (output, proof) = execute_and_prove(
         ProvingInput {
-            public_context: PublicExecutionContext::new(vec![public], []),
+            public_context: PublicExecutionContext::new(signed_by(vec![public], []), []),
             private_witnesses: vec![init_witness(&keys)],
             ..proving_input(root(public, &Script::write(vec![7; 4])))
         },

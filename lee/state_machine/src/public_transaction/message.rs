@@ -4,7 +4,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     RootCall,
     account::{Actor, Nonce},
-    execution_state::PublicExecutionContext,
+    execution_state::{Authority, PublicExecutionContext},
     program::MessageData,
 };
 
@@ -27,7 +27,7 @@ impl Message {
     pub fn new(
         to: Actor,
         message: MessageData,
-        public_actors: impl IntoIterator<Item = Actor>,
+        public_actors: impl IntoIterator<Item = (Actor, Authority)>,
         nonces: BTreeMap<AccountId, Nonce>,
         fee: Option<FeeDeclaration>,
         admission_evidence: Vec<PublicAccountEvidence>,
@@ -48,7 +48,7 @@ impl Message {
     /// [`Self::try_new_with_fees`].
     pub fn try_new(
         to: Actor,
-        public_actors: impl IntoIterator<Item = Actor>,
+        public_actors: impl IntoIterator<Item = (Actor, Authority)>,
         nonces: BTreeMap<AccountId, Nonce>,
         message: impl BorshSerialize,
     ) -> Result<Self, LeeError> {
@@ -63,7 +63,7 @@ impl Message {
 
     pub fn try_new_with_fees(
         to: Actor,
-        public_actors: impl IntoIterator<Item = Actor>,
+        public_actors: impl IntoIterator<Item = (Actor, Authority)>,
         nonces: BTreeMap<AccountId, Nonce>,
         message: impl BorshSerialize,
         fee: FeeDeclaration,
@@ -81,7 +81,7 @@ impl Message {
     pub fn new_preserialized(
         to: Actor,
         message: MessageData,
-        public_actors: impl IntoIterator<Item = Actor>,
+        public_actors: impl IntoIterator<Item = (Actor, Authority)>,
         nonces: BTreeMap<AccountId, Nonce>,
         fee: Option<FeeDeclaration>,
     ) -> Self {
@@ -102,6 +102,7 @@ mod tests {
     use sha2::{Digest as _, Sha256};
 
     use super::{Message, PREFIX};
+    use crate::Authority;
 
     #[test]
     fn a_public_message_has_a_pinned_layout_and_hash() {
@@ -109,7 +110,7 @@ mod tests {
         let message = Message::new_preserialized(
             to,
             vec![0],
-            [to],
+            [(to, Authority::Signer)],
             BTreeMap::from([(to.account_id, Nonce(1))]),
             None,
         );

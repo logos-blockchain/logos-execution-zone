@@ -130,7 +130,10 @@ pub mod tests {
         let nonces = BTreeMap::from([(addr1, Nonce(0)), (addr2, Nonce(0))]);
         let message = Message::try_new(
             Actor::native_balance(addr1),
-            vec![Actor::native_balance(addr1), Actor::native_balance(addr2)],
+            vec![
+                (Actor::native_balance(addr1), Authority::Signer),
+                (Actor::native_balance(addr2), Authority::Signer),
+            ],
             nonces,
             transfer_to(addr2),
         )
@@ -362,7 +365,10 @@ pub mod tests {
         let to = Actor::new(addr1, unknown_program_id);
         let message = Message::try_new(
             to,
-            vec![to, Actor::native_balance(addr2)],
+            vec![
+                (to, Authority::Signer),
+                (Actor::native_balance(addr2), Authority::Signer),
+            ],
             nonces,
             instruction,
         )

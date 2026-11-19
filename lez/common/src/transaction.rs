@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee::{AccountId, Actor, V03State, ValidatedStateDiff};
+use lee::{AccountId, Actor, Authority, V03State, ValidatedStateDiff};
 use lee_core::{
     BlockId, Timestamp, account::Balance, native_token::NATIVE_TOKEN_PROGRAM_ID,
     program::TransactionEvent,
@@ -268,7 +268,7 @@ pub fn clock_invocation(block_id: BlockId, timestamp: Timestamp) -> lee::PublicT
     let clock = system_accounts::clock_actor();
     let message = lee::public_transaction::Message::try_new(
         clock,
-        vec![clock],
+        vec![(clock, Authority::None)],
         BTreeMap::new(),
         clock_core::Message::Tick {
             timestamp,
@@ -378,7 +378,8 @@ pub fn fee_invocation(
     .chain(match payee {
         FeePayee::Present(producer) => Some(Actor::native_balance(producer)),
         FeePayee::Bound(_) => None,
-    });
+    })
+    .map(|actor| (actor, Authority::None));
     let message = lee::public_transaction::Message::try_new(
         fee_state,
         public_actors,
@@ -451,7 +452,10 @@ pub fn fee_reserve_invocation(payer: AccountId, amount: u128) -> lee::public_tra
     let inbox = Actor::native_balance(system_accounts::fee_inbox_account_id());
     lee::public_transaction::Message::try_new(
         Actor::native_balance(payer),
-        vec![Actor::native_balance(payer), inbox],
+        vec![
+            (Actor::native_balance(payer), Authority::Signer),
+            (inbox, Authority::None),
+        ],
         BTreeMap::new(),
         lee_core::native_token::Message::Transfer {
             to: inbox.account_id,
@@ -490,7 +494,8 @@ fn refund_invocation(
             Actor::native_balance(system_accounts::fee_inbox_account_id()),
         ]
         .into_iter()
-        .chain(payee),
+        .chain(payee)
+        .map(|actor| (actor, Authority::None)),
         BTreeMap::new(),
         fee_core::Message::Refund { amount, payer },
     )
@@ -709,7 +714,7 @@ fn native_balance_only_increased(pre: &lee::Account, post: &lee::Account) -> boo
 mod tests {
     use std::collections::BTreeMap;
 
-    use lee::{Account, AccountId, PrivateKey, PublicKey, V03State};
+    use lee::{Account, AccountId, Authority, PrivateKey, PublicKey, V03State};
     use lee_core::{
         account::Nonce,
         native_token::{NATIVE_TOKEN_PROGRAM_ID, encode_balance},
@@ -1025,7 +1030,7 @@ mod tests {
         let message = lee::public_transaction::Message::new_preserialized(
             registry,
             registry_message(),
-            [registry],
+            [(registry, Authority::None)],
             BTreeMap::new(),
             None,
         );
@@ -1039,7 +1044,7 @@ mod tests {
         super::LeeTransaction::PrivacyPreserving(lee::PrivacyPreservingTransaction {
             message: lee::privacy_preserving_transaction::Message {
                 public_context: lee_core::execution_state::PublicExecutionContext::new(
-                    vec![registry],
+                    vec![(registry, Authority::None)],
                     [],
                 ),
                 execution: lee_core::ProvenExecution {
@@ -1107,7 +1112,7 @@ mod tests {
         };
         let message = lee::public_transaction::Message::try_new(
             config,
-            vec![config, outbox],
+            vec![(config, Authority::None), (outbox, Authority::None)],
             BTreeMap::new(),
             send,
         )

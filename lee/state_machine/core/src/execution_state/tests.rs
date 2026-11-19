@@ -363,7 +363,7 @@ fn root(to: Actor) -> TransactionEntry<MessageBody> {
 }
 
 fn public_context(actors: Vec<Actor>) -> PublicExecutionContext {
-    PublicExecutionContext::new(actors, [])
+    PublicExecutionContext::new(actors.into_iter().map(|actor| (actor, Authority::None)), [])
 }
 
 fn whole(
@@ -710,7 +710,10 @@ fn a_root_authorized_public_account_is_authorized_from_any_origin() {
         .on(peer, sending(vec![send_to(signer)]));
 
     public_transaction(
-        PublicExecutionContext::new(vec![signer, peer], [signer.account_id]),
+        PublicExecutionContext::new(
+            vec![(signer, Authority::Signer), (peer, Authority::None)],
+            [signer.account_id],
+        ),
         signer,
         &mut script,
     )

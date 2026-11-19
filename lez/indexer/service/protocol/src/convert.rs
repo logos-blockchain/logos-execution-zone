@@ -1434,7 +1434,7 @@ mod tests {
         let to = lee::Actor::new(signer_id, lee::AccountId::new([7; 32]));
         let message = lee::public_transaction::Message::try_new_with_fees(
             to,
-            vec![to],
+            lee::test_utils::signed_by(vec![to], [signer_id]),
             BTreeMap::from([(signer_id, 0_u128.into())]),
             0_u32,
             fee,
@@ -1469,7 +1469,7 @@ mod tests {
         let to = lee::Actor::new(signer_id, lee::AccountId::new([7; 32]));
         let message = lee::public_transaction::Message::try_new(
             to,
-            vec![to],
+            lee::test_utils::signed_by(vec![to], [signer_id]),
             BTreeMap::from([(signer_id, 0_u128.into())]),
             0_u32,
         )
@@ -1509,7 +1509,7 @@ mod tests {
         let message = lee::public_transaction::Message::new(
             actor(3, 4),
             vec![12],
-            vec![actor(5, 6)],
+            lee::test_utils::signed_by(vec![actor(5, 6)], [account_id(13)]),
             BTreeMap::from([(account_id(13), lee_core::account::Nonce(7))]),
             Some(lee::FeeDeclaration::new(account_id(8), 9, 10, 11)),
             admission_evidence(),
@@ -1530,7 +1530,7 @@ mod tests {
         let mut mirrored = PublicMessage::from(lee::public_transaction::Message::new(
             actor(1, 2),
             vec![3],
-            vec![actor(1, 2)],
+            lee::test_utils::signed_by(vec![actor(1, 2)], [account_id(1)]),
             BTreeMap::from([(account_id(1), lee_core::account::Nonce(4))]),
             None,
             Vec::new(),

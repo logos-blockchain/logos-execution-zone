@@ -90,7 +90,7 @@ fn private_account(tag: u8, account: Option<Account>) -> (AccountId, PrivateWitn
 
 fn proving_input(
     root: TransactionEntry<MessageWitness>,
-    public_actors: Vec<Actor>,
+    public_actors: Vec<(Actor, lee::Authority)>,
     signers: HashSet<AccountId>,
     private_witnesses: Vec<PrivateWitness>,
 ) -> ProvingInput {
@@ -181,7 +181,7 @@ fn prove_native_transfer_with_dummies(
                         amount: AMOUNT_TO_TRANSFER,
                     })?,
                 }),
-                vec![sender],
+                vec![(sender, lee::Authority::Signer)],
                 [sender.account_id].into(),
                 vec![recipient_witness],
             )
@@ -237,7 +237,7 @@ fn prove_scripted_transfers(
                 to: Actor::new(sender_id, scripted_id),
                 message: to_vec(&script)?,
             }),
-            vec![Actor::native_balance(RECIPIENT_ID)],
+            vec![(Actor::native_balance(RECIPIENT_ID), lee::Authority::None)],
             HashSet::new(),
             vec![sender_witness],
         ),

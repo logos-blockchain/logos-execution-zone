@@ -65,7 +65,7 @@ async fn user_origin_inbox_call_rejected() -> Result<()> {
     let config = Actor::new(inbox_config_account_id(inbox_id), inbox_id);
     let message = Message::try_new(
         config,
-        vec![config, Actor::new(seen_id, inbox_id)],
+        lee::test_utils::signed_by(vec![config, Actor::new(seen_id, inbox_id)], []),
         BTreeMap::new(),
         InboxMessage::Dispatch(msg),
     )

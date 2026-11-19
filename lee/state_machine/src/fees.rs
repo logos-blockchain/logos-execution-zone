@@ -59,7 +59,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        PrivateKey, PublicKey,
+        Authority, PrivateKey, PublicKey,
         public_transaction::{Message, WitnessSet},
     };
 
@@ -80,7 +80,10 @@ mod tests {
                 account_id_of(&keys().0),
                 AccountId::from_builtin_program([0_u32; 8]),
             ),
-            vec![Actor::native_balance(account_id_of(&keys().0))],
+            vec![(
+                Actor::native_balance(account_id_of(&keys().0)),
+                Authority::Signer,
+            )],
             BTreeMap::from([(account_id_of(&keys().0), Nonce(0))]),
             vec![1_u8, 2, 3],
             FeeDeclaration::new(payer, 1_000, 0, 10_000),
@@ -94,7 +97,10 @@ mod tests {
                 account_id_of(&keys().0),
                 AccountId::from_builtin_program([0_u32; 8]),
             ),
-            vec![Actor::native_balance(account_id_of(&keys().0))],
+            vec![(
+                Actor::native_balance(account_id_of(&keys().0)),
+                Authority::Signer,
+            )],
             BTreeMap::from([(account_id_of(&keys().0), Nonce(0))]),
             vec![1_u8, 2, 3],
         )

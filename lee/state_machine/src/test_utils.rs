@@ -18,7 +18,7 @@ use lee_core::{
 
 #[cfg(feature = "test-utils")]
 use crate::validated_state_diff::{StateDiff, ValidatedStateDiff};
-use crate::{Account, AccountId, PrivateKey, PublicKey, error::LeeError};
+use crate::{Account, AccountId, Actor, Authority, PrivateKey, PublicKey, error::LeeError};
 
 pub struct TestPrivateKeys {
     pub ask: AuthorizationSecretKey,
@@ -56,6 +56,26 @@ pub fn signer_nonces(signers: &[&PrivateKey], nonces: Vec<Nonce>) -> BTreeMap<Ac
         .iter()
         .map(|key| AccountId::from(&PublicKey::new_from_private_key(key)))
         .zip(nonces)
+        .collect()
+}
+
+/// Declares `actors`, each [`Authority::Signer`] exactly when its account is one of `signers`.
+#[must_use]
+pub fn signed_by(
+    actors: impl IntoIterator<Item = Actor>,
+    signers: impl IntoIterator<Item = AccountId>,
+) -> Vec<(Actor, Authority)> {
+    let signers: BTreeSet<AccountId> = signers.into_iter().collect();
+    actors
+        .into_iter()
+        .map(|actor| {
+            let authority = if signers.contains(&actor.account_id) {
+                Authority::Signer
+            } else {
+                Authority::None
+            };
+            (actor, authority)
+        })
         .collect()
 }
 
