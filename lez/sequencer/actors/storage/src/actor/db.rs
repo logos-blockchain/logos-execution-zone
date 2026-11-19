@@ -89,6 +89,16 @@ impl<C: ColumnFamilies> Database<C> {
         let mut db_opts = rocksdb::Options::default();
         db_opts.create_missing_column_families(true);
         db_opts.create_if_missing(true);
+        // Column families written a little each block never fill a memtable, so they
+        // never flush, and every write-ahead log stays on disk until RocksDB's dynamic
+        // limit (several GB). Capping the total forces those flushes.
+        db_opts.set_max_total_wal_size(256 * 1024 * 1024);
+        // The default keeps every table file open. Under a low descriptor limit (macOS
+        // gives 256 by default) opens start failing, compaction stops and each
+        // crash-restart leaves more files behind.
+        db_opts.set_max_open_files(200);
+        // Info LOG files kept; the default is 1000.
+        db_opts.set_keep_log_file_num(10);
         let db = rocksdb::DB::open_cf_descriptors(&db_opts, path, cfs)?;
 
         Ok(Self {
