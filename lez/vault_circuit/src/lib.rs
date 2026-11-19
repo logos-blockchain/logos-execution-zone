@@ -49,6 +49,7 @@ const STEP_ID_DST: &[u8] = b"PROGRAM_STEP_ID_V1";
 const DEPOSITS_DST: &[u8] = b"PROGRAM_DEPOSITS_V1";
 const COMMITTEE_DST: &[u8] = b"LEZ_VAULT_COMMITTEE_V1";
 const INTENT_DST: &[u8] = b"LEZ_VAULT_INTENT_V1";
+const RECIPIENT_DST: &[u8] = b"LEZ_VAULT_RECIPIENT_V1";
 const NONCE_DST: &[u8] = b"LEZ_VAULT_NONCE_V1";
 const SIGNATURE_DST: &[u8] = b"LEZ_VAULT_SIG_V1";
 
@@ -95,10 +96,16 @@ pub struct Deposit {
 }
 
 impl Deposit {
-    /// The recipient of a deposit crediting the zone account `account_id`.
+    /// The recipient of a deposit crediting the zone account `account_id`, salted with the
+    /// deposit's first input nullifier. Bedrock spends a nullifier once, so no two deposits
+    /// share an intent, and the notes a step creates from its deposits alone never repeat.
     #[must_use]
-    pub fn recipient_element(account_id: &[u8; 32]) -> Fr {
-        Fr::from_le_bytes_mod_order(account_id)
+    pub fn recipient_element(account_id: &[u8; 32], nullifier: Fr) -> Fr {
+        Poseidon2Bn254Hasher::digest(&[
+            domain_tag(RECIPIENT_DST),
+            Fr::from_le_bytes_mod_order(account_id),
+            nullifier,
+        ])
     }
 
     /// The intent the depositor signs: it pays `recipient` through the vault of `committee` only.
@@ -313,12 +320,22 @@ pub fn verification_key_bytes(key: &VerifyingKey<Bn254>) -> [u8; VERIFICATION_KE
 }
 
 /// Proves `circuit`, in the encoding a program step carries.
+///
+/// # Errors
+///
+/// [`SynthesisError::Unsatisfiable`] when the assignment breaks the vault's rule: a release
+/// build would otherwise hand back a proof that does not verify.
 pub fn prove(
     proving_key: &ProvingKey<Bn254>,
     circuit: VaultCircuit,
     rng: &mut (impl RngCore + CryptoRng),
 ) -> Result<CompressedGroth16Proof, SynthesisError> {
+    let public = circuit.public.to_array();
     let proof = Groth16::<Bn254>::create_random_proof_with_reduction(circuit, proving_key, rng)?;
+    let key = ark_groth16::prepare_verifying_key(&proving_key.vk);
+    if !Groth16::<Bn254>::verify_proof(&key, &proof, &public)? {
+        return Err(SynthesisError::Unsatisfiable);
+    }
     Ok(CompressedGroth16Proof::try_from(&Groth16Proof {
         pi_a: proof.a,
         pi_b: proof.b,

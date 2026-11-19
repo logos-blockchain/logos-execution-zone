@@ -671,7 +671,7 @@ fn bridge_withdraw_tx(amount: u64) -> LeeTransaction {
 }
 
 #[tokio::test]
-async fn a_reverted_withdraw_releases_nothing_on_l1() {
+async fn a_reverted_withdraw_is_included_as_reverted() {
     let (mut sequencer, mempool_handle) = common_setup().await;
     let withdraw = bridge_withdraw_tx(u64::MAX);
     mempool_handle
@@ -689,10 +689,26 @@ async fn a_reverted_withdraw_releases_nothing_on_l1() {
 #[tokio::test]
 async fn a_withdrawal_is_dropped_until_payouts_are_supported() {
     let (mut sequencer, mempool_handle) = common_setup().await;
+    let withdraw = bridge_withdraw_tx(1);
     mempool_handle
-        .push((TransactionOrigin::User, bridge_withdraw_tx(1)))
+        .push((TransactionOrigin::User, withdraw.clone()))
         .await
         .unwrap();
+
+    // It settles and emits its withdrawal: only the guard keeps it out.
+    let mut state = sequencer.with_state(Clone::clone).await;
+    let opening = chain_state::apply::opening_fee_state(&state);
+    let (events, _) = chain_state::apply::settle_transaction(
+        &withdraw,
+        &mut state,
+        &opening,
+        2,
+        0,
+        0,
+        &mut fee_core::BlockFeeSummary::default(),
+    )
+    .expect("a withdrawal the payer can afford settles");
+    assert_eq!(crate::bridge_withdrawals(&events).count(), 1);
 
     let built = sequencer.build_block_from_mempool().await.unwrap();
 
@@ -700,12 +716,9 @@ async fn a_withdrawal_is_dropped_until_payouts_are_supported() {
 }
 
 #[tokio::test]
-async fn an_exempt_public_bridge_deposit_is_dropped_by_the_builder_bridge_guard() {
-    // An empty-witness bridge `Deposit` classifies as an exempt system
-    // injection, so `settle_transaction` applies it — a legit deposit replays
-    // through that same path. Only the builder's origin-gated guard can drop a
-    // *user*-submitted one. Without it the fee classification waves a forged
-    // public deposit straight through (the consensus replay gap is #809).
+async fn an_unsigned_public_bridge_deposit_is_not_included() {
+    // The builder's guard drops it; settlement would refuse it too, since a
+    // bridge deposit is no longer an exempt system injection.
     let config = setup_sequencer_config();
 
     let (mut sequencer, mempool_handle) = start_sequencer(config).await;
@@ -2528,7 +2541,7 @@ fn resubmittable_txs_drops_clock_and_bridge_deposits() {
         vec![user_tx.clone(), deposit_tx, withdraw_tx.clone()],
     );
 
-    // The trailing clock tx and the sequencer-generated deposit are dropped;
+    // The trailing clock tx and the bridge deposit are dropped;
     // user txs (withdrawals included) are returned.
     assert_eq!(resubmittable_txs(&block), vec![user_tx, withdraw_tx]);
 }

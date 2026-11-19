@@ -677,9 +677,8 @@ fn validate_no_inbox_state_modification(
 /// Whether `pre` became `post` by a pure native balance increase: nonce and
 /// every other shard unchanged.
 ///
-/// The only change a user transaction may make to the bridge escrow (legit
-/// deposits debit it, but they are sequencer-injected) or, for a private
-/// transaction, to the fee inbox.
+/// The only change a user transaction may make to the bridge escrow (only
+/// genesis deposits debit it) or, for a private transaction, to the fee inbox.
 #[must_use]
 fn native_balance_only_increased(pre: &lee::Account, post: &lee::Account) -> bool {
     fn non_native(
