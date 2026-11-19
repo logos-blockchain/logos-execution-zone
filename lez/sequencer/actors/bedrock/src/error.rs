@@ -92,6 +92,9 @@ pub enum Error {
         current: ChannelSeq,
     },
 
+    #[error("Invalid vault deposit: {0}")]
+    InvalidVaultDeposit(&'static str),
+
     #[error("Invalid vault step: {0}")]
     InvalidVaultStep(&'static str),
 

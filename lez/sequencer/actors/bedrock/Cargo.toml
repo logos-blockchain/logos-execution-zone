@@ -16,6 +16,7 @@ actor = [
   "dep:url",
   "dep:tracing",
   "dep:vault_circuit",
+  "dep:bridge_core",
   "dep:logos-blockchain-program-spend",
   "dep:logos-blockchain-mmr",
   "dep:rand",
@@ -44,11 +45,13 @@ url = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 mockall = { workspace = true, optional = true }
 vault_circuit = { workspace = true, optional = true }
+bridge_core = { workspace = true, features = ["host"], optional = true }
 logos-blockchain-program-spend = { workspace = true, optional = true }
 logos-blockchain-mmr = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
 
 [dev-dependencies]
+lee.workspace = true
 logos-blockchain-core = { workspace = true, features = ["test-utils"] }
 glob.workspace = true
 tokio = { workspace = true, features = ["macros", "test-util"] }

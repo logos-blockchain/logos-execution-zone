@@ -95,6 +95,12 @@ pub struct Deposit {
 }
 
 impl Deposit {
+    /// The recipient of a deposit crediting the zone account `account_id`.
+    #[must_use]
+    pub fn recipient_element(account_id: &[u8; 32]) -> Fr {
+        Fr::from_le_bytes_mod_order(account_id)
+    }
+
     /// The intent the depositor signs: it pays `recipient` through the vault of `committee` only.
     #[must_use]
     pub fn intent(&self, committee: Fr) -> Fr {

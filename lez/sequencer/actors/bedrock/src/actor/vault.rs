@@ -2,24 +2,30 @@
 
 use std::sync::LazyLock;
 
+use borsh::BorshDeserialize as _;
+use bridge_core::{DepositMetadata, DepositRecipient};
 use logos_blockchain_mmr::MerklePath;
 use logos_blockchain_program_spend::{
     MAX_INPUTS, MAX_OUTPUTS, ZkProgramSpendChainInputsData, ZkProgramSpendInputNoteData,
     ZkProgramSpendOutputNoteData, ZkProgramSpendWalletInputsData, ZkProgramSpendWitnessInputs,
 };
 use logos_blockchain_zone_sdk::{
+    binary_codec::canonical::BinaryDecodeExt,
     core::mantle::{
+        batch::{DeferrableProof as _, DeferredProofs},
         notes::{Note, NoteNullifier, derive_note_nullifier},
         ops::{
             ProgramProof, ProgramStepProof, StepProof, ZkProgramSpendProof, ZkTransferProof,
             channel::{
+                ChannelId,
                 inscribe::{InscriptionOp, MiniBlock, Step},
-                program_step::{ProgramDeposit, ProgramStep},
+                program_step::{ProgramDeposit, ProgramStep, program_deposit_id},
             },
+            zk_transfer::defer_zk_transfer,
         },
         programs::{SpendInputFields, SpendOutputFields},
     },
-    groth16::Fr,
+    groth16::{Fr, fr_to_bytes},
     key_management_system_service::keys::{PK0, ZkKey, ZkPublicKey},
     node_types::{
         InputNullifiers, Inscription, OpId as _, OutputCommitments, ProgramId, ProgramNoteOpening,
@@ -42,8 +48,75 @@ pub struct VaultDeposit {
     pub deposit: ProgramDeposit,
     /// The holder's proof of the deposit.
     pub proof: ZkTransferProof,
-    /// Who the zone credits, the opening of the deposit's intent.
-    pub recipient: Fr,
+    /// Whom the zone credits: the opening of the deposit's intent, read from its inscription.
+    pub recipient: DepositRecipient,
+}
+
+impl VaultDeposit {
+    /// Admits a deposit to the vault of `committee` on `channel`. `bytes` holds the step, then
+    /// its proof, in Bedrock's encoding; the step's inscription is a borsh [`DepositMetadata`].
+    ///
+    /// Bedrock still decides whether the notes it spends exist and its root is recent.
+    pub fn admit(bytes: &[u8], channel: &ChannelId, committee: &Committee) -> Result<Self> {
+        let (rest, deposit) = <ProgramDeposit as BinaryDecodeExt>::decode(bytes)
+            .map_err(|_err| Error::InvalidVaultDeposit("its step does not decode"))?;
+        let proof = ZkTransferProof::decode_all(rest)
+            .map_err(|_err| Error::InvalidVaultDeposit("its proof does not decode"))?;
+        let recipient = DepositMetadata::try_from_slice(deposit.inscription.as_ref())
+            .map_err(|_err| Error::InvalidVaultDeposit("its inscription names no recipient"))?
+            .recipient;
+
+        if deposit.program_id != *VAULT_PROGRAM {
+            return Err(Error::InvalidVaultDeposit("it pays another program"));
+        }
+        if deposit.value == 0 {
+            return Err(Error::InvalidVaultDeposit("it pays nothing"));
+        }
+        if deposit.inputs.is_empty() {
+            return Err(Error::InvalidVaultDeposit("it spends no note"));
+        }
+        let intent = Deposit {
+            value: deposit.value,
+            recipient: recipient_element(&recipient),
+        }
+        .intent(committee.id());
+        if deposit.intent != intent {
+            return Err(Error::InvalidVaultDeposit(
+                "its intent names another committee or recipient",
+            ));
+        }
+        // A deposit sits in the first mini-block, where its root is the one its holder proved
+        // against.
+        defer_zk_transfer(
+            &proof,
+            deposit.inputs.iter(),
+            deposit.outputs.iter(),
+            deposit.value,
+            deposit.commitment_merkle_root,
+            program_deposit_id(channel, &deposit),
+        )
+        .ok()
+        .and_then(|transfer| {
+            let mut batch = DeferredProofs::new();
+            transfer.defer_into(&mut batch);
+            batch.verify().ok()
+        })
+        .ok_or(Error::InvalidVaultDeposit("its proof does not verify"))?;
+
+        Ok(Self {
+            deposit,
+            proof,
+            recipient,
+        })
+    }
+
+    /// The id the zone mints the deposit under. Bedrock spends a note once, so no other deposit
+    /// shares its first nullifier.
+    #[must_use]
+    pub fn id(&self) -> Option<[u8; 32]> {
+        let nullifier = self.deposit.inputs.iter().next()?;
+        Some(fr_to_bytes(&nullifier.0))
+    }
 }
 
 /// What the vault does in one inscription: it takes the deposits in, pays the payouts and keeps
@@ -123,7 +196,7 @@ impl VaultStep {
                 .iter()
                 .map(|deposit| Deposit {
                     value: deposit.deposit.value,
-                    recipient: deposit.recipient,
+                    recipient: recipient_element(&deposit.recipient),
                 })
                 .collect(),
             public,
@@ -337,6 +410,11 @@ pub fn vault_key() -> ProgramVerificationKey {
         .expect("the vault key is a valid program key")
 }
 
+/// The recipient as the deposit's intent commits to it.
+fn recipient_element(recipient: &DepositRecipient) -> Fr {
+    Deposit::recipient_element(recipient.account_id().value())
+}
+
 fn commitments<'note>(notes: impl Iterator<Item = &'note Note>) -> OutputCommitments {
     OutputCommitments::try_from_iter(notes.map(Note::commitment))
         .expect("the outputs of a spend fit a note list")
@@ -347,8 +425,8 @@ mod tests {
     use logos_blockchain_core::mantle::ops::transfer::test_utils::prove_transfer;
     use logos_blockchain_zone_sdk::{
         Slot,
+        binary_codec::canonical::BinaryEncode as _,
         core::mantle::{
-            batch::{DeferrableProof as _, DeferredProofs},
             channel::Channels,
             ledger::{VerifiableOperation as _, verification_mode::StandardMode},
             note_set::{CommitmentMmr, NoteSets, TxNoteState},
@@ -356,7 +434,7 @@ mod tests {
             ops::{
                 ChannelInscribeProof, SignedOperation,
                 channel::{
-                    ChannelId, MsgId, UnverifiedChannelKeys,
+                    MsgId, UnverifiedChannelKeys,
                     inscribe::{InscriptionPreverificationContext, InscriptionValidationContext},
                 },
             },
@@ -367,7 +445,6 @@ mod tests {
             },
         },
         key_management_system_service::keys::Ed25519Key,
-        node_types::program_deposit_id,
     };
     use vault_circuit::SigningKey;
 
@@ -438,15 +515,25 @@ mod tests {
         batch.verify().expect("the proofs of the steps verify");
     }
 
-    #[test]
-    fn bedrock_accepts_a_deposit_into_an_empty_vault() {
+    fn recipient() -> DepositRecipient {
+        DepositRecipient::Identified(lee::PublicAccountEvidence::Pda {
+            program: lee::AccountId::new([4; 32]),
+            seed: bridge_core::PdaSeed::new([6; 32]),
+        })
+    }
+
+    /// A deposit of a note worth 1000 to the vault of `committee`, with the note and the root
+    /// of the set holding it alone.
+    fn deposit(committee: &Committee) -> (VaultDeposit, Note, Fr) {
         let holder = Fr::from(1_u64);
         let note = Note::new(1_000, Fr::from(11_u64), ZkKey::new(holder).to_public_key());
         let (mmr, path) = CommitmentMmr::new()
             .push_with_paths(note.commitment(), &mut [])
             .unwrap();
         let root = mmr.frontier_root();
-        let recipient = Fr::from(77_u64);
+        let metadata = DepositMetadata {
+            recipient: recipient(),
+        };
         let deposit = ProgramDeposit {
             program_id: *VAULT_PROGRAM,
             inputs: [derive_note_nullifier(
@@ -459,10 +546,10 @@ mod tests {
             value: 1_000,
             intent: Deposit {
                 value: 1_000,
-                recipient,
+                recipient: recipient_element(&recipient()),
             }
-            .intent(committee().id()),
-            inscription: Inscription::default(),
+            .intent(committee.id()),
+            inscription: Inscription::try_from(borsh::to_vec(&metadata).unwrap()).unwrap(),
         };
         let proof = prove_transfer(
             &[(note, holder, path)],
@@ -470,21 +557,81 @@ mod tests {
             root,
             program_deposit_id(&channel(), &deposit),
         );
+        let deposit = VaultDeposit {
+            deposit,
+            proof: ZkTransferProof::new(proof),
+            recipient: recipient(),
+        };
+        (deposit, note, root)
+    }
+
+    fn submitted(deposit: &VaultDeposit) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        deposit.deposit.encode_into(&mut bytes);
+        deposit.proof.encode_into(&mut bytes);
+        bytes
+    }
+
+    #[test]
+    fn bedrock_accepts_a_deposit_into_an_empty_vault() {
+        let (deposit, note, root) = deposit(&committee());
 
         let vault = VaultStep {
             committee: committee(),
             inputs: vec![],
-            deposits: vec![VaultDeposit {
-                deposit,
-                proof: ZkTransferProof::new(proof),
-                recipient,
-            }],
+            deposits: vec![deposit],
             payouts: vec![],
             commitment_merkle_root: root,
             tx_commitment_root: root,
         };
 
         bedrock_accepts(&vault, &[note.commitment()]);
+    }
+
+    #[test]
+    fn a_submitted_deposit_is_admitted_with_its_recipient() {
+        let (deposit, _, _) = deposit(&committee());
+
+        let admitted = VaultDeposit::admit(&submitted(&deposit), &channel(), &committee()).unwrap();
+
+        assert_eq!(admitted.recipient, recipient());
+        assert_eq!(admitted.deposit, deposit.deposit);
+        assert_eq!(
+            admitted.id(),
+            Some(fr_to_bytes(
+                &deposit.deposit.inputs.iter().next().unwrap().0
+            ))
+        );
+    }
+
+    #[test]
+    fn a_deposit_to_another_committee_is_refused() {
+        let other = Committee {
+            threshold: 1,
+            signers: vec![SigningKey::from_channel_seed(&[16; 32]).public_key()],
+        };
+        let (deposit, _, _) = deposit(&other);
+
+        assert!(matches!(
+            VaultDeposit::admit(&submitted(&deposit), &channel(), &committee()),
+            Err(Error::InvalidVaultDeposit(
+                "its intent names another committee or recipient"
+            ))
+        ));
+    }
+
+    #[test]
+    fn a_deposit_whose_proof_covers_another_channel_is_refused() {
+        let (deposit, _, _) = deposit(&committee());
+
+        assert!(matches!(
+            VaultDeposit::admit(
+                &submitted(&deposit),
+                &ChannelId::from([13; 32]),
+                &committee()
+            ),
+            Err(Error::InvalidVaultDeposit("its proof does not verify"))
+        ));
     }
 
     #[test]
