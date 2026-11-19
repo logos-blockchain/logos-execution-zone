@@ -1,4 +1,7 @@
-use lee_core::{RootCall, execution_state::BoundaryStep};
+use lee_core::{
+    RootCall,
+    execution_state::{Authority, BoundaryStep},
+};
 
 use super::*;
 
@@ -302,6 +305,9 @@ fn a_journal_claiming_an_unsigned_account_authorized_is_rejected() {
 
     // Dropping the claim to match the missing signature detaches the statement from its proof.
     message.public_context.authorized_accounts.clear();
+    for authority in message.public_context.actors.values_mut() {
+        *authority = Authority::None;
+    }
     let unclaimed = PrivacyPreservingTransaction::new(
         message.clone(),
         WitnessSet::for_message(&message, witness_set.proof, &[]),

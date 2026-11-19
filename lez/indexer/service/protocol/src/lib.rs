@@ -352,9 +352,21 @@ pub enum BoundaryStep {
 
 pub type Boundary = Vec<BoundaryStep>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum Authority {
+    None,
+    Signer,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct DeclaredActor {
+    pub actor: Actor,
+    pub authority: Authority,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PublicExecutionContext {
-    pub actors: Vec<Actor>,
+    pub actors: Vec<DeclaredActor>,
     pub authorized_accounts: Vec<AccountId>,
     pub promotions: Vec<u64>,
 }

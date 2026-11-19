@@ -310,13 +310,21 @@ typedef struct FfiActor {
   FfiAccountId program_account_id;
 } FfiActor;
 
-typedef struct FfiVec_FfiActor {
-  struct FfiActor *entries;
+/**
+ * A declared public actor and whether the transaction's signatures authorize it.
+ */
+typedef struct FfiDeclaredActor {
+  struct FfiActor actor;
+  bool signer;
+} FfiDeclaredActor;
+
+typedef struct FfiVec_FfiDeclaredActor {
+  struct FfiDeclaredActor *entries;
   uintptr_t len;
   uintptr_t capacity;
-} FfiVec_FfiActor;
+} FfiVec_FfiDeclaredActor;
 
-typedef struct FfiVec_FfiActor FfiActorList;
+typedef struct FfiVec_FfiDeclaredActor FfiDeclaredActorList;
 
 typedef struct FfiVec_FfiAccountId {
   FfiAccountId *entries;
@@ -335,7 +343,7 @@ typedef struct FfiVec_u64 {
 typedef struct FfiVec_u64 FfiPromotionList;
 
 typedef struct FfiPublicExecutionContext {
-  FfiActorList actors;
+  FfiDeclaredActorList actors;
   FfiAccountIdList authorized_accounts;
   FfiPromotionList promotions;
 } FfiPublicExecutionContext;

@@ -408,8 +408,7 @@ pub fn fee_invocation_payee(fee_tx: &lee::PublicTransaction) -> Option<FeePayee>
         if fee_tx
             .message()
             .public_context
-            .actors
-            .contains(&Actor::native_balance(producer))
+            .runs_publicly(Actor::native_balance(producer))
         {
             FeePayee::Present(producer)
         } else {

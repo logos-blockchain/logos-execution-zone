@@ -33,7 +33,7 @@ impl Message {
         let mut seen = HashSet::new();
         self.public_context
             .actors
-            .iter()
+            .keys()
             .map(|actor| actor.account_id)
             .filter(|account_id| seen.insert(*account_id))
             .collect()

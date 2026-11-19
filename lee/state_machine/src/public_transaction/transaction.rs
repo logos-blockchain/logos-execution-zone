@@ -53,7 +53,7 @@ impl PublicTransaction {
             self.message
                 .public_context
                 .actors
-                .iter()
+                .keys()
                 .map(|actor| actor.account_id),
         );
 
@@ -92,8 +92,8 @@ pub mod tests {
     use sha2::{Digest as _, digest::FixedOutput as _};
 
     use crate::{
-        AccountId, InvalidTransaction, PrivateKey, PublicKey, PublicTransaction, Signature,
-        V03State,
+        AccountId, Authority, InvalidTransaction, PrivateKey, PublicKey, PublicTransaction,
+        Signature, V03State,
         error::LeeError,
         public_transaction::{Message, WitnessSet},
         validated_state_diff::ValidatedStateDiff,
@@ -244,6 +244,38 @@ pub mod tests {
             tx.check_stateless(),
             Err(InvalidTransaction::AuthorizedAccounts)
         );
+    }
+
+    #[test]
+    fn a_signer_authority_needs_its_account_to_sign() {
+        let (key1, key2, ..) = keys_for_tests();
+        let mut message = transaction_for_tests().message;
+        let unsigned = Actor::native_balance(AccountId::new([9; 32]));
+        message
+            .public_context
+            .actors
+            .insert(unsigned, Authority::Signer);
+
+        let tx = signed(message, &[&key1, &key2]);
+        let rejection = InvalidTransaction::UnsignedAuthority;
+        assert_eq!(tx.check_stateless(), Err(rejection));
+        assert!(matches!(
+            ValidatedStateDiff::from_public_transaction(&tx, &state_for_tests(), 1, 0),
+            Err(LeeError::InvalidInput(msg)) if msg == rejection.to_string()
+        ));
+    }
+
+    #[test]
+    fn an_unsigned_actor_may_be_declared_without_authority() {
+        let (key1, key2, ..) = keys_for_tests();
+        let mut message = transaction_for_tests().message;
+        message.public_context.actors.insert(
+            Actor::native_balance(AccountId::new([9; 32])),
+            Authority::None,
+        );
+
+        let tx = signed(message, &[&key1, &key2]);
+        assert!(tx.check_stateless().is_ok());
     }
 
     #[test]

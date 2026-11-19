@@ -882,7 +882,7 @@ mod tests {
 
         let inbox_id = programs::cross_zone_inbox_account_id();
         let shard = Actor::new(inbox_seen_shard_account_id(inbox_id, &[3; 32], 7), inbox_id);
-        assert!(tx.message.public_context.actors.contains(&shard));
+        assert!(tx.message.public_context.runs_publicly(shard));
         assert_eq!(
             tx.message
                 .admission_evidence

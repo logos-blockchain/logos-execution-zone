@@ -599,7 +599,7 @@ fn settle_private_transaction(
         let refund_diff = lee::ValidatedStateDiff::from_fee_settlement_invocation(
             refund_msg.execution.root.to,
             &refund_msg.execution.root.message,
-            &refund_msg.public_context.actors,
+            refund_msg.public_context.actors.keys().copied(),
             &HashSet::new(),
             state,
             block_id,
@@ -686,7 +686,7 @@ fn settle_charged_transaction(
     let reserve_diff = lee::ValidatedStateDiff::from_fee_settlement_invocation(
         reserve_msg.execution.root.to,
         &reserve_msg.execution.root.message,
-        &reserve_msg.public_context.actors,
+        reserve_msg.public_context.actors.keys().copied(),
         &payer_authorized,
         state,
         block_id,
@@ -775,7 +775,7 @@ fn settle_charged_transaction(
         let refund_diff = lee::ValidatedStateDiff::from_fee_settlement_invocation(
             refund_msg.execution.root.to,
             &refund_msg.execution.root.message,
-            &refund_msg.public_context.actors,
+            refund_msg.public_context.actors.keys().copied(),
             &HashSet::new(),
             state,
             block_id,

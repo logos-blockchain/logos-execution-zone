@@ -1,6 +1,6 @@
 use lee_core::{
     EncryptionScheme, ProgramImageClaim, SharedSecretKey,
-    execution_state::{BoundaryStep, Delivery},
+    execution_state::{Authority, BoundaryStep, Delivery},
     program::{PrivateAccountKind, ProgramHeader, immutable_mirror_commitment},
 };
 use program_loader_core::Message as LoaderMessage;
@@ -1180,10 +1180,10 @@ fn a_disclosed_image_claim_must_name_its_accounts_live_image() {
 fn a_proof_binds_its_messages_context() {
     let mut state = V03State::new().with_programs([crate::test_methods::scripted()]);
     let mut tx = prove_scripted_init(&test_private_account_keys_1(), &Script::default());
-    tx.message
-        .public_context
-        .actors
-        .insert(Actor::native_balance(AccountId::new([1; 32])));
+    tx.message.public_context.actors.insert(
+        Actor::native_balance(AccountId::new([1; 32])),
+        Authority::None,
+    );
 
     assert!(matches!(
         state.transition_from_privacy_preserving_transaction(&tx, 1, 0),

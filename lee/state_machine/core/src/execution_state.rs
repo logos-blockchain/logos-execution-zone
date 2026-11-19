@@ -41,30 +41,50 @@ impl TransactionEntry<MessageBody> {
     }
 }
 
+/// Whether the transaction's signatures authorize a declared public actor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum Authority {
+    None,
+    Signer,
+}
+
 /// The public context representation of the private transaction part proof.
 #[derive(Clone, Default, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 pub struct PublicExecutionContext {
-    pub actors: BTreeSet<Actor>,
+    pub actors: BTreeMap<Actor, Authority>,
     pub authorized_accounts: BTreeSet<AccountId>,
     pub promotions: BTreeSet<u64>,
 }
 
 impl PublicExecutionContext {
+    /// Marks every declared actor of an authorized account [`Authority::Signer`].
     pub fn new(
         actors: impl IntoIterator<Item = Actor>,
         authorized_accounts: impl IntoIterator<Item = AccountId>,
     ) -> Self {
+        let authorized_accounts: BTreeSet<AccountId> = authorized_accounts.into_iter().collect();
+        let actors = actors
+            .into_iter()
+            .map(|actor| {
+                let authority = if authorized_accounts.contains(&actor.account_id) {
+                    Authority::Signer
+                } else {
+                    Authority::None
+                };
+                (actor, authority)
+            })
+            .collect();
         Self {
-            actors: actors.into_iter().collect(),
-            authorized_accounts: authorized_accounts.into_iter().collect(),
+            actors,
+            authorized_accounts,
             ..Self::default()
         }
     }
 
     #[must_use]
     pub fn runs_publicly(&self, actor: Actor) -> bool {
-        self.actors.contains(&actor)
+        self.actors.contains_key(&actor)
     }
 }
 
@@ -1017,7 +1037,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
                 )
             })
             .collect();
-        for actor in &public_context.actors {
+        for actor in public_context.actors.keys() {
             let account_id = actor.account_id;
             if witness_index.contains_key(&account_id) {
                 return Err(ExecutionError::PublicAndPrivate { account_id });
@@ -1036,7 +1056,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
             .find(|account_id| {
                 public_context
                     .actors
-                    .iter()
+                    .keys()
                     .any(|actor| actor.account_id == *account_id)
             })
         {

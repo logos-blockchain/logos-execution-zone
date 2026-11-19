@@ -1,8 +1,8 @@
 use crate::primitives::types::{
     FfiAccountId, FfiBytes32, FfiVec,
     actor::{
-        FfiActor, FfiBoundaryStep, FfiNonceEntry, FfiPrivateAction, FfiPublicAccountEvidence,
-        FfiPublication, FfiRecoveryBinding, FfiSignaturePubKeyEntry,
+        FfiActor, FfiBoundaryStep, FfiDeclaredActor, FfiNonceEntry, FfiPrivateAction,
+        FfiPublicAccountEvidence, FfiPublication, FfiRecoveryBinding, FfiSignaturePubKeyEntry,
     },
     transaction::FfiTransaction,
 };
@@ -16,6 +16,8 @@ pub type FfiProof = FfiVecU8;
 pub type FfiProgramDeploymentMessage = FfiVecU8;
 
 pub type FfiActorList = FfiVec<FfiActor>;
+
+pub type FfiDeclaredActorList = FfiVec<FfiDeclaredActor>;
 
 pub type FfiAccountIdList = FfiVec<FfiAccountId>;
 

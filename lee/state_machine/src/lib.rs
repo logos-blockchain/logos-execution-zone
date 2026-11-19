@@ -11,7 +11,7 @@ pub use lee_core::{
     account::{Account, AccountData, AccountId, Actor, ActorState, Balance, Cycles, Fee, Gas},
     encryption::EphemeralPublicKey,
     execution_state::{
-        Boundary, BoundaryStep, Delivery, Placement, PredictedCrossMessages,
+        Authority, Boundary, BoundaryStep, Delivery, Placement, PredictedCrossMessages,
         PublicExecutionContext, TransactionEntry,
     },
     native_token,

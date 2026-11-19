@@ -5,15 +5,15 @@ use std::collections::BTreeMap;
 use lee_core::account::Nonce;
 
 use crate::{
-    Account, AccountData, AccountId, Actor, ActorState, BedrockStatus, Block, BlockBody,
+    Account, AccountData, AccountId, Actor, ActorState, Authority, BedrockStatus, Block, BlockBody,
     BlockHeader, BlockId, BlockIngestError, BoundaryStep, Ciphertext, Commitment,
-    CommitmentSetDigest, CrossZoneHalt, Delivery, EncryptedNote, EphemeralPublicKey, EventRecord,
-    FeeDeclaration, FeeFallback, FeeReceipt, HashType, IndexerStatus, IndexerSyncState,
-    MessageEnvelope, Nullifier, PdaSeed, PeerHealth, PeerStatus, PrivacyPreservingMessage,
-    PrivacyPreservingTransaction, PrivateAction, Proof, ProvenFee, PublicAccountEvidence,
-    PublicExecutionContext, PublicKey, PublicMessage, PublicTransaction, Publication,
-    RecoveryBinding, RootCall, SealedMessage, Selector, Signature, StallReason, Transaction,
-    TransactionReceipt, ValidityWindow, WitnessSet,
+    CommitmentSetDigest, CrossZoneHalt, DeclaredActor, Delivery, EncryptedNote, EphemeralPublicKey,
+    EventRecord, FeeDeclaration, FeeFallback, FeeReceipt, HashType, IndexerStatus,
+    IndexerSyncState, MessageEnvelope, Nullifier, PdaSeed, PeerHealth, PeerStatus,
+    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, Proof, ProvenFee,
+    PublicAccountEvidence, PublicExecutionContext, PublicKey, PublicMessage, PublicTransaction,
+    Publication, RecoveryBinding, RootCall, SealedMessage, Selector, Signature, StallReason,
+    Transaction, TransactionReceipt, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -485,6 +485,24 @@ impl From<BoundaryStep> for lee_core::execution_state::BoundaryStep {
     }
 }
 
+impl From<lee_core::execution_state::Authority> for Authority {
+    fn from(value: lee_core::execution_state::Authority) -> Self {
+        match value {
+            lee_core::execution_state::Authority::None => Self::None,
+            lee_core::execution_state::Authority::Signer => Self::Signer,
+        }
+    }
+}
+
+impl From<Authority> for lee_core::execution_state::Authority {
+    fn from(value: Authority) -> Self {
+        match value {
+            Authority::None => Self::None,
+            Authority::Signer => Self::Signer,
+        }
+    }
+}
+
 impl From<lee_core::execution_state::PublicExecutionContext> for PublicExecutionContext {
     fn from(value: lee_core::execution_state::PublicExecutionContext) -> Self {
         let lee_core::execution_state::PublicExecutionContext {
@@ -493,7 +511,13 @@ impl From<lee_core::execution_state::PublicExecutionContext> for PublicExecution
             promotions,
         } = value;
         Self {
-            actors: actors.into_iter().map(Into::into).collect(),
+            actors: actors
+                .into_iter()
+                .map(|(actor, authority)| DeclaredActor {
+                    actor: actor.into(),
+                    authority: authority.into(),
+                })
+                .collect(),
             authorized_accounts: authorized_accounts.into_iter().map(Into::into).collect(),
             promotions: promotions.into_iter().collect(),
         }
@@ -508,7 +532,10 @@ impl From<PublicExecutionContext> for lee_core::execution_state::PublicExecution
             promotions,
         } = value;
         Self {
-            actors: actors.into_iter().map(Into::into).collect(),
+            actors: actors
+                .into_iter()
+                .map(|DeclaredActor { actor, authority }| (actor.into(), authority.into()))
+                .collect(),
             authorized_accounts: authorized_accounts.into_iter().map(Into::into).collect(),
             promotions: promotions.into_iter().collect(),
         }

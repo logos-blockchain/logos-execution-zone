@@ -118,6 +118,7 @@ mod tests {
             &[1, 0, 0, 0][..], // public_context.actors: one actor
             &[42; 32],
             &[0; 32],
+            &[1],          // Authority::Signer: its account signs
             &[1, 0, 0, 0], // public_context.authorized_accounts: the account naming a nonce
             &[42; 32],
             &[0, 0, 0, 0], // public_context.promotions: none

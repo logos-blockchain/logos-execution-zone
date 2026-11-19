@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{AccountId, Nonce},
-    execution_state::PublicExecutionContext,
+    execution_state::{Authority, PublicExecutionContext},
     program::PdaSeed,
 };
 use serde::{Deserialize, Serialize};
@@ -56,6 +56,8 @@ pub enum InvalidTransaction {
     AuthorizedAccounts,
     #[error("A public transaction cannot select promotions")]
     PublicPromotions,
+    #[error("A declared actor carries signer authority its account does not sign for")]
+    UnsignedAuthority,
 }
 
 impl<P: BorshSerialize> TransactionMessage<P> {
@@ -84,6 +86,11 @@ impl<P> TransactionMessage<P> {
         }
         if unique != self.public_context.authorized_accounts {
             return Err(InvalidTransaction::AuthorizedAccounts);
+        }
+        if self.public_context.actors.iter().any(|(actor, authority)| {
+            *authority == Authority::Signer && !unique.contains(&actor.account_id)
+        }) {
+            return Err(InvalidTransaction::UnsignedAuthority);
         }
         Ok(())
     }

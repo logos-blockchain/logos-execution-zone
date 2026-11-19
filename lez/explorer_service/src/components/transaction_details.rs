@@ -5,7 +5,7 @@ use indexer_service_protocol::{
 };
 use leptos::prelude::*;
 
-use super::ActorList;
+use super::{ActorList, DeclaredActorList};
 
 /// Public transaction details component
 #[component]
@@ -79,7 +79,7 @@ pub fn PublicTxDetails(
             <ActorList actors=root_actors />
 
             <h3>"Public Actors"</h3>
-            <ActorList actors=public_actors />
+            <DeclaredActorList actors=public_actors />
         </div>
     }
 }
@@ -234,7 +234,7 @@ pub fn PrivacyPreservingTxDetails(
             <ReceiptRows receipt=receipt />
 
             <h3>"Declared Public Actors"</h3>
-            <ActorList actors=public_actors />
+            <DeclaredActorList actors=public_actors />
 
             <h3>"Boundary Public Deliveries"</h3>
             <ActorList actors=delivery_receivers />

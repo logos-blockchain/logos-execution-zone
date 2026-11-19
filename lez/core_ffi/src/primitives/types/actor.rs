@@ -1,9 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use lee::{
-    AccountId, Actor, BoundaryStep, Delivery, EncryptedNote, EphemeralPublicKey, MessageBody,
-    MessageEnvelope, PublicAccountEvidence, PublicExecutionContext, PublicKey, Publication,
-    RecoveryBinding, RootCall, SealedMessage, Signature, error::LeeError,
+    AccountId, Actor, Authority, BoundaryStep, Delivery, EncryptedNote, EphemeralPublicKey,
+    MessageBody, MessageEnvelope, PublicAccountEvidence, PublicExecutionContext, PublicKey,
+    Publication, RecoveryBinding, RootCall, SealedMessage, Signature, error::LeeError,
 };
 use lee_core::{
     Commitment, Nullifier, PrivateAction, account::Nonce, encryption::Ciphertext, program::PdaSeed,
@@ -12,8 +12,8 @@ use lee_core::{
 use crate::primitives::types::{
     FfiAccountId, FfiBytes32, FfiNonce, FfiPublicKey, FfiSignature,
     vectors::{
-        FfiAccountIdList, FfiActorList, FfiMessageDataList, FfiPdaSeedList, FfiPromotionList,
-        FfiVecU8,
+        FfiAccountIdList, FfiDeclaredActorList, FfiMessageDataList, FfiPdaSeedList,
+        FfiPromotionList, FfiVecU8,
     },
 };
 
@@ -347,9 +347,37 @@ impl From<FfiPublication> for Publication {
     }
 }
 
+/// A declared public actor and whether the transaction's signatures authorize it.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FfiDeclaredActor {
+    pub actor: FfiActor,
+    pub signer: bool,
+}
+
+impl From<(Actor, Authority)> for FfiDeclaredActor {
+    fn from((actor, authority): (Actor, Authority)) -> Self {
+        Self {
+            actor: actor.into(),
+            signer: authority == Authority::Signer,
+        }
+    }
+}
+
+impl From<FfiDeclaredActor> for (Actor, Authority) {
+    fn from(value: FfiDeclaredActor) -> Self {
+        let authority = if value.signer {
+            Authority::Signer
+        } else {
+            Authority::None
+        };
+        (value.actor.into(), authority)
+    }
+}
+
 #[repr(C)]
 pub struct FfiPublicExecutionContext {
-    pub actors: FfiActorList,
+    pub actors: FfiDeclaredActorList,
     pub authorized_accounts: FfiAccountIdList,
     pub promotions: FfiPromotionList,
 }
@@ -380,7 +408,7 @@ impl From<PublicExecutionContext> for FfiPublicExecutionContext {
 
 impl From<FfiPublicExecutionContext> for PublicExecutionContext {
     fn from(value: FfiPublicExecutionContext) -> Self {
-        let actors: Vec<FfiActor> = value.actors.into();
+        let actors: Vec<FfiDeclaredActor> = value.actors.into();
         let authorized_accounts: Vec<FfiAccountId> = value.authorized_accounts.into();
         let promotions: Vec<u64> = value.promotions.into();
 
@@ -653,7 +681,10 @@ mod tests {
     #[test]
     fn each_shared_component_roundtrips_over_the_ffi() {
         let public_context = PublicExecutionContext {
-            actors: BTreeSet::from([actor(1, 2), actor(3, 4)]),
+            actors: BTreeMap::from([
+                (actor(1, 2), Authority::None),
+                (actor(3, 4), Authority::Signer),
+            ]),
             authorized_accounts: BTreeSet::from([account_id(5), account_id(6)]),
             promotions: BTreeSet::from([7, 8]),
         };

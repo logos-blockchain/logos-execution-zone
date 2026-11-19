@@ -105,6 +105,22 @@ typedef struct FfiBytes64 {
   uint8_t data[64];
 } FfiBytes64;
 
+/**
+ * A declared public actor and whether the transaction's signatures authorize it.
+ */
+typedef struct FfiDeclaredActor {
+  struct FfiActor actor;
+  bool signer;
+} FfiDeclaredActor;
+
+typedef struct FfiVec_FfiDeclaredActor {
+  struct FfiDeclaredActor *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiDeclaredActor;
+
+typedef struct FfiVec_FfiDeclaredActor FfiDeclaredActorList;
+
 typedef struct FfiVec_u64 {
   uint64_t *entries;
   uintptr_t len;
@@ -173,7 +189,7 @@ typedef struct FfiVec_FfiPrivateAction {
 typedef struct FfiVec_FfiPrivateAction FfiPrivateActionList;
 
 typedef struct FfiPublicExecutionContext {
-  FfiActorList actors;
+  FfiDeclaredActorList actors;
   FfiAccountIdList authorized_accounts;
   FfiPromotionList promotions;
 } FfiPublicExecutionContext;

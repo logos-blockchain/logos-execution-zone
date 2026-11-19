@@ -933,7 +933,7 @@ async fn settlement_rejects_a_dispatch_a_user_signed() {
         admission_evidence: public.message().admission_evidence.clone(),
         ..lee::public_transaction::Message::try_new_with_fees(
             *to,
-            public.message().public_context.actors.clone(),
+            public.message().public_context.actors.keys().copied(),
             BTreeMap::from([(payer, state.get_account_by_id(payer).nonce)]),
             borsh::from_slice::<cross_zone_inbox_core::Message>(dispatch)
                 .expect("a dispatch message decodes"),
@@ -7111,7 +7111,7 @@ fn a_genesis_stake_carries_the_evidence_of_the_funds_it_credits() {
         sequencer_genesis::genesis_stake_message(0, test_sequencer_key(1), ownership_id, 100);
 
     let funds = Actor::native_balance(system_accounts::stake_funds_account_id(&ownership_id));
-    assert!(message.public_context.actors.contains(&funds));
+    assert!(message.public_context.runs_publicly(funds));
     assert!(
         matches!(
             &*message.admission_evidence,

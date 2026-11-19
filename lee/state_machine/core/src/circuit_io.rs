@@ -553,14 +553,14 @@ impl PrivacyPreservingCircuitOutput {
 #[cfg(feature = "host")]
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use super::*;
     use crate::{
         Commitment, EncryptedNote, Nullifier, SealedMessage,
         account::{Account, AccountId, Actor},
         encryption::{Ciphertext, EphemeralPublicKey},
-        execution_state::{BoundaryStep, Delivery},
+        execution_state::{Authority, BoundaryStep, Delivery},
         program::{MessageBody, MessageEnvelope, Publication},
     };
 
@@ -624,7 +624,7 @@ mod tests {
         let private = Actor::new(AccountId::new([2; 32]), AccountId::new([3; 32]));
         let output = PrivacyPreservingCircuitOutput {
             public_context: PublicExecutionContext {
-                actors: BTreeSet::from([public]),
+                actors: BTreeMap::from([(public, Authority::None)]),
                 authorized_accounts: BTreeSet::from([AccountId::new([4; 32])]),
                 promotions: BTreeSet::from([5]),
             },
@@ -703,10 +703,11 @@ mod tests {
         };
 
         let expected: Vec<u8> = [
-            &[244, 3, 0, 0][..], // frame length: the 1012 bytes below
+            &[245, 3, 0, 0][..], // frame length: the 1013 bytes below
             &[1, 0, 0, 0],       // public_context.actors: one actor
             &[0; 32],
             &[1; 32],
+            &[0],          // Authority::None
             &[1, 0, 0, 0], // public_context.authorized_accounts: one account
             &[4; 32],
             &[1, 0, 0, 0], // public_context.promotions: one selected async message

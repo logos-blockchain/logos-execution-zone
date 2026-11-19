@@ -265,15 +265,13 @@ impl Case {
             fixtures,
             message,
         } = self;
-        let public_context = PublicExecutionContext {
-            actors: fixtures.iter().map(|f| f.actor).collect(),
-            authorized_accounts: fixtures
+        let public_context = PublicExecutionContext::new(
+            fixtures.iter().map(|f| f.actor),
+            fixtures
                 .iter()
                 .filter(|f| f.is_authorized)
-                .map(|f| f.actor.account_id)
-                .collect(),
-            ..PublicExecutionContext::default()
-        };
+                .map(|f| f.actor.account_id),
+        );
         let mut meter = Meter {
             label,
             actor_states: fixtures.into_iter().map(|f| (f.actor, f.data)).collect(),

@@ -42,7 +42,7 @@ use lee_core::{
     MembershipProof, MessageWitness, Nullifier, NullifierSecretKey, PrivateAccountKind, RootCall,
     SharedSecretKey,
     account::{Actor, Nonce},
-    execution_state::TransactionEntry,
+    execution_state::{Authority, TransactionEntry},
     native_token::NATIVE_TOKEN_PROGRAM_ID,
     program::{MessageBody, MessageData, PROGRAM_LOADER_ACCOUNT_ID, Publication},
 };
@@ -1820,7 +1820,10 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         // the refund.
         let fee_inbox = system_accounts::fee_inbox_account_id();
         let inbox_actor = Actor::native_balance(fee_inbox);
-        input.public_context.actors.insert(inbox_actor);
+        input
+            .public_context
+            .actors
+            .insert(inbox_actor, Authority::None);
         let mut simulation = Simulation {
             public_actor_states: acc_manager.public_actor_states(),
             admitted_accounts: Some(acc_manager.admitted_accounts()),
@@ -2718,7 +2721,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         let declared: BTreeSet<AccountId> = message
             .public_context
             .actors
-            .iter()
+            .keys()
             .map(|actor| actor.program_account_id)
             .collect();
         for program in declared {
@@ -4247,7 +4250,7 @@ mod tests {
         // The destination stays undeclared, so its credit is published and not executed at once.
         assert_eq!(
             tx.message.public_context.actors,
-            BTreeSet::from([Actor::native_balance(sender)])
+            BTreeMap::from([(Actor::native_balance(sender), lee::Authority::Signer)])
         );
 
         assert!(matches!(

@@ -544,9 +544,10 @@ const fn cast_ffi_validity_window(ffi_window: [u64; 2]) -> ValidityWindow {
 #[cfg(test)]
 mod tests {
     use indexer_service_protocol::{
-        AccountId, Actor, BoundaryStep, Ciphertext, Commitment, CommitmentSetDigest, Delivery,
-        EncryptedNote, EphemeralPublicKey, FeeDeclaration, FeeFallback, MessageEnvelope, Nullifier,
-        PrivateAction, ProvenFee, PublicExecutionContext, Publication, RootCall, SealedMessage,
+        AccountId, Actor, Authority, BoundaryStep, Ciphertext, Commitment, CommitmentSetDigest,
+        DeclaredActor, Delivery, EncryptedNote, EphemeralPublicKey, FeeDeclaration, FeeFallback,
+        MessageEnvelope, Nullifier, PrivateAction, ProvenFee, PublicExecutionContext, Publication,
+        RootCall, SealedMessage,
     };
 
     use super::*;
@@ -600,7 +601,10 @@ mod tests {
                 hash: HashType([4; 32]),
                 message: PublicMessage {
                     public_context: PublicExecutionContext {
-                        actors: vec![actor(6, 7)],
+                        actors: vec![DeclaredActor {
+                            actor: actor(6, 7),
+                            authority: Authority::None,
+                        }],
                         authorized_accounts: vec![account_id(10)],
                         promotions: vec![],
                     },

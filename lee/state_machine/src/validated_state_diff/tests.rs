@@ -569,7 +569,7 @@ fn charged_alike(
             .message()
             .public_context
             .actors
-            .iter()
+            .keys()
             .map(|actor| {
                 let account = state.get_account_by_id(actor.account_id);
                 (

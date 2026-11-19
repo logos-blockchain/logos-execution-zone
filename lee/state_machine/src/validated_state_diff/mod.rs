@@ -198,7 +198,7 @@ impl ValidatedStateDiff {
     pub fn from_fee_settlement_invocation(
         to: Actor,
         message: &[u8],
-        public_actors: &BTreeSet<Actor>,
+        public_actors: impl IntoIterator<Item = Actor>,
         authorized: &HashSet<AccountId>,
         state: &V03State,
         block_id: BlockId,
@@ -210,7 +210,7 @@ impl ValidatedStateDiff {
                 to,
                 message: message.to_vec(),
             },
-            PublicExecutionContext::new(public_actors.iter().copied(), authorized.iter().copied()),
+            PublicExecutionContext::new(public_actors, authorized.iter().copied()),
             authorized.iter().copied().collect(),
             Vec::new(), // no nonces to advance!
             state,
