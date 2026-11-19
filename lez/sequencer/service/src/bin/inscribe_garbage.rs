@@ -53,11 +53,15 @@ struct BlockWatcherActor {
 }
 
 impl Message<ChannelEvent> for BlockWatcherActor {
-    type Reply = ();
+    type Reply = Result<(), sequencer_bedrock_actor::protocol::ChannelEventFailed>;
 
-    async fn handle(&mut self, msg: ChannelEvent, _ctx: &mut Context<Self, Self::Reply>) {
+    async fn handle(
+        &mut self,
+        msg: ChannelEvent,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
         let ChannelEventKind::Update(update) = msg.event else {
-            return;
+            return Ok(());
         };
 
         self.finalized = highest(self.finalized.iter().chain(blocks_of(&update.finalized)));
@@ -67,6 +71,7 @@ impl Message<ChannelEvent> for BlockWatcherActor {
             ViewChange::Conflict { canonical, .. } => highest(blocks_of(canonical)),
         };
         self.latest = highest(self.finalized.iter().chain(&self.view));
+        Ok(())
     }
 }
 
@@ -153,19 +158,7 @@ async fn main() -> Result<()> {
     );
 
     let channel_id = config.bedrock_config.channel_id;
-    let broker_ref = kameo_actors::broker::Broker::spawn(kameo_actors::broker::Broker::new(
-        kameo_actors::DeliveryStrategy::Guaranteed,
-    ));
-
     let watcher = BlockWatcherActor::spawn(BlockWatcherActor::default());
-    broker_ref
-        .tell(kameo_actors::broker::Subscribe {
-            topic: glob::Pattern::new(&format!("channel/{channel_id}/**"))
-                .expect("a valid topic pattern"),
-            recipient: watcher.clone().recipient(),
-        })
-        .await
-        .context("Failed to follow the channel")?;
 
     let mut storage = MockStorageActor::default();
     storage
@@ -174,6 +167,9 @@ async fn main() -> Result<()> {
     storage
         .expect_handle_put_final_configs_bytes()
         .returning(|_msg, _ctx| Ok(()));
+    storage
+        .expect_handle_update_zone_checkpoint()
+        .returning(|_msg, _ctx| Ok(()));
     let storage_ref = MockStorageActor::spawn(storage);
 
     let bedrock_ref = BedrockActor::spawn(sequencer_bedrock_actor::actor::Args {
@@ -181,11 +177,13 @@ async fn main() -> Result<()> {
         basic_auth: config.bedrock_config.auth.map(Into::into),
         channel_id,
         storage_ref,
-        broker_ref,
         backfill_batch_slots: config.bedrock_config.backfill_batch_slots,
     });
     bedrock_ref
-        .ask(FollowChannel { channel_id })
+        .ask(FollowChannel {
+            channel_id,
+            recipient: watcher.clone().reply_recipient(),
+        })
         .await
         .context("Failed to follow the channel")?;
     bedrock_ref

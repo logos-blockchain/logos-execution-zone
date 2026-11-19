@@ -2,7 +2,7 @@ use std::{collections::BTreeSet, num::NonZero, time::Duration};
 
 pub use chain_state::ChannelEntry;
 use common::block::Block;
-use kameo::Reply;
+use kameo::{Reply, actor::ReplyRecipient};
 pub use logos_blockchain_zone_sdk::{
     Slot, UnverifiedEd25519PublicKey, ZoneMessage,
     adapter::BoxStream,
@@ -22,47 +22,6 @@ use sharding_pool_actor::ShardingKey;
 /// What [`ReadChannel`] serves: a failed read is an `Err` item, not the stream's end.
 pub type ChannelReadStream = BoxStream<crate::Result<(ZoneMessage, Slot)>>;
 
-/// Version of the channel view the actor holds, bumped by every broadcast update
-/// and every publish.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Reply)]
-pub struct ChannelSeq(u64);
-
-impl ChannelSeq {
-    /// The sequence a channel nothing has been read from yet sits at.
-    #[cfg(feature = "actor")]
-    pub(crate) const ZERO: Self = Self(0);
-
-    /// Resumes at `raw`, which only a sequence this actor persisted can be.
-    #[cfg(feature = "actor")]
-    pub(crate) const fn resumed(raw: u64) -> Self {
-        Self(raw)
-    }
-
-    /// The next one along.
-    #[cfg(feature = "actor")]
-    pub(crate) const fn next(self) -> Self {
-        Self(self.0.saturating_add(1))
-    }
-
-    #[must_use]
-    pub const fn into_inner(self) -> u64 {
-        self.0
-    }
-
-    /// A sequence conjured outside the actor, for a mocked channel to serve.
-    #[cfg(feature = "mock")]
-    #[must_use]
-    pub const fn mocked(raw: u64) -> Self {
-        Self(raw)
-    }
-}
-
-impl std::fmt::Display for ChannelSeq {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
 /// How the unfinalized message lineage moved across one update.
 #[derive(Debug, Clone)]
 pub enum ViewChange {
@@ -75,7 +34,16 @@ pub enum ViewChange {
     },
 }
 
-/// Event happened on configured chain and published to the broker.
+/// Where the events of a followed channel go. The channel is read on only once the recipient has
+/// replied, and an `Err` reply stops the Bedrock actor.
+pub type ChannelEventRecipient = ReplyRecipient<ChannelEvent, (), ChannelEventFailed>;
+
+/// Why the recipient failed to handle a [`ChannelEvent`].
+#[derive(Debug, thiserror::Error)]
+#[error(transparent)]
+pub struct ChannelEventFailed(#[from] pub anyhow::Error);
+
+/// Event happened on the followed channel, asked of the [`ChannelEventRecipient`].
 #[derive(Debug, Clone)]
 pub struct ChannelEvent {
     pub channel_id: ChannelId,
@@ -87,14 +55,14 @@ pub struct ChannelEvent {
 /// Arrive once the channel is followed with [`FollowChannel`].
 #[derive(Debug, Clone)]
 pub enum ChannelEventKind {
-    /// Message arriving to `channel/<channel_id>/update` topic.
+    /// The channel moved, or the L1 blocks it is read from carry something about it.
     Update(Box<ChannelUpdate>),
 
-    /// The finalized history is read up to the node's LIB and the live chain is followed, arriving
-    /// to `channel/<channel_id>/ready` topic. Arrives again after a reconnect.
+    /// The finalized history is read up to the node's LIB and the live chain is followed. Arrives
+    /// again after a reconnect.
     Ready,
 
-    /// Message arriving to `channel/<channel_id>/turn` topic.
+    /// Whose turn it is to write to the channel.
     Turn {
         our_turn_to_write: bool,
         /// Slot the current turn started at, if known. A new one is a new turn,
@@ -102,31 +70,26 @@ pub enum ChannelEventKind {
         starting_slot: Option<Slot>,
     },
 
-    /// Message arriving to `channel/<channel_id>/config` topic.
+    /// The live channel config, sent on every live block.
     Config(LiveChannelConfig),
-
-    /// Deposits seen in L1 blocks before finality, arriving to
-    /// `channel/<channel_id>/pending_deposits` topic. Observations, not view: a reorg can drop
-    /// one or deliver it again.
-    PendingDeposits(Vec<DepositInfo>),
 }
 
 /// Everything one channel update carries.
 #[derive(Debug, Clone)]
 pub struct ChannelUpdate {
-    /// Resume cursor for this event. Persist only together with the effects
-    /// below, never ahead of them.
-    pub checkpoint: Checkpoint,
-    /// The channel sequence this update leaves the actor at. A consumer that
-    /// wants to publish echoes the last one it applied back in
-    /// [`PublishBlock::expected_seq`].
-    pub seq: ChannelSeq,
+    /// The last slot the node had finalized when this update was read.
+    pub lib_slot: Slot,
+    /// The last config entry that reached finality.
+    pub finalized_config: MsgId,
     /// How the unfinalized message lineage moved.
     pub view: ViewChange,
     /// Message-lineage entries whose L1 block reached finality, in channel order.
     pub finalized: Vec<ChannelEntry>,
     /// Finalized Bedrock deposit events, to record and mint on L2.
     pub deposits: Vec<DepositInfo>,
+    /// Deposits seen in L1 blocks before finality. Observations, not view: a reorg can drop one
+    /// or deliver it again.
+    pub pending_deposits: Vec<DepositInfo>,
     /// Finalized Bedrock withdraw events, to reconcile against local intents.
     pub withdrawals: Vec<WithdrawInfo>,
     /// Finalized inscriptions that are not blocks, with the key that signed each.
@@ -152,11 +115,23 @@ pub struct LiveChannelConfig {
     pub posting_timeout: u32,
 }
 
-/// Start following the channel from the stored checkpoint, publishing what zone-sdk reports as
-/// [`ChannelEvent`]s. Following again restarts from the stored checkpoint.
-#[derive(Debug, Clone)]
+/// Start following the channel from the stored checkpoint, asking `recipient` each
+/// [`ChannelEvent`] in turn.
+///
+/// Fails with [`Error::ChannelAlreadyFollowed`](crate::error::Error::ChannelAlreadyFollowed)
+/// when the channel is followed already.
+#[derive(Clone)]
 pub struct FollowChannel {
     pub channel_id: ChannelId,
+    pub recipient: ChannelEventRecipient,
+}
+
+impl std::fmt::Debug for FollowChannel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FollowChannel")
+            .field("channel_id", &self.channel_id)
+            .finish_non_exhaustive()
+    }
 }
 
 impl ShardingKey for FollowChannel {
@@ -170,8 +145,8 @@ impl ShardingKey for FollowChannel {
 /// Where [`FollowChannel`] started.
 #[derive(Debug, Clone, Copy, Reply)]
 pub struct FollowStart {
-    /// The channel sequence following started at, which the first update moves past.
-    pub seq: ChannelSeq,
+    /// The last config entry that reached finality, as of the checkpoint following started from.
+    pub finalized_config: MsgId,
     /// The last slot the node had finalized when following started, [`None`] if it could not be
     /// read.
     pub lib_slot: Option<Slot>,
@@ -223,6 +198,10 @@ impl ShardingKey for CreateChannel {
 }
 
 /// Publish block to the configured channel.
+///
+/// Expected to be sent by the [`FollowChannel::recipient`], as the publish is refused with
+/// [`Error::ChannelMoved`](crate::error::Error::ChannelMoved) while an update it has not applied
+/// yet moved the channel.
 #[derive(Debug, Clone)]
 pub struct PublishBlock {
     pub channel_id: ChannelId,
@@ -231,12 +210,6 @@ pub struct PublishBlock {
     /// Parent message ID to inscribe the block on.
     /// If [`None`] then the block is inscribed on top of channel tip.
     pub parent: Option<MsgId>,
-    /// The channel sequence the caller built this block on. The publish is
-    /// refused when it is not the actor's current one, which means an update
-    /// the caller has not applied yet moved the channel under it.
-    ///
-    /// [`None`] will omit the check.
-    pub expected_seq: Option<ChannelSeq>,
 }
 
 impl ShardingKey for PublishBlock {
@@ -256,8 +229,6 @@ pub struct PreparePin {
     pub parent: MsgId,
     /// Deposited channel notes the block mints from.
     pub notes: Vec<NoteId>,
-    /// As in [`PublishBlock::expected_seq`].
-    pub expected_seq: Option<ChannelSeq>,
 }
 
 /// A funded pinned block, short of the signatures its transfer needs.
@@ -338,8 +309,6 @@ pub struct PublishPin {
     pub channel_id: ChannelId,
     pub prepared: PreparedPin,
     pub signatures: Vec<IndexedSignature>,
-    /// As in [`PublishBlock::expected_seq`].
-    pub expected_seq: Option<ChannelSeq>,
 }
 
 impl ShardingKey for PublishPin {
@@ -357,10 +326,6 @@ pub struct PublishOutcome {
     pub this_msg: MsgId,
     /// The entry the inscription chains on.
     pub parent: MsgId,
-    /// The checkpoint that now holds the inscription as pending.
-    pub checkpoint: Checkpoint,
-    /// The channel sequence this publish leaves the actor at.
-    pub seq: ChannelSeq,
     /// Channel notes the bundled withdrawals release, empty for a plain
     /// publish.
     pub released_notes: Vec<NoteId>,
@@ -463,7 +428,7 @@ impl ShardingKey for CheckChannelExists {
 
 /// Whether this sequencer is currently authorized to write to the channel.
 ///
-/// Prefer subscribing to `channel/<channel_id>/turn` topic instead of polling this.
+/// Prefer [`ChannelEventKind::Turn`] events instead of polling this.
 #[derive(Debug, Clone)]
 pub struct CheckIsOurTurn {
     pub channel_id: ChannelId,

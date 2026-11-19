@@ -8,8 +8,8 @@ license.workspace = true
 workspace = true
 
 [features]
-# Adds actor implementation using kameo_actors.
-actor = ["dep:kameo_actors", "dep:tokio", "dep:borsh", "dep:url", "dep:tracing", "dep:rand"]
+# Adds actor implementation.
+actor = ["dep:tokio", "dep:borsh", "dep:url", "dep:tracing", "dep:rand"]
 # Adds mock actor implementation.
 mock = ["sequencer_actors_common/mock", "dep:mockall"]
 test-utils = []
@@ -27,7 +27,6 @@ kameo.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 futures.workspace = true
-kameo_actors = { workspace = true, optional = true }
 tokio = { workspace = true, features = ["time"], optional = true }
 borsh = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
@@ -37,5 +36,5 @@ mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
 rand.workspace = true
-glob.workspace = true
 tokio = { workspace = true, features = ["macros", "test-util"] }
+sequencer_storage_actor = { workspace = true, features = ["mock"] }

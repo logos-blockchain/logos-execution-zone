@@ -238,7 +238,7 @@ What is exported is what `RUST_LOG` lets through, plus every span kameo opens fo
 
 | Root span | What it is |
 |---|---|
-| `bedrock.blocks_processed`, `bedrock.turn_notification`, `bedrock.ready` | the Bedrock actor handling a zone SDK event, which it publishes to the executor through the broker |
+| `bedrock.blocks_processed`, `bedrock.turn_notification`, `bedrock.ready` | the Bedrock actor handling a zone SDK event, whose channel events it then asks the executor to handle |
 | `gossip.transaction`, `gossip.approval`, `gossip.config` | the gossip actor handling a message from a peer |
 | `rpc.<method>`, e.g. `rpc.sendTransaction` | an RPC call; a batch is one `rpc.batch` |
 | `cross_zone_pass` | one pass of a cross-zone watcher over its peer's channel |

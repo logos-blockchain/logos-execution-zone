@@ -12,7 +12,7 @@ use crate::{
         tests::{
             Finalized, finalized_at, finalized_updates, initialize_state, sequencer_config,
             stored_chain::{
-                block_at, checkpoint_record, finalized_genesis_store, fresh_store, genesis,
+                block_at, checkpoint_bytes, finalized_genesis_store, fresh_store, genesis,
                 with_finalized,
             },
         },
@@ -108,7 +108,7 @@ async fn committed_local_against_missing_channel_fails_without_anchor() {
     let genesis = genesis();
     let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
     let store = CannedStore {
-        checkpoint: Some(checkpoint_record()),
+        checkpoint: Some(checkpoint_bytes()),
         ..with_finalized(finalized_genesis_store(), block2)
     };
 

@@ -14,10 +14,10 @@ use logos_blockchain_zone_sdk::core::{
     mantle::{TxHash, ledger::Inputs, ops::channel::deposit::Metadata},
 };
 use sequencer_bedrock_actor::{
-    mock::{CannedChannel, MockBedrockActor, SharedChannel, checkpoint_at, mock_msg_of},
+    mock::{CannedChannel, MockBedrockActor, SharedChannel, mock_msg_of},
     protocol::{
-        ChannelEntry, ChannelEvent, ChannelEventKind, ChannelSeq, ChannelUpdate, Checkpoint,
-        DepositInfo, DeserializeOp as _, FollowStart, MsgId, Slot, ViewChange,
+        ChannelEntry, ChannelEvent, ChannelEventKind, ChannelUpdate, DepositInfo, FollowStart,
+        MsgId, Slot, ViewChange,
     },
 };
 use sequencer_core::config::SequencerConfig;
@@ -82,11 +82,12 @@ async fn replay(
 /// exercise via `..empty_channel_update()`.
 fn empty_channel_update() -> ChannelUpdate {
     ChannelUpdate {
-        checkpoint: checkpoint_at(MsgId::from([0; 32])),
-        seq: ChannelSeq::mocked(0),
+        lib_slot: Slot::from(0),
+        finalized_config: MsgId::root(),
         view: ViewChange::Extension(Vec::new()),
         finalized: Vec::new(),
         deposits: Vec::new(),
+        pending_deposits: Vec::new(),
         withdrawals: Vec::new(),
         undecodable: Vec::new(),
         finalized_signers: Vec::new(),
@@ -220,7 +221,7 @@ async fn an_empty_store_does_not_create_a_channel_that_is_only_configured() {
                     .expect_handle_follow_channel()
                     .returning(|_msg, _ctx| {
                         Ok(FollowStart {
-                            seq: ChannelSeq::mocked(0),
+                            finalized_config: MsgId::root(),
                             lib_slot: None,
                         })
                     });
@@ -358,41 +359,6 @@ async fn an_empty_chain_bootstraps_until_a_block_finalizes() -> Result<()> {
     assert!(
         matches!(online, ExecutorStatus::Online { height: 1, .. }),
         "{online:?}"
-    );
-    Ok(())
-}
-
-/// Bootstrapping stores the checkpoint of every update it applies, so a restart follows the
-/// channel on from there.
-#[test]
-async fn bootstrapping_stores_the_checkpoint_it_replayed_up_to() -> Result<()> {
-    let (config, _home) = sequencer_config();
-    let channel_id = config.bedrock_config.channel_id;
-    let genesis = genesis();
-    let channel = CannedChannel {
-        tip_slot: Some(Slot::from(10)),
-        tip: Some(mock_msg_of(&genesis)),
-        ..CannedChannel::absent()
-    }
-    .share();
-    let store = SharedStore::default();
-    let executor = start(&config, &store, &channel).await?;
-
-    feed(
-        &executor,
-        finalized_updates(channel_id, [finalized_at(&genesis, 10)]),
-    )
-    .await?;
-
-    let checkpoint = store
-        .lock()
-        .checkpoint
-        .clone()
-        .expect("the replay stores a checkpoint");
-    assert_eq!(checkpoint.seq, 1);
-    assert_eq!(
-        Checkpoint::from_bytes(&checkpoint.bytes)?.lib_slot,
-        Slot::from(10)
     );
     Ok(())
 }
@@ -548,37 +514,6 @@ async fn the_pin_the_genesis_publish_leaves_survives_a_lagging_channel_read() ->
     Ok(())
 }
 
-/// The sdk can deliver a checkpoint it built before our publishes, whose tip is
-/// root on a channel that did not exist yet. Believing it would rewind the pin
-/// onto a channel we have since filled.
-#[test]
-async fn a_buffered_startup_checkpoint_cannot_rewind_the_pin() -> Result<()> {
-    let (config, _home) = sequencer_config();
-    let store = SharedStore::default();
-    let executor = start(&config, &store, &CannedChannel::absent().share()).await?;
-
-    // Built before our publishes, so it names none of them and its tip is root.
-    executor
-        .ask(ChannelEvent {
-            channel_id: config.bedrock_config.channel_id,
-            event: ChannelEventKind::Update(Box::new(ChannelUpdate {
-                checkpoint: checkpoint_at(MsgId::root()),
-                ..empty_channel_update()
-            })),
-        })
-        .await?;
-    executor.ask(ProduceBlock).await?;
-
-    // The channel refuses a publish chained on anything but our genesis, so a
-    // pin rewound onto root would fail the turn.
-    assert_eq!(
-        stored_ids(&store),
-        [1, 2],
-        "the turn after a stale startup checkpoint must still produce"
-    );
-    Ok(())
-}
-
 #[test]
 async fn a_restart_restores_the_head_tier_and_recovers_from_an_orphan() -> Result<()> {
     let (config, _home) = sequencer_config();
@@ -624,7 +559,6 @@ async fn a_restart_restores_the_head_tier_and_recovers_from_an_orphan() -> Resul
         .ask(ChannelEvent {
             channel_id: config.bedrock_config.channel_id,
             event: ChannelEventKind::Update(Box::new(ChannelUpdate {
-                checkpoint: checkpoint_at(block2_prime_msg),
                 view: ViewChange::Conflict {
                     canonical: vec![entry(&block2_prime, &genesis)],
                     orphaned: vec![entry(&block2, &genesis)],

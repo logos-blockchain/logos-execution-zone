@@ -123,7 +123,6 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
     let state = Arc::new(state);
     storage_ref
         .ask(AtomicUpdate {
-            checkpoint: None,
             blocks: vec![],
             channel_view: None,
             head_tip: Some(tip.clone()),

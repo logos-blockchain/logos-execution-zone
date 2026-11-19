@@ -9,7 +9,6 @@ use fee_core::validity::FeeError;
 use futures::{
     FutureExt as _, StreamExt as _, TryFutureExt as _, TryStreamExt as _, future::ready, stream,
 };
-use glob::Pattern;
 use kameo::{
     actor::{ActorId, ActorRef, WeakActorRef},
     error::ActorStopReason,
@@ -17,10 +16,7 @@ use kameo::{
     message::{Context, Message},
     reply::DelegatedReply,
 };
-use kameo_actors::{
-    broker::{Broker, Subscribe, Unsubscribe},
-    pubsub::PubSub,
-};
+use kameo_actors::pubsub::PubSub;
 use lee::Account;
 use lee_core::{
     BlockId, EncryptedNote, MembershipProof,
@@ -75,7 +71,6 @@ pub struct Args<S: StorageActorTrait, B: BedrockActorTrait> {
     pub stake_config_pubsub_ref: ActorRef<PubSub<StakeConfigUpdate>>,
     pub slasher_ref: ActorRef<SlasherActor<S>>,
     pub channel_signer_ref: ActorRef<ChannelSigningActor>,
-    pub bedrock_broker_ref: ActorRef<Broker<ChannelEvent>>,
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> Clone for Args<S, B> {
@@ -88,12 +83,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Clone for Args<S, B> {
             stake_config_pubsub_ref: self.stake_config_pubsub_ref.clone(),
             slasher_ref: self.slasher_ref.clone(),
             channel_signer_ref: self.channel_signer_ref.clone(),
-            bedrock_broker_ref: self.bedrock_broker_ref.clone(),
         }
     }
 }
 
-/// Marks where the channel events published before this start end in the mailbox.
+/// Marks where the channel events of the Bedrock actor of an earlier start end in the mailbox.
 struct ChannelEventsResumed;
 
 /// Restarts along with the Bedrock actor of its channel, so it is meant to be supervised.
@@ -136,24 +130,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> kameo::Actor for ExecutorActor<
             .await
             .map_err(Error::from_infallible_bedrock_error)?;
 
-        // Once unsubscribed, the events published so far are all in the mailbox, ahead of the
-        // marker.
-        args.bedrock_broker_ref
-            .ask(Unsubscribe {
-                topic: None,
-                actor_id: actor_ref.id(),
-            })
-            .await
-            .map_err(Error::from_infallible_bedrock_error)?;
+        // The reset stopped that actor, so its events are all in the mailbox, ahead of the marker.
         actor_ref
             .tell(ChannelEventsResumed)
-            .await
-            .map_err(Error::from_infallible_bedrock_error)?;
-        args.bedrock_broker_ref
-            .ask(Subscribe {
-                topic: Pattern::new(&format!("channel/{channel_id}/**")).expect("Valid pattern"),
-                recipient: actor_ref.clone().recipient(),
-            })
             .await
             .map_err(Error::from_infallible_bedrock_error)?;
 
@@ -168,7 +147,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> kameo::Actor for ExecutorActor<
             return Err(Error::BedrockActorStartFailed);
         }
         let follow_start = bedrock_pool_ref
-            .ask(sequencer_bedrock_actor::protocol::FollowChannel { channel_id })
+            .ask(sequencer_bedrock_actor::protocol::FollowChannel {
+                channel_id,
+                recipient: actor_ref.clone().reply_recipient(),
+            })
             .await
             .map_err(SendErrorExt::flatten)?;
 
@@ -848,7 +830,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountTransactions>
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEvent> for ExecutorActor<S, B> {
-    type Reply = Result<()>;
+    /// An `Err` stops the Bedrock actor, and so this one, as they are linked.
+    type Reply = std::result::Result<(), sequencer_bedrock_actor::protocol::ChannelEventFailed>;
 
     async fn handle(
         &mut self,
@@ -880,7 +863,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEvent> for Execu
                         State::Error(_) | State::Online(_) => Ok(state),
                     }
                 }))
-                .await?;
+                .await
+                .map_err(anyhow::Error::from)?;
             }
             State::Online(online) => match &event {
                 ChannelEventKind::Update(channel_update) => {
@@ -901,9 +885,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEvent> for Execu
                         .sequencer_mut()
                         .on_channel_config_update(live_channel_config)
                         .await;
-                }
-                ChannelEventKind::PendingDeposits(deposits) => {
-                    online.sequencer_mut().on_observed_deposits(deposits).await;
                 }
             },
         }

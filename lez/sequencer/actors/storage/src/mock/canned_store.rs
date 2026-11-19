@@ -13,7 +13,7 @@ use super::MockStorageActor;
 use crate::protocol::{
     AtomicUpdate, DropSettledCrossZoneDispatches, GetBlock, PendingCrossZoneDispatchRecord,
     PendingDepositEventRecord, PutSlashRecordBytes, PutSystemApprovalsBytes, SetZoneAnchor,
-    StoreUpdateOutcome, UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
+    StoreUpdateOutcome, UpdateZoneCheckpoint, ZoneAnchorRecord,
 };
 
 /// What a mocked store holds.
@@ -25,7 +25,8 @@ pub struct CannedStore {
     /// The irreversible tier; `None` until something finalizes.
     pub final_snapshot: Option<(V03State, BlockMeta)>,
     pub anchor: Option<ZoneAnchorRecord>,
-    pub checkpoint: Option<ZoneCheckpointRecord>,
+    /// Zone checkpoint bytes.
+    pub checkpoint: Option<Vec<u8>>,
     /// Serialized unfinalized channel view.
     pub channel_view: Option<Vec<u8>>,
     pub pending_deposits: Vec<PendingDepositEventRecord>,
@@ -53,9 +54,6 @@ impl CannedStore {
             self.final_snapshot = Some((V03State::clone(&state), meta));
         }
         self.anchor = update.zone_anchor.or(self.anchor);
-        if let Some(checkpoint) = update.checkpoint {
-            self.update_checkpoint(checkpoint);
-        }
         if let Some(view) = update.channel_view {
             self.channel_view = Some(view);
         }
@@ -74,17 +72,6 @@ impl CannedStore {
                 .finalized_dispatch_records
                 .contains(&record.message_key)
         });
-    }
-
-    /// Stores `checkpoint` unless the stored one is at least as new, as the store does.
-    pub fn update_checkpoint(&mut self, checkpoint: ZoneCheckpointRecord) {
-        if self
-            .checkpoint
-            .as_ref()
-            .is_none_or(|stored| stored.seq < checkpoint.seq)
-        {
-            self.checkpoint = Some(checkpoint);
-        }
     }
 
     /// The last stored block.
@@ -142,8 +129,8 @@ impl SharedStore {
         });
         mock.expect_handle_update_zone_checkpoint().returning({
             let store = self.clone();
-            move |UpdateZoneCheckpoint { checkpoint }, _ctx| {
-                store.lock().update_checkpoint(checkpoint);
+            move |UpdateZoneCheckpoint { bytes }, _ctx| {
+                store.lock().checkpoint = Some(bytes);
                 Ok(())
             }
         });

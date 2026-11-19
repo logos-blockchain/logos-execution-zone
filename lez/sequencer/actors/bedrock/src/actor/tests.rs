@@ -1,10 +1,18 @@
-use std::{collections::HashMap, num::NonZero};
+use std::{collections::HashMap, num::NonZero, time::Duration};
 
 use common::{
     HashType,
     block::{Block, HashableBlockData},
 };
+use kameo::{
+    Actor,
+    actor::{ActorRef, Spawn as _},
+    error::SendError,
+    message::{Context, Message},
+    request::PendingReply,
+};
 use logos_blockchain_zone_sdk::{
+    Slot,
     core::{
         era::ForkDigest,
         mantle::{
@@ -26,17 +34,117 @@ use logos_blockchain_zone_sdk::{
             },
         },
     },
-    key_management_system_service::keys::Ed25519Key,
+    key_management_system_service::keys::{Ed25519Key, ZkPublicKey},
     node_types::HeaderId,
-    sequencer::ChannelUpdateTx,
+    sequencer::{ChannelUpdateTx, SequencerCheckpoint},
 };
+use sequencer_storage_actor::mock::MockStorageActor;
+use tokio::sync::mpsc;
 
 use super::{
-    BlockSummary, NodeReader,
-    channel::{channel_entries, genesis_config_op, genesis_config_proof},
+    Args, BedrockActor, BlockSummary, NodeReader,
+    channel::{self, channel_entries, genesis_config_op, genesis_config_proof},
     keep_newest_block_summaries,
 };
-use crate::protocol::ChannelParams;
+use crate::{
+    Result,
+    error::Error,
+    protocol::{
+        ChannelEvent, ChannelEventFailed, ChannelEventKind, ChannelParams, ChannelUpdate,
+        FollowChannel, PublishBlock, PublishOutcome, ViewChange,
+    },
+};
+
+type TestBedrockActor = BedrockActor<MockStorageActor>;
+
+/// Turns the followed channel into a publishing one, without waiting for zone-sdk to be ready.
+struct StartPublishing;
+
+impl Message<StartPublishing> for TestBedrockActor {
+    type Reply = ();
+
+    async fn handle(&mut self, _msg: StartPublishing, _ctx: &mut Context<Self, Self::Reply>) {
+        let Some(channel::Channel::Followed(followed)) = self.channel.take() else {
+            panic!("the channel is followed");
+        };
+        self.channel = Some(channel::Channel::Publishing(followed.into_publishing(
+            channel::PublishConfig {
+                channel_signing_key: Ed25519Key::from_bytes(&[7; 32]),
+                funding_pk: ZkPublicKey::zero(),
+                priority_fee_percent: 0,
+                resubmit_interval: Duration::from_secs(5),
+                stale_refund_slots: 0,
+            },
+        )));
+    }
+}
+
+/// Queues an empty update for the follower, as if zone-sdk reported one.
+struct QueueUpdate;
+
+impl Message<QueueUpdate> for TestBedrockActor {
+    type Reply = ();
+
+    async fn handle(&mut self, _msg: QueueUpdate, _ctx: &mut Context<Self, Self::Reply>) {
+        let update = ChannelUpdate {
+            lib_slot: Slot::from(0),
+            finalized_config: MsgId::root(),
+            view: ViewChange::Extension(Vec::new()),
+            finalized: Vec::new(),
+            deposits: Vec::new(),
+            pending_deposits: Vec::new(),
+            withdrawals: Vec::new(),
+            undecodable: Vec::new(),
+            finalized_signers: Vec::new(),
+        };
+        let checkpoint = SequencerCheckpoint {
+            last_msg_id: MsgId::root(),
+            pending_txs: Vec::new(),
+            lib: HeaderId::from([0; 32]),
+            lib_slot: Slot::from(0),
+            channel_notes: Vec::new(),
+            finalized_config: MsgId::root(),
+            funding: Vec::new(),
+        };
+        self.deliveries.push_update(update, checkpoint);
+    }
+}
+
+/// A follower that, asked an update, puts a publish in the Bedrock actor's mailbox before it
+/// replies, and hands the publish's pending reply to the test.
+#[derive(Actor)]
+struct PublishingFollower {
+    bedrock: ActorRef<TestBedrockActor>,
+    channel_id: ChannelId,
+    publishes: mpsc::UnboundedSender<PendingReply<PublishBlock, Result<PublishOutcome>>>,
+}
+
+impl Message<ChannelEvent> for PublishingFollower {
+    type Reply = std::result::Result<(), ChannelEventFailed>;
+
+    async fn handle(
+        &mut self,
+        msg: ChannelEvent,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        if !matches!(msg.event, ChannelEventKind::Update(_)) {
+            return Ok(());
+        }
+        let publish = self
+            .bedrock
+            .ask(PublishBlock {
+                channel_id: self.channel_id,
+                block: common::test_utils::produce_dummy_block(1, None, vec![]),
+                withdrawals: Vec::new(),
+                parent: None,
+            })
+            .enqueue()
+            .await
+            .expect("the Bedrock actor is running");
+        self.publishes.send(publish).expect("the test is listening");
+        Ok(())
+    }
+}
 
 /// A tx wrapping `block` in one inscribe op on `channel`.
 fn inscribing_tx(channel: ChannelId, block: &Block) -> SignedOps<Unverified, StandardMode> {
@@ -163,4 +271,65 @@ fn a_full_cache_keeps_the_newest_block_summaries_by_slot() {
             .values()
             .all(|block_summary| block_summary.slot >= cutoff)
     );
+}
+
+/// The follower publishes only after it replied to the update, so the publish must not be refused
+/// for that update, even when the reply and the publish reach the Bedrock actor together.
+#[tokio::test]
+async fn a_publish_sent_after_applying_an_update_is_not_refused_for_it() {
+    let mut storage = MockStorageActor::default();
+    storage
+        .expect_handle_get_zone_checkpoint()
+        .returning(|_msg, _ctx| Ok(None));
+    storage
+        .expect_handle_put_final_configs_bytes()
+        .returning(|_msg, _ctx| Ok(()));
+    storage
+        .expect_handle_update_zone_checkpoint()
+        .returning(|_msg, _ctx| Ok(()));
+
+    let channel_id = ChannelId::from([1; 32]);
+    // Nothing listens there, so a publish that is not refused fails reaching the node.
+    let bedrock = TestBedrockActor::spawn(Args {
+        node_url: "http://127.0.0.1:1".parse().expect("a valid URL"),
+        basic_auth: None,
+        channel_id,
+        backfill_batch_slots: NonZero::new(100).expect("not zero"),
+        storage_ref: MockStorageActor::spawn(storage),
+    });
+    let (publishes_tx, mut publishes) = mpsc::unbounded_channel();
+    let follower = PublishingFollower::spawn(PublishingFollower {
+        bedrock: bedrock.clone(),
+        channel_id,
+        publishes: publishes_tx,
+    });
+    bedrock
+        .ask(FollowChannel {
+            channel_id,
+            recipient: follower.reply_recipient(),
+        })
+        .await
+        .expect("the channel is followed");
+    bedrock
+        .ask(StartPublishing)
+        .await
+        .expect("the channel publishes");
+
+    // Which of two ready inputs an unbiased select takes is random, so a single round could pass
+    // by luck.
+    for _ in 0..16 {
+        bedrock
+            .ask(QueueUpdate)
+            .await
+            .expect("the update is queued");
+        let publish = publishes
+            .recv()
+            .await
+            .expect("the follower publishes on every update");
+        let err = publish.await.expect_err("the node is unreachable");
+        assert!(
+            matches!(err, SendError::HandlerError(Error::NodeRequestFailed(_))),
+            "the publish must pass the moved check and only fail reaching the node, got {err:?}"
+        );
+    }
 }
