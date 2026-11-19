@@ -42,7 +42,6 @@ use crate::{
         PutSlashRecordBytes, PutSystemApprovalsBytes, RecordDispatchFailure,
         RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
         StoreUpdateOutcome, UpdateZoneCheckpoint, WithdrawalReconciliationKey, ZoneAnchorRecord,
-        ZoneCheckpointRecord,
     },
 };
 
@@ -465,36 +464,6 @@ impl StorageActor {
         Ok(())
     }
 
-    /// Stages `checkpoint`, if it's newer than the one already stored.
-    fn stage_zone_checkpoint(
-        &self,
-        batch: &mut db::WriteBatch,
-        checkpoint: ZoneCheckpointRecord,
-    ) -> Result<()> {
-        let stored = self
-            .db()
-            .get::<entities::ZoneCheckpoint>(&encoding::SingletonKey)?;
-
-        if let Some(stored) = stored
-            && stored.seq >= checkpoint.seq
-        {
-            tracing::debug!(
-                seq = checkpoint.seq,
-                stored_seq = stored.seq,
-                "Dropping a zone checkpoint older than the stored one"
-            );
-            return Ok(());
-        }
-
-        self.db()
-            .put_batch(
-                batch,
-                &encoding::SingletonKey,
-                &entities::ZoneCheckpoint::from(checkpoint),
-            )
-            .map_err(Into::into)
-    }
-
     /// Records the deposits `new_deposit_events` observes and drops the records
     /// of `finalized_deposit_records`, returning how many were newly recorded.
     fn update_pending_deposits(
@@ -865,7 +834,7 @@ impl Message<GetLeeState> for StorageActor {
 }
 
 impl Message<GetZoneCheckpoint> for StorageActor {
-    type Reply = Result<Option<ZoneCheckpointRecord>>;
+    type Reply = Result<Option<Vec<u8>>>;
 
     async fn handle(
         &mut self,
@@ -875,7 +844,7 @@ impl Message<GetZoneCheckpoint> for StorageActor {
         Ok(self
             .db()
             .get::<entities::ZoneCheckpoint>(&encoding::SingletonKey)?
-            .map(Into::into))
+            .map(|checkpoint| checkpoint.bytes))
     }
 }
 
@@ -884,12 +853,12 @@ impl Message<UpdateZoneCheckpoint> for StorageActor {
 
     async fn handle(
         &mut self,
-        UpdateZoneCheckpoint { checkpoint }: UpdateZoneCheckpoint,
+        UpdateZoneCheckpoint { bytes }: UpdateZoneCheckpoint,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let mut batch = db::WriteBatch::default();
-        self.stage_zone_checkpoint(&mut batch, checkpoint)?;
-        self.db().write(batch).map_err(Into::into)
+        self.db()
+            .put(&encoding::SingletonKey, &entities::ZoneCheckpoint { bytes })
+            .map_err(Into::into)
     }
 }
 
@@ -1080,7 +1049,6 @@ impl Message<AtomicUpdate> for StorageActor {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let AtomicUpdate {
-            checkpoint,
             blocks,
             channel_view,
             head_tip,
@@ -1105,11 +1073,6 @@ impl Message<AtomicUpdate> for StorageActor {
                 &encoding::SingletonKey,
                 &entities::ChannelView { bytes },
             )?;
-        }
-
-        // Checkpoint
-        if let Some(checkpoint) = checkpoint {
-            self.stage_zone_checkpoint(&mut batch, checkpoint)?;
         }
 
         // Zone anchor

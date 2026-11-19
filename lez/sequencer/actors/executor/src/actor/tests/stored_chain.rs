@@ -15,7 +15,7 @@ use sequencer_bedrock_actor::{
     protocol::{Checkpoint, HeaderId, MsgId, SerializeOp as _, Slot},
 };
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
-use sequencer_storage_actor::{mock::CannedStore, protocol::ZoneCheckpointRecord};
+use sequencer_storage_actor::mock::CannedStore;
 
 /// The peer zone a delivery comes from.
 pub(in crate::actor) const PEER_ZONE: [u8; 32] = [0xbe_u8; 32];
@@ -163,8 +163,9 @@ pub(in crate::actor) fn applied(state: &V03State, block: &Block) -> V03State {
     next
 }
 
-pub(in crate::actor) fn checkpoint_record() -> ZoneCheckpointRecord {
-    let bytes = Checkpoint {
+/// The bytes of a checkpoint at the root of the channel.
+pub(in crate::actor) fn checkpoint_bytes() -> Vec<u8> {
+    Checkpoint {
         last_msg_id: MsgId::from([0; 32]),
         pending_txs: Vec::new(),
         lib: HeaderId::from([0; 32]),
@@ -175,6 +176,5 @@ pub(in crate::actor) fn checkpoint_record() -> ZoneCheckpointRecord {
     }
     .to_bytes()
     .expect("checkpoint serializes")
-    .into();
-    ZoneCheckpointRecord { bytes, seq: 0 }
+    .into()
 }

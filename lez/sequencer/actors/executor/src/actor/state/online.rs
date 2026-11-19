@@ -8,7 +8,7 @@ use mempool::{MemPool, MemPoolHandle};
 use sequencer_actors_common::SendErrorExt;
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
-    protocol::{ChannelId, ChannelSeq, Ed25519Key, Ed25519PublicKey, PublishOutcome, Slot},
+    protocol::{ChannelId, Ed25519Key, Ed25519PublicKey, MsgId, PublishOutcome, Slot},
 };
 use sequencer_core::{SequencerCore, TransactionOrigin, config::SequencerConfig};
 use sequencer_storage_actor::{StorageActorTrait, protocol::AtomicUpdate};
@@ -18,7 +18,7 @@ use tracing::info;
 use self::turn::Turn;
 use crate::{
     Result,
-    actor::state::{ActorsBundle, bootstrapping, check_startup_channel_params, checkpoint_record},
+    actor::state::{ActorsBundle, bootstrapping, check_startup_channel_params},
     error::Error,
 };
 
@@ -36,14 +36,13 @@ pub struct OnlineState<S: StorageActorTrait, B: BedrockActorTrait> {
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
-    /// Goes online once bootstrapping replayed the channel up to its tip, read at `tip_slot`.
+    /// Goes online once bootstrapping replayed the channel's finalized history.
     pub(super) async fn from_bootstrapping(
         bootstrapping_state: bootstrapping::BootstrappingState<S, B>,
-        replayed_up_to: Slot,
     ) -> Result<Self> {
         Self::start(
             true,
-            Some(replayed_up_to),
+            bootstrapping_state.finalized_config,
             bootstrapping_state.config,
             bootstrapping_state.chain,
             bootstrapping_state.channel_signing_key,
@@ -56,9 +55,18 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         config: SequencerConfig,
         chain: ChainState,
         channel_signing_key: Ed25519Key,
+        finalized_config: MsgId,
         actors: ActorsBundle<S, B>,
     ) -> Result<Self> {
-        Self::start(true, None, config, chain, channel_signing_key, actors).await
+        Self::start(
+            true,
+            finalized_config,
+            config,
+            chain,
+            channel_signing_key,
+            actors,
+        )
+        .await
     }
 
     /// Creates the channel, inscribing the stored chain onto it, or a new genesis when the store
@@ -67,9 +75,18 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         config: SequencerConfig,
         chain: ChainState,
         channel_signing_key: Ed25519Key,
+        finalized_config: MsgId,
         actors: ActorsBundle<S, B>,
     ) -> Result<Self> {
-        Self::start(false, None, config, chain, channel_signing_key, actors).await
+        Self::start(
+            false,
+            finalized_config,
+            config,
+            chain,
+            channel_signing_key,
+            actors,
+        )
+        .await
     }
 
     pub const fn sequencer(&self) -> &SequencerCore<S, B> {
@@ -99,9 +116,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         &self.background_tasks
     }
 
+    /// Starts producing on `chain`, whose last final config entry is `finalized_config`.
     async fn start(
         channel_exists: bool,
-        replayed_up_to: Option<Slot>,
+        finalized_config: MsgId,
         config: SequencerConfig,
         mut chain: ChainState,
         channel_signing_key: Ed25519Key,
@@ -119,9 +137,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             sequencer_stake_core::SequencerKey::new(channel_signing_key.public_key().to_bytes())
                 .ok_or(Error::InvalidSequencerKey)?;
 
-        // Production waits for every update the publisher broadcasts past the
-        // sequence it started at.
-        let mut applied_seq = bedrock_pool_ref
+        bedrock_pool_ref
             .ask(
                 sequencer_bedrock_actor::protocol::InitializeChannelPublisher {
                     channel_id: config.bedrock_config.channel_id,
@@ -132,7 +148,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                     priority_fee_percent: config.bedrock_config.priority_fee_percent,
                     resubmit_interval: config.retry_pending_blocks_timeout,
                     stale_refund_slots: config.bedrock_config.stale_refund_slots,
-                    replayed_up_to,
                 },
             )
             .await
@@ -143,7 +158,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                 .ask(sequencer_storage_actor::protocol::GetLatestBlockMeta)
                 .await?
                 .is_some();
-            let created_seq = if holds_blocks {
+            if holds_blocks {
                 Self::create_channel_from_store(
                     &mut chain,
                     &config,
@@ -151,20 +166,17 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                     &storage_ref,
                     &bedrock_pool_ref,
                 )
-                .await?
+                .await?;
             } else {
-                Some(
-                    Self::create_channel_with_genesis(
-                        &mut chain,
-                        &config,
-                        own_sequencer_key,
-                        &storage_ref,
-                        &bedrock_pool_ref,
-                    )
-                    .await?,
+                Self::create_channel_with_genesis(
+                    &mut chain,
+                    &config,
+                    own_sequencer_key,
+                    &storage_ref,
+                    &bedrock_pool_ref,
                 )
-            };
-            applied_seq = created_seq.or(applied_seq);
+                .await?;
+            }
         }
 
         // A joining node's config carries no channel params, so check the finalized chain's.
@@ -216,7 +228,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             config,
             mempool,
             chain,
-            applied_seq,
+            finalized_config,
             channel_signing_key,
             storage_ref,
             bedrock_pool_ref,
@@ -241,7 +253,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         own_sequencer_key: sequencer_stake_core::SequencerKey,
         storage_ref: &ActorRef<S>,
         bedrock_pool_ref: &ActorRef<ShardingPoolActor<B, ChannelId>>,
-    ) -> Result<ChannelSeq> {
+    ) -> Result<()> {
         let genesis_spec = config
             .genesis_spec(Some(own_sequencer_key))
             .map_err(Error::InvalidGenesisConfig)?;
@@ -256,26 +268,24 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         chain.apply_conflict(vec![published_entry(&outcome, &block)]);
         storage_ref
             .ask(AtomicUpdate {
-                checkpoint: Some(checkpoint_record(&outcome.checkpoint, outcome.seq)?),
                 blocks: vec![block],
                 events: vec![(block_id, events)],
                 ..sequencer_core::chain_update(chain)
             })
             .await?;
 
-        Ok(outcome.seq)
+        Ok(())
     }
 
     /// Inscribes the pending blocks the store holds, genesis first, onto a channel that does not
-    /// exist yet. Returns the channel sequence the last publish left, [`None`] if nothing was
-    /// pending.
+    /// exist yet.
     async fn create_channel_from_store(
         chain: &mut ChainState,
         config: &SequencerConfig,
         own_sequencer_key: sequencer_stake_core::SequencerKey,
         storage_ref: &ActorRef<S>,
         bedrock_pool_ref: &ActorRef<ShardingPoolActor<B, ChannelId>>,
-    ) -> Result<Option<ChannelSeq>> {
+    ) -> Result<()> {
         let mut pending_blocks = storage_ref
             .ask(sequencer_storage_actor::protocol::GetAllBlocks)
             .await?
@@ -285,7 +295,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         pending_blocks.sort_unstable_by_key(|block| block.header.block_id);
 
         let Some((genesis, descendants)) = pending_blocks.split_first() else {
-            return Ok(None);
+            return Ok(());
         };
         if genesis.header.block_id != lee::GENESIS_BLOCK_ID {
             return Err(Error::StorageInconsistency(format!(
@@ -300,7 +310,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                 Error::StorageInconsistency("The store holds blocks but no state".to_owned())
             })?;
 
-        let mut outcome = Self::inscribe_genesis(
+        let genesis_outcome = Self::inscribe_genesis(
             genesis,
             &genesis_state,
             config,
@@ -308,33 +318,25 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             bedrock_pool_ref,
         )
         .await?;
-        let mut published = vec![published_entry(&outcome, genesis)];
+        let mut published = vec![published_entry(&genesis_outcome, genesis)];
         for block in descendants {
-            outcome = bedrock_pool_ref
+            let outcome = bedrock_pool_ref
                 .ask(sequencer_bedrock_actor::protocol::PublishBlock {
                     channel_id: config.bedrock_config.channel_id,
                     block: block.clone(),
                     withdrawals: Vec::new(),
                     parent: None,
-                    expected_seq: None,
                 })
                 .await
                 .map_err(SendErrorExt::flatten)?;
             published.push(published_entry(&outcome, block));
         }
 
-        // These blocks are already stored, so only the view and the sdk's
-        // pending set moved. Checkpoints are cumulative, so the last one
-        // covers every publish above.
+        // These blocks are already stored, so only the view moved.
         chain.apply_conflict(published);
-        storage_ref
-            .ask(AtomicUpdate {
-                checkpoint: Some(checkpoint_record(&outcome.checkpoint, outcome.seq)?),
-                ..sequencer_core::chain_update(chain)
-            })
-            .await?;
+        storage_ref.ask(sequencer_core::chain_update(chain)).await?;
 
-        Ok(Some(outcome.seq))
+        Ok(())
     }
 
     /// Inscribes `genesis` as the first entry of a new channel.
@@ -388,7 +390,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                     block: genesis.clone(),
                     withdrawals: Vec::new(),
                     parent: None,
-                    expected_seq: None,
                 })
                 .await
                 .map_err(SendErrorExt::flatten)?,

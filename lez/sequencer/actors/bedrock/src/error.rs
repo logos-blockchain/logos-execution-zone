@@ -1,12 +1,12 @@
-use kameo::error::{Infallible, SendError};
+use kameo::error::SendError;
 use sequencer_actors_common::{ErasedMessage, SendErrorExt as _};
 
-use crate::protocol::{ChannelSeq, MsgId, Slot};
+use crate::protocol::{MsgId, Slot};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("Broker publish failed")]
-    BrokerPublishFailed(#[source] kameo::error::SendError<ErasedMessage, Infallible>),
+    #[error("The follower failed to handle a channel event")]
+    ChannelEventDeliveryFailed(#[source] anyhow::Error),
 
     #[error(
         "Stored checkpoint has channel activity but the channel does not exist on the \
@@ -55,6 +55,9 @@ pub enum Error {
     #[error("Channel publisher is not initialized, send `InitializeChannelPublisher` first")]
     ChannelPublisherIsNotInitialized,
 
+    #[error("Channel is followed already")]
+    ChannelAlreadyFollowed,
+
     #[error("Creating the channel requires our own key first; creation gives the turn to index 0")]
     ChannelCreationRequiresOurKey,
 
@@ -97,13 +100,8 @@ pub enum Error {
     #[error("Failed to assemble the deposit pin transfer")]
     DepositPinAssemblyFailed(#[source] anyhow::Error),
 
-    #[error(
-        "Tried to publish block which was built on channel sequence {provided} but the channel is at {current}"
-    )]
-    ChannelMoved {
-        provided: ChannelSeq,
-        current: ChannelSeq,
-    },
+    #[error("The channel moved by an update the follower has not applied yet")]
+    ChannelMoved,
 
     #[error("Zone-sdk error")]
     ZoneSdkError(#[from] logos_blockchain_zone_sdk::sequencer::Error),
