@@ -1100,8 +1100,7 @@ fn public_at_head_a_signer_ahead_is_checked_against_its_pending_key() {
     authenticate_transaction_at_head(&ahead, &state, pending).unwrap();
 
     let mut tampered = ahead;
-    let last = tampered.witness_set.entries[0].auth_data.len() - 1;
-    tampered.witness_set.entries[0].auth_data[last] ^= 1;
+    tampered.witness_set.entries[0].auth_data[0] ^= 1;
     assert!(matches!(
         authenticate_transaction_at_head(&tampered, &state, pending),
         Err(HeadAuthError::Pending(LeeError::InvalidInput(message)))
