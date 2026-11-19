@@ -2,10 +2,7 @@
 
 use anyhow::Result;
 use common::{block::BedrockStatus, test_utils::produce_dummy_block};
-use sequencer_bedrock_actor::{
-    mock::{CannedChannel, mock_msg_of},
-    protocol::{Checkpoint, DeserializeOp as _},
-};
+use sequencer_bedrock_actor::mock::{CannedChannel, mock_msg_of};
 use tokio::test;
 
 use crate::{
@@ -30,15 +27,6 @@ async fn a_seeded_store_creates_the_channel_from_its_chain() -> Result<()> {
     // The channel refuses a publish chained on anything but its tip, so landing on
     // block 2 means the chain was inscribed in order.
     assert_eq!(channel.lock().tip, Some(mock_msg_of(&block2)));
-    let checkpoint = store
-        .lock()
-        .checkpoint
-        .clone()
-        .expect("the checkpoint of the last publish is persisted");
-    assert_eq!(
-        Checkpoint::from_bytes(&checkpoint.bytes)?.last_msg_id,
-        mock_msg_of(&block2)
-    );
     assert_eq!(state.online()?.sequencer().chain_height().await, 2);
     Ok(())
 }

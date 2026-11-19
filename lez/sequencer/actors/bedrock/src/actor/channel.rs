@@ -7,8 +7,6 @@ use std::{
 use anyhow::{Context as _, anyhow};
 use chain_state::timeout_node::TimeoutNode;
 use common::block::Block;
-use kameo::actor::ActorRef;
-use kameo_actors::broker::Broker;
 use logos_blockchain_zone_sdk::{
     adapter::{Node as _, NodeHttpClient},
     core::{
@@ -32,25 +30,30 @@ use logos_blockchain_zone_sdk::{
         FundingConfig, InscriptionInfo, SequencerConfig, WithdrawInputs, ZoneSequencer,
     },
 };
-use sequencer_actors_common::SendErrorExt as _;
-use sequencer_storage_actor::protocol::ZoneCheckpointRecord;
 use tracing::info;
 
 use crate::{
     Result,
     actor::{
         block_from_inscription,
+        delivery::Deliveries,
         finality::{self, ConfigIndex},
         released_notes, verified_keys,
     },
     error::Error,
     protocol::{
-        ChannelEntry, ChannelEvent, ChannelEventKind, ChannelId, ChannelParams, ChannelSeq,
-        ChannelUpdate, DeserializeOp as _, Ed25519Key, Ed25519PublicKey, IndexedSignature,
-        IndexedSignatures, LiveChannelConfig, MsgId, NoteId, Ops, PreparedConfig, PreparedPin,
-        PublishOutcome, SequencerCheckpoint, Slot, ViewChange, WithdrawArg, ZkPublicKey,
+        ChannelEntry, ChannelEventKind, ChannelId, ChannelParams, ChannelUpdate, DepositInfo,
+        Ed25519Key, Ed25519PublicKey, IndexedSignature, IndexedSignatures, LiveChannelConfig,
+        MsgId, NoteId, Ops, PreparedConfig, PreparedPin, PublishOutcome, SequencerCheckpoint, Slot,
+        ViewChange, WithdrawArg, ZkPublicKey,
     },
 };
+
+/// A publish, with the checkpoint that now holds it as pending.
+pub struct Published {
+    pub outcome: PublishOutcome,
+    pub checkpoint: SequencerCheckpoint,
+}
 
 /// What the channel signs and funds its publishes with.
 pub struct PublishConfig {
@@ -67,14 +70,9 @@ pub struct FollowedChannel {
     sequencer: ZoneSequencer<TimeoutNode<NodeHttpClient>>,
     channel_id: ChannelId,
     backfill_batch_slots: NonZero<u64>,
-    /// Checkpoint of the last update published, which [`Self::into_publishing`] restarts zone-sdk
-    /// from.
+    /// Checkpoint of the last event zone-sdk reported, which [`Self::into_publishing`] restarts
+    /// zone-sdk from.
     last_checkpoint: Option<SequencerCheckpoint>,
-    /// Version of the channel view this actor holds, bumped by every broadcast
-    /// update and every publish.
-    seq: ChannelSeq,
-    /// Where events are published, [`None`] to publish none.
-    broker_ref: Option<ActorRef<Broker<ChannelEvent>>>,
 }
 
 /// A [`FollowedChannel`] restarted under this node's key, which publishes to the channel.
@@ -105,22 +103,13 @@ impl Channel {
 }
 
 impl FollowedChannel {
-    /// Starts following the channel from `initial_checkpoint`, returning the followed channel with
-    /// the sequence it started at. Events go to `broker_ref`, [`None`] for none.
+    /// Starts following the channel from `initial_checkpoint`.
     pub async fn follow(
         channel_id: ChannelId,
         node: TimeoutNode<NodeHttpClient>,
         backfill_batch_slots: NonZero<u64>,
-        initial_checkpoint: Option<ZoneCheckpointRecord>,
-        broker_ref: Option<ActorRef<Broker<ChannelEvent>>>,
-    ) -> Result<(Self, ChannelSeq)> {
-        let seq = initial_checkpoint
-            .as_ref()
-            .map_or(ChannelSeq::ZERO, |stored| ChannelSeq::resumed(stored.seq));
-        let initial_checkpoint = initial_checkpoint
-            .map(|stored| SequencerCheckpoint::from_bytes(&stored.bytes))
-            .transpose()?;
-
+        initial_checkpoint: Option<SequencerCheckpoint>,
+    ) -> Result<Self> {
         if let Some(checkpoint) = &initial_checkpoint
             && has_channel_activity(checkpoint)
             && node
@@ -146,19 +135,16 @@ impl FollowedChannel {
             initial_checkpoint.clone(),
         );
 
-        let channel = Self {
+        Ok(Self {
             node,
             sequencer,
             channel_id,
             backfill_batch_slots,
             last_checkpoint: initial_checkpoint,
-            seq,
-            broker_ref,
-        };
-        Ok((channel, seq))
+        })
     }
 
-    /// Restarts zone-sdk under `config`'s key from the checkpoint of the last update published.
+    /// Restarts zone-sdk under `config`'s key from the checkpoint of the last event it reported.
     pub fn into_publishing(self, config: PublishConfig) -> PublishingChannel {
         let PublishConfig {
             channel_signing_key,
@@ -195,15 +181,20 @@ impl FollowedChannel {
         self.sequencer.next_event().await
     }
 
-    /// Publishes what `event` reports to the broker, after adding the configs it reports final to
+    /// Queues what `event` reports to `deliveries`, after adding the configs it reports final to
     /// `config_index`.
-    pub async fn on_event(&mut self, event: Event, config_index: &mut ConfigIndex) -> Result<()> {
+    pub fn on_event(
+        &mut self,
+        event: Event,
+        config_index: &mut ConfigIndex,
+        deliveries: &mut Deliveries,
+    ) -> Result<()> {
         match event {
             Event::BlocksProcessed {
                 checkpoint,
                 channel_update,
                 finalized,
-                deposits: observed_deposits,
+                deposits: pending_deposits,
             } => {
                 let config_keys = finalized.iter().flat_map(|item| {
                     item.ops.iter().filter_map(|op| {
@@ -219,17 +210,14 @@ impl FollowedChannel {
                 });
                 config_index.extend_final(config_keys, checkpoint.lib_slot.into_inner());
                 self.last_checkpoint = Some(checkpoint.clone());
-                // Apart from the update: they carry no checkpoint and move no channel sequence.
-                if !observed_deposits.is_empty() {
-                    self.publish(
-                        "deposits",
-                        ChannelEventKind::PendingDeposits(observed_deposits),
-                    )
-                    .await?;
-                }
-                self.on_blocks_processed(checkpoint, channel_update, finalized)
-                    .await?;
-                self.publish_live_config().await
+                self.on_blocks_processed(
+                    checkpoint,
+                    &channel_update,
+                    finalized,
+                    pending_deposits,
+                    deliveries,
+                );
+                self.send_live_config(deliveries)
             }
             Event::TurnNotification { notification } => {
                 info!(
@@ -239,34 +227,34 @@ impl FollowedChannel {
                     "Turn update"
                 );
 
-                self.publish(
-                    "turn",
-                    ChannelEventKind::Turn {
-                        our_turn_to_write: notification.our_turn_to_write,
-                        starting_slot: notification.starting_slot.map(Slot::from),
-                    },
-                )
-                .await
+                deliveries.push(ChannelEventKind::Turn {
+                    our_turn_to_write: notification.our_turn_to_write,
+                    starting_slot: notification.starting_slot.map(Slot::from),
+                });
+                Ok(())
             }
             Event::Ready => {
-                self.publish("ready", ChannelEventKind::Ready).await?;
-                self.publish_live_config().await
+                deliveries.push(ChannelEventKind::Ready);
+                self.send_live_config(deliveries)
             }
         }
     }
 
-    /// Publishes the channel update one processed L1 block carries.
-    async fn on_blocks_processed(
-        &mut self,
+    /// Queues the channel update one processed L1 block carries.
+    fn on_blocks_processed(
+        &self,
         checkpoint: SequencerCheckpoint,
-        channel_update: SdkChannelUpdate,
+        channel_update: &SdkChannelUpdate,
         finalized: Vec<FinalizedTx>,
-    ) -> Result<()> {
-        // An L1 block that moved nothing on this channel: it only advances the checkpoint.
+        pending_deposits: Vec<DepositInfo>,
+        deliveries: &mut Deliveries,
+    ) {
+        // An L1 block that carries nothing about this channel: it only advances the checkpoint.
         if matches!(&channel_update, SdkChannelUpdate::Extension { adopted } if adopted.is_empty())
             && finalized.is_empty()
+            && pending_deposits.is_empty()
         {
-            return Ok(());
+            return;
         }
         let channel_id = self.channel_id;
         let entries = |txs: &mut dyn Iterator<Item = &ChannelUpdateTx>| {
@@ -320,29 +308,28 @@ impl FollowedChannel {
             }
         }
 
-        let seq = self.next_seq();
-        self.publish(
-            "update",
-            ChannelEventKind::Update(Box::new(ChannelUpdate {
-                checkpoint,
-                seq,
+        deliveries.push_update(
+            ChannelUpdate {
+                lib_slot: checkpoint.lib_slot,
+                finalized_config: checkpoint.finalized_config,
                 view,
                 finalized: finalized_entries,
                 deposits,
+                pending_deposits,
                 withdrawals,
                 undecodable,
                 finalized_signers,
-            })),
-        )
-        .await
+            },
+            checkpoint,
+        );
     }
 
-    /// Publishes the channel config zone-sdk last read from the node.
+    /// Queues the channel config zone-sdk last read from the node.
     ///
     /// Sent on every live block, changed or not: what the config should become
     /// follows the chain, so consumers re-evaluate it as the chain moves. Skipped
     /// during cold-start backfill, which reads the config only once.
-    async fn publish_live_config(&mut self) -> Result<()> {
+    fn send_live_config(&self, deliveries: &mut Deliveries) -> Result<()> {
         if !self.sequencer.is_ready() {
             return Ok(());
         }
@@ -357,60 +344,23 @@ impl FollowedChannel {
         };
 
         let config = LiveChannelConfig::try_from(&channel)?;
-        self.publish("config", ChannelEventKind::Config(config))
-            .await
-    }
-
-    /// Publishes `event` to `channel/<channel_id>/<topic>`, if there is a broker to publish to.
-    #[expect(
-        clippy::needless_pass_by_ref_mut,
-        reason = "Helps to make returned future Send"
-    )]
-    async fn publish(&mut self, topic: &str, event: ChannelEventKind) -> Result<()> {
-        let Some(broker_ref) = &self.broker_ref else {
-            return Ok(());
-        };
-        broker_ref
-            .tell(kameo_actors::broker::Publish {
-                topic: format!("channel/{}/{topic}", self.channel_id),
-                message: ChannelEvent {
-                    channel_id: self.channel_id,
-                    event,
-                },
-            })
-            .await
-            .map_err(|err| Error::BrokerPublishFailed(err.erase_message()))
-    }
-
-    /// Refuses a publish built on a channel sequence other than the current one.
-    fn check_seq(&self, expected_seq: Option<ChannelSeq>) -> Result<()> {
-        if let Some(expected) = expected_seq
-            && expected != self.seq
-        {
-            return Err(Error::ChannelMoved {
-                provided: expected,
-                current: self.seq,
-            });
-        }
-
+        deliveries.push(ChannelEventKind::Config(config));
         Ok(())
-    }
-
-    /// Bumps the channel sequence and hands back the new one.
-    const fn next_seq(&mut self) -> ChannelSeq {
-        self.seq = self.seq.next();
-        self.seq
     }
 }
 
 impl PublishingChannel {
     /// Follows the channel until zone-sdk is ready, so callers can publish right away, feeding the
-    /// configs it reports final to `config_index`. The events on the way report the channel up to
-    /// its tip, so they are published as well.
-    pub async fn wait_until_ready(&mut self, config_index: &mut ConfigIndex) -> Result<()> {
+    /// configs it reports final to `config_index`. The events on the way are queued to
+    /// `deliveries`, as the recipient may be waiting for this.
+    pub async fn wait_until_ready(
+        &mut self,
+        config_index: &mut ConfigIndex,
+        deliveries: &mut Deliveries,
+    ) -> Result<()> {
         while !self.followed.sequencer.is_ready() {
             let event = self.followed.sequencer.next_event().await;
-            self.followed.on_event(event, config_index).await?;
+            self.followed.on_event(event, config_index, deliveries)?;
         }
         Ok(())
     }
@@ -422,7 +372,7 @@ impl PublishingChannel {
         channel_params: ChannelParams,
         configuration_threshold: NonZero<u16>,
         transfer_threshold: NonZero<u16>,
-    ) -> Result<PublishOutcome> {
+    ) -> Result<Published> {
         let own_key = self.channel_signing_key.public_key();
         if keys.first() != Some(&own_key) {
             return Err(Error::ChannelCreationRequiresOurKey);
@@ -486,9 +436,7 @@ impl PublishingChannel {
         block: Block,
         withdrawals: Vec<WithdrawArg>,
         parent: Option<MsgId>,
-        expected_seq: Option<ChannelSeq>,
-    ) -> Result<PublishOutcome> {
-        self.followed.check_seq(expected_seq)?;
+    ) -> Result<Published> {
         let inscription = block_inscription(&self.followed.node, &block).await?;
         let data_byte_size = inscription.len();
 
@@ -519,12 +467,13 @@ impl PublishingChannel {
                     .map_err(|err| Error::PublishAtomicWithdrawFailed(err.into()))?
             };
 
-            Ok(PublishOutcome {
-                this_msg: result.tx.inscription().this_msg,
-                parent: result.tx.inscription().parent_msg,
+            Ok(Published {
+                outcome: PublishOutcome {
+                    this_msg: result.tx.inscription().this_msg,
+                    parent: result.tx.inscription().parent_msg,
+                    released_notes: released_notes(&result.tx),
+                },
                 checkpoint,
-                seq: self.followed.next_seq(),
-                released_notes: released_notes(&result.tx),
             })
         };
         if published.is_ok() {
@@ -542,9 +491,7 @@ impl PublishingChannel {
         block: Block,
         parent: MsgId,
         notes: &[NoteId],
-        expected_seq: Option<ChannelSeq>,
     ) -> Result<PreparedPin> {
-        self.followed.check_seq(expected_seq)?;
         let inscription = block_inscription(&self.followed.node, &block).await?;
         let block_size = inscription.len();
         let inscribe_op = self.inscription_op(inscription, parent);
@@ -571,9 +518,7 @@ impl PublishingChannel {
         &mut self,
         prepared: PreparedPin,
         signatures: Vec<IndexedSignature>,
-        expected_seq: Option<ChannelSeq>,
-    ) -> Result<PublishOutcome> {
-        self.followed.check_seq(expected_seq)?;
+    ) -> Result<Published> {
         let PreparedPin {
             tx,
             msg_id,
@@ -659,7 +604,7 @@ impl PublishingChannel {
     }
 
     #[cfg(feature = "test-utils")]
-    pub async fn publish_raw_inscription(&mut self, data: Vec<u8>) -> Result<PublishOutcome> {
+    pub async fn publish_raw_inscription(&mut self, data: Vec<u8>) -> Result<Published> {
         let inscription = checked_inscription(&self.followed.node, data).await?;
 
         let (result, checkpoint) = self
@@ -670,12 +615,13 @@ impl PublishingChannel {
             .await
             .map_err(|err| Error::SubmitSignedTransactionFailed(err.into()))?;
 
-        Ok(PublishOutcome {
-            this_msg: result.tx.inscription().this_msg,
-            parent: result.tx.inscription().parent_msg,
+        Ok(Published {
+            outcome: PublishOutcome {
+                this_msg: result.tx.inscription().this_msg,
+                parent: result.tx.inscription().parent_msg,
+                released_notes: released_notes(&result.tx),
+            },
             checkpoint,
-            seq: self.followed.next_seq(),
-            released_notes: released_notes(&result.tx),
         })
     }
 
@@ -687,7 +633,7 @@ impl PublishingChannel {
         >,
         msg_id: MsgId,
         parent: MsgId,
-    ) -> Result<PublishOutcome> {
+    ) -> Result<Published> {
         let (result, checkpoint) = self
             .followed
             .sequencer
@@ -695,12 +641,13 @@ impl PublishingChannel {
             .submit_signed_tx(tx, msg_id)
             .map_err(|err| Error::SubmitSignedTransactionFailed(err.into()))?;
 
-        Ok(PublishOutcome {
-            this_msg: result.tx.inscription().this_msg,
-            parent,
+        Ok(Published {
+            outcome: PublishOutcome {
+                this_msg: result.tx.inscription().this_msg,
+                parent,
+                released_notes: released_notes(&result.tx),
+            },
             checkpoint,
-            seq: self.followed.next_seq(),
-            released_notes: released_notes(&result.tx),
         })
     }
 
@@ -722,7 +669,7 @@ impl PublishingChannel {
         msg_id: MsgId,
         parent: MsgId,
         proofs: impl IntoIterator<Item = OpProof>,
-    ) -> Result<PublishOutcome> {
+    ) -> Result<Published> {
         let signature = self
             .channel_signing_key
             .sign_payload(tx.hash().as_signing_bytes().as_ref());

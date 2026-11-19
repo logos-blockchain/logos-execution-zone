@@ -9,8 +9,8 @@ use kameo::actor::ActorRef;
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
     protocol::{
-        ChannelEntry, ChannelEventKind, ChannelSeq, ChannelUpdate, Ed25519Key, Ed25519PublicKey,
-        FollowStart, L1Position, MsgId, Slot,
+        ChannelEntry, ChannelEventKind, ChannelUpdate, Ed25519Key, Ed25519PublicKey, FollowStart,
+        L1Position, MsgId, Slot,
     },
 };
 use sequencer_core::{config::SequencerConfig, faults, release_finality};
@@ -23,7 +23,7 @@ use tracing::{debug, warn};
 
 use crate::{
     Result,
-    actor::state::{ActorsBundle, State, checkpoint_record, online},
+    actor::state::{ActorsBundle, State, online},
     error::Error,
 };
 
@@ -35,8 +35,8 @@ pub struct BootstrappingState<S: StorageActorTrait, B: BedrockActorTrait> {
     pub(super) chain: ChainState,
     pub(super) channel_signing_key: Ed25519Key,
     pub(super) consistency_check: Option<AnchorConsistencyCheck>,
-    /// Channel sequence of the last update applied, or the one following started at.
-    pub(super) applied_seq: ChannelSeq,
+    /// The last config entry that reached finality, as of the last update applied.
+    pub(super) finalized_config: MsgId,
     /// The last slot the node had finalized when following started.
     pub(super) bootstrap_to: Option<Slot>,
     /// LIB slot of the last update applied, [`None`] before the first one.
@@ -60,7 +60,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
             chain,
             channel_signing_key,
             consistency_check,
-            applied_seq: follow_start.seq,
+            finalized_config: follow_start.finalized_config,
             bootstrap_to: follow_start.lib_slot,
             replayed_up_to: None,
             ready: false,
@@ -92,9 +92,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
         match event {
             ChannelEventKind::Update(update) => self.on_channel_update(update).await?,
             ChannelEventKind::Ready => self.ready = true,
-            ChannelEventKind::Turn { .. }
-            | ChannelEventKind::Config(_)
-            | ChannelEventKind::PendingDeposits(_) => {
+            ChannelEventKind::Turn { .. } | ChannelEventKind::Config(_) => {
                 debug!("Ignoring a channel event about the live chain while bootstrapping");
             }
         }
@@ -114,15 +112,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
         ))
     }
 
-    /// Applies the finalized entries, deposits and withdrawals of `update`, persisting them with
-    /// its checkpoint.
+    /// Applies and persists the finalized entries, deposits and withdrawals of `update`.
     async fn on_channel_update(&mut self, update: &ChannelUpdate) -> Result<()> {
         let ChannelUpdate {
-            checkpoint,
-            seq,
+            lib_slot,
+            finalized_config,
             view: _,
             finalized,
             deposits,
+            pending_deposits: _,
             withdrawals,
             undecodable,
             finalized_signers,
@@ -155,7 +153,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
             .actors
             .storage_ref
             .ask(AtomicUpdate {
-                checkpoint: Some(checkpoint_record(checkpoint, *seq)?),
                 channel_view,
                 head_tip,
                 head_state,
@@ -173,8 +170,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
         sequencer_core::log_recorded_deposits(&outcome);
         sequencer_core::log_unmatched_withdrawals(&outcome);
 
-        self.applied_seq = *seq;
-        self.replayed_up_to = Some(checkpoint.lib_slot);
+        self.finalized_config = *finalized_config;
+        self.replayed_up_to = Some(*lib_slot);
         Ok(())
     }
 

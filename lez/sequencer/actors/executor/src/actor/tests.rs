@@ -14,7 +14,7 @@ use kameo::{
     error::SendError,
     supervision::RestartPolicy,
 };
-use kameo_actors::{DeliveryStrategy, broker::Broker, pubsub::PubSub};
+use kameo_actors::{DeliveryStrategy, pubsub::PubSub};
 use lee::{
     Account, AccountId, Actor, PrivateKey, PublicKey, PublicTransaction,
     public_transaction::{Message, WitnessSet},
@@ -22,10 +22,10 @@ use lee::{
 use lee_core::native_token::Message as NativeMessage;
 use mockall::predicate::{always, eq, function};
 use sequencer_bedrock_actor::{
-    mock::{MockBedrockActor, SharedChannel, checkpoint_at, mock_msg_of},
+    mock::{MockBedrockActor, SharedChannel, mock_msg_of},
     protocol::{
-        ChannelEntry, ChannelEvent, ChannelEventKind, ChannelSeq, ChannelUpdate, Checkpoint,
-        Ed25519PublicKey, FollowStart, HeaderId, PublishOutcome, Slot, ViewChange,
+        ChannelEntry, ChannelEvent, ChannelEventKind, ChannelUpdate, Ed25519PublicKey, FollowStart,
+        PublishOutcome, Slot, ViewChange,
     },
 };
 use sequencer_channel_signing_actor::ChannelSigningActor;
@@ -157,7 +157,7 @@ fn prepare_mock_bedrock_on_genesis(_channel_id: &ChannelId) -> MockBedrockActor 
     let mut mock_bedrock = MockBedrockActor::default();
     mock_bedrock
         .expect_handle_follow_channel()
-        .returning(|_msg, _ctx| Ok(follow_start(0)));
+        .returning(|_msg, _ctx| Ok(follow_start()));
     mock_bedrock
         .expect_handle_get_channel_tip_slot()
         .returning(|_msg, _ctx| Ok(Some(Slot::from(0))));
@@ -382,7 +382,6 @@ pub(super) async fn executor_args<S: StorageActorTrait>(
         stake_config_pubsub_ref: PubSub::spawn(PubSub::new(DeliveryStrategy::Guaranteed)),
         slasher_ref,
         channel_signer_ref,
-        bedrock_broker_ref: Broker::spawn(Broker::new(DeliveryStrategy::Guaranteed)),
     }
 }
 
@@ -448,7 +447,7 @@ pub(super) async fn initialize_state(
     let follow_start = {
         let channel = channel.lock();
         FollowStart {
-            seq: ChannelSeq::mocked(channel.seq),
+            finalized_config: MsgId::root(),
             lib_slot: channel.lib_slot,
         }
     };
@@ -461,7 +460,6 @@ pub(super) async fn initialize_state(
             stake_config_pubsub_ref: PubSub::spawn(PubSub::new(DeliveryStrategy::Guaranteed)),
             slasher_ref,
             channel_signer_ref,
-            bedrock_broker_ref: Broker::spawn(Broker::new(DeliveryStrategy::Guaranteed)),
         },
         follow_start,
     ))
@@ -479,15 +477,15 @@ async fn spawn_on_genesis(
     Box::pin(spawn_executor(config, storage_ref, bedrock_pool_ref)).await
 }
 
-/// Following started at channel sequence `seq`, the node's LIB unknown.
-fn follow_start(seq: u64) -> FollowStart {
+/// Following started on a channel with no final config, the node's LIB unknown.
+fn follow_start() -> FollowStart {
     FollowStart {
-        seq: ChannelSeq::mocked(seq),
+        finalized_config: MsgId::root(),
         lib_slot: None,
     }
 }
 
-/// `event` as the Bedrock actor broadcasts it.
+/// `event` as the Bedrock actor asks it.
 pub(super) const fn channel_event(channel_id: ChannelId, event: ChannelEventKind) -> ChannelEvent {
     ChannelEvent { channel_id, event }
 }
@@ -528,8 +526,7 @@ pub(super) fn finalized_updates(
     let mut parent = None;
     history
         .into_iter()
-        .zip(1..)
-        .map(|(finalized, seq)| {
+        .map(|finalized| {
             let entry_parent = parent.unwrap_or_else(|| {
                 finalized.block.as_ref().map_or_else(MsgId::root, |block| {
                     MsgId::from(block.header.prev_block_hash.0)
@@ -549,11 +546,8 @@ pub(super) fn finalized_updates(
             channel_event(
                 channel_id,
                 ChannelEventKind::Update(Box::new(ChannelUpdate {
-                    checkpoint: Checkpoint {
-                        lib_slot: Slot::from(finalized.slot),
-                        ..checkpoint_at(finalized.msg)
-                    },
-                    seq: ChannelSeq::mocked(seq),
+                    lib_slot: Slot::from(finalized.slot),
+                    finalized_config: MsgId::root(),
                     view: ViewChange::Extension(Vec::new()),
                     finalized: vec![ChannelEntry {
                         msg: finalized.msg,
@@ -563,6 +557,7 @@ pub(super) fn finalized_updates(
                         final_slot: Some(finalized.slot),
                     }],
                     deposits: Vec::new(),
+                    pending_deposits: Vec::new(),
                     withdrawals: Vec::new(),
                     undecodable,
                     finalized_signers,
@@ -616,10 +611,7 @@ async fn a_publish_refused_as_stale_returns_its_transactions_to_the_mempool() ->
                 .expect_handle_publish_block()
                 .returning(move |msg, _ctx| {
                     if !refused_first.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                        return Err(sequencer_bedrock_actor::error::Error::ChannelMoved {
-                            provided: msg.expected_seq.unwrap_or(ChannelSeq::mocked(0)),
-                            current: ChannelSeq::mocked(7),
-                        });
+                        return Err(sequencer_bedrock_actor::error::Error::ChannelMoved);
                     }
                     let msg_id = MsgId::from(msg.block.header.hash.0);
                     let parent = msg.parent.unwrap_or_else(MsgId::root);
@@ -629,16 +621,6 @@ async fn a_publish_refused_as_stale_returns_its_transactions_to_the_mempool() ->
                     Ok(PublishOutcome {
                         this_msg: msg_id,
                         parent,
-                        checkpoint: Checkpoint {
-                            last_msg_id: msg_id,
-                            pending_txs: Vec::new(),
-                            lib: HeaderId::from([0; 32]),
-                            lib_slot: Slot::from(0),
-                            channel_notes: Vec::new(),
-                            finalized_config: MsgId::root(),
-                            funding: Vec::new(),
-                        },
-                        seq: ChannelSeq::mocked(8),
                         released_notes: Vec::new(),
                     })
                 });
@@ -691,73 +673,6 @@ async fn a_publish_refused_as_stale_returns_its_transactions_to_the_mempool() ->
     Ok(())
 }
 
-/// The updates the Bedrock actor broadcasts from the start of following reach
-/// the executor only as it handles them. Until it applies them its view lags
-/// the channel, so its publishes are held to the sequence following started at.
-#[test]
-async fn a_publish_expects_the_sequence_following_started_at() -> Result<()> {
-    let _res = logging::try_init();
-
-    let (config, _home, sequencer_key) = staked_sequencer_config();
-    let mut mock_storage = prepare_mock_storage_with_stake(stake_entries(sequencer_key));
-    mock_storage
-        .expect_handle_get_pending_deposit_events()
-        .returning(|_msg, _ctx| Ok(Vec::new()));
-
-    let (expected_tx, mut expected_rx) = mpsc::unbounded_channel();
-    let executor = spawn_on_genesis(
-        config,
-        MockStorageActor::spawn(mock_storage),
-        spawn_bedrock_pool(move |_channel_id| {
-            let mut mock_bedrock = MockBedrockActor::default();
-            mock_bedrock
-                .expect_handle_follow_channel()
-                .returning(|_msg, _ctx| Ok(follow_start(3)));
-            mock_bedrock
-                .expect_handle_get_channel_tip_slot()
-                .returning(|_msg, _ctx| Ok(Some(Slot::from(0))));
-            mock_bedrock
-                .expect_handle_get_channel_tip_message_id()
-                .returning(|_msg, _ctx| Ok(Some(mock_msg_of(&empty_genesis()))));
-            mock_bedrock
-                .expect_handle_initialize_channel_publisher()
-                .returning(|_msg, _ctx| Ok(()));
-            mock_bedrock
-                .expect_handle_check_is_our_turn()
-                .returning(|_msg, _ctx| Ok(true));
-            mock_bedrock
-                .expect_handle_get_accredited_keys()
-                .returning(|_msg, _ctx| Ok(None));
-            let expected_tx = expected_tx.clone();
-            mock_bedrock
-                .expect_handle_publish_block()
-                .returning(move |msg, _ctx| {
-                    expected_tx
-                        .send(msg.expected_seq)
-                        .expect("the test still listens");
-                    Err(sequencer_bedrock_actor::error::Error::ChannelMoved {
-                        provided: msg.expected_seq.unwrap_or(ChannelSeq::mocked(0)),
-                        current: ChannelSeq::mocked(5),
-                    })
-                });
-            mock_bedrock
-        }),
-    )
-    .await?;
-
-    executor
-        .ask(protocol::ProduceBlock)
-        .await
-        .expect("a refused turn must still reply Ok");
-    assert_eq!(
-        expected_rx.try_recv().ok(),
-        Some(Some(ChannelSeq::mocked(3))),
-        "the publish has to expect the sequence following started at"
-    );
-
-    Ok(())
-}
-
 /// A supervised executor on [`empty_genesis`], whose Bedrock actors report every publisher they set
 /// up to the returned receiver.
 async fn spawn_supervised_on_genesis(
@@ -779,7 +694,7 @@ async fn spawn_supervised_on_genesis(
         let mut mock_bedrock = MockBedrockActor::default();
         mock_bedrock
             .expect_handle_follow_channel()
-            .returning(|_msg, _ctx| Ok(follow_start(0)));
+            .returning(|_msg, _ctx| Ok(follow_start()));
         mock_bedrock
             .expect_handle_get_channel_tip_slot()
             .returning(|_msg, _ctx| Ok(Some(Slot::from(0))));

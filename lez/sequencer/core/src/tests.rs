@@ -48,10 +48,8 @@ use logos_blockchain_zone_sdk::{
 use mempool::{MemPool, MemPoolHandle};
 use ping_core::{ReceiverMessage, ping_record_pda, receiver_config_account_id};
 use sequencer_bedrock_actor::{
-    mock::{CannedChannel, MockBedrockActor, SharedChannel, checkpoint_at, mock_msg_of},
-    protocol::{
-        ChannelSeq, ChannelUpdate, Checkpoint, LiveChannelConfig, PublishOutcome, ViewChange,
-    },
+    mock::{CannedChannel, MockBedrockActor, SharedChannel, mock_msg_of},
+    protocol::{ChannelUpdate, LiveChannelConfig, PublishOutcome, ViewChange},
 };
 use sequencer_channel_signing_actor::ChannelSigningActor;
 use sequencer_slasher_actor::SlasherActor;
@@ -77,7 +75,6 @@ use crate::{
     },
     config_target, deposit_already_minted, dispatch_already_delivered, extract_cross_zone_dispatch,
     extract_cross_zone_dispatch_key, is_sequencer_only_program, resubmittable_txs, round_robin,
-    zone_checkpoint,
 };
 
 /// The peer zone a cross-zone test receives from. Distinct from the test
@@ -90,10 +87,6 @@ const TEST_INSCRIPTION: [u8; 32] = [0xA1; 32];
 const TEST_CHANNEL_ID: [u8; 32] = [0xC1; 32];
 /// The tips the fee distribution tests pay out.
 const TIPS: u128 = 7;
-
-fn mock_checkpoint() -> Checkpoint {
-    checkpoint_at(MsgId::from([0; 32]))
-}
 
 /// The bootstrap sequencer's key for `config`: read from `config.home`'s key
 /// file if present, else generated and persisted there. Callers building
@@ -252,7 +245,7 @@ async fn start_sequencer_bare_on(
         config,
         mempool,
         chain,
-        None,
+        MsgId::root(),
         channel_signing_key,
         storage_ref,
         bedrock_pool_ref,
@@ -310,30 +303,20 @@ fn publish_outcome(block: &Block, parent: MsgId) -> PublishOutcome {
     PublishOutcome {
         this_msg: mock_msg_of(block),
         parent,
-        checkpoint: mock_checkpoint(),
-        seq: next_channel_seq(),
         released_notes: Vec::new(),
     }
-}
-
-/// The next channel sequence of the follow updates a test feeds in.
-fn next_channel_seq() -> ChannelSeq {
-    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    ChannelSeq::mocked(
-        SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-            .saturating_add(1),
-    )
 }
 
 /// A follow update carrying nothing, to fill in the fields a test does not
 /// exercise via `..empty_channel_update()`.
 fn empty_channel_update() -> ChannelUpdate {
     ChannelUpdate {
-        checkpoint: mock_checkpoint(),
-        seq: next_channel_seq(),
+        lib_slot: Slot::from(0),
+        finalized_config: MsgId::root(),
         view: ViewChange::Extension(Vec::new()),
         finalized: Vec::new(),
         deposits: Vec::new(),
+        pending_deposits: Vec::new(),
         withdrawals: Vec::new(),
         undecodable: Vec::new(),
         finalized_signers: Vec::new(),
@@ -1133,7 +1116,6 @@ async fn a_redelivered_record_is_dropped_once_its_delivery_is_irreversible() {
 
     sequencer
         .on_channel_update(&ChannelUpdate {
-            checkpoint: checkpoint_at(mock_msg_of(&delivery_block)),
             finalized: vec![finalized_as_held(&sequencer.chain(), &delivery_block).await],
             ..empty_channel_update()
         })
@@ -1726,8 +1708,7 @@ async fn build_block_from_mempool() {
     assert_eq!(sequencer.chain_height().await, genesis_height);
 }
 
-/// A live channel sitting at the config entry [`mock::checkpoint_at`] calls
-/// finalized.
+/// A live channel sitting at the root config entry, which the tests' updates call finalized.
 fn live_channel(keys: Vec<Ed25519PublicKey>) -> LiveChannelConfig {
     LiveChannelConfig {
         keys,
@@ -2576,7 +2557,7 @@ fn resubmittable_txs_of_blocks_without_user_txs_is_empty() {
 }
 
 #[tokio::test]
-async fn follow_update_persists_the_checkpoint_with_its_effects() {
+async fn follow_update_persists_the_blocks_it_adopts() {
     let config = setup_sequencer_config();
     let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
     let genesis_meta = sequencer
@@ -2595,15 +2576,6 @@ async fn follow_update_persists_the_checkpoint_with_its_effects() {
         })
         .await;
 
-    // The checkpoint is the sdk resume cursor; landing it without the block
-    // would let a restart stream past a block the store never got.
-    assert!(
-        zone_checkpoint(&sequencer.storage_ref)
-            .await
-            .unwrap()
-            .is_some(),
-        "the event's checkpoint must be persisted alongside the block it covers"
-    );
     assert!(block_at(&sequencer, 2).await.is_some());
 }
 
@@ -3054,7 +3026,6 @@ async fn a_peer_pin_of_a_deposit_final_on_l1_is_still_signed() {
         sequencer_minting_an_observed_deposit().await;
     sequencer
         .on_channel_update(&ChannelUpdate {
-            checkpoint: checkpoint_at(mock_msg_of(&block)),
             deposits: vec![deposit.clone()],
             ..empty_channel_update()
         })
@@ -3069,7 +3040,6 @@ async fn a_peer_pin_of_a_deposit_minted_in_a_final_block_is_not_signed() {
         sequencer_minting_an_observed_deposit().await;
     sequencer
         .on_channel_update(&ChannelUpdate {
-            checkpoint: checkpoint_at(mock_msg_of(&block)),
             finalized: vec![finalized_as_held(&sequencer.chain(), &block).await],
             ..empty_channel_update()
         })
@@ -3140,7 +3110,6 @@ async fn a_pin_short_of_signatures_leaves_its_deposit_to_finality() {
 
     sequencer
         .on_channel_update(&ChannelUpdate {
-            checkpoint: checkpoint_at(mock_msg_of(&block)),
             deposits: vec![deposit],
             ..empty_channel_update()
         })
@@ -3295,7 +3264,6 @@ async fn a_pinned_deposit_is_not_minted_again_once_final() {
     // The deposit finalizes before the block minting it does.
     sequencer
         .on_channel_update(&ChannelUpdate {
-            checkpoint: checkpoint_at(mock_msg_of(&pinned_block)),
             deposits: vec![deposit],
             ..empty_channel_update()
         })

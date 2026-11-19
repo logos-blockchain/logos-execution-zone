@@ -29,14 +29,13 @@ use crate::{
         GetTransactionByHash, GetTransactionReceiptByHash, GetZoneCheckpoint,
         PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RecordDispatchFailure,
         RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip,
-        UpdateZoneCheckpoint, WithdrawalReconciliationKey, ZoneCheckpointRecord,
+        UpdateZoneCheckpoint, WithdrawalReconciliationKey,
     },
 };
 
 /// An update that touches no block, for filling in one bookkeeping field.
 fn bookkeeping_update() -> AtomicUpdate {
     AtomicUpdate {
-        checkpoint: None,
         blocks: Vec::new(),
         head_tip: None,
         head_state: Arc::new(V03State::new()),
@@ -53,21 +52,12 @@ fn bookkeeping_update() -> AtomicUpdate {
     }
 }
 
-/// A checkpoint of `bytes` minted at channel sequence `seq`.
-fn checkpoint_record(bytes: &[u8], seq: u64) -> ZoneCheckpointRecord {
-    ZoneCheckpointRecord {
-        bytes: bytes.to_vec(),
-        seq,
-    }
-}
-
 /// The checkpoint bytes the store holds, or [`None`] when it holds none.
 async fn stored_checkpoint(storage_ref: &ActorRef<StorageActor>) -> Option<Vec<u8>> {
     storage_ref
         .ask(GetZoneCheckpoint)
         .await
         .expect("Failed to read the checkpoint")
-        .map(|checkpoint| checkpoint.bytes)
 }
 
 fn withdrawal_key(byte: u8) -> WithdrawalReconciliationKey {
@@ -1033,10 +1023,9 @@ async fn a_rewritten_block_keeps_the_finalized_status_it_had() {
     );
 }
 
-/// Every follow event carries a checkpoint and most carry nothing else, so the
-/// idle path must not pay for a whole state serialization.
+/// An update that moves no chain must not pay for a whole state serialization.
 #[tokio::test]
-async fn a_checkpoint_only_update_does_not_rewrite_the_head_state() {
+async fn an_update_on_the_stored_tip_does_not_rewrite_the_head_state() {
     let dir = tempfile::tempdir().expect("Failed to create temp dir");
     let storage_ref = spawn_with_blocks(dir.path(), Vec::new()).await;
 
@@ -1054,19 +1043,13 @@ async fn a_checkpoint_only_update_does_not_rewrite_the_head_state() {
     // comes with the update. The state it carries is ignored.
     storage_ref
         .ask(AtomicUpdate {
-            checkpoint: Some(checkpoint_record(b"cp-idle", 1)),
             head_tip: Some(BlockMeta::from(&genesis)),
             head_state: state_with_balance(999),
             ..bookkeeping_update()
         })
         .await
-        .expect("Failed to apply the checkpoint-only update");
+        .expect("Failed to apply the update");
 
-    assert_eq!(
-        stored_checkpoint(&storage_ref).await,
-        Some(b"cp-idle".to_vec()),
-        "The checkpoint still has to land"
-    );
     assert_eq!(stored_balance(&storage_ref).await, 200);
 }
 
@@ -1107,109 +1090,24 @@ async fn final_snapshot_round_trips_and_is_kept_apart_from_the_head_state() {
     assert_eq!(stored_balance(&storage_ref).await, 300);
 }
 
-/// The checkpoint is the zone-sdk's resume cursor, so an event that writes no
-/// block still has to land it — a restart would otherwise resume past the
-/// orphan it covers.
 #[tokio::test]
-async fn checkpoint_lands_with_an_update_carrying_no_block() {
+async fn a_stored_checkpoint_is_replaced_by_the_next() {
     let dir = tempfile::tempdir().expect("Failed to create temp dir");
     let storage_ref = spawn_with_blocks(dir.path(), vec![]).await;
 
-    storage_ref
-        .ask(AtomicUpdate {
-            checkpoint: Some(checkpoint_record(b"cp-orphan", 1)),
-            ..bookkeeping_update()
-        })
-        .await
-        .expect("Failed to apply the update");
+    for bytes in [b"cp-first", b"cp-later"] {
+        storage_ref
+            .ask(UpdateZoneCheckpoint {
+                bytes: bytes.to_vec(),
+            })
+            .await
+            .expect("Failed to store the checkpoint");
+    }
 
     assert_eq!(
         stored_checkpoint(&storage_ref).await.as_deref(),
-        Some(b"cp-orphan".as_slice())
+        Some(b"cp-later".as_slice())
     );
-}
-
-#[tokio::test]
-async fn a_checkpoint_behind_the_stored_one_is_dropped() {
-    let dir = tempfile::tempdir().expect("Failed to create temp dir");
-    let storage_ref = spawn_with_blocks(dir.path(), vec![]).await;
-
-    storage_ref
-        .ask(UpdateZoneCheckpoint {
-            checkpoint: checkpoint_record(b"cp-produced", 20),
-        })
-        .await
-        .expect("Failed to store the checkpoint");
-
-    // What the follow path was holding while the produce path published.
-    storage_ref
-        .ask(UpdateZoneCheckpoint {
-            checkpoint: checkpoint_record(b"cp-stale", 10),
-        })
-        .await
-        .expect("A stale checkpoint is dropped, not an error");
-
-    assert_eq!(
-        stored_checkpoint(&storage_ref).await.as_deref(),
-        Some(b"cp-produced".as_slice()),
-        "The newer checkpoint has to survive the stale one"
-    );
-
-    // Same sequence, different bytes: nothing says the newcomer is the later
-    // view, so the store keeps what it has.
-    storage_ref
-        .ask(UpdateZoneCheckpoint {
-            checkpoint: checkpoint_record(b"cp-tie", 20),
-        })
-        .await
-        .expect("A tied checkpoint is dropped, not an error");
-
-    assert_eq!(
-        stored_checkpoint(&storage_ref).await.as_deref(),
-        Some(b"cp-produced".as_slice()),
-    );
-
-    storage_ref
-        .ask(UpdateZoneCheckpoint {
-            checkpoint: checkpoint_record(b"cp-followed", 30),
-        })
-        .await
-        .expect("Failed to store the checkpoint");
-
-    assert_eq!(
-        stored_checkpoint(&storage_ref).await.as_deref(),
-        Some(b"cp-followed".as_slice()),
-        "A newer checkpoint still has to land"
-    );
-}
-
-#[tokio::test]
-async fn a_stale_checkpoint_in_an_atomic_update_drops_alone() {
-    let dir = tempfile::tempdir().expect("Failed to create temp dir");
-    let genesis = produce_dummy_block(1, None, vec![]);
-    let storage_ref = spawn_with_blocks(dir.path(), vec![]).await;
-
-    storage_ref
-        .ask(UpdateZoneCheckpoint {
-            checkpoint: checkpoint_record(b"cp-produced", 20),
-        })
-        .await
-        .expect("Failed to store the checkpoint");
-
-    storage_ref
-        .ask(AtomicUpdate {
-            checkpoint: Some(checkpoint_record(b"cp-stale", 10)),
-            ..AtomicUpdate::from_block(genesis.clone(), Arc::new(V03State::new()), vec![])
-        })
-        .await
-        .expect("Failed to apply the update");
-
-    assert_eq!(
-        stored_checkpoint(&storage_ref).await.as_deref(),
-        Some(b"cp-produced".as_slice()),
-        "The stored checkpoint is the newer one"
-    );
-    assert_tip_is(&storage_ref, &genesis).await;
 }
 
 /// A database nothing has written a chain into answers "nothing yet" rather

@@ -1121,16 +1121,15 @@ pub fn spawn_standalone_bedrock_actor(
     bedrock_addr: SocketAddr,
     channel_id: ChannelId,
 ) -> Result<ActorRef<StandaloneBedrockActor>> {
-    let broker_ref = kameo_actors::broker::Broker::spawn(kameo_actors::broker::Broker::new(
-        kameo_actors::DeliveryStrategy::Guaranteed,
-    ));
-
     let mut storage = MockStorageActor::default();
     storage
         .expect_handle_get_zone_checkpoint()
         .returning(|_msg, _ctx| Ok(None));
     storage
         .expect_handle_put_final_configs_bytes()
+        .returning(|_msg, _ctx| Ok(()));
+    storage
+        .expect_handle_update_zone_checkpoint()
         .returning(|_msg, _ctx| Ok(()));
     let storage_ref = MockStorageActor::spawn(storage);
 
@@ -1140,7 +1139,6 @@ pub fn spawn_standalone_bedrock_actor(
             basic_auth: None,
             channel_id,
             storage_ref,
-            broker_ref,
             backfill_batch_slots: sequencer_core::config::default_backfill_batch_slots(),
         },
     ))
