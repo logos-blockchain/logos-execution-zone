@@ -26,10 +26,7 @@ use logos_blockchain_zone_sdk::{
         },
         proofs::channel_multi_sig_proof::ChannelMultiSigProof,
     },
-    node_types::{
-        Inscription, ProgramVerificationKey, WalletFundRequestBody, WalletFundResponseBody,
-        derive_program_id,
-    },
+    node_types::{Inscription, WalletFundRequestBody, WalletFundResponseBody},
     sequencer::{
         ChannelUpdate as SdkChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FinalizedTx,
         FundingConfig, InscriptionInfo, SequencerConfig, ZoneSequencer,
@@ -44,6 +41,7 @@ use crate::{
     actor::{
         block_from_inscription,
         finality::{self, ConfigIndex},
+        vault::{VAULT_PROGRAM, vault_key},
         verified_keys,
     },
     error::Error,
@@ -374,15 +372,10 @@ impl Publisher {
         let msg_id = inscribe_op.id();
 
         // Registering a program already registered has no effect, so every zone can do it.
-        let vault_key =
-            ProgramVerificationKey::try_from_bytes(vault_circuit::DEMO_VERIFICATION_KEY)
-                .expect("the vault key is a valid program key");
-        let vault_program = derive_program_id(&vault_key);
-
         let funded = self
             .fund_ops([
                 Op::ProgramRegister(ProgramRegisterOp {
-                    verification_key: vault_key,
+                    verification_key: vault_key(),
                 }),
                 Op::ChannelConfig(config_op),
                 Op::ChannelInscribe(inscribe_op),
@@ -411,7 +404,7 @@ impl Publisher {
 
         info!(
             accredited_keys = key_count,
-            vault_program = %vault_program,
+            vault_program = %*VAULT_PROGRAM,
             "Creating the channel, genesis block and vault program registration bundled"
         );
 

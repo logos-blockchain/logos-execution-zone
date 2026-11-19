@@ -9,13 +9,17 @@
     reason = "Field and curve arithmetic does not overflow"
 )]
 
+use std::sync::LazyLock;
+
 use ark_bn254::{Bn254, Fr};
 use ark_ec::{AffineRepr as _, CurveGroup as _};
 use ark_ed_on_bn254::{EdwardsAffine, Fr as Scalar};
 use ark_ff::{BigInteger as _, PrimeField as _};
-use ark_groth16::{Groth16, Proof, ProvingKey, VerifyingKey};
+use ark_groth16::{Groth16, ProvingKey, VerifyingKey};
 use ark_relations::r1cs::SynthesisError;
-use logos_blockchain_groth16::{CompressedGroth16VerificationKey, Groth16VerificationKey};
+use logos_blockchain_groth16::{
+    CompressedGroth16Proof, CompressedGroth16VerificationKey, Groth16Proof, Groth16VerificationKey,
+};
 use logos_blockchain_poseidon2::{Digest as _, Poseidon2Bn254Hasher};
 use rand::{CryptoRng, RngCore, SeedableRng as _};
 use rand_chacha::ChaCha20Rng;
@@ -176,6 +180,12 @@ pub struct PublicInputs {
 }
 
 impl PublicInputs {
+    /// An operation id as the third input: Bedrock reduces its bytes into the field.
+    #[must_use]
+    pub fn op_id_element(op_id: &[u8; 32]) -> Fr {
+        Fr::from_le_bytes_mod_order(op_id)
+    }
+
     #[must_use]
     pub const fn to_array(&self) -> [Fr; 3] {
         [self.program_step_id, self.program_deposits_hash, self.op_id]
@@ -272,8 +282,11 @@ pub fn setup(rng: &mut (impl RngCore + CryptoRng)) -> Result<ProvingKey<Bn254>, 
 /// The keys of a setup whose randomness is public: anyone can forge proofs under them. For
 /// demos and tests only.
 #[must_use]
-pub fn demo_proving_key() -> ProvingKey<Bn254> {
-    setup(&mut ChaCha20Rng::seed_from_u64(DEMO_SETUP_SEED)).expect("the circuit has a setup")
+pub fn demo_proving_key() -> &'static ProvingKey<Bn254> {
+    static KEY: LazyLock<ProvingKey<Bn254>> = LazyLock::new(|| {
+        setup(&mut ChaCha20Rng::seed_from_u64(DEMO_SETUP_SEED)).expect("the circuit has a setup")
+    });
+    &KEY
 }
 
 /// A verification key in the encoding `PROGRAM_REGISTER` takes.
@@ -293,12 +306,19 @@ pub fn verification_key_bytes(key: &VerifyingKey<Bn254>) -> [u8; VERIFICATION_KE
         .expect("a key of three public inputs has the size of a program key")
 }
 
+/// Proves `circuit`, in the encoding a program step carries.
 pub fn prove(
     proving_key: &ProvingKey<Bn254>,
     circuit: VaultCircuit,
     rng: &mut (impl RngCore + CryptoRng),
-) -> Result<Proof<Bn254>, SynthesisError> {
-    Groth16::<Bn254>::create_random_proof_with_reduction(circuit, proving_key, rng)
+) -> Result<CompressedGroth16Proof, SynthesisError> {
+    let proof = Groth16::<Bn254>::create_random_proof_with_reduction(circuit, proving_key, rng)?;
+    Ok(CompressedGroth16Proof::try_from(&Groth16Proof {
+        pi_a: proof.a,
+        pi_b: proof.b,
+        pi_c: proof.c,
+    })
+    .expect("the points of a proof compress"))
 }
 
 /// A domain tag as Bedrock encodes them: the bytes as a little-endian integer.
@@ -338,7 +358,6 @@ mod tests {
             program_step_id,
         },
     };
-    use logos_blockchain_groth16::{CompressedGroth16Proof, Groth16Proof};
     use logos_blockchain_key_management_system_keys::keys::ZkPublicKey;
 
     use super::*;
@@ -687,17 +706,11 @@ mod tests {
 
         let circuit = circuit(withdraw_step(), vec![]);
         let public = circuit.public.to_array();
-        let proof = prove(&proving_key, circuit, &mut ChaCha20Rng::seed_from_u64(1)).unwrap();
+        let proof = prove(proving_key, circuit, &mut ChaCha20Rng::seed_from_u64(1)).unwrap();
 
         let program = RegisteredProgram::new(
             ProgramVerificationKey::try_from_bytes(DEMO_VERIFICATION_KEY).unwrap(),
         )
-        .unwrap();
-        let proof = CompressedGroth16Proof::try_from(&Groth16Proof {
-            pi_a: proof.a,
-            pi_b: proof.b,
-            pi_c: proof.c,
-        })
         .unwrap();
         assert!(program.verify(&proof, &public).unwrap());
 

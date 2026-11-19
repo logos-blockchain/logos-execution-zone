@@ -92,6 +92,12 @@ pub enum Error {
         current: ChannelSeq,
     },
 
+    #[error("Invalid vault step: {0}")]
+    InvalidVaultStep(&'static str),
+
+    #[error("Failed to prove the vault step")]
+    VaultProofFailed(#[source] anyhow::Error),
+
     #[error("Zone-sdk error")]
     ZoneSdkError(#[from] logos_blockchain_zone_sdk::sequencer::Error),
 }

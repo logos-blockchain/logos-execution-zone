@@ -52,6 +52,7 @@ mod node_stream;
 mod publisher;
 #[cfg(test)]
 mod tests;
+pub mod vault;
 
 /// Time one [`FilterFinallyAbsent`] may hold the actor; the blocks and configs it read are kept.
 const FILTER_FINALLY_ABSENT_BUDGET: Duration = Duration::from_secs(10);
