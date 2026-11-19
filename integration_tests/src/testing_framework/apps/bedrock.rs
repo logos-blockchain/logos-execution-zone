@@ -15,6 +15,10 @@ use num_bigint::BigUint;
 use tempfile::TempDir;
 use tokio::time::{sleep, timeout};
 
+/// The node funds a transaction from at most four notes, at a gas price of 1e9. Same value as
+/// the notes of `bedrock/genesis/stakeholders.yaml`.
+const FUNDING_NOTE_VALUE: u64 = 1_000_000_000_000_000;
+
 /// A TF-managed Logos blockchain cluster used as LEZ's Bedrock layer.
 ///
 /// Logos owns node configuration generation through [`TopologyConfig`] and
@@ -258,7 +262,7 @@ fn lez_funding_account() -> WalletAccount {
 fn lez_funding_wallet() -> WalletConfig {
     WalletConfig::new(
         std::iter::repeat_with(|| WalletAccount {
-            value: 50_000_000,
+            value: FUNDING_NOTE_VALUE,
             ..lez_funding_account()
         })
         .take(20)
@@ -269,7 +273,7 @@ fn lez_funding_wallet() -> WalletConfig {
 fn committee_funding_wallet() -> WalletConfig {
     WalletConfig::new(
         std::iter::repeat_with(|| WalletAccount {
-            value: 1_000_000,
+            value: FUNDING_NOTE_VALUE,
             ..lez_funding_account()
         })
         .take(20)

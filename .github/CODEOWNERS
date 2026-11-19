@@ -85,6 +85,7 @@
 /lez/sequencer/core/                          @schouhy @erhant @arjentix
 /lez/sequencer/genesis/                       @schouhy @erhant @arjentix
 /lez/sequencer/bridge/                        @schouhy @erhant @arjentix
+/lez/vault_circuit/                           @erhant
 /lez/sequencer/service/                       @arjentix @schouhy @erhant
 /lez/mempool/                                 @arjentix @erhant
 
