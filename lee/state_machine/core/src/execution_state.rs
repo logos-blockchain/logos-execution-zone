@@ -297,7 +297,8 @@ pub enum ExecutionError {
 
 enum AccountEntry {
     Public {
-        is_authorized: bool,
+        /// Programs whose actor on this account the transaction's signatures authorize.
+        signed: BTreeSet<AccountId>,
         loaded: BTreeMap<AccountId, ActorState>,
     },
     Private {
@@ -1024,17 +1025,23 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
                 )
             })
             .collect();
-        for actor in public_context.actors.keys() {
+        for (actor, authority) in &public_context.actors {
             let account_id = actor.account_id;
             if witness_index.contains_key(&account_id) {
                 return Err(ExecutionError::PublicAndPrivate { account_id });
             }
-            accounts
+            let entry = accounts
                 .entry(account_id)
                 .or_insert_with(|| AccountEntry::Public {
-                    is_authorized: public_context.authorized_accounts.contains(&account_id),
+                    signed: BTreeSet::new(),
                     loaded: BTreeMap::new(),
                 });
+            if *authority == Authority::Signer
+                && public_context.authorized_accounts.contains(&account_id)
+                && let AccountEntry::Public { signed, .. } = entry
+            {
+                signed.insert(actor.program_account_id);
+            }
         }
         // Public seed grants land only at declared, proof-bound addresses, so none can conflict.
         if let Some(account_id) = pda_family_binding
@@ -1448,8 +1455,8 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
             .get(&account_id)
             .ok_or(ExecutionError::UndeclaredActor { actor })?;
         let (credential, granted) = match entry {
-            AccountEntry::Public { is_authorized, .. } => (
-                *is_authorized,
+            AccountEntry::Public { signed, .. } => (
+                signed.contains(&actor.program_account_id),
                 issuer.and_then(|issuer| {
                     delivery
                         .pda_seeds

@@ -1,5 +1,5 @@
 use super::*;
-use crate::ValidatedStateDiff;
+use crate::{Authority, ValidatedStateDiff};
 
 fn native_transfer_tx(
     sender: AccountId,
@@ -71,6 +71,39 @@ fn program_should_transfer_balance_from_an_authorized_account() {
             .native_balance(),
         Ok(1)
     );
+}
+
+#[test]
+fn a_signer_does_not_authorize_its_actor_declared_without_authority() {
+    let sender_key = PrivateKey::try_new([3; 32]).unwrap();
+    let sender_account_id = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
+    let receiver_account_id = AccountId::new([2; 32]);
+    let mut state = V03State::new()
+        .with_public_account_balances([(sender_account_id, 100), (receiver_account_id, 0)]);
+    let (from, to) = (
+        Actor::native_balance(sender_account_id),
+        Actor::native_balance(receiver_account_id),
+    );
+    let message = public_transaction::Message::try_new(
+        from,
+        [(from, Authority::None), (to, Authority::None)],
+        signer_nonces(&[&sender_key], vec![Nonce(0)]),
+        transfer(receiver_account_id, 1),
+    )
+    .unwrap();
+    let witness_set = public_transaction::WitnessSet::for_message(&message, &[&sender_key]);
+    let tx = PublicTransaction::new(message, witness_set);
+
+    let result = state.transition_from_public_transaction(&tx, 1, 0);
+
+    assert!(matches!(
+        result,
+        Err(LeeError::InvalidProgramBehavior(
+            InvalidProgramBehaviorError::NativeTransferFailed(
+                TransferError::UnauthorizedSender { account_id }
+            )
+        )) if account_id == sender_account_id
+    ));
 }
 
 #[test]

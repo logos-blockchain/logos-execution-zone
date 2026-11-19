@@ -726,6 +726,59 @@ fn a_root_authorized_public_account_is_authorized_from_any_origin() {
 }
 
 #[test]
+fn a_signature_authorizes_only_the_actors_marked_signer() {
+    let (marked, unmarked) = (actor(1, 9), actor(1, 8));
+    let mut script = Script::default()
+        .on(marked, sending(vec![send_to(unmarked)]))
+        .on(unmarked, sending(vec![]));
+
+    public_transaction(
+        PublicExecutionContext::new(
+            vec![(marked, Authority::Signer), (unmarked, Authority::None)],
+            [marked.account_id],
+        ),
+        marked,
+        &mut script,
+    )
+    .unwrap();
+
+    assert_eq!(authorized(&script), vec![(marked, true), (unmarked, false)]);
+}
+
+#[test]
+fn a_root_call_to_an_unmarked_actor_of_a_signer_is_not_authorized() {
+    let (marked, unmarked) = (actor(1, 9), actor(1, 8));
+    let mut script = Script::default().on(unmarked, sending(vec![]));
+
+    public_transaction(
+        PublicExecutionContext::new(
+            vec![(marked, Authority::Signer), (unmarked, Authority::None)],
+            [marked.account_id],
+        ),
+        unmarked,
+        &mut script,
+    )
+    .unwrap();
+
+    assert_eq!(authorized(&script), vec![(unmarked, false)]);
+}
+
+#[test]
+fn a_signer_mark_without_a_signature_authorizes_nothing() {
+    let marked = actor(1, 9);
+    let mut script = Script::default().on(marked, sending(vec![]));
+
+    public_transaction(
+        PublicExecutionContext::new(vec![(marked, Authority::Signer)], []),
+        marked,
+        &mut script,
+    )
+    .unwrap();
+
+    assert_eq!(authorized(&script), vec![(marked, false)]);
+}
+
+#[test]
 fn transition_windows_intersect_and_disjoint_ones_are_rejected() {
     let (outer, inner) = (actor(1, 9), actor(2, 9));
     let windowed = |inner_window: std::ops::Range<u64>| {
@@ -2619,10 +2672,13 @@ fn a_promoted_async_message_delegates_no_authorization_but_keeps_transaction_cre
         .on(signer, sending(Vec::new()));
 
     public_transaction(
-        PublicExecutionContext {
-            authorized_accounts: BTreeSet::from([signer.account_id]),
-            ..public_context(vec![owner, vault, sibling, relay, relay_vault, signer])
-        },
+        PublicExecutionContext::new(
+            [owner, vault, sibling, relay, relay_vault]
+                .into_iter()
+                .map(|actor| (actor, Authority::None))
+                .chain([(signer, Authority::Signer)]),
+            [signer.account_id],
+        ),
         owner,
         &mut script,
     )
