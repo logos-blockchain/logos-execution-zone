@@ -272,8 +272,8 @@ mod tests {
         66, 136, 209, 158, 243, 254, 168, 14, 19, 222, 8, 97,
     ];
 
-    const PUB_ACC_A_TEXT_ADDR: &str = "7VDm7YRPvimbZgCzuFqCGf6RwPsTV3XY5W9DzT71oain";
-    const PUB_ACC_B_TEXT_ADDR: &str = "6AtC7ekAeMXh9QgiBoUnsb69SVEnCy9DMhCy4nmJDbkh";
+    const PUB_ACC_A_TEXT_ADDR: &str = "8EBjKBe6VuFaVvqvapjFPVvGbRXKbJ8XqyQsUXGpGLKf";
+    const PUB_ACC_B_TEXT_ADDR: &str = "C9rb1MjdEzhFxHy3wxN2gnZQmuLE4eaVDFKxbcVG2eVq";
 
     const PRIV_ACC_A_TEXT_ADDR: &str = "44KVvzvh2ephQU9aR5snboGUXKgS1FnPYh1W4KZKwmhm";
     const PRIV_ACC_B_TEXT_ADDR: &str = "478hD6LXFTYu5gRRkWkCyXPRsWgCwAfRredoCUfxr5b9";
