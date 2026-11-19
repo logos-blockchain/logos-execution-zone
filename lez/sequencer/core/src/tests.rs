@@ -647,9 +647,7 @@ async fn a_charged_bridge_deposit_is_dropped_by_the_builder_bridge_guard() {
     );
 }
 
-#[tokio::test]
-async fn a_reverted_withdraw_releases_nothing_on_l1() {
-    let (mut sequencer, mempool_handle) = common_setup().await;
+fn bridge_withdraw_tx(amount: u64) -> LeeTransaction {
     let payer = &initial_pub_accounts_private_keys()[0];
     let root = Actor::new(payer.account_id, programs::bridge_account_id());
     let message = lee::public_transaction::Message::try_new_with_fees(
@@ -661,7 +659,7 @@ async fn a_reverted_withdraw_releases_nothing_on_l1() {
         ],
         signer_nonces(&[&payer.pub_sign_key], vec![Nonce(0)]),
         bridge_core::Message::Withdraw {
-            amount: u64::MAX,
+            amount,
             bedrock_account_pk: [0; 32],
         },
         common::test_utils::test_fee_declaration(payer.account_id),
@@ -669,7 +667,13 @@ async fn a_reverted_withdraw_releases_nothing_on_l1() {
     .unwrap();
     let witness_set =
         lee::public_transaction::WitnessSet::for_message(&message, &[&payer.pub_sign_key]);
-    let withdraw = LeeTransaction::Public(PublicTransaction::new(message, witness_set));
+    LeeTransaction::Public(PublicTransaction::new(message, witness_set))
+}
+
+#[tokio::test]
+async fn a_reverted_withdraw_releases_nothing_on_l1() {
+    let (mut sequencer, mempool_handle) = common_setup().await;
+    let withdraw = bridge_withdraw_tx(u64::MAX);
     mempool_handle
         .push((TransactionOrigin::User, withdraw.clone()))
         .await
@@ -680,6 +684,19 @@ async fn a_reverted_withdraw_releases_nothing_on_l1() {
     // Withdrawing more than the payer holds reverts.
     assert_block_tail(&built.block, std::slice::from_ref(&withdraw));
     assert!(built.block.body.is_reverted(0));
+}
+
+#[tokio::test]
+async fn a_withdrawal_is_dropped_until_payouts_are_supported() {
+    let (mut sequencer, mempool_handle) = common_setup().await;
+    mempool_handle
+        .push((TransactionOrigin::User, bridge_withdraw_tx(1)))
+        .await
+        .unwrap();
+
+    let built = sequencer.build_block_from_mempool().await.unwrap();
+
+    assert_block_tail(&built.block, &[]);
 }
 
 #[tokio::test]

@@ -962,7 +962,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     tx_index,
                     &mut scratch_summary,
                 ) {
-                    Ok((_events, tx_receipt)) => {
+                    Ok((events, tx_receipt)) => {
+                        // FIXME: interim. The sequencer cannot pay a withdrawal out on L1
+                        // yet, so every one is refused. Once it builds the vault's program
+                        // step, check the withdrawal against what the vault holds instead.
+                        if bridge_withdrawals(&events).next().is_some() {
+                            warn!(%tx_hash, "Dropping bridge withdrawal: payouts are not supported yet");
+                            return None;
+                        }
                         *state = scratch;
                         *summary = scratch_summary;
                         receipt = tx_receipt;
@@ -2355,6 +2362,19 @@ pub fn extract_bridge_deposit_id(tx: &LeeTransaction) -> Option<HashType> {
         } => Some(HashType(l1_deposit_op_id)),
         bridge_core::Message::Withdraw { .. } => None,
     }
+}
+
+/// The bridge withdrawals among `events`, each a payout the vault owes on L1.
+pub fn bridge_withdrawals(
+    events: &[lee_core::program::TransactionEvent],
+) -> impl Iterator<Item = bridge_core::event::Withdraw> {
+    events
+        .iter()
+        .filter(|emitted| {
+            emitted.account_id == programs::bridge_account_id()
+                && emitted.event.selector == bridge_core::event::Withdraw::SELECTOR
+        })
+        .filter_map(|emitted| bridge_core::event::Withdraw::from_bytes(&emitted.event.data).ok())
 }
 
 /// Parses a Bedrock wallet public key from hex.
