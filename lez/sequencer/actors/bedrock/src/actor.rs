@@ -191,7 +191,9 @@ impl<S: StorageActorTrait> Actor for BedrockActor<S> {
         )]
         loop {
             select! {
-                // Channel events first: a mailbox that always holds a publish must not starve them.
+                // Channel events first, so the ones a publish queued while it was funded are
+                // handed on before the next publish. This alone does not keep zone-sdk moving
+                // under back-to-back publishes: `Publisher::fund_ops` polls it for that.
                 biased;
                 Some(Some(item)) = OptionFuture::from(self.node_stream.as_mut().map(node_stream::NodeStream::next_item)) => {
                     let item = item?;

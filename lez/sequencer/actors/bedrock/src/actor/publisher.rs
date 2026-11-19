@@ -437,6 +437,7 @@ impl Publisher {
             let inscribe_op = self.inscription_op(inscription, parent);
             let msg_id = inscribe_op.id();
             let funded = self.fund_ops([Op::ChannelInscribe(inscribe_op)]).await?;
+            self.check_backlog(expected_seq)?;
 
             self.sign_and_submit(funded.funded_tx, msg_id, parent, funded.transfer_proof)
         } else {
@@ -562,6 +563,40 @@ impl Publisher {
         }
 
         Ok(())
+    }
+
+    /// Refuses a publish when the channel moved while the node funded it. The queued events
+    /// reach the consumer after the publish would, with checkpoints taken before it, so the
+    /// block has to be rebuilt on the view they leave.
+    fn check_backlog(&self, expected_seq: Option<ChannelSeq>) -> Result<()> {
+        let current = self
+            .backlog
+            .iter()
+            .filter(|event| self.moves_channel(event))
+            .fold(self.seq, |seq, _| seq.next());
+        if current == self.seq {
+            return Ok(());
+        }
+        Err(Error::ChannelMoved {
+            provided: expected_seq.unwrap_or(self.seq),
+            current,
+        })
+    }
+
+    /// Whether [`Self::on_blocks_processed`] will hand `event` on under a new channel sequence.
+    fn moves_channel(&self, event: &Event) -> bool {
+        let Event::BlocksProcessed {
+            channel_update,
+            finalized,
+            ..
+        } = event
+        else {
+            return false;
+        };
+        !matches!(channel_update, SdkChannelUpdate::Extension { adopted } if adopted.is_empty())
+            || finalized
+                .iter()
+                .any(|tx| self.replayed_up_to.is_none_or(|up_to| tx.l1_slot > up_to))
     }
 
     /// This node's inscription of `inscription` chained on `parent`.
