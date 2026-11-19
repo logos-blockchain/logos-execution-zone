@@ -34,10 +34,10 @@ pub enum Message {
         amount: BridgeAmount,
     },
 
-    /// Transfers native tokens from a user account to the bridge PDA account.
+    /// Transfers native tokens from the signing account to the bridge PDA account.
     ///
-    /// `bedrock_account_pk` is consumed by the Sequencer and is not used by the Bridge program
-    /// logic.
+    /// Sent to the signer's own actor of this program. `bedrock_account_pk` is the L1 key the
+    /// sequencer pays out to; the program does not read it.
     Withdraw {
         amount: BridgeAmount,
         bedrock_account_pk: [u8; 32],
