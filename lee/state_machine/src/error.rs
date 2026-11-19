@@ -118,6 +118,9 @@ pub enum InvalidProgramBehaviorError {
     #[error("Invalid native transfer: {0}")]
     NativeTransferFailed(#[from] TransferError),
 
+    #[error("Invalid signature program message: {0}")]
+    SetKeyFailed(#[from] crate::signature::program::SetKeyError),
+
     #[error(transparent)]
     Execution(#[from] ExecutionError),
 }
@@ -188,6 +191,12 @@ mod tests {
         // before execution and rejects instead.
         assert!(LeeError::UnknownProgram { at_root: false }.is_chargeable());
         assert!(!LeeError::UnknownProgram { at_root: true }.is_chargeable());
+        assert!(
+            LeeError::InvalidProgramBehavior(super::InvalidProgramBehaviorError::SetKeyFailed(
+                crate::signature::program::SetKeyError::ForeignSender
+            ))
+            .is_chargeable()
+        );
 
         // A malformed transaction is caught before execution, so it costs no
         // cycles and rejects the block instead of charging.
