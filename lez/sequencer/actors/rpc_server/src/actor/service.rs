@@ -427,6 +427,13 @@ fn map_executor_error<M>(
                 "Mempool is full".to_owned(),
                 None::<()>,
             ),
+            underpriced @ sequencer_executor_actor::error::Error::MempoolUnderpriced => {
+                ErrorObjectOwned::owned(
+                    sequencer_service_rpc::MEMPOOL_UNDERPRICED_ERROR_CODE,
+                    underpriced.to_string(),
+                    None::<()>,
+                )
+            }
             cycle @ sequencer_executor_actor::error::Error::MempoolNonceCycle => {
                 ErrorObjectOwned::owned(
                     sequencer_service_rpc::MEMPOOL_NONCE_CYCLE_ERROR_CODE,

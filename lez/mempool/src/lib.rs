@@ -3,15 +3,18 @@ use std::{
     collections::{BTreeMap, BinaryHeap, HashMap, HashSet},
     hash::Hash,
     ops::Bound,
+    time::{Duration, Instant},
 };
 
 /// Why [`MemPool::insert`] turned an item away.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Rejected {
-    /// The pool already holds `max_size` items.
+    /// The pool holds `max_size` items and none of them can be evicted.
     Full,
     /// It takes a slot another item holds: the first seen keeps it.
     Occupied,
+    /// It does not outbid the item it would evict from a full pool.
+    Underpriced,
     /// Its slots would order it both before and after another item, so neither could ever pop.
     Cycle,
 }
@@ -24,6 +27,7 @@ struct Entry<T, G, N> {
     queued: bool,
     /// Given back and not yet unparked: it holds its slots but does not pop.
     parked: bool,
+    born: Instant,
 }
 
 /// A bounded pool that pops the highest `priority` first, without ever
@@ -33,6 +37,7 @@ struct Entry<T, G, N> {
 /// - `slots_of`: the lane slots an item takes (one per signer, at its `nonce`). A lane pops in slot
 ///   order: an item is ready only once it holds the first slot of every lane it is in. An item in
 ///   no lane is always ready.
+/// - `outbids`: whether a bid may evict the lowest lane tail from a full pool.
 ///
 /// This is Kahn's algorithm with a priority heap, kept across pops:
 /// - items are the nodes of a DAG
@@ -43,6 +48,7 @@ pub struct MemPool<T, K = (), G = (), N = ()> {
     max_size: usize,
     priority: fn(&T) -> K,
     slots_of: fn(&T) -> Vec<(G, N)>,
+    outbids: fn(&K, &K) -> bool,
     /// Arrival numbers: counting up from 0 for inserted items, down from -1 for given back ones.
     next_arrival: i64,
     next_given_back: i64,
@@ -62,17 +68,23 @@ impl<T> MemPool<T> {
     /// A pool with no priorities nor lanes, simple arrival order (FIFO).
     #[must_use]
     pub fn new_fifo(max_size: usize) -> Self {
-        Self::new(max_size, |_| (), |_| Vec::new())
+        Self::new(max_size, |_| (), |_| Vec::new(), |(), ()| false)
     }
 }
 
 impl<T, K: Ord, G: Hash + Eq + Clone, N: Ord + Clone> MemPool<T, K, G, N> {
     #[must_use]
-    pub fn new(max_size: usize, priority: fn(&T) -> K, slots_of: fn(&T) -> Vec<(G, N)>) -> Self {
+    pub fn new(
+        max_size: usize,
+        priority: fn(&T) -> K,
+        slots_of: fn(&T) -> Vec<(G, N)>,
+        outbids: fn(&K, &K) -> bool,
+    ) -> Self {
         Self {
             max_size,
             priority,
             slots_of,
+            outbids,
             next_arrival: 0,
             next_given_back: -1,
             items: HashMap::new(),
@@ -109,17 +121,30 @@ impl<T, K: Ord, G: Hash + Eq + Clone, N: Ord + Clone> MemPool<T, K, G, N> {
             .map_or(0, |queue| queue.range(from..).count())
     }
 
-    /// Adds an item at its slots, if no other item holds any of them.
+    /// Adds an item at its slots, if no other item holds any of them. Into a full pool, it takes
+    /// the place of the lowest lane tail it outbids.
     pub fn insert(&mut self, item: T) -> Result<(), Rejected> {
         let slots = (self.slots_of)(&item);
         if !self.holders(&slots).is_empty() {
             return Err(Rejected::Occupied);
         }
-        if self.len() >= self.max_size {
-            return Err(Rejected::Full);
-        }
+        let evicted = if self.len() >= self.max_size {
+            let victim = self.eviction_candidate(&slots).ok_or(Rejected::Full)?;
+            let outbid = self.items.get(&victim).is_some_and(|held| {
+                (self.outbids)(&(self.priority)(&item), &(self.priority)(&held.item))
+            });
+            if !outbid {
+                return Err(Rejected::Underpriced);
+            }
+            Some(victim)
+        } else {
+            None
+        };
         if self.closes_cycle(&slots, &[]) {
             return Err(Rejected::Cycle);
+        }
+        if let Some(victim) = evicted {
+            self.remove(victim);
         }
         let arrival = self.next_arrival;
         self.next_arrival = arrival.saturating_add(1);
@@ -158,18 +183,45 @@ impl<T, K: Ord, G: Hash + Eq + Clone, N: Ord + Clone> MemPool<T, K, G, N> {
         }
     }
 
+    /// Drops every item held for `ttl` or longer, given back ones counting from when they were
+    /// given back. O(n) per call.
+    pub fn expire(&mut self, ttl: Duration) {
+        let expired: Vec<i64> = self
+            .items
+            .iter()
+            .filter(|(_, entry)| entry.born.elapsed() >= ttl)
+            .map(|(&arrival, _)| arrival)
+            .collect();
+        for arrival in expired {
+            self.remove(arrival);
+        }
+    }
+
     /// Pops the ready item that goes first.
     pub fn pop(&mut self) -> Option<T> {
-        let arrival = loop {
+        self.pop_unless(|_| false)
+    }
+
+    /// Pops the ready item that goes first, parking in place, as if given back, those `wait`
+    /// holds back. Unlike a pop and a give back, a parked item keeps its age.
+    pub fn pop_unless(&mut self, mut wait: impl FnMut(&T) -> bool) -> Option<T> {
+        loop {
             let (_, _, Reverse(arrival)) = self.ready.pop()?;
-            if self.is_ready(arrival) {
-                break arrival;
+            let ready = self.is_ready(arrival);
+            let Some(entry) = self.items.get_mut(&arrival) else {
+                continue;
+            };
+            entry.queued = false;
+            if !ready {
+                continue;
             }
-            if let Some(entry) = self.items.get_mut(&arrival) {
-                entry.queued = false;
+            if wait(&entry.item) {
+                entry.parked = true;
+                self.parked.push(arrival);
+                continue;
             }
-        };
-        self.remove(arrival)
+            return self.remove(arrival);
+        }
     }
 
     fn add(&mut self, arrival: i64, item: T, slots: Vec<(G, N)>, parked: bool) {
@@ -184,6 +236,7 @@ impl<T, K: Ord, G: Hash + Eq + Clone, N: Ord + Clone> MemPool<T, K, G, N> {
             slots,
             queued: false,
             parked,
+            born: Instant::now(),
         };
         self.items.insert(arrival, entry);
         self.enqueue_if_ready(arrival);
@@ -228,6 +281,27 @@ impl<T, K: Ord, G: Hash + Eq + Clone, N: Ord + Clone> MemPool<T, K, G, N> {
         holders
     }
 
+    /// The lowest bid among the inserted, unparked lane tails, latest arrival on ties: removing
+    /// it strands nothing. One ahead of `slots` in a lane they share is spared, as evicting it
+    /// would only leave a gap before them. O(n) per call.
+    fn eviction_candidate(&self, slots: &[(G, N)]) -> Option<i64> {
+        self.items
+            .iter()
+            .filter(|&(&arrival, entry)| {
+                arrival >= 0
+                    && !entry.parked
+                    && !is_ahead(&entry.slots, slots)
+                    && entry.slots.iter().all(|(lane, at)| {
+                        self.lanes
+                            .get(lane)
+                            .and_then(BTreeMap::last_key_value)
+                            .is_some_and(|(last, _)| last == at)
+                    })
+            })
+            .min_by_key(|&(&arrival, entry)| ((self.priority)(&entry.item), Reverse(arrival)))
+            .map(|(&arrival, _)| arrival)
+    }
+
     /// Whether an item at `slots`, once `replaced` are gone, would come after something that
     /// comes after it.
     ///
@@ -256,12 +330,7 @@ impl<T, K: Ord, G: Hash + Eq + Clone, N: Ord + Clone> MemPool<T, K, G, N> {
             let Some(entry) = self.items.get(&arrival) else {
                 continue;
             };
-            let ahead = entry.slots.iter().any(|(lane, at)| {
-                slots
-                    .iter()
-                    .any(|(new_lane, new_at)| lane == new_lane && at < new_at)
-            });
-            if ahead {
+            if is_ahead(&entry.slots, slots) {
                 return true;
             }
             behind.extend(entry.slots.iter().filter_map(|(lane, at)| next(lane, at)));
@@ -293,6 +362,15 @@ impl<T, K: Ord, G: Hash + Eq + Clone, N: Ord + Clone> MemPool<T, K, G, N> {
     }
 }
 
+/// Whether `slots` come before `others` in a lane they share.
+fn is_ahead<G: Eq, N: Ord>(slots: &[(G, N)], others: &[(G, N)]) -> bool {
+    slots.iter().any(|(lane, at)| {
+        others
+            .iter()
+            .any(|(other_lane, other_at)| lane == other_lane && at < other_at)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -305,6 +383,7 @@ mod tests {
             max_size,
             |&(priority, _, _)| priority,
             |(_, slots, _)| slots.clone(),
+            |new, old| new > old,
         )
     }
 
@@ -404,7 +483,8 @@ mod tests {
         let mut pool = MemPool::new_fifo(1);
 
         pool.insert(1).unwrap();
-        assert_eq!(pool.insert(2), Err(Rejected::Full));
+        // a FIFO bid never outbids, so nothing is evicted
+        assert_eq!(pool.insert(2), Err(Rejected::Underpriced));
 
         // Popping frees capacity again.
         assert_eq!(pool.pop(), Some(1));
@@ -427,6 +507,60 @@ mod tests {
         assert_eq!(pool.lane_len(&'A', &0), 2);
         assert_eq!(pool.lane_len(&'A', &1), 1);
         assert_eq!(drain(&mut pool), vec!["first", "next"]);
+    }
+
+    #[test]
+    fn a_full_pool_evicts_the_lowest_lane_tail_it_is_outbid_by() {
+        let mut pool = laned_pool(3);
+
+        // `a0` is no tail, so `b0` is the lowest one
+        pool.insert((1, vec![('A', 0)], "a0")).unwrap();
+        pool.insert((5, vec![('A', 1)], "a1")).unwrap();
+        pool.insert((2, vec![('B', 0)], "b0")).unwrap();
+        pool.insert((3, vec![('C', 0)], "c")).unwrap();
+        // now `c` is the lowest tail, and it is not outbid
+        assert_eq!(
+            pool.insert((0, vec![('D', 0)], "d")),
+            Err(Rejected::Underpriced)
+        );
+
+        assert_eq!(drain(&mut pool), vec!["c", "a0", "a1"]);
+    }
+
+    #[test]
+    fn expires_what_was_held_for_the_ttl() {
+        let mut pool = laned_pool(10);
+
+        pool.insert((1, vec![('A', 0)], "a0")).unwrap();
+        pool.give_back((1, vec![('B', 0)], "b0"));
+        pool.expire(Duration::from_secs(60));
+        assert_eq!(pool.len(), 2);
+
+        pool.expire(Duration::ZERO);
+        assert!(pool.is_empty());
+        assert!(pool.lanes.is_empty());
+        pool.unpark();
+        assert_eq!(pool.pop(), None);
+    }
+
+    #[test]
+    fn an_item_held_back_at_pop_parks_in_place_holding_its_lanes() {
+        let mut pool = laned_pool(10);
+
+        pool.insert((5, vec![('A', 0)], "wait")).unwrap();
+        pool.insert((1, vec![('B', 0)], "go")).unwrap();
+        pool.insert((0, vec![('A', 1)], "behind")).unwrap();
+
+        assert_eq!(
+            pool.pop_unless(|&(_, _, tag)| tag == "wait")
+                .map(|(_, _, tag)| tag),
+            Some("go")
+        );
+        assert_eq!(pool.pop(), None);
+        assert_eq!(pool.len(), 2);
+
+        pool.unpark();
+        assert_eq!(drain(&mut pool), vec!["wait", "behind"]);
     }
 
     #[test]

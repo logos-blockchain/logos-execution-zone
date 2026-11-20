@@ -665,6 +665,14 @@ async fn the_builder_orders_by_tip_without_breaking_a_nonce_sequence() {
     assert!(position(&alice_first) < position(&alice_second));
 }
 
+#[test]
+fn an_eviction_must_raise_the_priority_by_the_bump() {
+    assert!(crate::outbids(&110, &100));
+    assert!(!crate::outbids(&109, &100));
+    assert!(crate::outbids(&1, &0));
+    assert!(!crate::outbids(&0, &0));
+}
+
 #[tokio::test]
 async fn a_transaction_ahead_of_its_nonce_waits_for_the_gap() {
     let mut sequencer = start_sequencer(setup_sequencer_config()).await;
@@ -1107,7 +1115,8 @@ async fn push_tx_into_mempool_fails_until_a_turn_frees_it() {
     );
     assert_eq!(
         sequencer.mempool.insert((TransactionOrigin::User, other)),
-        Err(crate::Rejected::Full)
+        Err(crate::Rejected::Underpriced),
+        "a full mempool evicts only what a tx outbids"
     );
 
     // Empty the mempool by producing a block

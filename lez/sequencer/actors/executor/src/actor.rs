@@ -338,6 +338,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
                 Rejected::Occupied => {
                     Error::PendingSlot(anyhow::anyhow!("a slot is already pending"))
                 }
+                Rejected::Underpriced => Error::MempoolUnderpriced,
                 Rejected::Cycle => Error::MempoolNonceCycle,
             })?;
         Ok(())

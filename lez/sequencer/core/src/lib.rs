@@ -4,7 +4,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
     path::Path,
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context as _, Result, anyhow};
@@ -68,6 +68,13 @@ pub mod logging;
 pub mod pending;
 pub mod release_finality;
 pub mod system_approvals;
+
+/// How far, in percent, a transaction must raise the tip per declared gas of the pending one it
+/// evicts from a full mempool, so a dust raise cannot churn it.
+const EVICTION_BUMP_PERCENT: u128 = 10;
+
+/// How long a transaction may wait in the mempool, e.g. on a nonce gap that never fills.
+const MEMPOOL_TTL: Duration = Duration::from_mins(10);
 
 /// File in a sequencer home holding the Ed25519 key the node signs its channel inscriptions with,
 /// which is the key its stake accredits.
@@ -1202,6 +1209,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         taken: &mut Vec<(TransactionOrigin, LeeTransaction)>,
     ) -> Result<BlockWithMeta> {
         let now = Instant::now();
+        self.mempool.expire(MEMPOOL_TTL);
         self.mempool.unpark();
 
         // Build on the head: its tip is the parent, its state the validation
@@ -1360,7 +1368,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         while let Some((origin, tx, from_store)) = pending_from_store
             .pop_front()
             .map(|tx| (TransactionOrigin::Sequencer, tx, true))
-            .or_else(|| self.mempool.pop().map(|(origin, tx)| (origin, tx, false)))
+            .or_else(|| {
+                // One ahead of its signers' nonces waits, holding its lanes, for the gap to fill.
+                self.mempool
+                    .pop_unless(|(_, tx)| awaits_nonces(&working_state, tx))
+                    .map(|(origin, tx)| (origin, tx, false))
+            })
         {
             let tx_hash = tx.hash();
 
@@ -1375,12 +1388,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 pinned_deposit_notes.len().saturating_add(notes.len())
                     > logos_blockchain_zone_sdk::core::mantle::ledger::MAX_TRANSACTION_INPUTS
             }) {
-                continue;
-            }
-
-            // Ahead of its signers' nonces: it waits, holding its lanes, for the gap to fill.
-            if !from_store && awaits_nonces(&working_state, &tx) {
-                self.mempool.give_back((origin, tx));
                 continue;
             }
 
@@ -1970,7 +1977,21 @@ pub struct ChannelMovedWhileBuilding;
 
 #[must_use]
 pub fn new_mempool(max_size: usize) -> SequencerMemPool {
-    MemPool::new(max_size, |(_, tx)| priority(tx), |(_, tx)| nonce_slots(tx))
+    MemPool::new(
+        max_size,
+        |(_, tx)| priority(tx),
+        |(_, tx)| nonce_slots(tx),
+        outbids,
+    )
+}
+
+/// Whether a priority clears the one it would evict by [`EVICTION_BUMP_PERCENT`].
+fn outbids(new: &u128, old: &u128) -> bool {
+    let bump = old
+        .checked_div(100)
+        .expect("nonzero divisor")
+        .saturating_mul(EVICTION_BUMP_PERCENT);
+    new > old && *new >= old.saturating_add(bump)
 }
 
 /// Tip per declared gas, as a 64.64 fixed-point number.

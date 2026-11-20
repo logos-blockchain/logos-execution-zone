@@ -51,6 +51,11 @@ pub enum Error {
     #[error("The mempool is full")]
     MempoolIsFull,
 
+    #[error(
+        "The transaction does not raise the tip per gas enough over the pending one it would evict"
+    )]
+    MempoolUnderpriced,
+
     #[error("The transaction's nonces order it both before and after a pending transaction")]
     MempoolNonceCycle,
 
