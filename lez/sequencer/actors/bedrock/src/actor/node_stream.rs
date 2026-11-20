@@ -191,8 +191,10 @@ impl NodeStream {
         match msg {
             ZoneMessage::Block(zone_block) => {
                 let block = match borsh::from_slice::<Block>(&zone_block.data) {
-                    Ok(block) => BlockData::Block(block),
-                    Err(_) => BlockData::Undecodable(zone_block.data.into()),
+                    Ok(block) if chain_state::vault::mints_backed(&block, &zone_block.steps) => {
+                        BlockData::Block(block)
+                    }
+                    Ok(_) | Err(_) => BlockData::Undecodable(zone_block.data.into()),
                 };
 
                 self.publish(

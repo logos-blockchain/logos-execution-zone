@@ -425,8 +425,8 @@ pub fn settle_transaction(
                     reason: format!("{:#}", anyhow::Error::from(err)),
                 })?;
 
-            // A dispatch forged in the injection shape still passes; only
-            // verifying it against its source can close that (#809).
+            // A deposit or dispatch forged in the injection shape still passes;
+            // only verifying it against its source can close that (#809).
             validate_user_state_modification(transaction, state, &diff).map_err(|err| {
                 BlockIngestError::RestrictedAccountModification {
                     tx_index,

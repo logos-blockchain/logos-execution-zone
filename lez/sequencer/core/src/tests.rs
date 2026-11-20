@@ -717,8 +717,7 @@ async fn a_withdrawal_is_dropped_until_payouts_are_supported() {
 
 #[tokio::test]
 async fn an_unsigned_public_bridge_deposit_is_not_included() {
-    // The builder's guard drops it; settlement would refuse it too, since a
-    // bridge deposit is no longer an exempt system injection.
+    // The builder mints only the deposits it admitted itself.
     let config = setup_sequencer_config();
 
     let (mut sequencer, mempool_handle) = start_sequencer(config).await;

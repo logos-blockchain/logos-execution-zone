@@ -931,7 +931,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             // Gossiped transactions arrive from untrusted peers, same as
             // user-submitted ones, so they get the same full state validation.
             TransactionOrigin::User | TransactionOrigin::Gossip => {
-                // Only genesis mints through the bridge.
+                // A deposit is minted from the vault's intake, never from the mempool.
                 if extract_bridge_deposit_id(tx).is_some() {
                     if matches!(origin, TransactionOrigin::Gossip) {
                         debug!(%tx_hash, "Dropping gossiped bridge deposit");

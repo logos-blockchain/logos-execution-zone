@@ -21,4 +21,5 @@ pub mod full_stake_releases;
 pub mod ingest_error;
 pub mod stall_reason;
 pub mod timeout_node;
+pub mod vault;
 pub mod zone_indexer;

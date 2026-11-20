@@ -898,7 +898,9 @@ fn channel_entry(inscription: &InscriptionInfo, final_slot: Option<u64>) -> Chan
     let block = if <Inscription as AsRef<[u8]>>::as_ref(&inscription.payload).is_empty() {
         None
     } else {
+        // A block minting anything but the vault's deposits is no block of this chain.
         block_from_inscription(inscription)
+            .filter(|block| chain_state::vault::mints_backed(block, &inscription.steps))
     };
     ChannelEntry {
         msg: inscription.this_msg,

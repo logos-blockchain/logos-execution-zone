@@ -1,10 +1,9 @@
 //! The vault's program step of an inscription: what it asks zone-sdk to build and the proof of
 //! the vault's own rule.
 
-use std::sync::LazyLock;
-
 use borsh::BorshDeserialize as _;
 use bridge_core::{DepositMetadata, DepositRecipient};
+pub use chain_state::vault::{VAULT_PROGRAM, vault_key};
 use logos_blockchain_zone_sdk::{
     binary_codec::canonical::BinaryDecode as _,
     core::mantle::{
@@ -22,10 +21,7 @@ use logos_blockchain_zone_sdk::{
     },
     groth16::{Fr, fr_to_bytes},
     key_management_system_service::keys::{PK0, ZkPublicKey},
-    node_types::{
-        Inscription, ProgramId, ProgramNoteOpening, ProgramVerificationKey, Value,
-        derive_program_id,
-    },
+    node_types::{Inscription, ProgramNoteOpening, Value},
     sequencer::{
         MiniBlockSpec, ProgramOutput, ProgramStepDraft, ProgramStepSpec, StepSpec, UserOutput,
         prove_program_step,
@@ -37,9 +33,6 @@ use vault_circuit::{
 };
 
 use crate::{Result, error::Error};
-
-/// The id Bedrock gives the vault program.
-pub static VAULT_PROGRAM: LazyLock<ProgramId> = LazyLock::new(|| derive_program_id(&vault_key()));
 
 /// The most bytes the inscription of a deposit holds: a borsh [`DepositMetadata`] fits.
 pub const MAX_DEPOSIT_INSCRIPTION: u32 = 128;
@@ -327,13 +320,6 @@ impl VaultStep {
             .try_fold(held, |kept, (value, _)| kept.checked_sub(*value))
             .ok_or(Error::InvalidVaultStep("it pays out more than it holds"))
     }
-}
-
-/// The key the vault program is registered under.
-#[must_use]
-pub fn vault_key() -> ProgramVerificationKey {
-    ProgramVerificationKey::try_from_bytes(vault_circuit::DEMO_VERIFICATION_KEY)
-        .expect("the vault key is a valid program key")
 }
 
 /// The recipient as a deposit's intent commits to it.
