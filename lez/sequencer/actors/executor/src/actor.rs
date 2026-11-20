@@ -350,7 +350,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
         }: Transaction,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let online = self.state.online()?;
+        let online = self.state.online_mut()?;
 
         let size = u64::try_from(
             borsh::object_length(&transaction)
@@ -386,9 +386,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
             })?;
 
         online
-            .mempool_handle()
-            .try_push((origin.into(), transaction))
-            .map_err(|_err| Error::MempoolIsFull)?;
+            .sequencer_mut()
+            .mempool_mut()
+            .insert((origin.into(), transaction))
+            .map_err(|_item| Error::MempoolIsFull)?;
         Ok(())
     }
 }

@@ -8644,9 +8644,6 @@ dependencies = [
 [[package]]
 name = "mempool"
 version = "0.1.0"
-dependencies = [
- "tokio",
-]
 
 [[package]]
 name = "merlin"
@@ -12076,7 +12073,6 @@ dependencies = [
  "logging",
  "logos-blockchain-binary-codec",
  "logos-blockchain-core",
- "mempool",
  "mockall",
  "num-traits",
  "ping_core",
@@ -12144,7 +12140,6 @@ dependencies = [
  "libp2p 0.57.1",
  "logos-blockchain-core",
  "logos-blockchain-key-management-system-service",
- "mempool",
  "sequencer_channel_signing_actor",
  "sequencer_core",
  "sequencer_slasher_actor",

@@ -13,9 +13,8 @@ use kameo::{
 };
 use logos_blockchain_core::proofs::channel_multi_sig_proof::IndexedSignature;
 use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
-use mempool::{MemPool, MemPoolHandle};
 use sequencer_channel_signing_actor::protocol::{Signature, Wire};
-use sequencer_core::{TransactionOrigin, config::GossipConfig};
+use sequencer_core::config::GossipConfig;
 use sequencer_slasher_actor::protocol::{Approval, Offence};
 use sequencer_stake_core::SequencerKey;
 use system_upgrader_core::SignedApproval;
@@ -36,9 +35,9 @@ struct TestNode {
     local_peer_id: libp2p::PeerId,
 }
 
-/// The mempool and the gossip receivers a started node feeds.
+/// The gossip receivers a started node feeds.
 struct NodeSinks {
-    mempool: MemPool<(TransactionOrigin, LeeTransaction)>,
+    transactions: mpsc::UnboundedReceiver<LeeTransaction>,
     approvals: mpsc::UnboundedReceiver<Approval>,
     configs: mpsc::UnboundedReceiver<Wire>,
     system_approvals: mpsc::UnboundedReceiver<SignedApproval>,
@@ -152,7 +151,6 @@ fn pubkey(secret: [u8; 32]) -> Ed25519PublicKey {
     Ed25519Key::from_bytes(&secret).public_key()
 }
 
-/// An [`IngestSubmit`] that pushes straight into `mempool` unscreened.
 /// Forwards every `system_upgrader` approval the gossip actor accepts into a channel; stands in for
 /// the executor's approval pool.
 fn channel_system_approval_submit(
@@ -164,16 +162,11 @@ fn channel_system_approval_submit(
     })
 }
 
-fn unscreened_mempool_submit(
-    mempool: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
-) -> IngestSubmit {
+/// An [`IngestSubmit`] that forwards every transaction unscreened; stands in for the executor.
+fn unscreened_submit(sink: mpsc::UnboundedSender<LeeTransaction>) -> IngestSubmit {
     Arc::new(move |tx| {
-        let mempool = mempool.clone();
-        Box::pin(async move {
-            mempool
-                .try_push((TransactionOrigin::Gossip, tx))
-                .context("mempool is full")
-        })
+        let sink = sink.clone();
+        Box::pin(async move { sink.send(tx).context("the test dropped its receiver") })
     })
 }
 
@@ -188,8 +181,8 @@ fn test_config() -> GossipConfig {
     }
 }
 
-fn test_mempool_handle() -> MemPoolHandle<(TransactionOrigin, LeeTransaction)> {
-    MemPool::new_fifo(1000).handle().clone()
+fn test_submit() -> IngestSubmit {
+    unscreened_submit(mpsc::unbounded_channel().0)
 }
 
 fn test_approval_sink() -> kameo::actor::Recipient<Approval> {
@@ -230,8 +223,7 @@ async fn start_node(secret: [u8; 32], bootstrap: Vec<libp2p::Multiaddr>) -> (Tes
         listen_addr: "/ip4/127.0.0.1/udp/0/quic-v1".parse().unwrap(),
         bootstrap_peers: bootstrap,
     };
-    let mempool = MemPool::new_fifo(1000);
-    let mempool_handle = mempool.handle().clone();
+    let (transaction_tx, transactions) = mpsc::unbounded_channel();
     let (approval_tx, approvals) = mpsc::unbounded_channel();
     let (config_tx, configs) = mpsc::unbounded_channel();
     let (system_approval_tx, system_approvals) = mpsc::unbounded_channel();
@@ -242,7 +234,7 @@ async fn start_node(secret: [u8; 32], bootstrap: Vec<libp2p::Multiaddr>) -> (Tes
         CHANNEL,
         Ed25519Key::from_bytes(&secret),
         sink_ref.recipient(),
-        unscreened_mempool_submit(mempool_handle),
+        unscreened_submit(transaction_tx),
         config_sink_ref.recipient(),
         channel_system_approval_submit(system_approval_tx),
     )
@@ -258,7 +250,7 @@ async fn start_node(secret: [u8; 32], bootstrap: Vec<libp2p::Multiaddr>) -> (Tes
             local_peer_id,
         },
         NodeSinks {
-            mempool,
+            transactions,
             approvals,
             configs,
             system_approvals,
@@ -315,7 +307,7 @@ async fn new_binds_and_reports_listen_addr() {
         [1; 32],
         Ed25519Key::from_bytes(&[9; 32]),
         test_approval_sink(),
-        unscreened_mempool_submit(test_mempool_handle()),
+        test_submit(),
         test_config_sink(),
         channel_system_approval_submit(mpsc::unbounded_channel().0),
     )
@@ -334,7 +326,7 @@ async fn kill_stops_the_swarm_and_frees_the_socket() {
         [1; 32],
         Ed25519Key::from_bytes(&[9; 32]),
         test_approval_sink(),
-        unscreened_mempool_submit(test_mempool_handle()),
+        test_submit(),
         test_config_sink(),
         channel_system_approval_submit(mpsc::unbounded_channel().0),
     )
@@ -359,7 +351,7 @@ async fn kill_stops_the_swarm_and_frees_the_socket() {
         [1; 32],
         Ed25519Key::from_bytes(&[10; 32]),
         test_approval_sink(),
-        unscreened_mempool_submit(test_mempool_handle()),
+        test_submit(),
         test_config_sink(),
         channel_system_approval_submit(mpsc::unbounded_channel().0),
     )
@@ -423,9 +415,9 @@ async fn transaction_submitted_to_one_node_reaches_others() {
     assert!(
         wait_for(Duration::from_secs(30), async || {
             sinks_b
-                .mempool
-                .pop()
-                .is_some_and(|(_, received)| received.hash() == expected_hash)
+                .transactions
+                .try_recv()
+                .is_ok_and(|received| received.hash() == expected_hash)
         })
         .await,
         "B never received the gossiped transaction"
@@ -433,9 +425,9 @@ async fn transaction_submitted_to_one_node_reaches_others() {
     assert!(
         wait_for(Duration::from_secs(30), async || {
             sinks_c
-                .mempool
-                .pop()
-                .is_some_and(|(_, received)| received.hash() == expected_hash)
+                .transactions
+                .try_recv()
+                .is_ok_and(|received| received.hash() == expected_hash)
         })
         .await,
         "C never received the gossiped transaction"
@@ -474,9 +466,9 @@ async fn invalid_transaction_is_not_propagated() {
     assert!(
         wait_for(Duration::from_secs(30), async || {
             sinks_b
-                .mempool
-                .pop()
-                .is_some_and(|(_, received)| received.hash() == valid_hash)
+                .transactions
+                .try_recv()
+                .is_ok_and(|received| received.hash() == valid_hash)
         })
         .await,
         "B never received the valid transaction; gossip link not live"
@@ -486,8 +478,8 @@ async fn invalid_transaction_is_not_propagated() {
 
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert!(
-        sinks_b.mempool.pop().is_none(),
-        "an invalidly-signed transaction must not reach the mempool"
+        sinks_b.transactions.try_recv().is_err(),
+        "an invalidly-signed transaction must not be submitted"
     );
     drop((node_a, node_b));
 }

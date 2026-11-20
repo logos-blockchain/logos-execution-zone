@@ -1,16 +1,12 @@
 use chain_state::{ChainState, ChannelEntry};
-use common::{
-    block::{BedrockStatus, Block},
-    transaction::LeeTransaction,
-};
+use common::block::{BedrockStatus, Block};
 use kameo::actor::ActorRef;
-use mempool::MemPoolHandle;
 use sequencer_actors_common::SendErrorExt;
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
     protocol::{ChannelId, ChannelSeq, Ed25519Key, Ed25519PublicKey, PublishOutcome, Slot},
 };
-use sequencer_core::{SequencerCore, TransactionOrigin, config::SequencerConfig};
+use sequencer_core::{SequencerCore, config::SequencerConfig};
 use sequencer_storage_actor::{StorageActorTrait, protocol::AtomicUpdate};
 use sharding_pool_actor::ShardingPoolActor;
 use tracing::info;
@@ -28,7 +24,6 @@ mod turn;
 
 pub struct OnlineState<S: StorageActorTrait, B: BedrockActorTrait> {
     sequencer: SequencerCore<S, B>,
-    mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
     /// Whose turn it is to write: blocks are only produced in ours.
     turn: Turn,
     // TODO: Remove this field
@@ -78,10 +73,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
 
     pub const fn sequencer_mut(&mut self) -> &mut SequencerCore<S, B> {
         &mut self.sequencer
-    }
-
-    pub const fn mempool_handle(&self) -> &MemPoolHandle<(TransactionOrigin, LeeTransaction)> {
-        &self.mempool_handle
     }
 
     pub const fn is_our_turn(&self) -> bool {
@@ -199,7 +190,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         }
 
         let mempool = sequencer_core::new_mempool(config.mempool_max_size);
-        let mempool_handle = mempool.handle().clone();
 
         let is_our_turn = bedrock_pool_ref
             .ask(sequencer_bedrock_actor::protocol::CheckIsOurTurn {
@@ -229,7 +219,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
 
         Ok(Self {
             background_tasks: sequencer.background_task(),
-            mempool_handle,
             turn: Turn::new(is_our_turn),
             sequencer,
         })
