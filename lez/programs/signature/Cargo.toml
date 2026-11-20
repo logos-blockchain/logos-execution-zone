@@ -1,0 +1,15 @@
+[package]
+name = "signature_program"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[dependencies]
+borsh.workspace = true
+k256.workspace = true
+lee_core.workspace = true
+sha2.workspace = true
+signature_core.workspace = true
+
+[dev-dependencies]
+hex-literal = "1.0.0"

@@ -12,7 +12,7 @@ use lee_core::{
     },
     native_token::encode_balance,
     program::{PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, PrivateAccountKind, SyncMessage},
-    signing_key::SIGNATURE_PROGRAM_ID,
+    signing_key::signature_program_id,
 };
 use test_guest_core::Script;
 
@@ -742,11 +742,7 @@ fn a_hand_built_input_with_a_matching_receipt_proves() {
 #[test]
 fn a_guest_image_claim_for_the_reserved_id_is_refused() {
     let scripted = crate::test_methods::scripted();
-    for reserved in [
-        NATIVE_TOKEN_PROGRAM_ID,
-        PROGRAM_LOADER_ACCOUNT_ID,
-        SIGNATURE_PROGRAM_ID,
-    ] {
+    for reserved in [NATIVE_TOKEN_PROGRAM_ID, PROGRAM_LOADER_ACCOUNT_ID] {
         let (receipt, response) =
             receive_receipt(&scripted, &scripted_root_input(&Script::default(), true));
         let mut input = direct_input(
@@ -769,6 +765,36 @@ fn a_guest_image_claim_for_the_reserved_id_is_refused() {
             "A reserved program account has no deployable bytecode to claim",
         );
     }
+}
+
+#[test]
+fn a_signature_program_image_claim_is_accepted() {
+    let scripted = crate::test_methods::scripted();
+    let (receipt, response) =
+        receive_receipt(&scripted, &scripted_root_input(&Script::default(), true));
+    let mut input = direct_input(
+        scripted_id(),
+        &Script::default(),
+        &[&scripted],
+        vec![response],
+    );
+    let claim = ProgramImageWitness::Disclosed {
+        account_id: signature_program_id(),
+        image_id: scripted.id(),
+    };
+    input.program_image_witnesses.push(claim);
+
+    let output = prove_circuit_directly(&input, vec![receipt]).unwrap();
+
+    assert!(
+        output
+            .execution
+            .program_image_claims
+            .contains(&ProgramImageClaim::Disclosed {
+                account_id: signature_program_id(),
+                image_id: scripted.id(),
+            })
+    );
 }
 
 #[test]

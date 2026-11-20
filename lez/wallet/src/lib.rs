@@ -46,7 +46,7 @@ use lee_core::{
     execution_state::TransactionEntry,
     native_token::NATIVE_TOKEN_PROGRAM_ID,
     program::{MessageBody, MessageData, PROGRAM_LOADER_ACCOUNT_ID, Publication},
-    signing_key::{KeyType, SIGNATURE_PROGRAM_ID, SigningKeyState},
+    signing_key::{KeyType, SigningKeyState, signature_program_id},
 };
 /// The fee quote a [`WalletSequencerClient`] returns.
 pub use sequencer_service_rpc::FeeStateQuote;
@@ -1278,12 +1278,12 @@ impl<C: WalletSequencerClient> WalletCore<C> {
     /// account that has not signed yet.
     pub async fn current_key_type(&self, account_id: AccountId) -> Result<KeyType> {
         let Some(account) = self
-            .get_account_view(Actor::new(account_id, SIGNATURE_PROGRAM_ID))
+            .get_account_view(Actor::new(account_id, signature_program_id()))
             .await?
         else {
             return Ok(INITIAL_KEY_TYPE);
         };
-        let stored = account.data.actor_state(SIGNATURE_PROGRAM_ID);
+        let stored = account.data.actor_state(signature_program_id());
         if stored.is_empty() {
             return Ok(INITIAL_KEY_TYPE);
         }
