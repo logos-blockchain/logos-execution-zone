@@ -9,15 +9,11 @@ use kameo::{
     error::HookError,
 };
 use lee_core::BlockId;
-use logos_blockchain_zone_sdk::core::{
-    events::DepositRecreatedNotes,
-    mantle::{TxHash, ledger::Inputs, ops::channel::deposit::Metadata},
-};
 use sequencer_bedrock_actor::{
     mock::{CannedChannel, MockBedrockActor, SharedChannel, checkpoint_at, mock_msg_of},
     protocol::{
-        ChannelEntry, ChannelEvent, ChannelEventKind, ChannelSeq, ChannelUpdate, DepositInfo,
-        MsgId, PublisherEvent, Slot, ViewChange,
+        ChannelEntry, ChannelEvent, ChannelEventKind, ChannelSeq, ChannelUpdate, MsgId,
+        PublisherEvent, Slot, ViewChange,
     },
 };
 use sequencer_core::config::SequencerConfig;
@@ -66,8 +62,6 @@ fn empty_channel_update() -> ChannelUpdate {
         seq: ChannelSeq::mocked(0),
         view: ViewChange::Extension(Vec::new()),
         finalized: Vec::new(),
-        deposits: Vec::new(),
-        withdrawals: Vec::new(),
         undecodable: Vec::new(),
         finalized_signers: Vec::new(),
     }
@@ -81,19 +75,6 @@ fn entry(block: &Block, parent: &Block) -> ChannelEntry {
         block: Some(block.clone()),
         finally_absent_keys: BTreeSet::new(),
         final_slot: None,
-    }
-}
-
-/// A finalized L1 deposit identified by `op_id`.
-fn deposit(op_id: [u8; 32]) -> DepositInfo {
-    DepositInfo {
-        tx_hash: TxHash::from(op_id),
-        op_id,
-        channel_id: [0; 32].into(),
-        inputs: Inputs::empty(),
-        notes: DepositRecreatedNotes::default(),
-        amount: 5,
-        metadata: Metadata::new_unchecked(Vec::new()),
     }
 }
 
@@ -379,10 +360,9 @@ async fn the_channel_is_followed_from_the_stored_anchor() -> Result<()> {
     Ok(())
 }
 
-/// Bootstrapping records the deposits the channel replay carries, and hands the publisher the slot
-/// it replayed up to, past which the publisher reports them instead.
+/// Bootstrapping hands the publisher the slot it replayed up to.
 #[test]
-async fn bootstrapping_records_replayed_deposits_up_to_the_publisher_handoff() -> Result<()> {
+async fn bootstrapping_hands_the_publisher_the_slot_it_replayed_up_to() -> Result<()> {
     let (config, _home) = sequencer_config();
     let channel_id = config.bedrock_config.channel_id;
     let genesis = genesis();
@@ -394,12 +374,7 @@ async fn bootstrapping_records_replayed_deposits_up_to_the_publisher_handoff() -
     .share();
     let store = SharedStore::default();
     let executor = start(&config, &store, &channel).await?;
-    let deposit_event = |op_id| ChannelEvent {
-        channel_id,
-        event: ChannelEventKind::FinalizedDeposit(Arc::new(deposit(op_id))),
-    };
 
-    executor.ask(deposit_event([1; 32])).await?;
     executor
         .ask(ChannelEvent {
             channel_id,
@@ -412,19 +387,6 @@ async fn bootstrapping_records_replayed_deposits_up_to_the_publisher_handoff() -
         ExecutorStatus::Online { .. }
     ));
     assert_eq!(channel.lock().replayed_up_to, Some(Slot::from(10)));
-    executor.ask(deposit_event([2; 32])).await?;
-
-    let recorded: Vec<[u8; 32]> = store
-        .lock()
-        .pending_deposits
-        .iter()
-        .map(|record| record.deposit_op_id.0)
-        .collect();
-    assert_eq!(
-        recorded,
-        [[1; 32]],
-        "the publisher reports what follows the handoff"
-    );
     Ok(())
 }
 

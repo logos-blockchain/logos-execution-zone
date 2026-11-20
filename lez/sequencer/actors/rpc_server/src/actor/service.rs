@@ -425,6 +425,13 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         }
         Ok(())
     }
+
+    async fn submit_program_deposit(&self, deposit: HexBytes) -> Result<(), ErrorObjectOwned> {
+        self.executor_ref
+            .ask(sequencer_executor_actor::protocol::SubmitProgramDeposit { deposit: deposit.0 })
+            .await
+            .map_err(map_executor_error)
+    }
 }
 
 #[expect(clippy::needless_pass_by_value, reason = "More convenient mapping")]
@@ -449,7 +456,8 @@ fn map_executor_error<M>(
 ) -> ErrorObjectOwned {
     match err {
         SendError::HandlerError(handle_err) => match handle_err {
-            refused @ sequencer_executor_actor::error::Error::SystemApprovalRefused(_) => {
+            refused @ (sequencer_executor_actor::error::Error::SystemApprovalRefused(_)
+            | sequencer_executor_actor::error::Error::ProgramDepositRefused(_)) => {
                 ErrorObjectOwned::owned(
                     ErrorCode::InvalidParams.code(),
                     format!("{refused:#}"),

@@ -68,6 +68,7 @@ members = [
   "lez/programs/ping_receiver",
   "lez/programs/sequencer_stake",
   "lez/cross_zone",
+  "lez/vault_circuit",
   "lez/core_ffi",
 
   "test_guest_core",
@@ -146,6 +147,7 @@ wrapped_token_core = { path = "lez/programs/wrapped_token/core" }
 ping_core = { path = "lez/programs/ping_core" }
 sequencer_stake_core = { path = "lez/programs/sequencer_stake/core" }
 cross_zone = { path = "lez/cross_zone" }
+vault_circuit = { path = "lez/vault_circuit" }
 build_utils = { path = "build_utils" }
 test_guest_core = { path = "test_guest_core" }
 test_methods = { path = "lee/state_machine/test_methods" }
@@ -232,6 +234,11 @@ tempfile = "3.14.0"
 light-poseidon = "0.3.0"
 ark-bn254 = "0.5.0"
 ark-ff = "0.5.0"
+ark-ec = "0.5.0"
+ark-ed-on-bn254 = { version = "0.5.0", features = ["r1cs"] }
+ark-groth16 = "0.5.0"
+ark-r1cs-std = "0.5.0"
+ark-relations = "0.5.0"
 tiny-keccak = { version = "2.0.2", features = ["keccak"] }
 base64 = "0.22.1"
 bip39 = "2.2.0"
@@ -251,7 +258,18 @@ async-stream = "0.3.6"
 strum = { version = "0.28.0", features = ["derive"] }
 mockall = "0.15.0"
 
-logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-zone-sdk.git", rev = "1b5073a10caaa63cbbd825bd4397f2f1fb48b33a" }
+# FIXME: WIP branch for PUTXOs
+logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-zone-sdk.git", rev = "1f95999f474d2fae12a8ad4e3afd218678fb4799" }
+
+# Bedrock's hash and Groth16 verifier, for the vault circuit. Keep on the node revision zone-sdk pins.
+logos-blockchain-poseidon2 = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "767cf967b23b471869a7cae4cb5a6fa54f9389ac" }
+logos-blockchain-groth16 = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "767cf967b23b471869a7cae4cb5a6fa54f9389ac" }
+logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "767cf967b23b471869a7cae4cb5a6fa54f9389ac" }
+logos-blockchain-key-management-system-keys = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "767cf967b23b471869a7cae4cb5a6fa54f9389ac" }
+logos-blockchain-program-spend = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "767cf967b23b471869a7cae4cb5a6fa54f9389ac" }
+jf-poseidon2 = { git = "https://github.com/EspressoSystems/jellyfish.git", rev = "8d80230358e900f8d63765a937f63f4978ca1daa", features = [
+  "bn254",
+] }
 
 keycard-rs = { git = "https://github.com/keycard-tech/keycard-rs", rev = "9535a657ba04b1e6916de51777e22b4837c1a84d" }
 
@@ -260,6 +278,7 @@ rocksdb = { version = "0.24.0", default-features = false, features = [
   "bindgen-runtime",
 ] }
 rand = { version = "0.8.5", features = ["std", "std_rng", "getrandom"] }
+rand_chacha = "0.3.1"
 pcsc = "2"
 k256 = { version = "0.13.3", features = [
   "ecdsa-core",

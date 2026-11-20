@@ -1,21 +1,20 @@
 use std::{collections::BTreeSet, num::NonZero, sync::Arc, time::Duration};
 
-pub use chain_state::ChannelEntry;
+pub use chain_state::{ChannelEntry, vault::VaultMint};
 use common::block::Block;
 use kameo::Reply;
+use logos_blockchain_zone_sdk::sequencer::PreparedChannelConfig;
 pub use logos_blockchain_zone_sdk::{
     Slot, UnverifiedEd25519PublicKey, ZoneMessage,
     adapter::BoxStream,
     binary_codec::bincode::{DeserializeOp, SerializeOp},
-    core::mantle::{NoteId, transactions::Ops},
+    core::mantle::transactions::Ops,
     key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey, ZkPublicKey},
     node_types::{ChannelId, HeaderId, MsgId},
     sequencer::{
-        DepositInfo, IndexedSignature, IndexedSignatures, SequencerCheckpoint as Checkpoint,
-        SequencerCheckpoint, WithdrawArg, WithdrawInfo,
+        IndexedSignature, IndexedSignatures, SequencerCheckpoint as Checkpoint, SequencerCheckpoint,
     },
 };
-use logos_blockchain_zone_sdk::{core::mantle::OpProof, sequencer::PreparedChannelConfig};
 pub use sequencer_stake_core::{ChannelParams, SequencerKey};
 use sharding_pool_actor::ShardingKey;
 
@@ -89,15 +88,7 @@ pub enum ChannelEventKind {
     /// `channel/<channel_id>/finalized_block` topic.
     FinalizedBlock(Arc<FinalizedBlock>),
 
-    /// A deposit that has been finalized on chain since configured `stream_from` arriving to
-    /// `channel/<channel_id>/finalized_deposit` topic.
-    FinalizedDeposit(Arc<DepositInfo>),
-
-    /// A withdrawal that has been finalized on chain since configured `stream_from` arriving to
-    /// `channel/<channel_id>/finalized_withdrawal` topic.
-    FinalizedWithdrawal(Arc<WithdrawInfo>),
-
-    /// Every finalized block, deposit and withdrawal up to a slot has been published, arriving to
+    /// Every finalized block up to a slot has been published, arriving to
     /// `channel/<channel_id>/finalized_up_to` topic. Comes after the events it covers, also when
     /// the slots it covers hold none.
     FinalizedUpTo(FinalizedUpTo),
@@ -160,11 +151,6 @@ pub enum PublisherEvent {
 
     /// Message arriving to `channel/<channel_id>/publisher/config` topic.
     Config(LiveChannelConfig),
-
-    /// Deposits seen in L1 blocks before finality, arriving to
-    /// `channel/<channel_id>/publisher/deposits` topic. Observations, not view: a reorg can drop
-    /// one or deliver it again.
-    Deposits(Vec<DepositInfo>),
 }
 
 /// Everything one channel update carries.
@@ -181,10 +167,6 @@ pub struct ChannelUpdate {
     pub view: ViewChange,
     /// Message-lineage entries whose L1 block reached finality, in channel order.
     pub finalized: Vec<ChannelEntry>,
-    /// Finalized Bedrock deposit events, to record and mint on L2.
-    pub deposits: Vec<DepositInfo>,
-    /// Finalized Bedrock withdraw events, to reconcile against local intents.
-    pub withdrawals: Vec<WithdrawInfo>,
     /// Finalized inscriptions that are not blocks, with the key that signed each.
     pub undecodable: Vec<(MsgId, Ed25519PublicKey)>,
     /// The key that signed each finalized entry carrying a block.
@@ -200,8 +182,6 @@ pub struct LiveChannelConfig {
     pub config_tip: MsgId,
     /// Signatures Bedrock demands of the next config op, exactly.
     pub required_signatures: u16,
-    /// Signatures Bedrock demands of a channel transfer, exactly.
-    pub transfer_threshold: u16,
     /// Slots one sequencer's posting turn lasts.
     pub posting_timeframe: u32,
     /// Idle slots after which Bedrock passes a turn on.
@@ -262,7 +242,6 @@ pub struct CreateChannel {
     pub keys: Vec<Ed25519PublicKey>,
     pub channel_params: ChannelParams,
     pub configuration_threshold: NonZero<u16>,
-    pub transfer_threshold: NonZero<u16>,
 }
 
 impl ShardingKey for CreateChannel {
@@ -278,7 +257,6 @@ impl ShardingKey for CreateChannel {
 pub struct PublishBlock {
     pub channel_id: ChannelId,
     pub block: Block,
-    pub withdrawals: Vec<WithdrawArg>,
     /// Parent message ID to inscribe the block on.
     /// If [`None`] then the block is inscribed on top of channel tip.
     pub parent: Option<MsgId>,
@@ -288,112 +266,29 @@ pub struct PublishBlock {
     ///
     /// [`None`] will omit the check.
     pub expected_seq: Option<ChannelSeq>,
+    /// What the block moves through the bridge. The inscription carries the vault's program
+    /// step for it.
+    pub bridge: BridgeMoves,
+}
+
+/// What a block moves between Bedrock and the zone.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BridgeMoves {
+    /// The program deposits the block mints from, each as its holder submitted it: the step,
+    /// then its proof, in Bedrock's encoding.
+    pub deposits: Vec<Vec<u8>>,
+    /// The amount and Bedrock key of each withdrawal the block burns.
+    pub payouts: Vec<(u64, [u8; 32])>,
+}
+
+impl BridgeMoves {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.deposits.is_empty() && self.payouts.is_empty()
+    }
 }
 
 impl ShardingKey for PublishBlock {
-    type Key = ChannelId;
-
-    fn sharding_key(&self) -> Self::Key {
-        self.channel_id
-    }
-}
-
-/// Funds `block` chained on `parent` and bundled with a transfer re-creating
-/// `notes` unchanged, so it lands only where they exist; submits nothing.
-#[derive(Debug, Clone)]
-pub struct PreparePin {
-    pub channel_id: ChannelId,
-    pub block: Block,
-    pub parent: MsgId,
-    /// Deposited channel notes the block mints from.
-    pub notes: Vec<NoteId>,
-    /// As in [`PublishBlock::expected_seq`].
-    pub expected_seq: Option<ChannelSeq>,
-}
-
-/// A funded pinned block, short of the signatures its transfer needs.
-#[derive(Debug, Clone)]
-pub struct PreparedPin {
-    pub(crate) tx: Ops,
-    pub(crate) msg_id: MsgId,
-    pub(crate) parent: MsgId,
-    /// Proof of the fee transfer the wallet appended, if it appended one.
-    #[cfg_attr(
-        not(feature = "actor"),
-        expect(dead_code, reason = "Only the actor publishes a pin")
-    )]
-    pub(crate) fee_proof: Option<OpProof>,
-    /// Id of the pinned block, for the publish log.
-    #[cfg_attr(
-        not(feature = "actor"),
-        expect(dead_code, reason = "Only the actor publishes a pin")
-    )]
-    pub(crate) block_id: u64,
-    /// Encoded size of the pinned block in bytes, for the publish log.
-    #[cfg_attr(
-        not(feature = "actor"),
-        expect(dead_code, reason = "Only the actor publishes a pin")
-    )]
-    pub(crate) block_size: usize,
-}
-
-impl ShardingKey for PreparePin {
-    type Key = ChannelId;
-
-    fn sharding_key(&self) -> Self::Key {
-        self.channel_id
-    }
-}
-
-impl PreparedPin {
-    /// The transaction the transfer's signers sign.
-    #[must_use]
-    pub const fn tx(&self) -> &Ops {
-        &self.tx
-    }
-
-    #[must_use]
-    pub const fn msg_id(&self) -> MsgId {
-        self.msg_id
-    }
-
-    #[must_use]
-    pub const fn parent(&self) -> MsgId {
-        self.parent
-    }
-
-    /// A pin conjured outside the actor, for a mocked channel to serve.
-    #[cfg(feature = "mock")]
-    #[must_use]
-    pub fn mocked(msg_id: MsgId, parent: MsgId) -> Self {
-        Self {
-            tx: Ops::new(
-                logos_blockchain_zone_sdk::core::era::ForkDigest::new([0; 32]),
-                logos_blockchain_zone_sdk::core::mantle::transactions::TxList::new_unchecked(
-                    Vec::new(),
-                ),
-            ),
-            msg_id,
-            parent,
-            fee_proof: None,
-            block_id: 0,
-            block_size: 0,
-        }
-    }
-}
-
-/// Publishes a prepared pin with exactly the channel's transfer threshold of
-/// signatures.
-#[derive(Debug, Clone)]
-pub struct PublishPin {
-    pub channel_id: ChannelId,
-    pub prepared: PreparedPin,
-    pub signatures: Vec<IndexedSignature>,
-    /// As in [`PublishBlock::expected_seq`].
-    pub expected_seq: Option<ChannelSeq>,
-}
-
-impl ShardingKey for PublishPin {
     type Key = ChannelId;
 
     fn sharding_key(&self) -> Self::Key {
@@ -412,9 +307,6 @@ pub struct PublishOutcome {
     pub checkpoint: Checkpoint,
     /// The channel sequence this publish leaves the actor at.
     pub seq: ChannelSeq,
-    /// Channel notes the bundled withdrawals release, empty for a plain
-    /// publish.
-    pub released_notes: Vec<NoteId>,
 }
 
 /// Fund a channel config moving the channel to the config described here, ready to be signed.
@@ -427,7 +319,6 @@ pub struct PrepareConfig {
     pub posting_timeout: u32,
     /// Signatures the *next* config will have to carry, not this one.
     pub configuration_threshold: NonZero<u16>,
-    pub transfer_threshold: NonZero<u16>,
 }
 
 impl ShardingKey for PrepareConfig {
@@ -512,6 +403,22 @@ impl ShardingKey for CheckChannelExists {
     }
 }
 
+/// Checks a program deposit as its holder submitted it, the step and then its proof in Bedrock's
+/// encoding, and answers with what the zone mints once the vault takes it in.
+#[derive(Debug, Clone)]
+pub struct AdmitDeposit {
+    pub channel_id: ChannelId,
+    pub deposit: Vec<u8>,
+}
+
+impl ShardingKey for AdmitDeposit {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
+}
+
 /// Whether this sequencer is currently authorized to write to the channel.
 ///
 /// Prefer subscribing to `channel/<channel_id>/turn` topic instead of polling this.
@@ -564,20 +471,6 @@ impl AccreditedKeys {
     #[must_use]
     pub fn whose_turn(&self) -> Option<Ed25519PublicKey> {
         self.keys.get(usize::from(self.tip_sequencer)).copied()
-    }
-}
-
-/// The channel's notes on the current L1 branch, finalized or not.
-#[derive(Debug, Clone)]
-pub struct GetChannelNotes {
-    pub channel_id: ChannelId,
-}
-
-impl ShardingKey for GetChannelNotes {
-    type Key = ChannelId;
-
-    fn sharding_key(&self) -> Self::Key {
-        self.channel_id
     }
 }
 

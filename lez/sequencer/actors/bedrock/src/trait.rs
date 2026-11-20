@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 
 use kameo::{Actor, message::Message};
 
@@ -6,11 +6,11 @@ use crate::{
     Result,
     error::Error,
     protocol::{
-        AccreditedKeys, ChangeChannelConfig, ChannelReadStream, ChannelSeq, CheckChannelExists,
-        CheckIsOurTurn, CreateChannel, FilterFinallyAbsent, FollowChannel, GetAccreditedKeys,
-        GetChannelNotes, GetChannelTipMessageId, GetChannelTipSlot, InitializeChannelPublisher,
-        MsgId, NoteId, PrepareConfig, PreparePin, PreparedConfig, PreparedPin, PublishBlock,
-        PublishOutcome, PublishPin, ReadChannel, SequencerKey, Slot,
+        AccreditedKeys, AdmitDeposit, ChangeChannelConfig, ChannelReadStream, ChannelSeq,
+        CheckChannelExists, CheckIsOurTurn, CreateChannel, FilterFinallyAbsent, FollowChannel,
+        GetAccreditedKeys, GetChannelTipMessageId, GetChannelTipSlot, InitializeChannelPublisher,
+        MsgId, PrepareConfig, PreparedConfig, PublishBlock, PublishOutcome, ReadChannel,
+        SequencerKey, Slot, VaultMint,
     },
 };
 
@@ -20,14 +20,12 @@ pub trait BedrockActorTrait:
     + Message<InitializeChannelPublisher, Reply = Result<Option<ChannelSeq>>>
     + Message<CreateChannel, Reply = Result<PublishOutcome>>
     + Message<PublishBlock, Reply = Result<PublishOutcome>>
-    + Message<PreparePin, Reply = Result<PreparedPin>>
-    + Message<PublishPin, Reply = Result<PublishOutcome>>
     + Message<PrepareConfig, Reply = Result<PreparedConfig>>
     + Message<ChangeChannelConfig, Reply = Result<()>>
     + Message<CheckChannelExists, Reply = Result<bool>>
+    + Message<AdmitDeposit, Reply = Result<VaultMint>>
     + Message<CheckIsOurTurn, Reply = Result<bool>>
     + Message<GetAccreditedKeys, Reply = Result<Option<AccreditedKeys>>>
-    + Message<GetChannelNotes, Reply = Result<HashSet<NoteId>>>
     + Message<GetChannelTipSlot, Reply = Result<Option<Slot>>>
     + Message<GetChannelTipMessageId, Reply = Result<Option<MsgId>>>
     + Message<ReadChannel, Reply = Result<ChannelReadStream>>

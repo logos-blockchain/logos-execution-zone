@@ -169,9 +169,9 @@ pub(in crate::actor) fn checkpoint_record() -> ZoneCheckpointRecord {
         pending_txs: Vec::new(),
         lib: HeaderId::from([0; 32]),
         lib_slot: Slot::from(0),
-        channel_notes: Vec::new(),
         finalized_config: MsgId::root(),
         funding: Vec::new(),
+        program_notes: None,
     }
     .to_bytes()
     .expect("checkpoint serializes")

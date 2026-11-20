@@ -1,6 +1,7 @@
-use bridge_core::Message;
+use bridge_core::{BridgeAmount, Message};
 use lee_core::{
-    native_token::custody_transfer,
+    account::{AccountId, Actor},
+    native_token::{self, custody_transfer},
     program::{ProgramEvent, ReceiveInput, Response},
 };
 
@@ -15,15 +16,25 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
         "Bridge cannot be invoked through chain calls"
     );
 
-    let Message::Deposit {
-        l1_deposit_op_id,
-        recipient_id,
-        amount,
-    } = message
-    else {
-        panic!("Withdraws are disabled in the current version of LEZ");
-    };
+    match message {
+        Message::Deposit {
+            l1_deposit_op_id,
+            recipient_id,
+            amount,
+        } => deposit(input, l1_deposit_op_id, recipient_id, amount),
+        Message::Withdraw {
+            amount,
+            bedrock_account_pk,
+        } => withdraw(input, amount, bedrock_account_pk),
+    }
+}
 
+fn deposit(
+    input: &ReceiveInput,
+    l1_deposit_op_id: [u8; 32],
+    recipient_id: AccountId,
+    amount: BridgeAmount,
+) -> Response {
     let bridge = input.receiver.program_account_id;
     // The receipt actor state is the L1-deposit replay guard, so it must be the one this op id
     // derives.
@@ -55,12 +66,35 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
         })
 }
 
+/// Returns `amount` from the signing account to bridge custody.
+/// The event is what the sequencer pays out on L1.
+fn withdraw(input: &ReceiveInput, amount: BridgeAmount, bedrock_account_pk: [u8; 32]) -> Response {
+    assert!(input.is_authorized, "must sign for the withdrawing account");
+    assert!(amount > 0, "a withdrawal moves a nonzero amount");
+
+    let sender_id = input.receiver.account_id;
+    Response::keep_state()
+        .send_sync(
+            Actor::native_balance(sender_id),
+            &native_token::Message::Transfer {
+                to: bridge_core::compute_bridge_account_id(input.receiver.program_account_id),
+                amount: u128::from(amount),
+            },
+        )
+        .event(ProgramEvent {
+            selector: bridge_core::event::Withdraw::SELECTOR,
+            data: bridge_core::event::Withdraw {
+                sender_id,
+                amount,
+                bedrock_account_pk,
+            }
+            .to_bytes(),
+        })
+}
+
 #[cfg(test)]
 mod tests {
-    use lee_core::{
-        account::{AccountId, Actor, ActorState},
-        program::Transition,
-    };
+    use lee_core::{account::ActorState, program::Transition};
 
     use super::*;
 
@@ -129,5 +163,52 @@ mod tests {
     #[should_panic(expected = "Bridge cannot be invoked through chain calls")]
     fn a_deposit_from_another_program_is_refused() {
         let _transition = run(Some(AccountId::new([5; 32])), &[]);
+    }
+
+    fn run_withdraw(is_authorized: bool, amount: BridgeAmount) -> Transition {
+        let message = || Message::Withdraw {
+            amount,
+            bedrock_account_pk: [4; 32],
+        };
+        let input = ReceiveInput {
+            receiver: Actor::new(RECIPIENT, BRIDGE),
+            from: None,
+            is_authorized,
+            pre_state: ActorState::empty(),
+            message: borsh::to_vec(&message()).unwrap(),
+        };
+        handle_message(&input, message()).into_transition(input)
+    }
+
+    #[test]
+    fn a_withdrawal_returns_the_amount_to_custody_and_names_the_payout() {
+        let transition = run_withdraw(true, 5);
+
+        assert_eq!(transition.response.post_state, None);
+        assert_eq!(transition.response.sync_messages.len(), 1);
+        assert_eq!(
+            transition.response.sync_messages[0].to,
+            Actor::native_balance(RECIPIENT)
+        );
+        assert_eq!(
+            bridge_core::event::Withdraw::from_bytes(&transition.response.events[0].data).unwrap(),
+            bridge_core::event::Withdraw {
+                sender_id: RECIPIENT,
+                amount: 5,
+                bedrock_account_pk: [4; 32],
+            }
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "must sign for the withdrawing account")]
+    fn a_withdrawal_nobody_signed_is_refused() {
+        let _transition = run_withdraw(false, 5);
+    }
+
+    #[test]
+    #[should_panic(expected = "a withdrawal moves a nonzero amount")]
+    fn an_empty_withdrawal_is_refused() {
+        let _transition = run_withdraw(true, 0);
     }
 }

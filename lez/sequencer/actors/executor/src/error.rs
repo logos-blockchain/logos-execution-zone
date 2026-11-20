@@ -90,6 +90,9 @@ pub enum Error {
     #[error("Refused the system_upgrader approval: {0:#}")]
     SystemApprovalRefused(#[source] anyhow::Error),
 
+    #[error("Refused the program deposit: {0:#}")]
+    ProgramDepositRefused(#[source] anyhow::Error),
+
     #[error("Incorrect fee")]
     IncorrectFee(#[source] anyhow::Error),
 

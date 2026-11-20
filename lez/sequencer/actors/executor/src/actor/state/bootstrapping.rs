@@ -8,17 +8,11 @@ use common::{
 use kameo::actor::ActorRef;
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
-    protocol::{
-        BlockData, DepositInfo, Ed25519Key, FinalizedBlock, FinalizedUpTo, L1Position, MsgId, Slot,
-        WithdrawInfo,
-    },
+    protocol::{BlockData, Ed25519Key, FinalizedBlock, FinalizedUpTo, L1Position, MsgId, Slot},
 };
 use sequencer_core::{config::SequencerConfig, faults, release_finality};
 use sequencer_slasher_actor::protocol::{Report, ReportedOffence};
-use sequencer_storage_actor::{
-    StorageActorTrait,
-    protocol::{AtomicUpdate, ZoneAnchorRecord},
-};
+use sequencer_storage_actor::{StorageActorTrait, protocol::ZoneAnchorRecord};
 use tracing::warn;
 
 use crate::{
@@ -141,34 +135,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
         Ok(())
     }
 
-    /// Records a finalized deposit read alongside the finalized blocks.
-    pub async fn on_finalized_deposit(&self, deposit: &DepositInfo) -> Result<()> {
-        let outcome = self
-            .actors
-            .storage_ref
-            .ask(AtomicUpdate {
-                new_deposit_events: vec![sequencer_core::pending_deposit_event_record(deposit)],
-                ..sequencer_core::chain_update(&self.chain)
-            })
-            .await?;
-        sequencer_core::log_recorded_deposits(&outcome);
-        Ok(())
-    }
-
-    /// Reconciles a finalized withdrawal read alongside the finalized blocks.
-    pub async fn on_finalized_withdrawal(&self, withdrawal: &WithdrawInfo) -> Result<()> {
-        let outcome = self
-            .actors
-            .storage_ref
-            .ask(AtomicUpdate {
-                consumed_withdrawals: sequencer_core::released_note_keys(withdrawal).collect(),
-                ..sequencer_core::chain_update(&self.chain)
-            })
-            .await?;
-        sequencer_core::log_unmatched_withdrawals(&outcome);
-        Ok(())
-    }
-
     /// Applies one finalized channel entry, moving the final entry to it only on the lineage. A
     /// block the store already holds only settles its deliveries, a block that does not apply is
     /// skipped, like the follow path does. Advances the persisted anchor to a block the store
@@ -244,15 +210,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
         let mut update = sequencer_core::chain_update(&self.chain);
         update.blocks = sequencer_core::new_head_blocks(&self.chain, &head_before);
         if !newly_final.is_empty() {
-            // A reconstructed block is finalized, so any deposit it mints is
-            // permanently reflected in state (its receipt PDA); drop the
-            // pending record backfill may have re-delivered, so the drain
-            // stops re-minting. The same for the deliveries it carries.
-            update.finalized_deposit_records = newly_final
-                .iter()
-                .flat_map(|block| block.body.transactions.iter())
-                .filter_map(sequencer_core::extract_bridge_deposit_id)
-                .collect();
+            // A reconstructed block is finalized, so the deliveries it carries
+            // are settled: drop their pending records.
             for block in &newly_final {
                 update
                     .finalized_dispatch_records
@@ -292,19 +251,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
                 }
                 // A block we already hold verbatim needs no replay, but the
                 // channel serving it is what makes it irreversible, so its
-                // deposits and deliveries are settled and their records are
-                // owed nothing.
+                // deliveries are settled and their records are owed nothing.
                 Some(AcceptOutcome::AlreadyApplied | AcceptOutcome::Parked(_))
                     if let Some(stored) = held_final =>
                 {
                     Self::settle_reconstructed_deliveries(storage_ref, &stored).await?;
-                    update.finalized_deposit_records.extend(
-                        stored
-                            .body
-                            .transactions
-                            .iter()
-                            .filter_map(sequencer_core::extract_bridge_deposit_id),
-                    );
                     update.zone_anchor = Some(record);
                 }
                 Some(AcceptOutcome::AlreadyApplied) | None => {}

@@ -9,7 +9,16 @@ workspace = true
 
 [features]
 # Adds actor implementation using kameo_actors.
-actor = ["dep:kameo_actors", "dep:tokio", "dep:borsh", "dep:url", "dep:tracing"]
+actor = [
+  "dep:kameo_actors",
+  "dep:tokio",
+  "dep:borsh",
+  "dep:url",
+  "dep:tracing",
+  "dep:vault_circuit",
+  "dep:bridge_core",
+  "dep:rand",
+]
 # Adds mock actor implementation.
 mock = ["sequencer_actors_common/mock", "dep:mockall"]
 test-utils = []
@@ -28,13 +37,18 @@ thiserror.workspace = true
 anyhow.workspace = true
 futures.workspace = true
 kameo_actors = { workspace = true, optional = true }
-tokio = { workspace = true, features = ["time"], optional = true }
+tokio = { workspace = true, features = ["time", "rt"], optional = true }
 borsh = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
 tracing = { workspace = true, optional = true }
 mockall = { workspace = true, optional = true }
+vault_circuit = { workspace = true, optional = true }
+bridge_core = { workspace = true, features = ["host"], optional = true }
+rand = { workspace = true, optional = true }
 
 [dev-dependencies]
-rand.workspace = true
+logos-blockchain-program-spend.workspace = true
+lee.workspace = true
+logos-blockchain-core = { workspace = true, features = ["test-utils"] }
 glob.workspace = true
 tokio = { workspace = true, features = ["macros", "test-util"] }

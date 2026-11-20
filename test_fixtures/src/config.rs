@@ -66,7 +66,7 @@ const PRIVATE_FUNDER_ACCOUNT_SEED: [u8; 32] = [0x11; 32];
 
 /// Funding key of the Bedrock test node, matching `funding_pk` in `bedrock/node-config.yaml`.
 const BEDROCK_FUNDING_KEY_HEX: &str =
-    "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26";
+    "756b77fcff387d7358943535aca10505f1bda72343ceadf45433c5dbf4e2c903";
 
 #[derive(Clone)]
 pub struct InitialPrivateAccountForWallet {

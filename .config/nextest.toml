@@ -16,6 +16,14 @@ status-level = "slow"
 [test-groups]
 slashing = { max-threads = 1 }
 
+# Bedrock proves every transaction it funds, so a runner's cores go to the nodes: the binaries
+# with the most tests take turns at them.
+bedrock-heavy = { max-threads = 2 }
+
 [[profile.default.overrides]]
 filter = 'binary(slashing) + test(/^any_program::/) + test(/^system_upgrade::/)'
 test-group = 'slashing'
+
+[[profile.default.overrides]]
+filter = 'binary(sequencer_ffi) + binary(wallet_ffi_non_generic_transfers)'
+test-group = 'bedrock-heavy'
