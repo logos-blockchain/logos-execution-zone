@@ -200,6 +200,12 @@ pub struct GetSystemProposalsReply {
     pub proposals: Vec<common::system_upgrades::ProposalApprovals>,
 }
 
+/// A program deposit its holder wants the vault to take in: the step, then its proof, in
+/// Bedrock's encoding.
+pub struct SubmitProgramDeposit {
+    pub deposit: Vec<u8>,
+}
+
 /// A committee member's approval of a `system_upgrader` change, for the producer's pool.
 pub struct SubmitSystemApproval {
     pub approval: system_upgrader_core::SignedApproval,

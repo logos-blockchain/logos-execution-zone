@@ -191,6 +191,9 @@ pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
     /// The config draft zone-sdk last funded for us, submitted once its
     /// signatures are in.
     config_draft: Option<ConfigDraft>,
+    /// Deposits admitted to the vault and not minted yet, each with the bytes its holder
+    /// submitted. Lost on a restart: a holder whose deposit never landed submits it again.
+    pending_deposits: VecDeque<(Vec<u8>, chain_state::vault::VaultMint)>,
     finalized_config: MsgId,
     /// Channel sequence of the last thing `BedrockActor` handed us.
     applied_seq: Option<sequencer_bedrock_actor::protocol::ChannelSeq>,
@@ -229,6 +232,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// Production turns a draft gets to collect its signatures. Funding one takes the node a
     /// proof, which can leave the peers less than a turn to answer.
     const CONFIG_SIGNING_TURNS: u8 = 3;
+    /// Admitted deposits held for a block at once.
+    const MAX_PENDING_DEPOSITS: usize = 64;
 
     #[expect(
         clippy::too_many_arguments,
@@ -305,6 +310,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             watchers,
             channel_signer,
             config_draft: None,
+            pending_deposits: VecDeque::new(),
             finalized_config,
             applied_seq,
             channel_signing_key,
@@ -579,6 +585,39 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         }
     }
 
+    /// Admits a program deposit its holder submitted, the step and then its proof in Bedrock's
+    /// encoding, to be minted by a block whose inscription has the vault take it in.
+    pub async fn admit_deposit(&mut self, deposit: Vec<u8>) -> Result<()> {
+        let mint = self
+            .bedrock_pool_ref
+            .ask(sequencer_bedrock_actor::protocol::AdmitDeposit {
+                channel_id: self.channel_id,
+                deposit: deposit.clone(),
+            })
+            .await
+            .map_err(|err| anyhow!(err))
+            .context("The vault does not admit the deposit")?;
+        anyhow::ensure!(
+            self.pending_deposits.len() < Self::MAX_PENDING_DEPOSITS,
+            "Too many deposits are waiting for a block"
+        );
+        anyhow::ensure!(
+            self.pending_deposits
+                .iter()
+                .all(|(_, held)| held.id != mint.id),
+            "The deposit is already waiting for a block"
+        );
+        anyhow::ensure!(
+            !self
+                .with_state(|state| deposit_already_minted(state, mint.id))
+                .await,
+            "The deposit is already minted"
+        );
+        info!(deposit = %hex::encode(mint.id), amount = mint.amount, "Admitted a vault deposit");
+        self.pending_deposits.push_back((deposit, mint));
+        Ok(())
+    }
+
     /// Runs everything this sequencer owes its turn: builds a block from
     /// mempool transactions, publishes it via zone-sdk, and submits any
     /// committee-config update the new state calls for.
@@ -602,6 +641,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let BlockWithMeta {
             block,
             mempool_transactions,
+            deposits,
             ..
         } = built;
 
@@ -610,6 +650,19 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             for (origin, tx) in mempool_transactions.into_iter().rev() {
                 self.mempool.push_front((origin, tx));
             }
+        }
+        // Minted, or refused by the vault or by Bedrock, which a later turn would not change.
+        // Any other failure leaves them for the next turn.
+        if matches!(
+            &publish_res,
+            Ok(_)
+                | Err(kameo::error::SendError::HandlerError(
+                    sequencer_bedrock_actor::error::Error::InvalidVaultDeposit(_)
+                        | sequencer_bedrock_actor::error::Error::InvalidVaultStep(_)
+                        | sequencer_bedrock_actor::error::Error::VaultStepRefused(_)
+                ))
+        ) {
+            self.forget_deposits(deposits.iter().map(|(_, id)| *id));
         }
         let outcome = match publish_res {
             Ok(outcome) => outcome,
@@ -633,6 +686,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         Ok(block_id)
     }
 
+    fn forget_deposits(&mut self, ids: impl IntoIterator<Item = [u8; 32]>) {
+        for id in ids {
+            self.pending_deposits.retain(|(_, mint)| mint.id != id);
+        }
+    }
+
     /// Publishes `built` chained on its pin.
     async fn publish_block(&self, built: &BlockWithMeta) -> Result<PublishOutcome, PublishError> {
         // Height and pin together: both come from the view, read under one lock.
@@ -648,7 +707,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 block: built.block.clone(),
                 parent: Some(built.parent),
                 expected_seq: self.applied_seq,
-                bridge: sequencer_bedrock_actor::protocol::BridgeMoves::default(),
+                bridge: sequencer_bedrock_actor::protocol::BridgeMoves {
+                    deposits: built
+                        .deposits
+                        .iter()
+                        .map(|(deposit, _)| deposit.clone())
+                        .collect(),
+                    payouts: Vec::new(),
+                },
             })
             .await
             .map_err(|err| err.flatten().map_msg(|_| ()))
@@ -1236,6 +1302,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let mut pending_from_store = pending_dispatches;
         pending_from_store.extend(slash_txs);
         pending_from_store.extend(finalize_unstake_txs);
+        // As many deposits as one vault step takes in, oldest first.
+        let mints: Vec<_> = self
+            .pending_deposits
+            .iter()
+            .take(chain_state::vault::MAX_DEPOSITS)
+            .filter_map(|(deposit, mint)| Some((deposit.clone(), mint.id, mint.transaction()?)))
+            .collect();
+        pending_from_store.extend(mints.iter().map(|(_, _, tx)| tx.clone()));
         while let Some((origin, tx, from_store)) = pending_from_store
             .pop_front()
             .map(|tx| (TransactionOrigin::Sequencer, tx, true))
@@ -1565,10 +1639,24 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
         sequencer_core_metrics::record_block_creation_time(now.elapsed());
 
+        // A deposit left out was refused by the bridge, or found the block full: its holder
+        // still holds the notes and may submit it again.
+        let (minted, refused): (Vec<_>, Vec<_>) = mints
+            .into_iter()
+            .partition(|(_, _, tx)| block.body.transactions.contains(tx));
+        for (_, id, _) in &refused {
+            warn!(deposit = %hex::encode(id), "Dropping a vault deposit the block left out");
+        }
+        self.forget_deposits(refused.iter().map(|(_, id, _)| *id));
+
         Ok(BlockWithMeta {
             block,
             parent,
             mempool_transactions,
+            deposits: minted
+                .into_iter()
+                .map(|(deposit, id, _)| (deposit, id))
+                .collect(),
         })
     }
 
@@ -1890,6 +1978,8 @@ struct BlockWithMeta {
     /// The transactions this block took from the mempool, in the order it took
     /// them.
     mempool_transactions: Vec<(TransactionOrigin, LeeTransaction)>,
+    /// The vault deposits this block mints, in its order, each with its id.
+    deposits: Vec<(Vec<u8>, [u8; 32])>,
 }
 
 /// Why a publish did not go out.
@@ -2361,6 +2451,15 @@ pub fn extract_bridge_deposit_id(tx: &LeeTransaction) -> Option<HashType> {
         } => Some(HashType(l1_deposit_op_id)),
         bridge_core::Message::Withdraw { .. } => None,
     }
+}
+
+/// Whether the bridge holds the receipt of deposit `id`, which it writes when it mints one.
+fn deposit_already_minted(state: &lee::V03State, id: [u8; 32]) -> bool {
+    let bridge_program_id = programs::bridge_account_id();
+    let receipt_id = bridge_core::deposit_receipt_account_id(bridge_program_id, id);
+    state
+        .get_account_by_id_ref(receipt_id)
+        .is_some_and(|receipt| !receipt.data.actor_state(bridge_program_id).is_empty())
 }
 
 /// The bridge withdrawals among `events`, each a payout the vault owes on L1.

@@ -16,7 +16,7 @@ use crate::{
     protocol::{
         AccreditedKeys, ChannelReadStream, ChannelSeq, CreateChannel, FilterFinallyAbsent,
         HeaderId, InitializeChannelPublisher, MsgId, PublishBlock, PublishOutcome, ReadChannel,
-        SequencerCheckpoint, SequencerKey, Slot, ZoneMessage,
+        SequencerCheckpoint, SequencerKey, Slot, VaultMint, ZoneMessage,
     },
 };
 
@@ -46,6 +46,10 @@ pub struct CannedChannel {
     /// [`FollowChannel::anchor`](crate::protocol::FollowChannel::anchor) of every follow, in
     /// order.
     pub follows: Vec<Option<ZoneAnchorRecord>>,
+    /// The deposits the vault admits, by the bytes submitted; it refuses any other.
+    pub admitted: Vec<(Vec<u8>, VaultMint)>,
+    /// The deposits of every publish, in order.
+    pub taken_in: Vec<Vec<u8>>,
 }
 
 impl CannedChannel {
@@ -107,6 +111,20 @@ impl SharedChannel {
         });
         mock.expect_handle_check_is_our_turn()
             .returning(|_msg, _ctx| Ok(true));
+        mock.expect_handle_admit_deposit().returning({
+            let channel = self.clone();
+            move |msg, _ctx| {
+                channel
+                    .lock()
+                    .admitted
+                    .iter()
+                    .find(|(deposit, _)| *deposit == msg.deposit)
+                    .map(|(_, mint)| mint.clone())
+                    .ok_or(Error::InvalidVaultDeposit(
+                        "the canned vault does not know it",
+                    ))
+            }
+        });
         mock.expect_handle_get_channel_tip_slot().returning({
             let channel = self.clone();
             move |_msg, _ctx| {
@@ -170,9 +188,13 @@ impl SharedChannel {
                       block,
                       parent,
                       expected_seq: _,
-                      bridge: _,
+                      bridge,
                   },
-                  _ctx| channel.publish(&block, parent)
+                  _ctx| {
+                let outcome = channel.publish(&block, parent)?;
+                channel.lock().taken_in.extend(bridge.deposits);
+                Ok(outcome)
+            }
         });
         mock
     }

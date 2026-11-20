@@ -13,6 +13,8 @@ use logos_blockchain_zone_sdk::{
     node_types::{ProgramId, ProgramVerificationKey, derive_program_id},
 };
 use sequencer_bridge::{Credited, deposit_tx};
+/// The deposits one vault step takes in.
+pub use vault_circuit::MAX_DEPOSITS;
 
 /// The id Bedrock gives the vault program.
 pub static VAULT_PROGRAM: LazyLock<ProgramId> = LazyLock::new(|| derive_program_id(&vault_key()));

@@ -55,7 +55,7 @@ use crate::{
         BridgeMoves, ChannelEntry, ChannelEvent, ChannelEventKind, ChannelId, ChannelParams,
         ChannelSeq, ChannelUpdate, DeserializeOp as _, Ed25519Key, Ed25519PublicKey,
         IndexedSignatures, LiveChannelConfig, MsgId, Ops, PreparedConfig, PublishOutcome,
-        PublisherEvent, SequencerCheckpoint, Slot, ViewChange, ZkPublicKey,
+        PublisherEvent, SequencerCheckpoint, Slot, VaultMint, ViewChange, ZkPublicKey,
     },
 };
 
@@ -583,20 +583,33 @@ impl Publisher {
 
     /// The inscription of `data` on `parent` carrying the vault's program step for `bridge`,
     /// with the proofs of its steps.
+    /// Checks a deposit its holder submitted for this channel's vault.
+    pub fn admit_deposit(&self, deposit: &[u8]) -> Result<VaultMint> {
+        let committee = Self::committee(&self.vault_signing_key());
+        let admitted = VaultDeposit::admit(deposit, &self.channel_id, &committee)?;
+        VaultMint::of(&admitted.deposit).ok_or(Error::InvalidVaultDeposit("it spends no note"))
+    }
+
+    fn vault_signing_key(&self) -> SigningKey {
+        SigningKey::from_channel_seed(self.channel_signing_key.clone().into_unsecured().as_bytes())
+    }
+
+    // FIXME: the committee is this sequencer alone until the sequencer set shares one.
+    fn committee(signing_key: &SigningKey) -> Committee {
+        Committee {
+            threshold: 1,
+            signers: vec![signing_key.public_key()],
+        }
+    }
+
     async fn vault_inscription(
         &mut self,
         data: Inscription,
         parent: MsgId,
         bridge: &BridgeMoves,
     ) -> Result<(InscriptionOp, Vec<StepProof>)> {
-        let signing_key = SigningKey::from_channel_seed(
-            self.channel_signing_key.clone().into_unsecured().as_bytes(),
-        );
-        // FIXME: the committee is this sequencer alone until the sequencer set shares one.
-        let committee = Committee {
-            threshold: 1,
-            signers: vec![signing_key.public_key()],
-        };
+        let signing_key = self.vault_signing_key();
+        let committee = Self::committee(&signing_key);
         let deposits = bridge
             .deposits
             .iter()

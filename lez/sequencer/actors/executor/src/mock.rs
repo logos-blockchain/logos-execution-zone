@@ -31,7 +31,7 @@ use crate::{
         GetProofsAndRoot, GetProofsAndRootReply, GetPublications, GetPublicationsReply,
         GetRecoveryBinding, GetStatus, GetSystemProposals, GetSystemProposalsReply, GetTransaction,
         GetTransactionReceipt, ProduceBlock, RequeueCrossZoneDeadLetter,
-        RequeueCrossZoneDeadLetterReply, SubmitSystemApproval, Transaction,
+        RequeueCrossZoneDeadLetterReply, SubmitProgramDeposit, SubmitSystemApproval, Transaction,
     },
 };
 
@@ -160,6 +160,12 @@ mockall::mock! {
         pub fn handle_submit_system_approval(
             &mut self,
             msg: SubmitSystemApproval,
+            ctx: &mut Context<Self, Result<()>>
+        ) -> Result<()>;
+
+        pub fn handle_submit_program_deposit(
+            &mut self,
+            msg: SubmitProgramDeposit,
             ctx: &mut Context<Self, Result<()>>
         ) -> Result<()>;
 
@@ -440,6 +446,18 @@ impl Message<GetSystemProposals> for MockExecutorActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_get_system_proposals(msg, ctx)
+    }
+}
+
+impl Message<SubmitProgramDeposit> for MockExecutorActor {
+    type Reply = Result<()>;
+
+    async fn handle(
+        &mut self,
+        msg: SubmitProgramDeposit,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_submit_program_deposit(msg, ctx)
     }
 }
 

@@ -38,12 +38,13 @@ use crate::{
     actor::finality::{BlockSummary, ConfigIndex, L1Reader},
     error::Error,
     protocol::{
-        AccreditedKeys, ChangeChannelConfig, ChannelEvent, ChannelId, ChannelReadStream,
-        ChannelSeq, CheckChannelExists, CheckIsOurTurn, CreateChannel, DeserializeOp as _,
-        Ed25519PublicKey, FilterFinallyAbsent, FollowChannel, GetAccreditedKeys,
-        GetChannelTipMessageId, GetChannelTipSlot, HeaderId, InitializeChannelPublisher,
-        LiveChannelConfig, MsgId, PrepareConfig, PreparedConfig, PublishBlock, PublishOutcome,
-        ReadChannel, SequencerCheckpoint, SequencerKey, Slot, UnverifiedEd25519PublicKey,
+        AccreditedKeys, AdmitDeposit, ChangeChannelConfig, ChannelEvent, ChannelId,
+        ChannelReadStream, ChannelSeq, CheckChannelExists, CheckIsOurTurn, CreateChannel,
+        DeserializeOp as _, Ed25519PublicKey, FilterFinallyAbsent, FollowChannel,
+        GetAccreditedKeys, GetChannelTipMessageId, GetChannelTipSlot, HeaderId,
+        InitializeChannelPublisher, LiveChannelConfig, MsgId, PrepareConfig, PreparedConfig,
+        PublishBlock, PublishOutcome, ReadChannel, SequencerCheckpoint, SequencerKey, Slot,
+        UnverifiedEd25519PublicKey, VaultMint,
     },
 };
 
@@ -423,6 +424,23 @@ impl<S: StorageActorTrait> Message<CheckIsOurTurn> for BedrockActor<S> {
         self.assert_channel_id(channel_id);
 
         Ok(self.publisher()?.check_is_our_turn())
+    }
+}
+
+impl<S: StorageActorTrait> Message<AdmitDeposit> for BedrockActor<S> {
+    type Reply = Result<VaultMint>;
+
+    async fn handle(
+        &mut self,
+        AdmitDeposit {
+            channel_id,
+            deposit,
+        }: AdmitDeposit,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.assert_channel_id(channel_id);
+
+        self.publisher()?.admit_deposit(&deposit)
     }
 }
 

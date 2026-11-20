@@ -1,6 +1,6 @@
 use std::{collections::BTreeSet, num::NonZero, sync::Arc, time::Duration};
 
-pub use chain_state::ChannelEntry;
+pub use chain_state::{ChannelEntry, vault::VaultMint};
 use common::block::Block;
 use kameo::Reply;
 use logos_blockchain_zone_sdk::sequencer::PreparedChannelConfig;
@@ -396,6 +396,22 @@ pub struct CheckChannelExists {
 }
 
 impl ShardingKey for CheckChannelExists {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
+}
+
+/// Checks a program deposit as its holder submitted it, the step and then its proof in Bedrock's
+/// encoding, and answers with what the zone mints once the vault takes it in.
+#[derive(Debug, Clone)]
+pub struct AdmitDeposit {
+    pub channel_id: ChannelId,
+    pub deposit: Vec<u8>,
+}
+
+impl ShardingKey for AdmitDeposit {
     type Key = ChannelId;
 
     fn sharding_key(&self) -> Self::Key {

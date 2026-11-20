@@ -426,11 +426,11 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         Ok(())
     }
 
-    #[expect(clippy::todo, reason = "Bridge deposits wait on the vault program")]
-    async fn submit_program_deposit(&self, _deposit: HexBytes) -> Result<(), ErrorObjectOwned> {
-        // FIXME: decode the step and its proof, check them against the vault program and the
-        // channel's recent roots, and queue the deposit for the next inscription's `ProgramStep`.
-        todo!("bridge deposits need the vault program")
+    async fn submit_program_deposit(&self, deposit: HexBytes) -> Result<(), ErrorObjectOwned> {
+        self.executor_ref
+            .ask(sequencer_executor_actor::protocol::SubmitProgramDeposit { deposit: deposit.0 })
+            .await
+            .map_err(map_executor_error)
     }
 }
 
@@ -456,7 +456,8 @@ fn map_executor_error<M>(
 ) -> ErrorObjectOwned {
     match err {
         SendError::HandlerError(handle_err) => match handle_err {
-            refused @ sequencer_executor_actor::error::Error::SystemApprovalRefused(_) => {
+            refused @ (sequencer_executor_actor::error::Error::SystemApprovalRefused(_)
+            | sequencer_executor_actor::error::Error::ProgramDepositRefused(_)) => {
                 ErrorObjectOwned::owned(
                     ErrorCode::InvalidParams.code(),
                     format!("{refused:#}"),

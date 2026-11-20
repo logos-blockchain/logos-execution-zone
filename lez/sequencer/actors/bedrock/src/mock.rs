@@ -18,11 +18,11 @@ use crate::{
     BedrockActorTrait, Result,
     error::Error,
     protocol::{
-        AccreditedKeys, ChangeChannelConfig, ChannelId, ChannelReadStream, ChannelSeq,
-        CheckChannelExists, CheckIsOurTurn, CreateChannel, FilterFinallyAbsent, FollowChannel,
-        GetAccreditedKeys, GetChannelTipMessageId, GetChannelTipSlot, InitializeChannelPublisher,
-        MsgId, PrepareConfig, PreparedConfig, PublishBlock, PublishOutcome, ReadChannel,
-        SequencerKey, Slot,
+        AccreditedKeys, AdmitDeposit, ChangeChannelConfig, ChannelId, ChannelReadStream,
+        ChannelSeq, CheckChannelExists, CheckIsOurTurn, CreateChannel, FilterFinallyAbsent,
+        FollowChannel, GetAccreditedKeys, GetChannelTipMessageId, GetChannelTipSlot,
+        InitializeChannelPublisher, MsgId, PrepareConfig, PreparedConfig, PublishBlock,
+        PublishOutcome, ReadChannel, SequencerKey, Slot, VaultMint,
     },
 };
 
@@ -109,6 +109,12 @@ mockall::mock! {
             msg: CheckIsOurTurn,
             ctx: &mut Context<Self, Result<bool>>
         ) -> Result<bool>;
+
+        pub fn handle_admit_deposit(
+            &mut self,
+            msg: AdmitDeposit,
+            ctx: &mut Context<Self, Result<VaultMint>>
+        ) -> Result<VaultMint>;
 
         pub fn handle_get_accredited_keys(
             &mut self,
@@ -262,6 +268,18 @@ impl Message<CheckChannelExists> for MockBedrockActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_check_channel_exists(msg, ctx)
+    }
+}
+
+impl Message<AdmitDeposit> for MockBedrockActor {
+    type Reply = Result<VaultMint>;
+
+    async fn handle(
+        &mut self,
+        msg: AdmitDeposit,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_admit_deposit(msg, ctx)
     }
 }
 

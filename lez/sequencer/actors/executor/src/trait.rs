@@ -20,7 +20,7 @@ use crate::{
         GetProofsAndRoot, GetProofsAndRootReply, GetPublications, GetPublicationsReply,
         GetRecoveryBinding, GetStatus, GetSystemProposals, GetSystemProposalsReply, GetTransaction,
         GetTransactionReceipt, ProduceBlock, RequeueCrossZoneDeadLetter,
-        RequeueCrossZoneDeadLetterReply, SubmitSystemApproval, Transaction,
+        RequeueCrossZoneDeadLetterReply, SubmitProgramDeposit, SubmitSystemApproval, Transaction,
     },
 };
 
@@ -48,5 +48,6 @@ pub trait ExecutorActorTrait:
     + Message<GetFeeQuote, Reply = Result<FeeStateQuote>>
     + Message<GetSystemProposals, Reply = Result<GetSystemProposalsReply>>
     + Message<SubmitSystemApproval, Reply = Result<()>>
+    + Message<SubmitProgramDeposit, Reply = Result<()>>
 {
 }

@@ -52,8 +52,8 @@ use crate::{
         GetLastBlockId, GetMessagePath, GetProofsAndRoot, GetProofsAndRootReply, GetPublications,
         GetPublicationsReply, GetRecoveryBinding, GetStatus, GetSystemProposals,
         GetSystemProposalsReply, GetTransaction, GetTransactionReceipt, ProduceBlock,
-        RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, SubmitSystemApproval,
-        Transaction,
+        RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, SubmitProgramDeposit,
+        SubmitSystemApproval, Transaction,
     },
 };
 
@@ -816,6 +816,27 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<SubmitSystemApproval>
             .submit_system_approval(approval)
             .await
             .map_err(Error::SystemApprovalRefused)
+    }
+}
+
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<SubmitProgramDeposit>
+    for ExecutorActor<S, B>
+{
+    type Reply = Result<()>;
+
+    async fn handle(
+        &mut self,
+        SubmitProgramDeposit { deposit }: SubmitProgramDeposit,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let State::Online(online) = &mut self.state else {
+            return Err(Error::NotOnline);
+        };
+        online
+            .sequencer_mut()
+            .admit_deposit(deposit)
+            .await
+            .map_err(Error::ProgramDepositRefused)
     }
 }
 

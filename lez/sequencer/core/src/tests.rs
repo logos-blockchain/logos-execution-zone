@@ -57,7 +57,7 @@ use crate::{
     config::{
         self, BedrockConfig, CrossZoneConfig, CrossZonePeer, CrossZoneRoute, SequencerConfig,
     },
-    config_target, dispatch_already_delivered, extract_cross_zone_dispatch,
+    config_target, deposit_already_minted, dispatch_already_delivered, extract_cross_zone_dispatch,
     extract_cross_zone_dispatch_key, is_sequencer_only_program, resubmittable_txs, round_robin,
     zone_checkpoint,
 };
@@ -503,15 +503,6 @@ fn bridge_deposit_tx(
     .expect("bridge deposit tx builds")
 }
 
-/// Whether the bridge holds the receipt of the deposit `op_id` in `state`.
-fn deposit_already_minted(state: &V03State, op_id: [u8; 32]) -> bool {
-    let bridge_program_id = programs::bridge_account_id();
-    let receipt_id = bridge_core::deposit_receipt_account_id(bridge_program_id, op_id);
-    state
-        .get_account_by_id_ref(receipt_id)
-        .is_some_and(|receipt| !receipt.data.actor_state(bridge_program_id).is_empty())
-}
-
 fn tx_is_bridge_deposit(
     tx: &LeeTransaction,
     deposit_op_id: [u8; 32],
@@ -755,6 +746,67 @@ async fn an_unsigned_public_bridge_deposit_is_not_included() {
             .await,
         "a dropped deposit must not mint the receipt PDA",
     );
+}
+
+#[tokio::test]
+async fn an_admitted_deposit_is_minted_by_the_block_that_takes_it_in() {
+    let recipient = DepositRecipient::Identified(lee::PublicAccountEvidence::Key(
+        PublicKey::new_from_private_key(&PrivateKey::try_new([3; 32]).unwrap()),
+    ));
+    let mint = chain_state::vault::VaultMint {
+        id: [0x7f; 32],
+        recipient: recipient.clone(),
+        amount: 9,
+    };
+    let deposit = vec![1, 2, 3];
+    let channel = CannedChannel {
+        admitted: vec![(deposit.clone(), mint.clone())],
+        ..CannedChannel::empty()
+    }
+    .share();
+    let (mut sequencer, _mempool_handle) =
+        start_sequencer_on(setup_sequencer_config(), channel.clone()).await;
+
+    sequencer.admit_deposit(deposit.clone()).await.unwrap();
+    assert!(
+        sequencer.admit_deposit(deposit.clone()).await.is_err(),
+        "a deposit waits for its block once"
+    );
+    assert!(
+        sequencer.admit_deposit(vec![4]).await.is_err(),
+        "the vault admits what it holds"
+    );
+
+    let block_id = sequencer.run_production_turn().await.unwrap();
+    let block = sequencer
+        .storage_ref
+        .ask(GetBlock { block_id })
+        .await
+        .unwrap()
+        .expect("produced block is stored");
+
+    assert!(
+        block
+            .body
+            .transactions
+            .contains(&mint.transaction().unwrap())
+    );
+    assert_eq!(channel.lock().taken_in, std::slice::from_ref(&deposit));
+    assert_eq!(
+        sequencer
+            .with_state(|state| state
+                .get_account_by_id(recipient.account_id())
+                .data
+                .native_balance()
+                .unwrap())
+            .await,
+        9
+    );
+
+    // Minted once: neither a second submission nor a later block mints it again.
+    assert!(sequencer.admit_deposit(deposit).await.is_err());
+    sequencer.run_production_turn().await.unwrap();
+    assert_eq!(channel.lock().taken_in.len(), 1);
 }
 
 /// A config that receives `ping_receiver` messages from [`PEER_ZONE`], so
