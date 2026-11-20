@@ -1398,81 +1398,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 continue;
             }
 
-            let temp_valid_transactions = [
-                valid_transactions.as_slice(),
-                std::slice::from_ref(&tx),
-                trailing.as_slice(),
-            ]
-            .concat();
-            let temp_hashable_data = HashableBlockData {
-                block_id: new_block_height,
-                transactions: temp_valid_transactions,
-                prev_block_hash,
-                timestamp: new_block_timestamp,
-                // Receipts are fixed-size, so placeholders size them exactly: one for this
-                // transaction and one for the reserved `system_upgrader` slot, if any.
-                receipts: receipts
-                    .iter()
-                    .copied()
-                    .chain(reserved_receipts(&trailing))
-                    .collect(),
-            };
-
-            let block_size = borsh::to_vec(&temp_hashable_data)
-                .context("Failed to serialize block for size check")?
-                .len();
-
-            if block_size > max_block_size {
-                // Would a block carrying nothing but this still be too big? Then
-                // it does not fit in any block and deferring it defers it for
-                // ever. A deferred transaction is at the head of the queue every
-                // turn, so breaking here would stop production reaching anything
-                // behind it, including the whole mempool, permanently. Give up on
-                // it instead.
-                //
-                // Measured on its own rather than from `block_size`, which also
-                // counts whatever this block already holds: a transaction that
-                // merely does not fit *today* is the ordinary deferral below.
-                if !Self::fits_in_an_empty_block(
-                    &tx,
-                    &trailing,
-                    max_block_size,
-                    new_block_height,
-                    prev_block_hash,
-                    new_block_timestamp,
-                )? {
-                    warn!(
-                        %tx_hash,
-                        max_block_size,
-                        "Transaction cannot fit in any block, giving up on it rather than stalling \
-                         production"
-                    );
-                    continue;
-                }
-
-                warn!(
-                    %tx_hash,
-                    block_size,
-                    max_block_size,
-                    "Transaction deferred to next block: it would exceed the block size limit"
-                );
-                // Anything drained from the store needs no requeue: its record
-                // stays there and is drained again on the next turn.
-                if !from_store {
-                    self.mempool.give_back((origin, tx));
-                }
-                break;
-            }
-
-            // Declared-gas pre-screen: a charged transaction whose signed
-            // limits do not fit this block's remaining budget is deferred with
-            // nothing executed, mirroring the size deferral above — unless they
-            // exceed the caps outright, in which case it fits no budget and is
-            // dropped rather than deferred for ever (the RPC door screens these
-            // out, but gossip ingest does not). One that does not even classify
-            // (an unserializable transaction) falls through: the settlement
-            // below rejects it and it is dropped like any other failed
-            // application.
+            // Declared-gas pre-screen, before the size check that serializes the
+            // whole block: a charged transaction whose signed limits do not fit
+            // this block's remaining budget is deferred with nothing executed —
+            // unless they exceed the caps outright, in which case it fits no
+            // budget and is dropped rather than deferred for ever (the RPC door
+            // screens these out, but gossip ingest does not). One that does not
+            // even classify (an unserializable transaction) falls through: the
+            // settlement below rejects it and it is dropped like any other
+            // failed application.
             let charged_view = match chain_state::classify::classify(&tx, false) {
                 Ok(chain_state::classify::FeeClass::Charged(view)) => Some(view),
                 Ok(chain_state::classify::FeeClass::Exempt) | Err(_) => None,
@@ -1502,11 +1436,76 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                      gas caps"
                 );
                 // Anything drained from the store needs no requeue: its record
-                // stays there and is drained again on the next turn.
+                // stays there and is drained again on the next turn. Smaller ones
+                // behind it may still fit, so the block keeps filling.
                 if !from_store {
                     self.mempool.give_back((origin, tx));
                 }
-                break;
+                continue;
+            }
+
+            let temp_valid_transactions = [
+                valid_transactions.as_slice(),
+                std::slice::from_ref(&tx),
+                trailing.as_slice(),
+            ]
+            .concat();
+            let temp_hashable_data = HashableBlockData {
+                block_id: new_block_height,
+                transactions: temp_valid_transactions,
+                prev_block_hash,
+                timestamp: new_block_timestamp,
+                // Receipts are fixed-size, so placeholders size them exactly: one for this
+                // transaction and one for the reserved `system_upgrader` slot, if any.
+                receipts: receipts
+                    .iter()
+                    .copied()
+                    .chain(reserved_receipts(&trailing))
+                    .collect(),
+            };
+
+            let block_size = borsh::to_vec(&temp_hashable_data)
+                .context("Failed to serialize block for size check")?
+                .len();
+
+            if block_size > max_block_size {
+                // Would a block carrying nothing but this still be too big? Then
+                // it does not fit in any block and deferring it defers it for
+                // ever, coming back first every turn. Give up on it instead.
+                //
+                // Measured on its own rather than from `block_size`, which also
+                // counts whatever this block already holds: a transaction that
+                // merely does not fit *today* is the ordinary deferral below.
+                if !Self::fits_in_an_empty_block(
+                    &tx,
+                    &trailing,
+                    max_block_size,
+                    new_block_height,
+                    prev_block_hash,
+                    new_block_timestamp,
+                )? {
+                    warn!(
+                        %tx_hash,
+                        max_block_size,
+                        "Transaction cannot fit in any block, giving up on it rather than stalling \
+                         production"
+                    );
+                    continue;
+                }
+
+                warn!(
+                    %tx_hash,
+                    block_size,
+                    max_block_size,
+                    "Transaction deferred to next block: it would exceed the block size limit"
+                );
+                // Anything drained from the store needs no requeue: its record
+                // stays there and is drained again on the next turn. Smaller ones
+                // behind it may still fit, so the block keeps filling.
+                if !from_store {
+                    self.mempool.give_back((origin, tx));
+                }
+                continue;
             }
 
             let before_tx_apply = Instant::now();

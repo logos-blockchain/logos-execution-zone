@@ -861,7 +861,8 @@ async fn a_block_full_of_charged_gas_defers_the_rest() {
     // A reverted transfer settles first and is charged its whole declared budget — native
     // execution itself burns no cycles, so a settled transfer alone never fills a block. The
     // second transfer declares the full per-block cap: it fits an empty budget, but not on top
-    // of what the block already charged — deferred, not dropped.
+    // of what the block already charged — deferred, not dropped. It does not close the block:
+    // the third, queued behind it, still makes it.
     let transfers = vec![
         common::test_utils::create_transaction_native_token_transfer_with_fees(
             acc1,
@@ -879,6 +880,13 @@ async fn a_block_full_of_charged_gas_defers_the_rest() {
             &sign_key,
             lee::FeeDeclaration::new(acc1, fee_core::market::MAX_GAS_EXEC, 0, u128::MAX >> 1),
         ),
+        common::test_utils::create_transaction_native_token_transfer(
+            acc2,
+            0,
+            acc1,
+            10,
+            &create_signing_key_for_account2(),
+        ),
     ];
     for tx in &transfers {
         sequencer
@@ -894,10 +902,10 @@ async fn a_block_full_of_charged_gas_defers_the_rest() {
         .await
         .unwrap()
         .unwrap();
-    assert_block_tail(&block, &transfers[..1]);
+    assert_block_tail(&block, &[transfers[0].clone(), transfers[2].clone()]);
     // One receipt per user transaction; the reverted transfer is charged its whole budget.
     assert_eq!(block.body.receipts.len(), block.body.transactions.len() - 2);
-    let receipt = block.body.receipts.last().unwrap();
+    let receipt = block.body.receipts.first().unwrap();
     assert!(!receipt.success);
     assert_eq!(receipt.fee.gas_exec, fee_core::market::MAX_GAS_EXEC >> 1);
 
@@ -909,7 +917,7 @@ async fn a_block_full_of_charged_gas_defers_the_rest() {
         .await
         .unwrap()
         .unwrap();
-    assert_block_tail(&block, &transfers[1..]);
+    assert_block_tail(&block, &transfers[1..2]);
 }
 
 #[tokio::test]

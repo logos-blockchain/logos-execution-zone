@@ -314,6 +314,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
             return Err(Error::TransactionTooLarge { size, max });
         }
 
+        // Only the sequencer mints deposits, from their L1 events.
+        if sequencer_core::extract_bridge_deposit_id(&transaction).is_some() {
+            return Err(Error::BridgeDepositNotSequencer);
+        }
+
         // Admission against the head state and the pending slots, before the
         // mempool sees it: the fee screen first, so an unfundable transaction
         // costs no signature verification, then authentication, then the slots

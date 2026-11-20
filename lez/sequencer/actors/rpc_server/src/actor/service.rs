@@ -414,7 +414,8 @@ fn map_executor_error<M>(
             | sequencer_executor_actor::error::Error::InvalidTransaction(_)
             | sequencer_executor_actor::error::Error::RefusedAtHead(_)
             | sequencer_executor_actor::error::Error::PendingAuthentication(_)
-            | sequencer_executor_actor::error::Error::PendingSlot(_)) => {
+            | sequencer_executor_actor::error::Error::PendingSlot(_)
+            | sequencer_executor_actor::error::Error::BridgeDepositNotSequencer) => {
                 // With its cause, which the sender is shown.
                 let message = std::error::Error::source(&invalid).map_or_else(
                     || invalid.to_string(),
