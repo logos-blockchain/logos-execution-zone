@@ -1789,22 +1789,10 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 .collect(),
             public_context: PublicExecutionContext {
                 promotions: public,
-                ..{
-                    let signers = acc_manager.signers();
-                    let actors: Vec<_> = acc_manager
-                        .public_actors()
-                        .into_iter()
-                        .map(|actor| {
-                            let authority = if signers.contains(&actor.account_id) {
-                                Authority::Signer
-                            } else {
-                                Authority::None
-                            };
-                            (actor, authority)
-                        })
-                        .collect();
-                    PublicExecutionContext::new(actors, signers)
-                }
+                ..PublicExecutionContext::new(
+                    acc_manager.public_actor_authority(),
+                    acc_manager.signers(),
+                )
             },
             private_witnesses: acc_manager.private_witnesses()?,
             dummy_inputs: acc_manager.dummy_inputs_default(),
@@ -2029,6 +2017,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                         fee_at_head: at_head(cycles.saturating_add(verify_gas)),
                         reserve_at_head: reserve,
                         revert_reason,
+                        signer_actors: acc_manager.signer_actors(),
                     },
                 )));
             }
@@ -2119,8 +2108,9 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         let FeeParams { refund_to, tip, .. } = self.fee_params;
         if let Some(target) = refund_to
             && !acc_manager
-                .public_actors()
-                .contains(&Actor::native_balance(target))
+                .public_actor_authority()
+                .iter()
+                .any(|(actor, _)| *actor == Actor::native_balance(target))
         {
             warn!(
                 %target,
@@ -2244,6 +2234,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                         headroom_reserve,
                         claims: claims.len(),
                         swept,
+                        signer_actors: acc_manager.signer_actors(),
                     },
                 )));
             }
@@ -2501,7 +2492,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
     ///
     /// An explicit payer may be one of `accounts`' signing entries, or any other public account
     /// whose signing key the wallet holds: the latter co-signs (nonce and signature appended
-    /// after `accounts`' own) without joining the message's `account_ids`, so programs with a
+    /// after `accounts`' own) without its declared actors gaining authority, so programs with a
     /// fixed account shape (like the `program_loader`, whose accounts are all freshly claimed
     /// and unfunded) can still be paid for.
     pub async fn send_pub_tx_with_pre_check(
@@ -2539,8 +2530,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
 
         tx_pre_check(&acc_manager.selected_actor_states())?;
 
-        let public_actors = acc_manager.public_actors();
-        let account_ids = acc_manager.public_account_ids();
+        let public_actors = acc_manager.public_actor_authority();
         let mut nonces = acc_manager.public_account_nonces();
 
         let invalid_input = |msg: &str| {
@@ -2559,11 +2549,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 None,
             ),
             Some(payer) if acc_manager.signs_for(payer) => (payer, None),
-            Some(payer) if account_ids.contains(&payer) => {
-                return Err(invalid_input(
-                    "Fee payer is a non-signing account of this transaction",
-                ));
-            }
+            // Signs for the fee alone; its declared actors stay without authority.
             Some(payer) => {
                 let key = self.get_account_public_signing_key(payer).ok_or_else(|| {
                     invalid_input("Fee payer's signing key is not held by this wallet")
@@ -2589,17 +2575,6 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             .unwrap_or(self.config.gas_limit)
             .min(fee_core::market::MAX_GAS_EXEC);
         // Signed later: the fee is filled in once measured, and its fields are fixed width.
-        let public_actors: Vec<_> = public_actors
-            .into_iter()
-            .map(|actor| {
-                let authority = if nonces.contains_key(&actor.account_id) {
-                    Authority::Signer
-                } else {
-                    Authority::None
-                };
-                (actor, authority)
-            })
-            .collect();
         let mut message = lee::public_transaction::Message::new(
             to,
             message,
@@ -2718,6 +2693,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                     reserve_at_head: at_head(gas_limit),
                     revert_reason,
                     quote,
+                    signer_actors: acc_manager.signer_actors(),
                 },
             )));
         }
@@ -3824,10 +3800,10 @@ mod tests {
         assert_eq!(async_delivery.recoveries.len(), 1);
         assert_eq!(async_delivery.recoveries[0].recipient, recipient_material);
 
-        // A public recipient takes part either way, as the caller named it.
+        // A public recipient takes part either way, as the caller named it, without authorizing.
         let (declared, _) = route(&sender, public.clone(), CreditDelivery::DeferredPrivate);
         let declared = declared.unwrap();
-        assert!(declared.identity == public && declared.authorizes);
+        assert!(declared.identity == public && !declared.authorizes);
 
         // A sender crediting itself takes part once.
         let (declared, _) = route(&sender, sender.clone(), CreditDelivery::Automatic);
@@ -4288,6 +4264,117 @@ mod tests {
             )) if actor == Actor::native_balance(absent)
         ));
         assert!(submitted.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_signing_public_account_authorizes_only_its_authorizing_mentions() {
+        let (wallet, _home, _sequencer, submitted, sender) =
+            wallet_with_a_public_sender(AccountId::new([2; 32])).await;
+        let other = Actor::new(sender, AccountId::new([5; 32]));
+
+        wallet
+            .send_tx(
+                vec![
+                    AccountIdentity::Public(sender).balance(),
+                    AccountIdentity::Public(sender)
+                        .select_program_actor_state(other.program_account_id)
+                        .without_authorization(),
+                ],
+                0,
+                borsh::to_vec(&native_token::Message::Transfer {
+                    to: sender,
+                    amount: 0,
+                })
+                .unwrap(),
+                &ProgramCatalog::default(),
+                None,
+                AsyncDelivery::default(),
+            )
+            .await
+            .unwrap();
+
+        let Some(LeeTransaction::Public(tx)) = submitted.lock().unwrap().pop() else {
+            panic!("the transaction should have been submitted publicly");
+        };
+        assert_eq!(
+            tx.message.public_context.actors,
+            BTreeMap::from([
+                (Actor::native_balance(sender), lee::Authority::Signer),
+                (other, lee::Authority::None),
+            ])
+        );
+        assert!(tx.message.nonces.contains_key(&sender));
+    }
+
+    #[tokio::test]
+    async fn a_payer_declared_without_authority_co_signs_for_the_fee_alone() {
+        let (wallet, _home, _sequencer, submitted, sender) =
+            wallet_with_a_public_sender(AccountId::new([2; 32])).await;
+        let other = Actor::new(sender, AccountId::new([5; 32]));
+
+        wallet
+            .send_pub_tx_paid_by(
+                vec![
+                    AccountIdentity::Public(sender)
+                        .select_program_actor_state(other.program_account_id)
+                        .without_authorization(),
+                ],
+                0,
+                Vec::new(),
+                Some(sender),
+            )
+            .await
+            .unwrap();
+
+        let Some(LeeTransaction::Public(tx)) = submitted.lock().unwrap().pop() else {
+            panic!("the transaction should have been submitted publicly");
+        };
+        assert_eq!(
+            tx.message.public_context.actors,
+            BTreeMap::from([(other, lee::Authority::None)])
+        );
+        assert!(tx.message.nonces.contains_key(&sender));
+    }
+
+    #[tokio::test]
+    async fn a_private_account_rejects_mentions_that_differ_in_authorization() {
+        let (mut wallet, _home, _sequencer, _served) = wallet_with_a_received_message().await;
+        let payer = wallet
+            .find_pending_message(1)
+            .await
+            .unwrap()
+            .unwrap()
+            .recipient
+            .account_id();
+        // Not the payer, whose mentions all authorize.
+        let (other, _) = wallet.create_new_account_private(None);
+
+        let result = wallet
+            .send_tx_with_pre_check(
+                vec![
+                    AccountIdentity::PrivateOwned(other).balance(),
+                    AccountIdentity::PrivateOwned(other)
+                        .select_program_actor_state(AccountId::new([5; 32]))
+                        .without_authorization(),
+                ],
+                0,
+                Vec::new(),
+                &ProgramCatalog::default(),
+                None,
+                AsyncDelivery::default(),
+                Some(payer),
+                |_| Ok(()),
+            )
+            .await;
+        assert!(
+            matches!(
+                result,
+                Err(ExecutionFailureKind::ConflictingAccountIdentity(account_id))
+                    if account_id == other
+            ),
+            "{:?}",
+            result.as_ref().map(|(hash, _)| hash)
+        );
     }
 
     async fn wallet_with_a_received_message() -> (

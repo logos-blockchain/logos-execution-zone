@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 #[cfg(test)]
 use lee::{Account, PrivateKey, PublicKey, V03State, ValidatedStateDiff};
-use lee::{AccountId, Actor};
+use lee::{AccountId, Actor, Authority};
 
 use crate::{
     HashType,
@@ -158,6 +158,22 @@ pub fn create_transaction_native_token_transfer(
     )
 }
 
+fn transfer_actors(
+    from: AccountId,
+    to: AccountId,
+    signing_key: &lee::PrivateKey,
+) -> [(Actor, Authority); 2] {
+    let signer = AccountId::from(&lee::PublicKey::new_from_private_key(signing_key));
+    [from, to].map(|account_id| {
+        let authority = if account_id == signer {
+            Authority::Signer
+        } else {
+            Authority::None
+        };
+        (Actor::native_balance(account_id), authority)
+    })
+}
+
 #[must_use]
 pub fn create_transaction_native_token_transfer_with_fees(
     from: AccountId,
@@ -168,13 +184,9 @@ pub fn create_transaction_native_token_transfer_with_fees(
     fee_declaration: lee::FeeDeclaration,
 ) -> LeeTransaction {
     let nonces = signer_nonce(signing_key, nonce);
-    let public_actors = lee::test_utils::signed_by(
-        [Actor::native_balance(from), Actor::native_balance(to)],
-        nonces.keys().copied(),
-    );
     let message = lee::public_transaction::Message::try_new_with_fees(
         Actor::native_balance(from),
-        public_actors,
+        transfer_actors(from, to, signing_key),
         nonces,
         native_transfer(to, balance_to_move),
         fee_declaration,
@@ -202,10 +214,7 @@ pub fn create_transaction_native_token_transfer_without_fee(
     let nonces = signer_nonce(signing_key, nonce);
     let message = lee::public_transaction::Message::try_new(
         Actor::native_balance(from),
-        lee::test_utils::signed_by(
-            [Actor::native_balance(from), Actor::native_balance(to)],
-            nonces.keys().copied(),
-        ),
+        transfer_actors(from, to, signing_key),
         nonces,
         native_transfer(to, balance_to_move),
     )

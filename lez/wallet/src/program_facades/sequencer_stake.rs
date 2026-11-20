@@ -46,7 +46,7 @@ impl<C: WalletSequencerClient> SequencerStake<'_, C> {
         };
         let accounts = vec![
             ownership.select_program_actor_state(program),
-            funds.balance(),
+            funds.balance().without_authorization(),
             funding.balance(),
             AccountIdentity::PublicNoSign(system_accounts::sequencer_stake_config_account_id())
                 .select_program_actor_state(program),

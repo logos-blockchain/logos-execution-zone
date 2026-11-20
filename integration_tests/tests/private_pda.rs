@@ -53,7 +53,7 @@ async fn fund_private_pda(
         .send_tx(
             vec![
                 AccountIdentity::Public(sender).balance(),
-                pda.balance().receiving(),
+                pda.balance().without_authorization(),
             ],
             0,
             transfer,

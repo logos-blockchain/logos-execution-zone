@@ -7,8 +7,8 @@ use std::{
 use anyhow::Result;
 use keycard_wallet::KeycardWallet;
 use lee::{
-    AccountId, PrivateKey, PublicAccountEvidence, PublicKey, Recipient, RecipientEncryption,
-    Signature,
+    AccountId, Authority, PrivateKey, PublicAccountEvidence, PublicKey, Recipient,
+    RecipientEncryption, Signature,
 };
 use lee_core::{
     AuthorizationSecretKey, Commitment, CommitmentPosition, CommitmentSetDigest, DummyInput,
@@ -250,16 +250,6 @@ impl AccountMention {
         self
     }
 
-    // A private account that only receives takes part without spending authority.
-    #[must_use]
-    pub const fn receiving(self) -> Self {
-        if self.identity.is_private() {
-            self.without_authorization()
-        } else {
-            self
-        }
-    }
-
     fn normalized(mut self) -> Self {
         if let AccountIdentity::PublicNoSign(account_id) = self.identity {
             self.identity = AccountIdentity::Public(account_id);
@@ -297,6 +287,7 @@ struct PreparedAccount {
 struct Row {
     account: usize,
     program_account_id: AccountId,
+    authorizes: bool,
 }
 
 /// An account's prepared state and credentials.
@@ -350,10 +341,10 @@ impl State {
         }
     }
 
-    fn selected(&self, selector: Actor) -> SelectedActorState {
+    fn selected(&self, selector: Actor, authorizes: bool) -> SelectedActorState {
         SelectedActorState {
             selector,
-            is_authorized: self.is_authorized(),
+            is_authorized: authorizes && self.is_authorized(),
             data: self
                 .account()
                 .account
@@ -404,6 +395,16 @@ impl AccountManager {
         // Whether the transaction itself authorizes the fee payer; if not, the payer's key
         // authorizes only the fee entry.
         let mut payer_authorized = false;
+        let mentions: Vec<_> = mentions
+            .into_iter()
+            .map(AccountMention::normalized)
+            .collect();
+        // A public account signs when any of its mentions authorizes.
+        let signing_public: HashSet<AccountId> = mentions
+            .iter()
+            .filter(|mention| mention.identity.is_public() && mention.authorizes)
+            .map(|mention| mention.identity.account_id())
+            .collect();
 
         for mention in mentions {
             let AccountMention {
@@ -411,13 +412,18 @@ impl AccountManager {
                 program_account_id,
                 authorizes,
                 address_openings,
-            } = mention.normalized();
+            } = mention;
             let account_id = identity.account_id();
             let is_payer = fee_payer == Some(account_id);
             payer_authorized |= is_payer && authorizes;
             // The payer's witness takes its authorization key however it is mentioned, scoped to
             // the fee entry below unless the transaction authorizes it.
             let authorizes = authorizes || is_payer;
+            let account_authorizes = if identity.is_public() {
+                signing_public.contains(&account_id)
+            } else {
+                authorizes
+            };
             let actor_state_selector = Actor::new(account_id, program_account_id);
 
             let known =
@@ -426,7 +432,8 @@ impl AccountManager {
                     .map(|(index, prepared_identity, prepared_authorizes)| {
                         (
                             *index,
-                            *prepared_identity == identity && *prepared_authorizes == authorizes,
+                            *prepared_identity == identity
+                                && *prepared_authorizes == account_authorizes,
                         )
                     });
 
@@ -452,12 +459,12 @@ impl AccountManager {
                             wallet,
                             identity.clone(),
                             actor_state_selector,
-                            authorizes,
+                            account_authorizes,
                             &mut pin,
                         )
                         .await?,
                     );
-                    prepared.insert(account_id, (index, identity, authorizes));
+                    prepared.insert(account_id, (index, identity, account_authorizes));
                     index
                 }
             };
@@ -468,6 +475,7 @@ impl AccountManager {
             rows.push(Row {
                 account: index,
                 program_account_id,
+                authorizes,
             });
         }
 
@@ -529,7 +537,7 @@ impl AccountManager {
     pub fn selected_actor_states(&self) -> Vec<SelectedActorState> {
         self.rows
             .iter()
-            .map(|row| self.states[row.account].selected(self.row_selector(row)))
+            .map(|row| self.states[row.account].selected(self.row_selector(row), row.authorizes))
             .collect()
     }
 
@@ -539,22 +547,42 @@ impl AccountManager {
             .iter()
             .filter(|row| !matches!(self.states[row.account], State::Private(_)))
             .map(|row| {
-                let actor_state = self.states[row.account].selected(self.row_selector(row));
+                let actor_state =
+                    self.states[row.account].selected(self.row_selector(row), row.authorizes);
                 (actor_state.selector, actor_state.data)
             })
             .collect()
     }
 
-    // In mention order, deduplicated.
-    pub fn public_actors(&self) -> Vec<Actor> {
-        let mut actors = Vec::new();
+    /// The declared public actors in mention order, deduplicated, each `Signer` when a mention of
+    /// it authorizes and its account signs.
+    pub fn public_actor_authority(&self) -> Vec<(Actor, Authority)> {
+        let mut actors: Vec<(Actor, Authority)> = Vec::new();
         for row in &self.rows {
+            let state = &self.states[row.account];
+            if matches!(state, State::Private(_)) {
+                continue;
+            }
             let actor = self.row_selector(row);
-            if !matches!(self.states[row.account], State::Private(_)) && !actors.contains(&actor) {
-                actors.push(actor);
+            let authority = if row.authorizes && state.is_authorized() {
+                Authority::Signer
+            } else {
+                Authority::None
+            };
+            match actors.iter_mut().find(|(declared, _)| *declared == actor) {
+                Some((_, declared)) if authority == Authority::Signer => *declared = authority,
+                Some(_) => {}
+                None => actors.push((actor, authority)),
             }
         }
         actors
+    }
+
+    pub fn signer_actors(&self) -> Vec<Actor> {
+        self.public_actor_authority()
+            .into_iter()
+            .filter_map(|(actor, authority)| (authority == Authority::Signer).then_some(actor))
+            .collect()
     }
 
     /// The public accounts whose signature this transaction carries.
@@ -905,18 +933,6 @@ impl AccountManager {
             | State::PublicKeycard { account, .. } => account.account_id == account_id,
             State::Public { sk: None, .. } | State::Private(_) => false,
         })
-    }
-
-    pub fn public_account_ids(&self) -> Vec<AccountId> {
-        self.states
-            .iter()
-            .filter_map(|state| match state {
-                State::Public { account, .. } | State::PublicKeycard { account, .. } => {
-                    Some(account.account_id)
-                }
-                State::Private(_) => None,
-            })
-            .collect()
     }
 
     pub fn public_non_keycard_account_auth(&self) -> Vec<&PrivateKey> {
@@ -1452,6 +1468,7 @@ mod tests {
             .map(|account| Row {
                 account,
                 program_account_id: NATIVE_TOKEN_PROGRAM_ID,
+                authorizes: true,
             })
             .collect();
         AccountManager {
@@ -1640,8 +1657,9 @@ mod tests {
             unreachable!("public_signing_state builds a public account");
         };
         let signing_id = account.account_id;
-        let manager = manager(vec![public_state(), signing]);
-        let non_signing_id = manager.public_account_ids()[0];
+        let non_signing = public_state();
+        let non_signing_id = non_signing.account_id();
+        let manager = manager(vec![non_signing, signing]);
         assert!(manager.signs_for(signing_id));
         assert!(!manager.signs_for(non_signing_id));
     }
