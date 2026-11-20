@@ -51,6 +51,9 @@ pub enum Error {
     #[error("The mempool is full")]
     MempoolIsFull,
 
+    #[error("The transaction's nonces order it both before and after a pending transaction")]
+    MempoolNonceCycle,
+
     #[error("Transaction too large: size {size}, max {max}")]
     TransactionTooLarge { size: u64, max: u64 },
 

@@ -666,6 +666,44 @@ async fn the_builder_orders_by_tip_without_breaking_a_nonce_sequence() {
 }
 
 #[tokio::test]
+async fn a_transaction_ahead_of_its_nonce_waits_for_the_gap() {
+    let mut sequencer = start_sequencer(setup_sequencer_config()).await;
+    let (acc1, acc2) = (
+        initial_public_user_accounts()[0].account_id,
+        initial_public_user_accounts()[1].account_id,
+    );
+    let transfer = |nonce| {
+        common::test_utils::create_transaction_native_token_transfer(
+            acc1,
+            nonce,
+            acc2,
+            10,
+            &create_signing_key_for_account1(),
+        )
+    };
+
+    let second = transfer(1);
+    sequencer
+        .mempool
+        .insert((TransactionOrigin::User, second.clone()))
+        .unwrap();
+    let block_id = sequencer.run_production_turn().await.unwrap();
+    assert_block_tail(&block_at(&sequencer, block_id).await.unwrap(), &[]);
+    assert_eq!(sequencer.mempool.len(), 1, "the gapped tx is kept");
+
+    let first = transfer(0);
+    sequencer
+        .mempool
+        .insert((TransactionOrigin::User, first.clone()))
+        .unwrap();
+    let block_id = sequencer.run_production_turn().await.unwrap();
+    assert_block_tail(
+        &block_at(&sequencer, block_id).await.unwrap(),
+        &[first, second],
+    );
+}
+
+#[tokio::test]
 async fn an_exempt_public_bridge_deposit_is_dropped_by_the_builder_bridge_guard() {
     // An empty-witness bridge `Deposit` classifies as an exempt system
     // injection, so `settle_transaction` applies it — a legit deposit replays
@@ -888,8 +926,13 @@ async fn an_over_cap_transaction_is_dropped_not_deferred() {
         &sign_key,
         lee::FeeDeclaration::new(acc1, fee_core::market::MAX_GAS_EXEC + 1, 0, u128::MAX >> 1),
     );
-    let normal =
-        common::test_utils::create_transaction_native_token_transfer(acc1, 0, acc2, 10, &sign_key);
+    let normal = common::test_utils::create_transaction_native_token_transfer(
+        acc2,
+        0,
+        acc1,
+        10,
+        &create_signing_key_for_account2(),
+    );
 
     sequencer
         .mempool
@@ -1055,11 +1098,16 @@ async fn push_tx_into_mempool_fails_until_a_turn_frees_it() {
         .mempool
         .insert((TransactionOrigin::User, tx.clone()))
         .unwrap();
-    assert!(
-        sequencer
-            .mempool
-            .insert((TransactionOrigin::User, tx.clone()))
-            .is_err()
+    let other = common::test_utils::create_transaction_native_token_transfer(
+        initial_public_user_accounts()[0].account_id,
+        0,
+        initial_public_user_accounts()[1].account_id,
+        10,
+        &create_signing_key_for_account1(),
+    );
+    assert_eq!(
+        sequencer.mempool.insert((TransactionOrigin::User, other)),
+        Err(crate::Rejected::Full)
     );
 
     // Empty the mempool by producing a block
@@ -1079,13 +1127,22 @@ async fn orphaned_transactions_are_requeued_past_a_full_mempool() {
         ..setup_sequencer_config()
     };
     let mut sequencer = start_sequencer(config).await;
-    let tx = common::test_utils::produce_dummy_empty_transaction();
     sequencer
         .mempool
-        .insert((TransactionOrigin::User, tx.clone()))
+        .insert((
+            TransactionOrigin::User,
+            common::test_utils::produce_dummy_empty_transaction(),
+        ))
         .unwrap();
+    let orphan = common::test_utils::create_transaction_native_token_transfer(
+        initial_public_user_accounts()[0].account_id,
+        0,
+        initial_public_user_accounts()[1].account_id,
+        10,
+        &create_signing_key_for_account1(),
+    );
 
-    sequencer.resubmit_orphaned(vec![tx]);
+    sequencer.resubmit_orphaned(vec![orphan]);
 
     assert_eq!(sequencer.mempool.len(), 2);
 }
@@ -1182,17 +1239,17 @@ async fn replay_transactions_are_rejected_in_the_same_block() {
         acc1, 0, acc2, 100, &sign_key1,
     );
 
-    let tx_original = tx.clone();
-    let tx_replay = tx.clone();
-    // Pushing two copies of the same tx to the mempool
+    // The mempool holds one tx per signer nonce, the first seen
     sequencer
         .mempool
-        .insert((TransactionOrigin::User, tx_original))
+        .insert((TransactionOrigin::User, tx.clone()))
         .unwrap();
-    sequencer
-        .mempool
-        .insert((TransactionOrigin::User, tx_replay))
-        .unwrap();
+    assert_eq!(
+        sequencer
+            .mempool
+            .insert((TransactionOrigin::User, tx.clone())),
+        Err(crate::Rejected::Occupied)
+    );
 
     // Create block
     sequencer.run_production_turn().await.unwrap();
@@ -5729,7 +5786,6 @@ async fn a_left_out_stake_release_frees_its_signers_pending_slots() {
         .mempool
         .insert((TransactionOrigin::User, early.clone()))
         .unwrap();
-    sequencer.record_pending(&early);
 
     let built = sequencer.build_block_from_mempool().await.unwrap();
 
@@ -6811,37 +6867,24 @@ async fn an_approved_change_has_room_in_a_full_block() {
 async fn a_transaction_dropped_at_build_time_frees_its_nonce() {
     let mut sequencer = common_setup().await;
     let accounts = initial_pub_accounts_private_keys();
-    let signer = TestSigner::from(&accounts[0].secret);
-    let transfer_at = |nonce, amount| {
+    let transfer_at = |nonce, amount, signer: &TestSigner| {
         common::test_utils::create_transaction_native_token_transfer(
             accounts[0].account_id,
             nonce,
             accounts[1].account_id,
             amount,
-            &signer,
+            signer,
         )
     };
-    // Nonce 0 is pending but never reaches the mempool, so nonce 1, authenticated against it, is
-    // never applicable and is dropped at build.
-    let pending = transfer_at(0, 1);
-    assert_eq!(
-        sequencer.admit(&pending).await.unwrap(),
-        crate::pending::Admission::New
-    );
-    sequencer.record_pending(&pending);
-    let first = transfer_at(1, 1);
-    assert_eq!(
-        sequencer.admit(&first).await.unwrap(),
-        crate::pending::Admission::New
-    );
+    let signer = TestSigner::from(&accounts[0].secret);
+    // Signed by the wrong key, so it fails at build; inserted past admission, which refuses it.
+    let forged = transfer_at(0, 1, &TestSigner::from(&accounts[1].secret));
     sequencer
         .mempool
-        .insert((TransactionOrigin::User, first.clone()))
+        .insert((TransactionOrigin::User, forged))
         .unwrap();
-    sequencer.record_pending(&first);
-
     assert!(matches!(
-        sequencer.admit(&transfer_at(1, 2)).await,
+        sequencer.admit(&transfer_at(0, 2, &signer)).await,
         Err(crate::AdmissionError::Pending(
             crate::pending::PendingRefusal::NoncePending { .. }
         ))
@@ -6849,7 +6892,7 @@ async fn a_transaction_dropped_at_build_time_frees_its_nonce() {
 
     sequencer.build_block_from_mempool().await.unwrap();
     assert_eq!(
-        sequencer.admit(&transfer_at(1, 2)).await.unwrap(),
+        sequencer.admit(&transfer_at(0, 2, &signer)).await.unwrap(),
         crate::pending::Admission::New
     );
 }
@@ -6878,7 +6921,6 @@ async fn an_orphaned_transaction_holds_its_nonce_again() {
         .mempool
         .insert((TransactionOrigin::User, included.clone()))
         .unwrap();
-    sequencer.record_pending(&included);
     sequencer.run_production_turn().await.unwrap();
     // The next build frees the slot the included transaction filled.
     sequencer.run_production_turn().await.unwrap();
@@ -6926,7 +6968,6 @@ async fn an_orphaned_transaction_that_finds_the_mempool_full_keeps_its_nonce() {
         .mempool
         .insert((TransactionOrigin::User, included.clone()))
         .unwrap();
-    sequencer.record_pending(&included);
     // Its slot is not pruned until the next build.
     sequencer.run_production_turn().await.unwrap();
 
@@ -6977,7 +7018,6 @@ async fn a_failed_block_build_returns_its_transactions_to_the_mempool() {
         .mempool
         .insert((TransactionOrigin::User, tx.clone()))
         .unwrap();
-    sequencer.record_pending(&tx);
 
     sequencer.fail_build = true;
     assert!(sequencer.build_block_from_mempool().await.is_err());
@@ -7028,7 +7068,10 @@ async fn a_privacy_transaction_with_an_invalid_proof_takes_no_slot() {
 
     let refused = sequencer.admit(&junk).await;
     if matches!(refused, Ok(crate::pending::Admission::New)) {
-        sequencer.record_pending(&junk);
+        sequencer
+            .mempool
+            .insert((TransactionOrigin::User, junk.clone()))
+            .unwrap();
     }
     assert!(
         matches!(refused, Err(crate::AdmissionError::InvalidProof)),

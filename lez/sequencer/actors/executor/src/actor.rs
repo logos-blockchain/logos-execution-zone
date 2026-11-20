@@ -27,7 +27,7 @@ use sequencer_bedrock_actor::{
     protocol::{ChannelEvent, ChannelEventKind, Ed25519Key},
 };
 use sequencer_channel_signing_actor::{ChannelSigningActor, protocol as channel_signing_protocol};
-use sequencer_core::{StakeConfigUpdate, config::SequencerConfig};
+use sequencer_core::{Rejected, StakeConfigUpdate, config::SequencerConfig};
 use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::StorageActorTrait;
 use sharding_pool_actor::{
@@ -321,7 +321,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
         // (see `Error::is_definitive`); the rest depend on this node's head and
         // mempool. An identical re-send is already pending.
         let admission = online
-            .sequencer_mut()
+            .sequencer()
             .admit(&transaction)
             .await
             .map_err(admission_error)?;
@@ -332,9 +332,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
         online
             .sequencer_mut()
             .mempool_mut()
-            .insert((origin.into(), transaction.clone()))
-            .map_err(|_item| Error::MempoolIsFull)?;
-        online.sequencer_mut().record_pending(&transaction);
+            .insert((origin.into(), transaction))
+            .map_err(|rejected| match rejected {
+                Rejected::Full => Error::MempoolIsFull,
+                Rejected::Occupied => {
+                    Error::PendingSlot(anyhow::anyhow!("a slot is already pending"))
+                }
+                Rejected::Cycle => Error::MempoolNonceCycle,
+            })?;
         Ok(())
     }
 }

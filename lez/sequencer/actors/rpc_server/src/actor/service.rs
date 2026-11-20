@@ -427,6 +427,13 @@ fn map_executor_error<M>(
                 "Mempool is full".to_owned(),
                 None::<()>,
             ),
+            cycle @ sequencer_executor_actor::error::Error::MempoolNonceCycle => {
+                ErrorObjectOwned::owned(
+                    sequencer_service_rpc::MEMPOOL_NONCE_CYCLE_ERROR_CODE,
+                    cycle.to_string(),
+                    None::<()>,
+                )
+            }
             sequencer_executor_actor::error::Error::NotOnline => ErrorObjectOwned::owned(
                 sequencer_service_rpc::SEQUENCER_IS_NOT_ONLINE_ERROR_CODE,
                 "Sequencer is not online yet, try again later".to_owned(),
