@@ -8,7 +8,9 @@
     core:
       scheduler:
         cover:
-          message_frequency_per_round: 1.0
+          message_frequency_per_round:
+            numerator: 1
+            denominator: 1
           replication_factor: 0
         delayer:
           maximum_release_delay_in_rounds: 1
@@ -35,6 +37,11 @@
     # The most bytes a block's transactions may take, 2 MiB. An inscription or a
     # deposit's metadata may take seven eighths of it.
     max_transactions_size: 2097152
+    # ROOT_WINDOW: how many blocks a commitment root stays referenceable once a
+    # block supersedes it, kept by the root whatever window a later era sets.
+    root_window: 1024
+    # WITHDRAW_DELAY: the slots between a channel withdrawal and its release.
+    channel_withdraw_delay: 86400
     pow_config:
       blend:
         base_difficulty: 19
@@ -49,17 +56,14 @@
         target_claims_per_block: 100
         rate_num: 0
         rate_den: 1
-        target_claim_per_block: 1
         pow_share: 0
         share_den: 100
         slot_window: 100
     sdp_config:
       service_params:
         - inactivity_period: 2
-          epoch: 0
       min_stake:
         threshold: 1
-        timestamp: 0
     execution_market:
       max_gas_per_block: 3137798
       fee_adjustment_rate:
@@ -76,12 +80,25 @@
         numerator: 1
         denominator: 2
     block_rewards:
-      stake_target: 3000000000000000000
-      emission_factor_scale: 120000000000000000
-      fee_average_numerator: 10512
-      max_emission_per_block:
-        numerator: 62500000000000
-        denominator: 657
+      max_emission_rate:
+        numerator: 1
+        denominator: 100
+      min_emission_rate:
+        numerator: 0
+        denominator: 1
+      stake_target:
+        numerator: 3
+        denominator: 10
+      pooled_fees_target:
+        numerator: 1
+        denominator: 1
+      stake_deviation_weight:
+        numerator: 1
+        denominator: 4
+      pooled_fees_weight:
+        numerator: 1
+        denominator: 1
+      pooled_fees_window: 120
       blend_share:
         numerator: 6
         denominator: 10

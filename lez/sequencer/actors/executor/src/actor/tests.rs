@@ -527,6 +527,7 @@ async fn a_publish_refused_as_stale_returns_its_transactions_to_the_mempool() ->
                             lib_slot: Slot::from(0),
                             finalized_config: MsgId::root(),
                             funding: Vec::new(),
+                            program_notes: None,
                         },
                         seq: ChannelSeq::mocked(8),
                     })

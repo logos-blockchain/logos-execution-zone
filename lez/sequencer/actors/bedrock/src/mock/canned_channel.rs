@@ -239,6 +239,7 @@ pub fn checkpoint_at(tip: MsgId) -> SequencerCheckpoint {
         lib_slot: Slot::from(0),
         finalized_config: MsgId::root(),
         funding: Vec::new(),
+        program_notes: None,
     }
 }
 

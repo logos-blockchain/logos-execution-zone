@@ -2,3 +2,9 @@ entropy_sources:
   - "0000000000000000000000000000000000000000000000000000000000000001"
 chain_id: "lez-local/0.1.0"
 genesis_time: "2026-01-01T00:00:00Z"
+# The node's test-chain defaults.
+max_supply: 10000000000000000000
+pow_reward_pool: 50000000000000000
+rewards_reserve: 1000000000000000000
+storage_gas_price: 1000000000
+execution_gas_price: 1000000000

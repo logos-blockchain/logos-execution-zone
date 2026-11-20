@@ -10,7 +10,7 @@ use logos_blockchain_program_spend::{
     ZkProgramSpendOutputNoteData, ZkProgramSpendWalletInputsData, ZkProgramSpendWitnessInputs,
 };
 use logos_blockchain_zone_sdk::{
-    binary_codec::canonical::BinaryDecodeExt,
+    binary_codec::canonical::BinaryDecode as _,
     core::mantle::{
         batch::{DeferrableProof as _, DeferredProofs},
         notes::{Note, NoteNullifier, derive_note_nullifier},
@@ -42,6 +42,9 @@ use crate::{Result, error::Error};
 /// The id Bedrock gives the vault program.
 pub static VAULT_PROGRAM: LazyLock<ProgramId> = LazyLock::new(|| derive_program_id(&vault_key()));
 
+/// The most bytes the inscription of a deposit holds: a borsh [`DepositMetadata`] fits.
+pub const MAX_DEPOSIT_INSCRIPTION: u32 = 128;
+
 /// A program deposit the vault consumes, as its holder submitted it.
 #[derive(Clone, Debug)]
 pub struct VaultDeposit {
@@ -58,9 +61,9 @@ impl VaultDeposit {
     ///
     /// Bedrock still decides whether the notes it spends exist and its root is recent.
     pub fn admit(bytes: &[u8], channel: &ChannelId, committee: &Committee) -> Result<Self> {
-        let (rest, deposit) = <ProgramDeposit as BinaryDecodeExt>::decode(bytes)
+        let (rest, deposit) = ProgramDeposit::decode(bytes, &(MAX_DEPOSIT_INSCRIPTION, ()))
             .map_err(|_err| Error::InvalidVaultDeposit("its step does not decode"))?;
-        let proof = ZkTransferProof::decode_all(rest)
+        let proof = ZkTransferProof::decode_all(rest, &())
             .map_err(|_err| Error::InvalidVaultDeposit("its proof does not decode"))?;
         let recipient = DepositMetadata::try_from_slice(deposit.inscription.as_ref())
             .map_err(|_err| Error::InvalidVaultDeposit("its inscription names no recipient"))?
@@ -527,7 +530,7 @@ mod tests {
             .clone()
             .execute_adding(notes)
             .unwrap();
-        let note_sets = note_sets.update_channel(set).end_block(1).unwrap();
+        let note_sets = note_sets.update_channel(set).end_block(1, 1024).unwrap();
         let programs = Programs::new()
             .register(RegisteredProgram::new(vault_key()).unwrap())
             .0;
@@ -607,7 +610,11 @@ mod tests {
                 ),
             }
             .intent(committee.id()),
-            inscription: Inscription::try_from(borsh::to_vec(&metadata).unwrap()).unwrap(),
+            inscription: Inscription::try_new(
+                borsh::to_vec(&metadata).unwrap(),
+                MAX_DEPOSIT_INSCRIPTION,
+            )
+            .unwrap(),
         };
         let proof = prove_transfer(
             &[(note, holder, path)],

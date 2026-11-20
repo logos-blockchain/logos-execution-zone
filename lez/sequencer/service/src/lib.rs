@@ -728,6 +728,7 @@ fn bedrock_actor_args(
                 lib_slot: Slot::from(0),
                 finalized_config: MsgId::root(),
                 funding: Vec::new(),
+                program_notes: None,
             },
             // Block ids only grow, so a sequence derived from them continues the
             // stored one across restarts and the store keeps each new checkpoint.
