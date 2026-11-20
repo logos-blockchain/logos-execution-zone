@@ -39,7 +39,7 @@ use logos_blockchain_zone_sdk::{
 };
 use sequencer_actors_common::SendErrorExt as _;
 use sequencer_storage_actor::protocol::ZoneCheckpointRecord;
-use tracing::info;
+use tracing::{debug, info};
 use vault_circuit::{Committee, PublicInputs, SigningKey};
 
 use crate::{
@@ -84,6 +84,8 @@ pub struct Publisher {
     broker_ref: ActorRef<Broker<ChannelEvent>>,
     /// Events zone-sdk raised while a publish waited on the node, in order.
     backlog: VecDeque<Event>,
+    /// Whether this publisher has registered the vault program.
+    vault_registered: bool,
 }
 
 impl Publisher {
@@ -155,6 +157,7 @@ impl Publisher {
             replayed_up_to,
             broker_ref,
             backlog: VecDeque::new(),
+            vault_registered: false,
         };
 
         // Wait for cold-start backfill to complete before returning so callers
@@ -457,6 +460,11 @@ impl Publisher {
                 "a block moving funds through the bridge names its parent",
             ))
         } else {
+            // The first block of a channel zone-sdk creates: the vault needs its program too.
+            if !self.vault_registered {
+                self.register_vault().await?;
+                self.vault_registered = true;
+            }
             let (result, checkpoint) = self
                 .sequencer
                 .handle()
@@ -581,8 +589,29 @@ impl Publisher {
         Ok(())
     }
 
-    /// The inscription of `data` on `parent` carrying the vault's program step for `bridge`,
-    /// with the proofs of its steps.
+    /// Registers the vault program on Bedrock. Registering a program already registered has no
+    /// effect, so every zone can do it.
+    async fn register_vault(&mut self) -> Result<()> {
+        let funded = self
+            .fund_ops([Op::ProgramRegister(ProgramRegisterOp {
+                verification_key: vault_key(),
+            })])
+            .await?;
+        let mut op_proofs = OpProofs::from([OpProof::None(NoOpProof)]);
+        if let Some(transfer_proof) = funded.transfer_proof {
+            op_proofs
+                .try_push(transfer_proof)
+                .map_err(|err| Error::TooManyOperationProofs(err.into()))?;
+        }
+        let tx = SignedOps::from_parts(funded.funded_tx, op_proofs)?;
+        self.node
+            .post_transaction(tx)
+            .await
+            .map_err(|err| Error::NodeRequestFailed(err.into()))?;
+        info!(vault_program = %*VAULT_PROGRAM, "Registered the vault program");
+        Ok(())
+    }
+
     /// Checks a deposit its holder submitted for this channel's vault.
     pub fn admit_deposit(&self, deposit: &[u8]) -> Result<VaultMint> {
         let committee = Self::committee(&self.vault_signing_key());
@@ -602,6 +631,8 @@ impl Publisher {
         }
     }
 
+    /// The inscription of `data` on `parent` carrying the vault's program step for `bridge`,
+    /// with the proofs of its steps.
     async fn vault_inscription(
         &mut self,
         data: Inscription,
@@ -648,12 +679,14 @@ impl Publisher {
         let signature = signing_key.sign(&VaultStep::public_inputs(&draft));
 
         // Proving takes seconds: off the actor's thread, and with zone-sdk still followed.
+        let started = std::time::Instant::now();
         let proving =
             tokio::task::spawn_blocking(move || vault.prove(&draft, vec![Some(signature)]));
         let proofs = self
             .following(proving)
             .await
             .map_err(|err| Error::VaultProofFailed(err.into()))??;
+        debug!(elapsed = ?started.elapsed(), "Proved the vault step");
         let step_proofs = inscription
             .step_proofs(vec![proofs])
             .map_err(|err| Error::VaultStepRefused(err.into()))?;
