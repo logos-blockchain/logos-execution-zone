@@ -335,13 +335,14 @@ impl<S: StorageActorTrait> Message<PublishBlock> for BedrockActor<S> {
             block,
             parent,
             expected_seq,
+            bridge,
         }: PublishBlock,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.assert_channel_id(channel_id);
 
         self.publisher()?
-            .publish_block(block, parent, expected_seq)
+            .publish_block(block, parent, expected_seq, bridge)
             .await
     }
 }

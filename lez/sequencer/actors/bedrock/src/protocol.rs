@@ -266,6 +266,26 @@ pub struct PublishBlock {
     ///
     /// [`None`] will omit the check.
     pub expected_seq: Option<ChannelSeq>,
+    /// What the block moves through the bridge. The inscription carries the vault's program
+    /// step for it.
+    pub bridge: BridgeMoves,
+}
+
+/// What a block moves between Bedrock and the zone.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BridgeMoves {
+    /// The program deposits the block mints from, each as its holder submitted it: the step,
+    /// then its proof, in Bedrock's encoding.
+    pub deposits: Vec<Vec<u8>>,
+    /// The amount and Bedrock key of each withdrawal the block burns.
+    pub payouts: Vec<(u64, [u8; 32])>,
+}
+
+impl BridgeMoves {
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.deposits.is_empty() && self.payouts.is_empty()
+    }
 }
 
 impl ShardingKey for PublishBlock {

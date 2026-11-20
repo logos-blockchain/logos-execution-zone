@@ -316,6 +316,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                     block: block.clone(),
                     parent: None,
                     expected_seq: None,
+                    bridge: sequencer_bedrock_actor::protocol::BridgeMoves::default(),
                 })
                 .await
                 .map_err(SendErrorExt::flatten)?;
@@ -386,6 +387,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                     block: genesis.clone(),
                     parent: None,
                     expected_seq: None,
+                    bridge: sequencer_bedrock_actor::protocol::BridgeMoves::default(),
                 })
                 .await
                 .map_err(SendErrorExt::flatten)?,

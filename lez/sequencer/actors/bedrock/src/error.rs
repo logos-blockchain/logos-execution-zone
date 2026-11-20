@@ -98,6 +98,9 @@ pub enum Error {
     #[error("Invalid vault step: {0}")]
     InvalidVaultStep(&'static str),
 
+    #[error("zone-sdk refused the vault step")]
+    VaultStepRefused(#[source] anyhow::Error),
+
     #[error("Failed to prove the vault step")]
     VaultProofFailed(#[source] anyhow::Error),
 

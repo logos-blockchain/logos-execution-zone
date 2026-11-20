@@ -31,7 +31,7 @@ use logos_blockchain_zone_sdk::{
         },
         proofs::channel_multi_sig_proof::ChannelMultiSigProof,
     },
-    node_types::{Inscription, WalletFundRequestBody, WalletFundResponseBody},
+    node_types::{Inscription, StepProof, WalletFundRequestBody, WalletFundResponseBody},
     sequencer::{
         ChannelUpdate as SdkChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FinalizedTx,
         FundingConfig, InscriptionInfo, SequencerConfig, ZoneSequencer,
@@ -40,21 +40,22 @@ use logos_blockchain_zone_sdk::{
 use sequencer_actors_common::SendErrorExt as _;
 use sequencer_storage_actor::protocol::ZoneCheckpointRecord;
 use tracing::info;
+use vault_circuit::{Committee, PublicInputs, SigningKey};
 
 use crate::{
     Result,
     actor::{
         block_from_inscription,
         finality::{self, ConfigIndex},
-        vault::{VAULT_PROGRAM, vault_key},
+        vault::{VAULT_PROGRAM, VaultDeposit, VaultNote, VaultStep, vault_key},
         verified_keys,
     },
     error::Error,
     protocol::{
-        ChannelEntry, ChannelEvent, ChannelEventKind, ChannelId, ChannelParams, ChannelSeq,
-        ChannelUpdate, DeserializeOp as _, Ed25519Key, Ed25519PublicKey, IndexedSignatures,
-        LiveChannelConfig, MsgId, Ops, PreparedConfig, PublishOutcome, PublisherEvent,
-        SequencerCheckpoint, Slot, ViewChange, ZkPublicKey,
+        BridgeMoves, ChannelEntry, ChannelEvent, ChannelEventKind, ChannelId, ChannelParams,
+        ChannelSeq, ChannelUpdate, DeserializeOp as _, Ed25519Key, Ed25519PublicKey,
+        IndexedSignatures, LiveChannelConfig, MsgId, Ops, PreparedConfig, PublishOutcome,
+        PublisherEvent, SequencerCheckpoint, Slot, ViewChange, ZkPublicKey,
     },
 };
 
@@ -401,7 +402,7 @@ impl Publisher {
         let mut op_proofs = OpProofs::from([OpProof::None(NoOpProof)]);
         for proof in [
             OpProof::ChannelMultiSigProof(genesis_config_proof()),
-            inscribe_proof(signature),
+            OpProof::ChannelInscribe(ChannelInscribeProof::without_steps(signature)),
         ] {
             op_proofs
                 .try_push(proof)
@@ -428,18 +429,33 @@ impl Publisher {
         block: Block,
         parent: Option<MsgId>,
         expected_seq: Option<ChannelSeq>,
+        bridge: BridgeMoves,
     ) -> Result<PublishOutcome> {
         self.check_seq(expected_seq)?;
         let inscription = block_inscription(&self.node, &block).await?;
         let data_byte_size = inscription.len();
 
         let published = if let Some(parent) = parent {
-            let inscribe_op = self.inscription_op(inscription, parent);
+            let (inscribe_op, step_proofs) = if bridge.is_empty() {
+                (self.inscription_op(inscription, parent), Vec::new())
+            } else {
+                self.vault_inscription(inscription, parent, &bridge).await?
+            };
             let msg_id = inscribe_op.id();
             let funded = self.fund_ops([Op::ChannelInscribe(inscribe_op)]).await?;
             self.check_backlog(expected_seq)?;
 
-            self.sign_and_submit(funded.funded_tx, msg_id, parent, funded.transfer_proof)
+            self.sign_and_submit(
+                funded.funded_tx,
+                msg_id,
+                parent,
+                step_proofs,
+                funded.transfer_proof,
+            )
+        } else if !bridge.is_empty() {
+            Err(Error::InvalidVaultStep(
+                "a block moving funds through the bridge names its parent",
+            ))
         } else {
             let (result, checkpoint) = self
                 .sequencer
@@ -565,6 +581,139 @@ impl Publisher {
         Ok(())
     }
 
+    /// The inscription of `data` on `parent` carrying the vault's program step for `bridge`,
+    /// with the proofs of its steps.
+    async fn vault_inscription(
+        &mut self,
+        data: Inscription,
+        parent: MsgId,
+        bridge: &BridgeMoves,
+    ) -> Result<(InscriptionOp, Vec<StepProof>)> {
+        let signing_key = SigningKey::from_channel_seed(
+            self.channel_signing_key.clone().into_unsecured().as_bytes(),
+        );
+        // FIXME: the committee is this sequencer alone until the sequencer set shares one.
+        let committee = Committee {
+            threshold: 1,
+            signers: vec![signing_key.public_key()],
+        };
+        let deposits = bridge
+            .deposits
+            .iter()
+            .map(|deposit| VaultDeposit::admit(deposit, &self.channel_id, &committee))
+            .collect::<Result<Vec<_>>>()?;
+        let payouts: Vec<_> = bridge
+            .payouts
+            .iter()
+            .map(|(value, key)| (*value, ZkPublicKey::new(PublicInputs::op_id_element(key))))
+            .collect();
+        let vault = VaultStep {
+            inputs: self.vault_inputs(&committee, &deposits, &payouts)?,
+            committee,
+            deposits,
+            payouts,
+        };
+
+        let inscription = self
+            .sequencer
+            .handle()
+            .prepare_program_inscription(data, vec![vault.mini_block()?])
+            .map_err(|err| Error::VaultStepRefused(err.into()))?;
+        // zone-sdk chains on its own publish tip, the caller on the view it applied.
+        if inscription.op.parent != parent {
+            return Err(Error::InvalidVaultStep(
+                "its inscription is not on the parent the block was built on",
+            ));
+        }
+        let draft = inscription
+            .program_steps()
+            .next()
+            .cloned()
+            .ok_or(Error::InvalidVaultStep(
+                "its inscription has no program step",
+            ))?;
+        let signature = signing_key.sign(&VaultStep::public_inputs(&draft));
+
+        // Proving takes seconds: off the actor's thread, and with zone-sdk still followed.
+        let proving =
+            tokio::task::spawn_blocking(move || vault.prove(&draft, vec![Some(signature)]));
+        let proofs = self
+            .following(proving)
+            .await
+            .map_err(|err| Error::VaultProofFailed(err.into()))??;
+        let step_proofs = inscription
+            .step_proofs(vec![proofs])
+            .map_err(|err| Error::VaultStepRefused(err.into()))?;
+        Ok((inscription.op, step_proofs))
+    }
+
+    /// The spendable vault notes of `committee` a step consumes to pay `payouts`, the largest
+    /// first. A step that pays nothing out consumes none.
+    fn vault_inputs(
+        &mut self,
+        committee: &Committee,
+        deposits: &[VaultDeposit],
+        payouts: &[(u64, ZkPublicKey)],
+    ) -> Result<Vec<VaultNote>> {
+        let overflows = Error::InvalidVaultStep("the value it moves overflows");
+        let Some(owed) = payouts
+            .iter()
+            .try_fold(0_u64, |owed, (value, _)| owed.checked_add(*value))
+        else {
+            return Err(overflows);
+        };
+        let Some(mut held) = deposits.iter().try_fold(0_u64, |held, deposit| {
+            held.checked_add(deposit.deposit.value)
+        }) else {
+            return Err(overflows);
+        };
+
+        let committee = committee.id();
+        let view = self.sequencer.handle().program_notes();
+        let mut spendable: Vec<_> = view
+            .finalized
+            .iter()
+            .chain(&view.unfinalized)
+            .filter(|note| note.program == *VAULT_PROGRAM && note.opening.data == committee)
+            .collect();
+        spendable.sort_unstable_by_key(|note| std::cmp::Reverse(note.opening.value));
+
+        let mut inputs = Vec::new();
+        for note in spendable {
+            if held >= owed || inputs.len() == vault_circuit::MAX_INPUTS {
+                break;
+            }
+            held = held.saturating_add(note.opening.value);
+            inputs.push(VaultNote {
+                commitment: note.commitment,
+                opening: note.opening,
+            });
+        }
+        if held < owed {
+            return Err(Error::InvalidVaultStep(
+                "its spendable notes do not cover its payouts",
+            ));
+        }
+        Ok(inputs)
+    }
+
+    /// Awaits `task` with zone-sdk still followed: the events it raises meanwhile are queued
+    /// for [`Self::next_event`].
+    #[expect(
+        clippy::integer_division_remainder_used,
+        reason = "Generated by select! macro, can't be easily rewritten to avoid this lint"
+    )]
+    async fn following<T>(&mut self, task: impl Future<Output = T>) -> T {
+        tokio::pin!(task);
+        loop {
+            tokio::select! {
+                biased;
+                done = &mut task => break done,
+                event = self.sequencer.next_event() => self.backlog.push_back(event),
+            }
+        }
+    }
+
     /// Refuses a publish when the channel moved while the node funded it. The queued events
     /// reach the consumer after the publish would, with checkpoints taken before it, so the
     /// block has to be rebuilt on the view they leave.
@@ -617,12 +766,16 @@ impl Publisher {
         tx: Ops,
         msg_id: MsgId,
         parent: MsgId,
+        step_proofs: Vec<StepProof>,
         proofs: impl IntoIterator<Item = OpProof>,
     ) -> Result<PublishOutcome> {
         let signature = self
             .channel_signing_key
             .sign_payload(tx.hash().as_signing_bytes().as_ref());
-        let mut op_proofs = OpProofs::from([inscribe_proof(signature)]);
+        let mut op_proofs = OpProofs::from([OpProof::ChannelInscribe(ChannelInscribeProof::new(
+            signature,
+            step_proofs,
+        ))]);
         for proof in proofs {
             op_proofs
                 .try_push(proof)
@@ -644,10 +797,6 @@ impl Publisher {
     ///
     /// A timed-out call can leave the node's wallet holding its funding-note
     /// reservation until `pending_note_expiry_blocks` releases it.
-    #[expect(
-        clippy::integer_division_remainder_used,
-        reason = "Generated by select! macro, can't be easily rewritten to avoid this lint"
-    )]
     async fn fund_ops(
         &mut self,
         ops: impl IntoIterator<Item = Op>,
@@ -668,16 +817,8 @@ impl Publisher {
         // keeps following the channel meanwhile: publishing back to back would otherwise leave it
         // no time to, and the channel view would freeze.
         let node = self.node.clone();
-        let funding = async move { node.fund_tx(request).await };
-        tokio::pin!(funding);
-        let funded = loop {
-            tokio::select! {
-                biased;
-                funded = &mut funding => break funded,
-                event = self.sequencer.next_event() => self.backlog.push_back(event),
-            }
-        };
-        funded
+        self.following(async move { node.fund_tx(request).await })
+            .await
             .context("Failed to fund channel transaction")
             .map_err(Error::NodeRequestFailed)
     }
@@ -707,13 +848,6 @@ pub(super) fn genesis_config_op(
 /// whole creation tx over a proof holding any signature.
 pub(super) const fn genesis_config_proof() -> ChannelMultiSigProof {
     ChannelMultiSigProof::empty()
-}
-
-/// The proof of an inscription that moves no channel notes.
-const fn inscribe_proof(
-    signature: logos_blockchain_zone_sdk::key_management_system_service::keys::Ed25519Signature,
-) -> OpProof {
-    OpProof::ChannelInscribe(ChannelInscribeProof::without_steps(signature))
 }
 
 /// `data` as an inscription, if it fits what an operation may carry in the era

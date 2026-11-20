@@ -170,6 +170,7 @@ impl SharedChannel {
                       block,
                       parent,
                       expected_seq: _,
+                      bridge: _,
                   },
                   _ctx| channel.publish(&block, parent)
         });

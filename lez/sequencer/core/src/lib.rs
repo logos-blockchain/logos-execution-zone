@@ -644,6 +644,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 block: built.block.clone(),
                 parent: Some(built.parent),
                 expected_seq: self.applied_seq,
+                bridge: sequencer_bedrock_actor::protocol::BridgeMoves::default(),
             })
             .await
             .map_err(|err| err.flatten().map_msg(|_| ()))
