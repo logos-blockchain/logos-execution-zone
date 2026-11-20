@@ -1294,7 +1294,10 @@ impl<C: WalletSequencerClient> WalletCore<C> {
     }
 
     /// A public account's nonce and its stored key, if it has one.
-    async fn stored_key(&self, account_id: AccountId) -> Result<(Nonce, Option<SigningKeyState>)> {
+    pub(crate) async fn stored_key(
+        &self,
+        account_id: AccountId,
+    ) -> Result<(Nonce, Option<SigningKeyState>)> {
         let Some(account) = self
             .get_account_view(Actor::new(account_id, signature_program_id()))
             .await?
@@ -4135,6 +4138,90 @@ mod tests {
             })
             .unwrap();
         sequencer
+    }
+
+    /// A sequencer holding only the signature program's header for `image_id`.
+    fn sequencer_with_guest(image_id: lee_core::program::ProgramId) -> RpcModule<()> {
+        use program_loader_core::LoaderActorState as _;
+        let signature = lee_core::signing_key::signature_program_id();
+        let header = Account::default().with_actor_state(
+            lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+            lee_core::program::ProgramHeader {
+                image_id,
+                program_first_segment: AccountId::new([1; 32]),
+                immutable: false,
+            }
+            .to_loader_actor_state()
+            .into(),
+        );
+        let mut sequencer = RpcModule::new(());
+        sequencer
+            .register_method("getAccountView", move |params, (), _| {
+                let actor = params.one::<Actor>()?;
+                Ok::<_, ErrorObjectOwned>((actor.account_id == signature).then(|| header.clone()))
+            })
+            .unwrap();
+        sequencer
+    }
+
+    fn rotation_error<T: std::fmt::Debug>(result: Result<T, ExecutionFailureKind>) -> String {
+        match result {
+            Err(ExecutionFailureKind::TransactionBuildError(error)) => error.to_string(),
+            other => panic!("expected a refused manual rotation, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn manual_rotation_requires_a_private_fee_payer() {
+        let (wallet, _home, _sequencer) =
+            served_wallet(sequencer_with_guest(programs::signature_program().id())).await;
+        let error = rotation_error(
+            crate::program_facades::signature::Signature(&wallet)
+                .manual_rotation(&[AccountId::new([2; 32])], AccountId::new([3; 32]))
+                .await,
+        );
+        assert!(
+            error.contains("private account this wallet holds"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn manual_rotation_refuses_a_stale_guest() {
+        let (mut wallet, _home, _sequencer) = served_wallet(sequencer_with_guest([9; 8])).await;
+        let (payer, _) = wallet.create_new_account_private(None);
+        let error = rotation_error(
+            crate::program_facades::signature::Signature(&wallet)
+                .manual_rotation(&[AccountId::new([2; 32])], payer)
+                .await,
+        );
+        assert!(error.contains("out of date"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn manual_rotation_refuses_an_account_the_wallet_does_not_hold() {
+        let (mut wallet, _home, _sequencer) =
+            served_wallet(sequencer_with_guest(programs::signature_program().id())).await;
+        let (payer, _) = wallet.create_new_account_private(None);
+        let error = rotation_error(
+            crate::program_facades::signature::Signature(&wallet)
+                .manual_rotation(&[AccountId::new([2; 32])], payer)
+                .await,
+        );
+        assert!(error.contains("holds no secret"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn manual_rotation_refuses_no_accounts() {
+        let (mut wallet, _home, _sequencer) =
+            served_wallet(sequencer_with_guest(programs::signature_program().id())).await;
+        let (payer, _) = wallet.create_new_account_private(None);
+        let error = rotation_error(
+            crate::program_facades::signature::Signature(&wallet)
+                .manual_rotation(&[], payer)
+                .await,
+        );
+        assert!(error.contains("at least one account"), "{error}");
     }
 
     #[tokio::test]
