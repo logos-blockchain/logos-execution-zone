@@ -6,13 +6,13 @@
 use anyhow::{Context as _, Result};
 use integration_tests::{
     TestContext,
-    config::INITIAL_PUBLIC_BALANCES_FOR_WALLET,
+    config::{default_public_accounts_for_wallet, private_funder_account_id},
     private_mention,
     utils::{get_account, new_account},
 };
 use key_protocol::key_management::KeyChain;
 use lee::{Account, test_utils::TestSigner};
-use lee_core::{account::Nonce, signing_key::SIGNATURE_PROGRAM_ID};
+use lee_core::{account::Nonce, signing_key::signature_program_id};
 use tokio::test;
 use wallet::{
     account::{AccountIdWithPrivacy, HumanReadableAccount, Label},
@@ -27,23 +27,21 @@ use wallet::{
 async fn get_existing_account() -> Result<()> {
     let ctx = TestContext::new().await?;
 
-    let account_id = ctx.existing_public_accounts()[0];
+    let account_id = private_funder_account_id();
     let account = get_account(&ctx, account_id).await?;
-    let signer = TestSigner::from(
-        ctx.wallet()
-            .storage()
-            .key_chain()
-            .pub_account_secret(account_id)
-            .context("the wallet holds the account")?,
-    );
+    let (secret, balance) = default_public_accounts_for_wallet()
+        .into_iter()
+        .find(|(secret, _)| lee::signature::public_account_id(secret) == account_id)
+        .context("the funder is a default public account")?;
+    let signer = TestSigner::from(&secret);
 
     // It gets used as a funder for private accounts on genesis twice, so it signed twice.
     assert_eq!(account.nonce.0, 2);
     // Genesis credits the account, and its key rotated with each signature.
     assert_eq!(
         account.data,
-        Account::funded(INITIAL_PUBLIC_BALANCES_FOR_WALLET[0])
-            .with_actor_state(SIGNATURE_PROGRAM_ID, signer.key_state(Nonce(2)).into())
+        Account::funded(balance)
+            .with_actor_state(signature_program_id(), signer.key_state(Nonce(2)).into())
             .data
     );
 

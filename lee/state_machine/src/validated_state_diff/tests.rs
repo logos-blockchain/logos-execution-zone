@@ -4,7 +4,7 @@ use lee_core::{
     account::{AccountId, Actor, Nonce},
     execution_state::ExecutionError,
     program::SyncMessage,
-    signing_key::SIGNATURE_PROGRAM_ID,
+    signing_key::signature_program_id,
 };
 use test_guest_core::Script;
 
@@ -363,7 +363,7 @@ fn metered_revert_reports_cycles_and_yields_a_nonce_only_diff() {
         state.get_account_by_id(from).data,
         from_before
             .data
-            .with_actor_state(SIGNATURE_PROGRAM_ID, from_key.key_state(Nonce(1)).into()),
+            .with_actor_state(signature_program_id(), from_key.key_state(Nonce(1)).into()),
         "the write was reverted"
     );
     assert_eq!(state.get_account_by_id(from).nonce.0, 1);

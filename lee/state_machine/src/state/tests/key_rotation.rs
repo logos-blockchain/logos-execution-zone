@@ -1,6 +1,6 @@
 use lee_core::{
     FeeTransfer,
-    signing_key::{SIGNATURE_PROGRAM_ID, SigningKeyState},
+    signing_key::{SigningKeyState, signature_program_id},
 };
 
 use super::*;
@@ -18,7 +18,7 @@ fn stored_key(state: &V03State, account_id: AccountId) -> ActorState {
     state
         .get_account_by_id(account_id)
         .data
-        .actor_state(SIGNATURE_PROGRAM_ID)
+        .actor_state(signature_program_id())
         .clone()
 }
 
@@ -286,7 +286,7 @@ fn public_a_successful_transaction_rotates_every_signers_key_and_advances_its_no
         assert_eq!(account.data.native_balance(), Ok(balance));
         assert_eq!(account.nonce, Nonce(1));
         assert_eq!(
-            account.data.actor_state(SIGNATURE_PROGRAM_ID),
+            account.data.actor_state(signature_program_id()),
             &key_at(signer, 1)
         );
     }
@@ -329,7 +329,7 @@ fn public_a_charged_revert_drops_the_effects_but_rotates_every_signers_key_and_a
         assert_eq!(account.data.native_balance(), Ok(balance));
         assert_eq!(account.nonce, Nonce(1));
         assert_eq!(
-            account.data.actor_state(SIGNATURE_PROGRAM_ID),
+            account.data.actor_state(signature_program_id()),
             &key_at(signer, 1)
         );
     }
@@ -396,7 +396,7 @@ fn public_an_account_that_does_not_sign_keeps_its_key() {
     assert_eq!(account.data.native_balance(), Ok(120));
     assert_eq!(account.nonce, Nonce(1));
     assert_eq!(
-        account.data.actor_state(SIGNATURE_PROGRAM_ID),
+        account.data.actor_state(signature_program_id()),
         &key_at(&b, 1)
     );
 }
@@ -516,7 +516,7 @@ fn public_a_signer_whose_account_the_transaction_also_writes_ends_with_its_new_k
                 nonce: Nonce(1),
                 ..Account::funded(100)
             }
-            .with_actor_state(SIGNATURE_PROGRAM_ID, key_at(&sender, 1)),
+            .with_actor_state(signature_program_id(), key_at(&sender, 1)),
         ),
         (recipient, Account::default()),
     ]);
@@ -532,7 +532,7 @@ fn public_a_signer_whose_account_the_transaction_also_writes_ends_with_its_new_k
     assert_eq!(
         diff.public_diff()[&sender.account_id()]
             .data
-            .actor_state(SIGNATURE_PROGRAM_ID),
+            .actor_state(signature_program_id()),
         &key_at(&sender, 1)
     );
     state.apply_state_diff(diff).unwrap();
@@ -541,7 +541,7 @@ fn public_a_signer_whose_account_the_transaction_also_writes_ends_with_its_new_k
     assert_eq!(account.data.native_balance(), Ok(90));
     assert_eq!(account.nonce, Nonce(2));
     assert_eq!(
-        account.data.actor_state(SIGNATURE_PROGRAM_ID),
+        account.data.actor_state(signature_program_id()),
         &key_at(&sender, 2)
     );
 }
@@ -625,7 +625,7 @@ fn privacy_a_successful_transaction_rotates_every_signers_key_and_advances_its_n
         let account = state.get_account_by_id(signer.account_id());
         assert_eq!(account.nonce, Nonce(1));
         assert_eq!(
-            account.data.actor_state(SIGNATURE_PROGRAM_ID),
+            account.data.actor_state(signature_program_id()),
             &key_at(signer, 1)
         );
     }
@@ -670,7 +670,7 @@ fn privacy_a_charged_revert_falls_back_to_the_fee_but_rotates_the_signers_key_an
     assert_eq!(account.data.native_balance(), Ok(10));
     assert_eq!(account.nonce, Nonce(1));
     assert_eq!(
-        account.data.actor_state(SIGNATURE_PROGRAM_ID),
+        account.data.actor_state(signature_program_id()),
         &key_at(&signer, 1)
     );
     assert_eq!(
@@ -728,7 +728,7 @@ fn privacy_an_account_that_does_not_sign_keeps_its_key() {
                     nonce: Nonce(1),
                     ..Account::funded(7)
                 }
-                .with_actor_state(SIGNATURE_PROGRAM_ID, key_at(&bystander, 1)),
+                .with_actor_state(signature_program_id(), key_at(&bystander, 1)),
             ),
             (FEE_INBOX, Account::default()),
         ])
@@ -752,7 +752,7 @@ fn privacy_an_account_that_does_not_sign_keeps_its_key() {
     assert_eq!(account.data.native_balance(), Ok(37));
     assert_eq!(account.nonce, Nonce(1));
     assert_eq!(
-        account.data.actor_state(SIGNATURE_PROGRAM_ID),
+        account.data.actor_state(signature_program_id()),
         &key_at(&bystander, 1)
     );
 }
@@ -866,7 +866,7 @@ fn privacy_a_signer_whose_account_the_transaction_also_writes_ends_with_its_new_
             nonce: Nonce(1),
             ..Account::funded(100)
         }
-        .with_actor_state(SIGNATURE_PROGRAM_ID, key_at(&sender, 1)),
+        .with_actor_state(signature_program_id(), key_at(&sender, 1)),
     )]);
     let tx = privacy_shield(&state, &[&sender], &test_private_account_keys_1(), 10);
 
@@ -875,7 +875,7 @@ fn privacy_a_signer_whose_account_the_transaction_also_writes_ends_with_its_new_
     assert_eq!(
         diff.public_diff()[&sender.account_id()]
             .data
-            .actor_state(SIGNATURE_PROGRAM_ID),
+            .actor_state(signature_program_id()),
         &key_at(&sender, 1)
     );
     state.apply_state_diff(diff).unwrap();
@@ -884,7 +884,7 @@ fn privacy_a_signer_whose_account_the_transaction_also_writes_ends_with_its_new_
     assert_eq!(account.data.native_balance(), Ok(90));
     assert_eq!(account.nonce, Nonce(2));
     assert_eq!(
-        account.data.actor_state(SIGNATURE_PROGRAM_ID),
+        account.data.actor_state(signature_program_id()),
         &key_at(&sender, 2)
     );
 }

@@ -12,8 +12,8 @@ mod inner {
         BRIDGE_ELF, BRIDGE_ID, BRIDGE_LOCK_ELF, BRIDGE_LOCK_ID, CLOCK_ELF, CLOCK_ID,
         CROSS_ZONE_INBOX_ELF, CROSS_ZONE_INBOX_ID, CROSS_ZONE_OUTBOX_ELF, CROSS_ZONE_OUTBOX_ID,
         FEE_ELF, FEE_ID, PING_RECEIVER_ELF, PING_RECEIVER_ID, PING_SENDER_ELF, PING_SENDER_ID,
-        SEQUENCER_STAKE_ELF, SEQUENCER_STAKE_ID, SYSTEM_UPGRADER_ELF, SYSTEM_UPGRADER_ID,
-        WRAPPED_TOKEN_ELF, WRAPPED_TOKEN_ID,
+        SEQUENCER_STAKE_ELF, SEQUENCER_STAKE_ID, SIGNATURE_ELF, SIGNATURE_ID, SYSTEM_UPGRADER_ELF,
+        SYSTEM_UPGRADER_ID, WRAPPED_TOKEN_ELF, WRAPPED_TOKEN_ID,
     };
     use lee::{AccountId, program::Program};
     use system_upgrader_core::SystemProgramName;
@@ -30,6 +30,7 @@ mod inner {
     pub use fee_core::FEE_NAME;
     pub use ping_core::{PING_RECEIVER_NAME, PING_SENDER_NAME};
     pub use sequencer_stake_core::SEQUENCER_STAKE_NAME;
+    pub use signature_core::{SIGNATURE_PROGRAM_NAME, signature_program_id};
     pub use wrapped_token_core::WRAPPED_TOKEN_NAME;
 
     #[must_use]
@@ -120,14 +121,22 @@ mod inner {
 
     pub use sequencer_stake_core::sequencer_stake_account_id;
 
+    /// The guest-callable part of the signature program, run privately for a manual rotation.
+    #[must_use]
+    #[inline]
+    pub const fn signature_program() -> Program {
+        Program::new_unchecked(SIGNATURE_ID, Cow::Borrowed(SIGNATURE_ELF))
+    }
+
     /// System programs every zone registers at genesis, by name.
     #[must_use]
-    pub fn builtin_core_programs() -> [(SystemProgramName, Program); 4] {
+    pub fn builtin_core_programs() -> [(SystemProgramName, Program); 5] {
         [
             (CLOCK_NAME, clock()),
             (FEE_NAME, fee()),
             (BRIDGE_NAME, bridge()),
             (SEQUENCER_STAKE_NAME, sequencer_stake()),
+            (SIGNATURE_PROGRAM_NAME, signature_program()),
         ]
     }
 
@@ -149,11 +158,11 @@ mod inner {
     /// lengths are the enforcement: adding to either half fails to compile until every length
     /// here is updated too.
     #[must_use]
-    pub fn builtin_programs() -> [(AccountId, Program); 11] {
+    pub fn builtin_programs() -> [(AccountId, Program); 12] {
         let at_name = |(name, program): (SystemProgramName, Program)| {
             (AccountId::from_system_program_name(&name), program)
         };
-        let [clock, fee, bridge, stake] = builtin_core_programs().map(at_name);
+        let [clock, fee, bridge, stake, signature] = builtin_core_programs().map(at_name);
         let [inbox, outbox, sender, receiver, lock, wrapped] =
             builtin_cross_zone_programs().map(at_name);
         [
@@ -162,6 +171,7 @@ mod inner {
             fee,
             bridge,
             stake,
+            signature,
             inbox,
             outbox,
             sender,
@@ -172,7 +182,7 @@ mod inner {
     }
 
     #[must_use]
-    pub fn builtin_program_account_ids() -> [AccountId; 11] {
+    pub fn builtin_program_account_ids() -> [AccountId; 12] {
         builtin_programs().map(|(account_id, _)| account_id)
     }
 
@@ -310,6 +320,14 @@ mod inner {
             fn staged_with(
                 programs: impl IntoIterator<Item = (AccountId, Program, bool)>,
             ) -> (V03State, Vec<AccountId>) {
+                staged_registering(programs, [CLOCK_NAME, FEE_NAME])
+            }
+
+            /// `programs` deployed, `names` registered, and the new chain uploaded.
+            fn staged_registering(
+                programs: impl IntoIterator<Item = (AccountId, Program, bool)>,
+                names: impl IntoIterator<Item = SystemProgramName>,
+            ) -> (V03State, Vec<AccountId>) {
                 let new_code = ping_receiver();
                 let user_elf = risc0_binfmt::ProgramBinary::decode(new_code.elf())
                     .unwrap()
@@ -320,7 +338,7 @@ mod inner {
                     .collect();
                 let segments = program_loader_core::build_segments(&user_elf, &ids).unwrap();
                 let registry = Registry {
-                    programs: BTreeMap::from([(CLOCK_NAME, None), (FEE_NAME, None)]),
+                    programs: names.into_iter().map(|name| (name, None)).collect(),
                 };
                 let state = V03State::new()
                     .with_programs_at(
@@ -470,10 +488,14 @@ mod inner {
             }
 
             fn apply_tx(activation_height: u64) -> PublicTransaction {
+                apply_tx_for(CLOCK_NAME, activation_height)
+            }
+
+            fn apply_tx_for(name: SystemProgramName, activation_height: u64) -> PublicTransaction {
                 system_upgrader_tx(
-                    &[loader_actor(&CLOCK_NAME)],
+                    &[loader_actor(&name)],
                     &Message::Apply {
-                        name: CLOCK_NAME,
+                        name,
                         activation_height,
                     },
                 )
@@ -598,6 +620,65 @@ mod inner {
                 );
                 assert_eq!(schedule(&state), None, "applying clears the schedule");
                 assert!(!header(&state, clock_account_id()).immutable);
+            }
+
+            #[test]
+            fn the_signature_program_can_be_scheduled_and_applied() {
+                let (mut state, ids) = staged_registering(
+                    [(signature_program_id(), signature_program(), false)],
+                    [SIGNATURE_PROGRAM_NAME],
+                );
+                assert_eq!(
+                    state.get_program_image_id(signature_program_id()),
+                    Some(signature_program().id())
+                );
+
+                state
+                    .transition_from_public_transaction(
+                        &approved_schedule_tx(SIGNATURE_PROGRAM_NAME, ids[0]),
+                        1,
+                        0,
+                    )
+                    .expect("scheduling succeeds");
+                state
+                    .transition_from_public_transaction(
+                        &apply_tx_for(SIGNATURE_PROGRAM_NAME, ACTIVATION_HEIGHT),
+                        ACTIVATION_HEIGHT,
+                        0,
+                    )
+                    .expect("the upgrade applies at its height");
+
+                assert_eq!(
+                    state.get_program_image_id(signature_program_id()),
+                    Some(ping_receiver().id())
+                );
+                assert!(!header(&state, signature_program_id()).immutable);
+            }
+
+            /// Settlement accepts a disclosed claim only for the image an account holds now, so
+            /// once the upgrade applies, a proof of the old guest is refused.
+            #[test]
+            fn a_proof_of_the_old_guest_is_refused_after_an_upgrade() {
+                let (mut state, ids) = staged_registering(
+                    [(signature_program_id(), signature_program(), false)],
+                    [SIGNATURE_PROGRAM_NAME],
+                );
+                for (tx, block) in [
+                    (approved_schedule_tx(SIGNATURE_PROGRAM_NAME, ids[0]), 1),
+                    (
+                        apply_tx_for(SIGNATURE_PROGRAM_NAME, ACTIVATION_HEIGHT),
+                        ACTIVATION_HEIGHT,
+                    ),
+                ] {
+                    state
+                        .transition_from_public_transaction(&tx, block, 0)
+                        .unwrap();
+                }
+
+                assert_ne!(
+                    state.get_program_image_id(signature_program_id()),
+                    Some(signature_program().id())
+                );
             }
 
             #[test]
@@ -1391,6 +1472,144 @@ mod inner {
         }
 
         #[test]
+        fn signature_program_id_collides_with_no_reserved_address() {
+            let reserved = [
+                lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
+                lee_core::program::SYSTEM_UPGRADER_ACCOUNT_ID,
+                lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+            ];
+            assert!(
+                !reserved
+                    .into_iter()
+                    .chain(
+                        builtin_program_account_ids()
+                            .into_iter()
+                            .filter(|&account_id| account_id != signature_program_id())
+                    )
+                    .any(|account_id| account_id == signature_program_id())
+            );
+        }
+
+        mod signature {
+            use lee::{
+                program::Program,
+                test_utils::{PINNED_ACCOUNT_ID, PINNED_SECRET},
+            };
+            use lee_core::{
+                account::{AccountId, Actor, ActorState},
+                program::{ReceiveInput, Transition},
+                signing_key::{KeyType, SignatureMessage, SigningKeyState},
+            };
+            use signature_core::{AccountRotation, Message};
+
+            use super::super::*;
+
+            const CYCLE_BUDGET: u64 = 64 << 20;
+
+            fn run(message: &[u8]) -> Result<Transition, lee::error::LeeError> {
+                let input = ReceiveInput {
+                    receiver: Actor::new(AccountId::new([80; 32]), signature_program_id()),
+                    from: None,
+                    is_authorized: true,
+                    pre_state: ActorState::empty(),
+                    message: message.to_vec(),
+                };
+                signature_program().handle_message_for_tests(&input, CYCLE_BUDGET)
+            }
+
+            fn rotation(secret: [u8; 32], account: AccountId, next: SigningKeyState) -> Vec<u8> {
+                borsh::to_vec(&Message::ManualRotation {
+                    rotations: vec![AccountRotation {
+                        secret,
+                        account,
+                        next,
+                    }],
+                })
+                .unwrap()
+            }
+
+            fn key(key_type: KeyType, byte: u8) -> SigningKeyState {
+                SigningKeyState {
+                    key_type,
+                    key_commitment: [byte; 32],
+                }
+            }
+
+            #[test]
+            fn the_guests_account_id_matches_the_pinned_vector() {
+                let next = key(KeyType::Schnorr, 3);
+                assert!(run(&rotation(PINNED_SECRET, PINNED_ACCOUNT_ID, next)).is_ok());
+                assert!(run(&rotation(PINNED_SECRET, AccountId::new([1; 32]), next)).is_err());
+            }
+
+            #[test]
+            fn manual_rotation_sends_one_set_key_per_account() {
+                let first = lee::signature::PublicAccountSecret::new([11; 32]);
+                let second = lee::signature::PublicAccountSecret::new([12; 32]);
+                let rotations = [
+                    (&first, key(KeyType::Schnorr, 3)),
+                    (&second, key(KeyType::Schnorr, 4)),
+                ];
+                let message = Message::ManualRotation {
+                    rotations: rotations
+                        .iter()
+                        .map(|(secret, next)| AccountRotation {
+                            secret: *secret.value(),
+                            account: lee::signature::public_account_id(secret),
+                            next: *next,
+                        })
+                        .collect(),
+                };
+
+                let response = run(&borsh::to_vec(&message).unwrap()).unwrap().response;
+
+                assert_eq!(response.post_state, None);
+                assert!(response.async_messages.is_empty());
+                assert!(response.events.is_empty());
+                let sent: Vec<(Actor, SignatureMessage)> = response
+                    .sync_messages
+                    .iter()
+                    .map(|sent| (sent.to, borsh::from_slice(&sent.message).unwrap()))
+                    .collect();
+                let expected: Vec<(Actor, SignatureMessage)> = rotations
+                    .iter()
+                    .map(|(secret, next)| {
+                        (
+                            Actor::new(
+                                lee::signature::public_account_id(secret),
+                                signature_program_id(),
+                            ),
+                            SignatureMessage::SetKey { next: *next },
+                        )
+                    })
+                    .collect();
+                assert_eq!(sent, expected);
+            }
+
+            #[test]
+            fn a_set_key_sent_to_the_guest_panics() {
+                let set_key = SignatureMessage::SetKey {
+                    next: key(KeyType::Schnorr, 3),
+                };
+                assert!(run(&borsh::to_vec(&set_key).unwrap()).is_err());
+            }
+
+            #[test]
+            fn manual_rotation_with_no_accounts_panics() {
+                let message = Message::ManualRotation {
+                    rotations: Vec::new(),
+                };
+                assert!(run(&borsh::to_vec(&message).unwrap()).is_err());
+            }
+
+            #[test]
+            fn the_signature_program_binary_matches_its_image_id() {
+                let rebuilt = Program::new(signature_program().elf().to_vec().into()).unwrap();
+                assert_eq!(rebuilt.id(), SIGNATURE_ID);
+            }
+        }
+
+        #[test]
         fn builtin_account_ids_are_distinct() {
             let ids = builtin_program_account_ids();
             let unique: std::collections::BTreeSet<_> = ids.iter().collect();
@@ -1410,6 +1629,7 @@ mod inner {
                     fee_account_id(),
                     bridge_account_id(),
                     sequencer_stake_account_id(),
+                    signature_program_id(),
                     cross_zone_inbox_account_id(),
                     cross_zone_outbox_account_id(),
                     ping_sender_account_id(),

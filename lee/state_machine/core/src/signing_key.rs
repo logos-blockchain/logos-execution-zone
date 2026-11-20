@@ -3,11 +3,19 @@ use std::{fmt, str::FromStr};
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 
-use crate::account::{AccountId, ActorState};
+use crate::{
+    account::{AccountId, ActorState},
+    program::SystemProgramName,
+};
 
-/// The fixed address of `signature_program`: a native pseudo-program with no bytecode, whose
-/// actor state holds each account's signing key. Never dispatched, deployed or upgraded.
-pub const SIGNATURE_PROGRAM_ID: AccountId = AccountId::new([0xFC; 32]);
+pub const SIGNATURE_PROGRAM_NAME: SystemProgramName = SystemProgramName::new(b"signature");
+
+/// Messages to an account's signature actor. Append only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum SignatureMessage {
+    /// Replaces the account's key state with `next`, without advancing its nonce.
+    SetKey { next: SigningKeyState },
+}
 
 /// Append only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -86,6 +94,16 @@ impl TryFrom<&ActorState> for SigningKeyState {
     }
 }
 
+/// The address of `signature_program`, the `system_upgrader` PDA for its name.
+///
+/// Its actor state holds each account's signing key. A public message there is handled natively:
+/// only `SetKey`, from the signature program itself. Run privately, its guest performs a manual
+/// rotation.
+#[must_use]
+pub fn signature_program_id() -> AccountId {
+    AccountId::from_system_program_name(&SIGNATURE_PROGRAM_NAME)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,6 +156,22 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             "Not all bytes read"
+        );
+    }
+
+    #[test]
+    fn signature_message_encoding_is_pinned() {
+        let message = SignatureMessage::SetKey {
+            next: SigningKeyState {
+                key_type: KeyType::Schnorr,
+                key_commitment: [7; 32],
+            },
+        };
+        let bytes = borsh::to_vec(&message).unwrap();
+        assert_eq!(bytes, [&[0, 0][..], &[7; 32][..]].concat());
+        assert_eq!(
+            borsh::from_slice::<SignatureMessage>(&bytes).unwrap(),
+            message
         );
     }
 

@@ -66,6 +66,8 @@ members = [
   "lez/programs/ping_sender",
   "lez/programs/ping_receiver",
   "lez/programs/sequencer_stake",
+  "lez/programs/signature",
+  "lez/programs/signature/core",
   "lez/cross_zone",
   "lez/core_ffi",
 
@@ -145,6 +147,7 @@ bridge_lock_core = { path = "lez/programs/bridge_lock/core" }
 wrapped_token_core = { path = "lez/programs/wrapped_token/core" }
 ping_core = { path = "lez/programs/ping_core" }
 sequencer_stake_core = { path = "lez/programs/sequencer_stake/core" }
+signature_core = { path = "lez/programs/signature/core" }
 cross_zone = { path = "lez/cross_zone" }
 build_utils = { path = "build_utils" }
 test_guest_core = { path = "test_guest_core" }

@@ -2,6 +2,7 @@
   "home": "/var/lib/sequencer_service",
   "max_num_tx_in_block": 20,
   "mempool_max_size": 10000,
+  "mempool_max_per_account": 16,
   "block_create_timeout": "10s",
   "retry_pending_blocks_timeout": "7s",
   "bedrock_config": {
@@ -57,10 +58,10 @@
             132,
             121
           ],
-          "ownership_id": "J5sTKEfnZpDxcdtSNFUqnZWfrKzup2tRnicZ1C4inCRT",
+          "ownership_id": "CuNVagH532VoVEWXPEc6cQY8dBQWnsLpaTgHUBGCp42z",
           "stake_entry": {
-            "auth_data": "002b45b9f023194e95342a8518ed2ff50401e76b84f2909165c362b1d7830ba10956e1ddbcd2dfa78fc9215988b5a838d50aa1ead52c17a3743cc79cc9b0b5c6916a50b9f822896cc3d0bd3a870714a6140dd156b68fdf9c270ad95eed797707e6609b6395fe796d796ac846ec3cfd776e2d4761530771df315f82497990d00823",
-            "next": "009e8e552585153280ac5fe1f50efa4a9f70eb482f85db90c157725911b9cea3a7"
+            "auth_data": "0086a6ddea028bb4c644d95fe8245b91072ccd1835d15e59f9f3875483f256888c113c40c96453a2f6290cee45bc49f2d253b53a745acd0602e3c4cd18349dff71894e582d4095d94b3055198104b387abc1098b1d5c2685f3e4e01ca8f7a9b2c99c25e6936eb4b6709241bbcaa705588f5a447e7414b322076cc1bdd11c544d0b",
+            "next": "005861e9b3297e65513fc6fe533c99144936290af3cf2dac66c7b1270f6d3a3930"
           }
         }
       },
@@ -100,10 +101,10 @@
             42,
             251
           ],
-          "ownership_id": "or46Fg7qtBMZfc68AJAz43VJCdv4aUfE7mWJZk8raBD",
+          "ownership_id": "7fox3yBYtZNxxhY2UzQEsfzob8tE4vaQQshHbSGBpuGp",
           "stake_entry": {
-            "auth_data": "003a816a3925b9b6862dcbbb36596161d2d155e0cc56185f5c056d9f7b97285ce2c62ab824ee114e2a8a0c95a02f7eb9bc4061efdbad473a7efc63871e0deae95d7eb6ab37e9eb318ae5c321b8fbf890f82ea9276e94fb5360640ad93d6c28c73999be7424052e2dd400e63d03746461f550e4168278641ca2dd20355c7bdb5854",
-            "next": "00c66a3fe58e9a78ff3535034af95af070ad291421aba378f9a0e0646bd48ab5a6"
+            "auth_data": "00ab4421f5f42074bb660a95a16e538215c24cd0c40674ddf2882e6a665e63bc0f2444fb29d20b2e4e48fbc850bcf00b53888e46ec5309056bb051d4f04d7198b5bac1a502b1d5bd17ddefdd62d19fa3ad3519e6701087eba7a7ca37cd2416cf959431056c48ea56638374d75f3c629905ce40e1b8e0e8387d75db3bda77899515",
+            "next": "001356c0e5be939568dd13b1f6a5603a4c149ecafbcd98771f310292be2ce1c48c"
           }
         }
       },
@@ -143,10 +144,10 @@
             113,
             209
           ],
-          "ownership_id": "Azw4Ta4hFATyfpmtbaWJE8g2uKgtRC99jbfNuSdzusbD",
+          "ownership_id": "HFrFEiaUwMN2E3Uq86VEYX7fzLd6z7UzsnmqDCNY47AX",
           "stake_entry": {
-            "auth_data": "00d6e1a34a7b49d62c70696bd6f421d2376be1a596ab2ca1de89d958859c1cb89070c3f2c6af9aa4cd3837fcd4194cb8c13d108b2a97097561639c170225aac16842690b58931c95b2fe2fa16ba76b51b2204f4d7fff322d48aedc8c5db4d64d9536f78ac2fd35e1b3c529bfcda64eca6ccf396a3920f97e0081055cc32d46c3b6",
-            "next": "005142dbbb963b0f9708f5f21b9ad1a5f9a0be5b1f6036a24af6ab926296b6be91"
+            "auth_data": "00254c4d42fc888d4799127a82d3e217f72e5088b08601040a1ddf52b2bc725dff401271c13f125d5ee24b3d1ba0a6b854b4bfdd2b4009d069465d7791892fe055de30a9b24e33c9cd0b796c7fc82b95270fdfd577e0547301e322771d17e7b7114349727fd464d3b4d70538c6d6bc1a3e218d06ad09d8ba5b726a551ae0b117e8",
+            "next": "00b1fcc32be9b991d96a026923620f7b7b825568638f4c97ec0d43bc1dede306cb"
           }
         }
       },
@@ -186,10 +187,10 @@
             17,
             10
           ],
-          "ownership_id": "DSQi5m18xN2UWAU8WXGTy3vGubBpFgYqXpFaeBk4mBSV",
+          "ownership_id": "5HPuca8fsSk67XbGaCsW3m1z6H1fPGgsmxVsvAS4jnAJ",
           "stake_entry": {
-            "auth_data": "003adcca687edae0434320ea59b3c59b02aecfc937e24785ebc7c21a8382e01e5ddf1e127af49cb19d5af31e719fcbbb8ab624003f5aa465dc8e823ee0f7d7c15cae237eb9d161c979e28a82fbfa3d16c4f1f60a40dfc51357a8251eb21ecc45dc2555a5062133bbe89c7130757d88356d2fb9262cc6d8d14c2707ef06653b8818",
-            "next": "005994de4f0eff738acac1e1badbf2688942d9ea355bf769e25fab909a9b2137fa"
+            "auth_data": "001a0577da52f059a1e3993f30bf1339244bcdfd8cab42e6588bb0ed61d4aa26605f4576f756906cd463585fb6d04857774e44aea2753c69b67d32d34bab56c8ec59793ebcbd20bb79e106a31a1ff6a2f6ad2eec06aa5f5897af522824243b7bb4e1f3751ff7ff1a1fb48418bb79f0f0d2985343c0b35b0b8b235c1d6df29d09df",
+            "next": "008306e499c3a82b5186228254537cfc169a59a4833febe2e3d145868b749031f7"
           }
         }
       },
@@ -197,7 +198,7 @@
         "supply_account": {
           "recipient": {
             "identified": {
-              "key": "00f00d1e62fa5278307fbde46d84a022f571caff20c157b2831884cc3cc2ae4c29"
+              "key": "00eb0524bbe08991770dc3975e23245723731115b4150c3f784a8b5bb4637ade88"
             }
           },
           "balance": 10000
@@ -207,7 +208,7 @@
         "supply_account": {
           "recipient": {
             "identified": {
-              "key": "000223ea30d102c2f066dca058325ee30af21c23cf4dd9a16c3e4ab190ba0b49cb"
+              "key": "003736e3cad692bc83c7a6e81fa672992bf2421903a9c4c9e11b569876918f1d66"
             }
           },
           "balance": 20000

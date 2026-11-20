@@ -13,6 +13,7 @@ pub mod bridge;
 pub mod native_token_transfer;
 pub mod program_loader;
 pub mod sequencer_stake;
+pub mod signature;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CreditDelivery {
