@@ -33,6 +33,7 @@ use logos_blockchain_zone_sdk::{
     sequencer::{DepositInfo, SequencerCheckpoint, WithdrawArg, WithdrawInfo},
 };
 use mempool::MemPool;
+pub use mempool::Rejected;
 use num_bigint::BigUint;
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
@@ -94,6 +95,10 @@ const RETIRE_DISPATCH_AFTER_FAILURES: u32 = 3;
 /// since store-drained work is taken before the mempool. The rest wait one
 /// block; nothing is dropped.
 const MAX_DISPATCHES_PER_BLOCK: usize = 16;
+
+/// How far, in percent, a transaction must raise the tip per declared gas of the pending one it
+/// replaces, so a dust raise cannot churn the mempool.
+const REPLACEMENT_BUMP_PERCENT: u128 = 10;
 
 /// File in a sequencer home holding the Ed25519 key the node signs its channel inscriptions with,
 /// which is the key its stake accredits.
@@ -581,9 +586,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         }
     }
 
-    /// Gives orphaned user txs back to the mempool, ahead of their signers' later ones, so the
-    /// next on-turn production re-includes them on the new head. They were included once, so
-    /// they go back past the size bound rather than being dropped.
+    /// Gives orphaned user txs back to the mempool, replacing any pending tx at their nonces, so
+    /// the next on-turn production re-includes them on the new head. They were included once,
+    /// so they go back past the size bound rather than being dropped.
     fn resubmit_orphaned(&mut self, txs: Vec<LeeTransaction>) {
         for tx in txs.into_iter().rev() {
             self.mempool.give_back((TransactionOrigin::User, tx));
@@ -1607,6 +1612,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 continue;
             }
 
+            // Ahead of its signers' nonces: it waits, holding its lanes, for the gap to fill.
+            if !from_store && awaits_nonces(&working_state, &tx) {
+                self.mempool.give_back((origin, tx));
+                continue;
+            }
+
             // A block pinning deposits publishes on an explicit parent, which
             // cannot carry withdrawals.
             if !pinned_deposit_notes.is_empty() && extract_bridge_withdraw_data(&tx).is_some() {
@@ -2279,8 +2290,8 @@ struct BlockWithMeta {
 type PublishError = kameo::error::SendError<(), sequencer_bedrock_actor::error::Error>;
 
 /// The sequencer's mempool: ordered by tip per declared gas, one lane per
-/// signer's nonce sequence.
-pub type SequencerMemPool = MemPool<(TransactionOrigin, LeeTransaction), u128, AccountId>;
+/// signer, slotted by nonce.
+pub type SequencerMemPool = MemPool<(TransactionOrigin, LeeTransaction), u128, AccountId, u128>;
 
 /// A turn given up because the channel moved under the block while it was
 /// being built.
@@ -2320,7 +2331,21 @@ fn checkpoint_bytes(checkpoint: &SequencerCheckpoint) -> Result<Vec<u8>> {
 
 #[must_use]
 pub fn new_mempool(max_size: usize) -> SequencerMemPool {
-    MemPool::new(max_size, |(_, tx)| priority(tx), |(_, tx)| signers(tx))
+    MemPool::new(
+        max_size,
+        |(_, tx)| priority(tx),
+        |(_, tx)| nonce_slots(tx),
+        outbids,
+    )
+}
+
+/// Whether a replacement's priority clears the one it replaces by [`REPLACEMENT_BUMP_PERCENT`].
+fn outbids(new: &u128, old: &u128) -> bool {
+    let bump = old
+        .checked_div(100)
+        .expect("nonzero divisor")
+        .saturating_mul(REPLACEMENT_BUMP_PERCENT);
+    new > old && *new >= old.saturating_add(bump)
 }
 
 /// Tip per declared gas, as a 64.64 fixed-point number.
@@ -2342,18 +2367,31 @@ fn priority(tx: &LeeTransaction) -> u128 {
     }
 }
 
-/// The accounts whose nonce sequences a transaction belongs to: every witness,
-/// a co-signing payer included. A private tx signs for its public accounts the
-/// same way, one nonce per signature; a purely private one has none.
-fn signers(tx: &LeeTransaction) -> Vec<AccountId> {
-    let witnesses = match tx {
-        LeeTransaction::Public(tx) => tx.witness_set().signatures_and_public_keys(),
-        LeeTransaction::PrivacyPreserving(tx) => tx.witness_set().signatures_and_public_keys(),
+/// The nonce each signer, a co-signing payer included, signs a transaction at. A private tx
+/// signs for its public accounts the same way; a purely private one has none.
+fn nonce_slots(tx: &LeeTransaction) -> Vec<(AccountId, u128)> {
+    let nonces = match tx {
+        LeeTransaction::Public(tx) => &tx.message().nonces,
+        LeeTransaction::PrivacyPreserving(tx) => &tx.message().nonces,
     };
-    witnesses
-        .iter()
-        .map(|(_, public_key)| AccountId::from(public_key))
-        .collect()
+    nonces.iter().map(|(id, nonce)| (*id, nonce.0)).collect()
+}
+
+/// Whether a transaction signs at a nonce one of its accounts has not reached yet, and at none
+/// one has passed: it waits for the gap to fill rather than fails.
+fn awaits_nonces(state: &lee::V03State, tx: &LeeTransaction) -> bool {
+    let mut ahead = false;
+    for (account_id, nonce) in nonce_slots(tx) {
+        let current = state
+            .get_account_by_id_ref(account_id)
+            .map_or(0, |account| account.nonce.0);
+        match nonce.cmp(&current) {
+            std::cmp::Ordering::Less => return false,
+            std::cmp::Ordering::Greater => ahead = true,
+            std::cmp::Ordering::Equal => {}
+        }
+    }
+    ahead
 }
 
 /// Whether `deposit_op_id`'s mint is already reflected in `state` — the bridge

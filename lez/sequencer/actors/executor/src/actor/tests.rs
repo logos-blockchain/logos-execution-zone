@@ -96,6 +96,11 @@ pub(super) fn sequencer_config() -> (SequencerConfig, TempDir) {
 }
 
 fn test_transaction() -> LeeTransaction {
+    test_transaction_at(0)
+}
+
+/// A transfer from the funded payer, signed at `payer_nonce`.
+fn test_transaction_at(payer_nonce: u128) -> LeeTransaction {
     let key2 = PrivateKey::new_os_random();
     let acc2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
 
@@ -106,7 +111,7 @@ fn test_transaction() -> LeeTransaction {
     let payer = accounts[0].account_id;
     let payer_key = accounts[0].pub_sign_key.clone();
 
-    let nonces = BTreeMap::from([(payer, 0_u128.into()), (acc2, 0_u128.into())]);
+    let nonces = BTreeMap::from([(payer, payer_nonce.into()), (acc2, 0_u128.into())]);
     let message = Message::try_new_with_fees(
         Actor::native_balance(payer),
         vec![Actor::native_balance(payer), Actor::native_balance(acc2)],
@@ -831,8 +836,8 @@ async fn handle_transaction_fails_on_full_mempool() -> Result<()> {
         .await?;
 
     // Fill mempool
-    for _ in 0..mempool_max_size {
-        let tx = test_transaction();
+    for payer_nonce in 0..mempool_max_size {
+        let tx = test_transaction_at(payer_nonce.try_into().unwrap());
         executor
             .ask(protocol::Transaction {
                 transaction: tx,
@@ -842,7 +847,7 @@ async fn handle_transaction_fails_on_full_mempool() -> Result<()> {
     }
 
     // Now the mempool is full, the next transaction should fail
-    let tx = test_transaction();
+    let tx = test_transaction_at(mempool_max_size.try_into().unwrap());
     assert!(matches!(
         executor
             .ask(protocol::Transaction {

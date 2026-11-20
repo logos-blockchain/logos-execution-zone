@@ -32,7 +32,7 @@ use sequencer_bedrock_actor::{
     protocol::{ChannelEvent, ChannelEventKind, Ed25519Key, PublisherEvent},
 };
 use sequencer_channel_signing_actor::{ChannelSigningActor, protocol as channel_signing_protocol};
-use sequencer_core::{StakeConfigUpdate, config::SequencerConfig};
+use sequencer_core::{Rejected, StakeConfigUpdate, config::SequencerConfig};
 use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::StorageActorTrait;
 use sharding_pool_actor::{
@@ -389,7 +389,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
             .sequencer_mut()
             .mempool_mut()
             .insert((origin.into(), transaction))
-            .map_err(|_item| Error::MempoolIsFull)?;
+            .map_err(|rejected| match rejected {
+                Rejected::Full => Error::MempoolIsFull,
+                Rejected::Underpriced => Error::MempoolUnderpriced,
+                Rejected::Cycle => Error::MempoolNonceCycle,
+            })?;
         Ok(())
     }
 }
