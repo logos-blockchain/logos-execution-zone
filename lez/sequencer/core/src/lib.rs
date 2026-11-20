@@ -129,7 +129,7 @@ impl DeclaredGasBudget {
 }
 
 /// The origin of a transaction.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub enum TransactionOrigin {
     /// Basic transactions submitted by users via RPC.
     User,
@@ -518,30 +518,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         }
     }
 
-    /// Returns orphaned user txs to the mempool so the next on-turn production
-    /// re-includes them on the new head.
-    ///
-    /// TODO: a full mempool still drops the transaction; a durable resubmit
-    /// queue is a follow-up.
+    /// Gives orphaned user txs back to the mempool, ahead of their signers' later ones, so the
+    /// next on-turn production re-includes them on the new head. They were included once, so
+    /// they go back past the size bound rather than being dropped.
     fn resubmit_orphaned(&mut self, txs: Vec<LeeTransaction>) {
-        for tx in txs {
-            let tx_hash = tx.hash();
-            match self
-                .mempool
-                .handle()
-                .try_push((TransactionOrigin::User, tx.clone()))
-            {
-                // Its slots may have been freed once it was included.
-                Ok(()) => self.record_pending(&tx),
-                Err(err) => {
-                    self.pending.remove(&tx);
-                    warn!(
-                        %tx_hash,
-                        error = format_args!("{:#}", anyhow!(err)),
-                        "Dropping orphaned transaction on resubmit"
-                    );
-                }
-            }
+        for tx in txs.into_iter().rev() {
+            // Its slots may have been freed once it was included.
+            self.record_pending(&tx);
+            self.mempool.give_back((TransactionOrigin::User, tx));
         }
     }
 
@@ -740,7 +724,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         if publish_res.is_err() {
             // Nothing was inscribed, so the block's transactions go back in front.
             for (origin, tx) in mempool_transactions.into_iter().rev() {
-                self.mempool.push_front((origin, tx));
+                self.mempool.give_back((origin, tx));
             }
         }
         let outcome = match publish_res {
@@ -870,7 +854,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         });
         // Nothing was inscribed, so the block's transactions go back in front.
         for (origin, tx) in mempool_transactions.into_iter().rev() {
-            self.mempool.push_front((origin, tx));
+            self.mempool.give_back((origin, tx));
         }
 
         let observed_deposits = std::mem::take(&mut self.observed_deposits);
@@ -1204,6 +1188,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         Some(receipt)
     }
 
+    /// Builds a block, giving back what it took from the mempool if it fails.
     async fn build_block_from_mempool(&mut self) -> Result<BlockWithMeta> {
         let mut taken = Taken::default();
         let built = self.build_block_from(&mut taken).await;
@@ -1223,7 +1208,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             // No block was built, so what it would have included goes back in front, still holding
             // its slots.
             for (origin, tx) in included.into_iter().rev() {
-                self.mempool.push_front((origin, tx));
+                self.mempool.give_back((origin, tx));
             }
         }
         built
@@ -1231,6 +1216,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
     async fn build_block_from(&mut self, taken: &mut Taken) -> Result<BlockWithMeta> {
         let now = Instant::now();
+        self.mempool.unpark();
 
         // Build on the head: its tip is the parent, its state the validation
         // base.
@@ -1329,7 +1315,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             pending_deposits.push_back(tx);
         }
         let mut pinned_deposit_notes = Vec::new();
-        let mut deferred_withdrawals = Vec::new();
 
         let max_block_size = usize::try_from(
             committee_discovery::channel_params(&working_state)
@@ -1416,7 +1401,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             // A block pinning deposits publishes on an explicit parent, which
             // cannot carry withdrawals.
             if !pinned_deposit_notes.is_empty() && extract_bridge_withdraw_data(&tx).is_some() {
-                deferred_withdrawals.push((origin, tx));
+                taken.requeued.insert(tx_hash);
+                self.mempool.give_back((origin, tx));
                 continue;
             }
 
@@ -1482,7 +1468,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 // stays there and is drained again on the next turn.
                 if !from_store {
                     taken.requeued.insert(tx_hash);
-                    self.mempool.push_front((origin, tx));
+                    self.mempool.give_back((origin, tx));
                 }
                 break;
             }
@@ -1528,7 +1514,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 // stays there and is drained again on the next turn.
                 if !from_store {
                     taken.requeued.insert(tx_hash);
-                    self.mempool.push_front((origin, tx));
+                    self.mempool.give_back((origin, tx));
                 }
                 break;
             }
@@ -1610,10 +1596,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 break;
             }
         }
-        for (origin, tx) in deferred_withdrawals.into_iter().rev() {
-            taken.requeued.insert(tx.hash());
-            self.mempool.push_front((origin, tx));
-        }
 
         // At most one `system_upgrader` transaction, directly before the fee: the due `Apply`
         // first, then changes a threshold of collected approvals carries, then approved changes a
@@ -1661,7 +1643,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 );
                 if !matches!(origin, TransactionOrigin::Sequencer) {
                     taken.requeued.insert(tx.hash());
-                    self.mempool.push_front((origin, tx));
+                    self.mempool.give_back((origin, tx));
                 }
                 continue;
             }
@@ -1694,7 +1676,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         for (origin, tx, _) in candidates {
             if !matches!(origin, TransactionOrigin::Sequencer) {
                 taken.requeued.insert(tx.hash());
-                self.mempool.push_front((origin, tx));
+                self.mempool.give_back((origin, tx));
             }
         }
         #[cfg(test)]
@@ -1795,6 +1777,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     pub fn record_pending(&mut self, tx: &LeeTransaction) {
         self.pending.insert(tx);
         sequencer_core_metrics::record_mempool_pending_slots(self.pending.len());
+    }
+
+    pub const fn mempool_mut(&mut self) -> &mut SequencerMemPool {
+        &mut self.mempool
     }
 
     #[must_use]

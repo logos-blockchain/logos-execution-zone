@@ -330,9 +330,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
         }
 
         online
-            .mempool_handle()
-            .try_push((origin.into(), transaction.clone()))
-            .map_err(|_err| Error::MempoolIsFull)?;
+            .sequencer_mut()
+            .mempool_mut()
+            .insert((origin.into(), transaction.clone()))
+            .map_err(|_item| Error::MempoolIsFull)?;
         online.sequencer_mut().record_pending(&transaction);
         Ok(())
     }
