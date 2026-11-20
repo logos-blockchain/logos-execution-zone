@@ -1027,3 +1027,48 @@ async fn handle_transaction_rejects_a_transaction_too_large_for_any_block() -> R
 
     Ok(())
 }
+
+#[test]
+async fn handle_transaction_rejects_a_bridge_deposit() -> Result<()> {
+    let _res = logging::try_init();
+
+    let (config, _home) = sequencer_config();
+    let storage_ref = MockStorageActor::spawn(prepare_mock_storage_with_empty_genesis());
+    let executor = spawn_on_genesis(
+        config,
+        storage_ref,
+        spawn_bedrock_pool(prepare_mock_bedrock_on_genesis),
+    )
+    .await?;
+
+    let recipient_id = testnet_initial_state::initial_public_user_accounts()[0].account_id;
+    let receipt = Actor::new(recipient_id, programs::bridge_account_id());
+    let message = Message::try_new(
+        receipt,
+        vec![receipt],
+        BTreeMap::new(),
+        bridge_core::Message::Deposit {
+            l1_deposit_op_id: [7; 32],
+            recipient_id,
+            amount: 1,
+        },
+    )?;
+    let tx: LeeTransaction =
+        PublicTransaction::new(message, WitnessSet::from_raw_parts(Vec::new())).into();
+
+    let res = executor
+        .ask(protocol::Transaction {
+            transaction: tx,
+            origin: TransactionOrigin::Gossip,
+        })
+        .await;
+    assert!(
+        matches!(
+            res.map_err(SendError::err),
+            Err(Some(crate::error::Error::BridgeDepositNotSequencer))
+        ),
+        "a bridge deposit was admitted"
+    );
+
+    Ok(())
+}

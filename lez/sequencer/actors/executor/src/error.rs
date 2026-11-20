@@ -69,6 +69,9 @@ pub enum Error {
     #[error("The transaction's nonces order it both before and after a pending transaction")]
     MempoolNonceCycle,
 
+    #[error("Only the sequencer mints bridge deposits, from their L1 events")]
+    BridgeDepositNotSequencer,
+
     #[error("Transaction too large: size {size}, max {max}")]
     TransactionTooLarge { size: u64, max: u64 },
 

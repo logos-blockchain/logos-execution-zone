@@ -1628,6 +1628,55 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 continue;
             }
 
+            // Declared-gas pre-screen, before the size check that serializes the
+            // whole block: a charged transaction whose signed limits do not fit
+            // this block's remaining budget is deferred with nothing executed —
+            // unless they exceed the caps outright, in which case it fits no
+            // budget and is dropped rather than deferred for ever (the RPC door
+            // screens these out, but gossip ingest does not). One that does not
+            // even classify (an unserializable transaction) falls through: the
+            // settlement below rejects it and it is dropped like any other
+            // failed application.
+            let charged_view = match chain_state::classify::classify(&tx, false) {
+                Ok(chain_state::classify::FeeClass::Charged(view)) => Some(view),
+                Ok(chain_state::classify::FeeClass::Exempt) | Err(_) => None,
+            };
+            if let Some(view) = &charged_view
+                && !gas_budget.fits(view)
+            {
+                // A transaction whose declared gas exceeds the caps fits no
+                // budget, not even an empty one, so deferring it would stall the
+                // builder behind it for ever. The RPC door screens these out,
+                // but gossip ingest does not, so drop it here instead.
+                if !DeclaredGasBudget::fits_empty(view) {
+                    warn!(
+                        %tx_hash,
+                        gas_limit = view.gas_limit(),
+                        gas_stor = view.gas_stor(),
+                        "Transaction declares gas beyond the block caps, dropping it rather than \
+                         stalling production"
+                    );
+                    self.count_dispatch_failure(&tx).await;
+                    continue;
+                }
+                warn!(
+                    %tx_hash,
+                    gas_limit = view.gas_limit(),
+                    gas_stor = view.gas_stor(),
+                    "Transaction deferred to next block: its declared gas would exceed the block \
+                     gas caps"
+                );
+                // Smaller ones behind it may still fit, so the block keeps filling,
+                // but not from the store: what follows there may depend on it, and
+                // its record stays and is drained again on the next turn.
+                if from_store {
+                    pending_from_store.clear();
+                } else {
+                    self.mempool.give_back((origin, tx));
+                }
+                continue;
+            }
+
             let temp_valid_transactions = [
                 valid_transactions.as_slice(),
                 std::slice::from_ref(&tx),
@@ -1655,10 +1704,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             if block_size > max_block_size {
                 // Would a block carrying nothing but this still be too big? Then
                 // it does not fit in any block and deferring it defers it for
-                // ever. A deferred transaction is at the head of the queue every
-                // turn, so breaking here would stop production reaching anything
-                // behind it, including the whole mempool, permanently. Give up on
-                // it instead.
+                // ever, coming back first every turn. Give up on it instead.
                 //
                 // Measured on its own rather than from `block_size`, which also
                 // counts whatever this block already holds: a transaction that
@@ -1689,58 +1735,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     max_block_size,
                     "Transaction deferred to next block: it would exceed the block size limit"
                 );
-                // Anything drained from the store needs no requeue: its record
-                // stays there and is drained again on the next turn.
-                if !from_store {
+                // Smaller ones behind it may still fit, so the block keeps filling,
+                // but not from the store: what follows there may depend on it, and
+                // its record stays and is drained again on the next turn.
+                if from_store {
+                    pending_from_store.clear();
+                } else {
                     self.mempool.give_back((origin, tx));
                 }
-                break;
-            }
-
-            // Declared-gas pre-screen: a charged transaction whose signed
-            // limits do not fit this block's remaining budget is deferred with
-            // nothing executed, mirroring the size deferral above — unless they
-            // exceed the caps outright, in which case it fits no budget and is
-            // dropped rather than deferred for ever (the RPC door screens these
-            // out, but gossip ingest does not). One that does not even classify
-            // (an unserializable transaction) falls through: the settlement
-            // below rejects it and it is dropped like any other failed
-            // application.
-            let charged_view = match chain_state::classify::classify(&tx, false) {
-                Ok(chain_state::classify::FeeClass::Charged(view)) => Some(view),
-                Ok(chain_state::classify::FeeClass::Exempt) | Err(_) => None,
-            };
-            if let Some(view) = &charged_view
-                && !gas_budget.fits(view)
-            {
-                // A transaction whose declared gas exceeds the caps fits no
-                // budget, not even an empty one, so deferring it would stall the
-                // builder behind it for ever. The RPC door screens these out,
-                // but gossip ingest does not, so drop it here instead.
-                if !DeclaredGasBudget::fits_empty(view) {
-                    warn!(
-                        %tx_hash,
-                        gas_limit = view.gas_limit(),
-                        gas_stor = view.gas_stor(),
-                        "Transaction declares gas beyond the block caps, dropping it rather than \
-                         stalling production"
-                    );
-                    self.count_dispatch_failure(&tx).await;
-                    continue;
-                }
-                warn!(
-                    %tx_hash,
-                    gas_limit = view.gas_limit(),
-                    gas_stor = view.gas_stor(),
-                    "Transaction deferred to next block: its declared gas would exceed the block \
-                     gas caps"
-                );
-                // Anything drained from the store needs no requeue: its record
-                // stays there and is drained again on the next turn.
-                if !from_store {
-                    self.mempool.give_back((origin, tx));
-                }
-                break;
+                continue;
             }
 
             let before_tx_apply = Instant::now();
