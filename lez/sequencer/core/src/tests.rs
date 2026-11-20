@@ -1778,7 +1778,8 @@ async fn push_tx_into_mempool_fails_until_a_turn_frees_it() {
     );
     assert_eq!(
         sequencer.mempool.insert((TransactionOrigin::User, other)),
-        Err(crate::Rejected::Full)
+        Err(crate::Rejected::Underpriced),
+        "a full mempool evicts only what a tx outbids"
     );
 
     // Empty the mempool by producing a block

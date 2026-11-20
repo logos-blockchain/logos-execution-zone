@@ -58,9 +58,13 @@ pub enum Error {
     MempoolIsFull,
 
     #[error(
-        "A pending transaction holds the same signer nonce; replacing it needs a higher tip per gas"
+        "The transaction does not raise the tip per gas enough over the pending one it would \
+         replace or evict"
     )]
     MempoolUnderpriced,
+
+    #[error("One of the transaction's signers already has too many pending transactions")]
+    MempoolLaneFull,
 
     #[error("The transaction's nonces order it both before and after a pending transaction")]
     MempoolNonceCycle,

@@ -492,6 +492,13 @@ fn map_executor_error<M>(
                     None::<()>,
                 )
             }
+            lane_full @ sequencer_executor_actor::error::Error::MempoolLaneFull => {
+                ErrorObjectOwned::owned(
+                    sequencer_service_rpc::MEMPOOL_LANE_FULL_ERROR_CODE,
+                    lane_full.to_string(),
+                    None::<()>,
+                )
+            }
             sequencer_executor_actor::error::Error::NotOnline => ErrorObjectOwned::owned(
                 sequencer_service_rpc::SEQUENCER_IS_NOT_ONLINE_ERROR_CODE,
                 "Sequencer is not online yet, try again later".to_owned(),

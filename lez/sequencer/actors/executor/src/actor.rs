@@ -391,6 +391,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
             .insert((origin.into(), transaction))
             .map_err(|rejected| match rejected {
                 Rejected::Full => Error::MempoolIsFull,
+                Rejected::LaneFull => Error::MempoolLaneFull,
                 Rejected::Underpriced => Error::MempoolUnderpriced,
                 Rejected::Cycle => Error::MempoolNonceCycle,
             })?;

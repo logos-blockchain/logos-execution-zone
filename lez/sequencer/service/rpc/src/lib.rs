@@ -26,13 +26,17 @@ pub const PRIVATE_FEE_BELOW_HEAD_ERROR_CODE: i32 = -31901;
 /// from the channel.
 pub const SEQUENCER_IS_NOT_ONLINE_ERROR_CODE: i32 = -31902;
 
-/// Error code of a transaction turned away because a pending one holds the same signer nonce
-/// and it does not raise the tip per gas enough to replace it.
+/// Error code of a transaction turned away because it does not raise the tip per gas enough over
+/// the pending one it would replace (same signer nonce) or evict (full mempool).
 pub const MEMPOOL_UNDERPRICED_ERROR_CODE: i32 = -31903;
 
 /// Error code of a transaction turned away because its nonces order it both before and after a
 /// pending transaction, so neither could ever be included.
 pub const MEMPOOL_NONCE_CYCLE_ERROR_CODE: i32 = -31904;
+
+/// Error code of a transaction turned away because one of its signers already has the most
+/// pending transactions a signer may have.
+pub const MEMPOOL_LANE_FULL_ERROR_CODE: i32 = -31905;
 
 /// Type alias for RPC client. Only available when `client` feature is enabled.
 ///
