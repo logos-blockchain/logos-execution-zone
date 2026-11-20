@@ -14,7 +14,7 @@ use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisE
 
 use crate::{
     COMMITTEE_DST, Committee, DEPOSITS_DST, Deposit, INTENT_DST, MAX_DEPOSITS, MAX_INPUTS,
-    NONCE_DST, PublicInputs, SIGNATURE_DST, STEP_ID_DST, Signature, Step, domain_tag,
+    PublicInputs, SIGNATURE_DST, STEP_ID_DST, Signature, Step, domain_tag,
     poseidon2::{Sponge, digest},
 };
 
@@ -82,35 +82,23 @@ impl ConstraintSynthesizer<Fr> for VaultCircuit {
             active.mul_equals(&(data - &committee), &zero)?;
         }
 
-        let consumes_nothing = &one - &inputs[0][0];
-        let mut nonce_prefix = Sponge::new();
-        nonce_prefix.absorb(&FpVar::constant(domain_tag(NONCE_DST)))?;
-        nonce_prefix.absorb(&deposits_hash)?;
-
-        for (index, output) in outputs.iter().enumerate() {
-            let [
-                active,
-                _value,
-                nonce,
-                public_key,
-                stake_public_key,
-                program,
-                data,
-            ] = output;
-
+        for [
+            _active,
+            _value,
+            _nonce,
+            public_key,
+            stake_public_key,
+            program,
+            data,
+        ] in outputs
+        {
             // A vault note does not stake, and goes to the successor.
             program.mul_equals(stake_public_key, &zero)?;
             program.mul_equals(&(data - &successor), &zero)?;
 
-            // A payout stakes under its payee's key, or the payee could not spend it.
+            // A payout stakes under its payee's key, so vault value is never staked under
+            // another's.
             stake_public_key.conditional_enforce_equal(public_key, &program.is_eq(&zero)?)?;
-
-            // Bedrock derives the nonces only when the step consumes a note.
-            let mut derived = nonce_prefix.clone();
-            let index = u64::try_from(index).expect("an output index fits a u64");
-            derived.absorb(&FpVar::constant(Fr::from(index)))?;
-            let derived = derived.finalize()?;
-            (&consumes_nothing * active).mul_equals(&(nonce - derived), &zero)?;
         }
 
         // Open the deposits: each was made out to the committee. The hash covers a variable

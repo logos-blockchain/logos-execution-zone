@@ -1,40 +1,39 @@
-//! The vault's program step of an inscription: the notes it moves and the proofs Bedrock checks.
+//! The vault's program step of an inscription: what it asks zone-sdk to build and the proof of
+//! the vault's own rule.
 
 use std::sync::LazyLock;
 
 use borsh::BorshDeserialize as _;
 use bridge_core::{DepositMetadata, DepositRecipient};
-use logos_blockchain_mmr::MerklePath;
-use logos_blockchain_program_spend::{
-    MAX_INPUTS, MAX_OUTPUTS, ZkProgramSpendChainInputsData, ZkProgramSpendInputNoteData,
-    ZkProgramSpendOutputNoteData, ZkProgramSpendWalletInputsData, ZkProgramSpendWitnessInputs,
-};
 use logos_blockchain_zone_sdk::{
     binary_codec::canonical::BinaryDecode as _,
     core::mantle::{
         batch::{DeferrableProof as _, DeferredProofs},
-        notes::{Note, NoteNullifier, derive_note_nullifier},
+        notes::NoteCommitment,
         ops::{
-            ProgramProof, ProgramStepProof, StepProof, ZkProgramSpendProof, ZkTransferProof,
+            ProgramProof, StepProof, ZkProgramSpendProof, ZkTransferProof,
             channel::{
                 ChannelId,
-                inscribe::{InscriptionOp, MiniBlock, Step},
-                program_step::{ProgramDeposit, ProgramStep, program_deposit_id},
+                inscribe::Step,
+                program_step::{ProgramDeposit, program_deposit_id},
             },
             zk_transfer::defer_zk_transfer,
         },
-        programs::{SpendInputFields, SpendOutputFields},
     },
     groth16::{Fr, fr_to_bytes},
-    key_management_system_service::keys::{PK0, ZkKey, ZkPublicKey},
+    key_management_system_service::keys::{PK0, ZkPublicKey},
     node_types::{
-        InputNullifiers, Inscription, OpId as _, OutputCommitments, ProgramId, ProgramNoteOpening,
-        ProgramVerificationKey, Value, derive_program_id, derive_program_output_nonce,
-        program_deposits_hash, program_step_id,
+        Inscription, ProgramId, ProgramNoteOpening, ProgramVerificationKey, Value,
+        derive_program_id,
+    },
+    sequencer::{
+        MiniBlockSpec, ProgramOutput, ProgramStepDraft, ProgramStepSpec, StepSpec, UserOutput,
+        prove_program_step,
     },
 };
 use vault_circuit::{
-    Committee, Deposit, InputNote, MAX_DEPOSITS, OutputNote, PublicInputs, Signature, VaultCircuit,
+    Committee, Deposit, InputNote, MAX_DEPOSITS, MAX_INPUTS, MAX_OUTPUTS, OutputNote, PublicInputs,
+    Signature, VaultCircuit,
 };
 
 use crate::{Result, error::Error};
@@ -85,9 +84,12 @@ impl VaultDeposit {
         }) {
             return Err(Error::InvalidVaultDeposit("it spends a note twice"));
         }
+        if deposit.inputs.is_empty() {
+            return Err(Error::InvalidVaultDeposit("it spends no note"));
+        }
         let intent = Deposit {
             value: deposit.value,
-            recipient: recipient_element(&deposit, &recipient)?,
+            recipient: recipient_element(&recipient),
         }
         .intent(committee.id());
         if deposit.intent != intent {
@@ -129,89 +131,145 @@ impl VaultDeposit {
     }
 }
 
+/// A vault note a step may consume, as zone-sdk tracks it.
+#[derive(Clone, Debug)]
+pub struct VaultNote {
+    pub commitment: NoteCommitment,
+    pub opening: ProgramNoteOpening,
+}
+
 /// What the vault does in one inscription: it takes the deposits in, pays the payouts and keeps
-/// the rest in one note.
+/// the rest in one note. zone-sdk builds the step and its spend; the vault's own proof is ours.
 #[derive(Clone, Debug)]
 pub struct VaultStep {
     pub committee: Committee,
-    /// The vault notes consumed, each with its path to `tx_commitment_root`.
-    pub inputs: Vec<(Note, MerklePath)>,
+    /// The vault notes consumed, among the ones zone-sdk lists as spendable.
+    pub inputs: Vec<VaultNote>,
     /// In the order of their mini-block.
     pub deposits: Vec<VaultDeposit>,
     /// The value and payee of each payout.
     pub payouts: Vec<(Value, ZkPublicKey)>,
-    /// A recent root of the channel's note set.
-    pub commitment_merkle_root: Fr,
-    /// That root extended with the notes the transaction creates before this step.
-    pub tx_commitment_root: Fr,
 }
 
 impl VaultStep {
-    /// The mini-block of the step: the deposits, then the vault's program step.
-    pub fn mini_block(&self) -> Result<MiniBlock> {
-        let steps = self
-            .deposits
+    /// The mini-block of the step for zone-sdk to build: the deposits, then the vault's program
+    /// step.
+    pub fn mini_block(&self) -> Result<MiniBlockSpec> {
+        let committee = self.committee.id();
+        if self
+            .inputs
             .iter()
-            .map(|deposit| Step::ProgramDeposit(deposit.deposit.clone()))
-            .chain([Step::Program(self.program_step()?)])
-            .collect::<Vec<_>>();
-        Ok(MiniBlock::try_from(steps).expect("a mini-block with a program step is not empty"))
+            .any(|note| note.opening.data != committee)
+        {
+            return Err(Error::InvalidVaultStep(
+                "it consumes a note that is not its vault's",
+            ));
+        }
+        let kept = self.kept_value()?;
+        // The spend's own limits are zone-sdk's to check.
+        if self.deposits.len() > MAX_DEPOSITS {
+            return Err(Error::InvalidVaultStep(
+                "it takes in more deposits than a step holds",
+            ));
+        }
+
+        let deposits = self.deposits.iter().map(|deposit| StepSpec::Holder {
+            step: Step::ProgramDeposit(deposit.deposit.clone()),
+            proof: StepProof::ZkTransfer(deposit.proof),
+        });
+        let program = StepSpec::Program(ProgramStepSpec {
+            program_id: *VAULT_PROGRAM,
+            inputs: self.inputs.iter().map(|note| note.commitment).collect(),
+            program_outputs: (kept > 0)
+                .then(|| ProgramOutput {
+                    value: kept,
+                    stake_public_key: ZkPublicKey::zero(),
+                    data: committee,
+                })
+                .into_iter()
+                .collect(),
+            outputs: self
+                .payouts
+                .iter()
+                .map(|(value, public_key)| UserOutput {
+                    public_key: *public_key,
+                    value: *value,
+                })
+                .collect(),
+            inscription: Inscription::default(),
+        });
+        Ok(deposits.chain([program]).collect())
     }
 
-    /// What a committee member signs to authorize the step in `op`.
-    pub fn public_inputs(&self, op: &InscriptionOp) -> Result<PublicInputs> {
-        let (inputs, outputs) = self.spend_fields()?;
-        Ok(PublicInputs {
-            program_step_id: program_step_id(&inputs, &outputs),
-            program_deposits_hash: self.deposits_hash(),
-            op_id: PublicInputs::op_id_element(&op.op_id()),
-        })
+    /// What a committee member signs to authorize the step zone-sdk built as `draft`.
+    #[must_use]
+    pub const fn public_inputs(draft: &ProgramStepDraft) -> PublicInputs {
+        let [program_step_id, program_deposits_hash, op_id] = draft.program_inputs;
+        PublicInputs {
+            program_step_id,
+            program_deposits_hash,
+            op_id,
+        }
     }
 
-    /// One proof per step of [`Self::mini_block`], for the inscription `op` that carries it.
-    /// `signatures` holds one slot per committee member.
+    /// The spend and program proofs of the step zone-sdk built as `draft`, for
+    /// `ProgramInscription::step_proofs`. `signatures` holds one slot per committee member.
+    /// Takes seconds of CPU.
     pub fn prove(
         &self,
-        op: &InscriptionOp,
+        draft: &ProgramStepDraft,
         signatures: Vec<Option<Signature>>,
-    ) -> Result<Vec<StepProof>> {
-        let public = self.public_inputs(op)?;
-        let (inputs, outputs) = self.spend_fields()?;
+    ) -> Result<(ZkProgramSpendProof, ProgramProof)> {
+        let public = Self::public_inputs(draft);
         let signatures = self.threshold_of(&public, signatures)?;
+
+        let inputs: Vec<_> = self
+            .inputs
+            .iter()
+            .map(|note| InputNote {
+                value: note.opening.value,
+                nonce: note.opening.nonce,
+                public_key: *PK0.as_fr(),
+                stake_public_key: *note.opening.stake_public_key.as_fr(),
+                data: note.opening.data,
+            })
+            .collect();
+        let outputs: Vec<_> = draft
+            .outputs
+            .iter()
+            .map(|note| OutputNote {
+                value: note.value,
+                nonce: note.nonce,
+                public_key: *note.public_key.as_fr(),
+                stake_public_key: *note.stake_public_key.as_fr(),
+                program: note.program,
+                data: note.data,
+            })
+            .collect();
+        let step = vault_circuit::Step {
+            inputs: std::array::from_fn(|slot| inputs.get(slot).copied()),
+            outputs: std::array::from_fn(|slot| outputs.get(slot).copied()),
+        };
+        if inputs.len() > MAX_INPUTS
+            || outputs.len() > MAX_OUTPUTS
+            || step.id() != public.program_step_id
+        {
+            return Err(Error::InvalidVaultStep(
+                "the step built is not the one it describes",
+            ));
+        }
 
         let circuit = VaultCircuit {
             committee: self.committee.clone(),
-            step: vault_circuit::Step {
-                inputs: inputs.map(|note| {
-                    note.active.then(|| InputNote {
-                        value: note.value,
-                        nonce: note.nonce,
-                        public_key: *note.public_key.as_fr(),
-                        stake_public_key: *note.stake_public_key.as_fr(),
-                        data: note.data,
-                    })
-                }),
-                outputs: outputs.map(|note| {
-                    note.active.then(|| OutputNote {
-                        value: note.value,
-                        nonce: note.nonce,
-                        public_key: *note.public_key.as_fr(),
-                        stake_public_key: *note.stake_public_key.as_fr(),
-                        program: note.program,
-                        data: note.data,
-                    })
-                }),
-            },
+            step,
             deposits: self
                 .deposits
                 .iter()
-                .map(|deposit| {
-                    Ok(Deposit {
-                        value: deposit.deposit.value,
-                        recipient: recipient_element(&deposit.deposit, &deposit.recipient)?,
-                    })
+                .map(|deposit| Deposit {
+                    value: deposit.deposit.value,
+                    recipient: recipient_element(&deposit.recipient),
                 })
-                .collect::<Result<_>>()?,
+                .collect(),
             public,
             signatures: signatures.clone(),
             successor: self.committee.clone(),
@@ -223,71 +281,10 @@ impl VaultStep {
             &mut rand::rngs::OsRng,
         )
         .map_err(|err| Error::VaultProofFailed(err.into()))?;
+        let spend_proof =
+            prove_program_step(draft).map_err(|err| Error::VaultProofFailed(err.into()))?;
 
-        let (spend_proof, _) = logos_blockchain_program_spend::prove(
-            ZkProgramSpendWitnessInputs::from_chain_and_wallet_data(
-                ZkProgramSpendChainInputsData {
-                    inputs_active: inputs.map(|note| note.active),
-                    outputs_active: outputs.map(|note| note.active),
-                    outputs_of_program: outputs.map(|note| note.program != Fr::from(0_u64)),
-                    tx_commitment_root: self.tx_commitment_root,
-                    program_id: *VAULT_PROGRAM,
-                    paid_value: self.paid_value()?,
-                    msg: public.op_id,
-                },
-                ZkProgramSpendWalletInputsData {
-                    inputs: std::array::from_fn(|slot| {
-                        self.inputs.get(slot).map_or_else(
-                            ZkProgramSpendInputNoteData::inactive,
-                            |(note, path)| ZkProgramSpendInputNoteData {
-                                stake_public_key: *note.stake_public_key.as_fr(),
-                                nonce: note.nonce,
-                                value: note.value,
-                                data: note.data,
-                                path_and_selectors: std::array::from_fn(|level| {
-                                    path.path_and_selectors(level).into()
-                                }),
-                            },
-                        )
-                    }),
-                    outputs: outputs.map(|note| {
-                        if note.active {
-                            ZkProgramSpendOutputNoteData {
-                                public_key: *note.public_key.as_fr(),
-                                stake_public_key: *note.stake_public_key.as_fr(),
-                                nonce: note.nonce,
-                                value: note.value,
-                                program: note.program,
-                                data: note.data,
-                            }
-                        } else {
-                            ZkProgramSpendOutputNoteData::inactive()
-                        }
-                    }),
-                },
-            ),
-        )
-        .map_err(|err| Error::VaultProofFailed(err.into()))?;
-
-        let (kept, _) = self.outputs()?;
-        Ok(self
-            .deposits
-            .iter()
-            .map(|deposit| StepProof::ZkTransfer(deposit.proof))
-            .chain([StepProof::ProgramStep(ProgramStepProof {
-                spend_proof: ZkProgramSpendProof::new(spend_proof),
-                program_proof: ProgramProof::new(program_proof),
-                program_notes: kept
-                    .iter()
-                    .map(|note| ProgramNoteOpening {
-                        value: note.value,
-                        nonce: note.nonce,
-                        stake_public_key: note.stake_public_key,
-                        data: note.data,
-                    })
-                    .collect(),
-            })])
-            .collect())
+        Ok((spend_proof, ProgramProof::new(program_proof)))
     }
 
     /// The valid ones among `signatures`, cut down to the committee's threshold: the circuit
@@ -316,137 +313,19 @@ impl VaultStep {
         Ok(kept)
     }
 
-    fn program_step(&self) -> Result<ProgramStep> {
-        let (inputs, outputs) = self.spend_fields()?;
-        let (kept, payouts) = self.outputs()?;
-        Ok(ProgramStep {
-            program_id: *VAULT_PROGRAM,
-            inputs: InputNullifiers::try_from_iter(self.nullifiers())
-                .expect("the inputs of a spend fit a note list"),
-            program_outputs: commitments(kept.iter()),
-            outputs: commitments(payouts.iter()),
-            commitment_merkle_root: self.commitment_merkle_root,
-            program_step_id: program_step_id(&inputs, &outputs),
-            inscription: Inscription::default(),
-        })
-    }
-
-    /// The note that stays in the vault, if any value does, and the payouts. A program step
-    /// lists them in this order.
-    fn outputs(&self) -> Result<(Option<Note>, Vec<Note>)> {
+    /// What stays in the vault: the notes consumed and the deposits, less the payouts.
+    fn kept_value(&self) -> Result<Value> {
         let held = self
-            .inputs
-            .iter()
-            .try_fold(self.paid_value()?, |held, (note, _)| {
-                held.checked_add(note.value)
-            })
-            .ok_or(Error::InvalidVaultStep("the value it moves overflows"))?;
-        let kept = self
-            .payouts
-            .iter()
-            .try_fold(held, |kept, (value, _)| kept.checked_sub(*value))
-            .ok_or(Error::InvalidVaultStep("it pays out more than it holds"))?;
-
-        // Bedrock fixes the nonces of a step that consumes a note. The vault's rule fixes the
-        // others.
-        let first_input = self.nullifiers().next();
-        let deposits_hash = self.deposits_hash();
-        let nonce = |index: usize, value: Value, public_key: &ZkPublicKey| {
-            first_input.map_or_else(
-                || vault_circuit::bootstrap_nonce(deposits_hash, index),
-                |input| derive_program_output_nonce(&input, index, value, public_key),
-            )
-        };
-
-        let kept = (kept > 0).then(|| Note {
-            value: kept,
-            nonce: nonce(0, kept, &PK0),
-            public_key: *PK0,
-            stake_public_key: ZkPublicKey::zero(),
-            program: *VAULT_PROGRAM,
-            data: self.committee.id(),
-        });
-        let payouts = self
-            .payouts
-            .iter()
-            .zip(usize::from(kept.is_some())..)
-            .map(|((value, payee), index)| Note::new(*value, nonce(index, *value, payee), *payee))
-            .collect();
-        Ok((kept, payouts))
-    }
-
-    /// The step's notes as Bedrock's program spend lays them out.
-    fn spend_fields(
-        &self,
-    ) -> Result<(
-        [SpendInputFields; MAX_INPUTS],
-        [SpendOutputFields; MAX_OUTPUTS],
-    )> {
-        let (kept, payouts) = self.outputs()?;
-        let outputs: Vec<_> = kept.iter().chain(&payouts).collect();
-        if self.inputs.len() > MAX_INPUTS
-            || outputs.len() > MAX_OUTPUTS
-            || self.deposits.len() > MAX_DEPOSITS
-        {
-            return Err(Error::InvalidVaultStep(
-                "it moves more notes than a step holds",
-            ));
-        }
-        let committee = self.committee.id();
-        if self.inputs.iter().any(|(note, _)| {
-            note.program != *VAULT_PROGRAM || note.public_key != *PK0 || note.data != committee
-        }) {
-            return Err(Error::InvalidVaultStep(
-                "it consumes a note that is not its vault's",
-            ));
-        }
-        Ok((
-            std::array::from_fn(|slot| {
-                self.inputs
-                    .get(slot)
-                    .map_or_else(SpendInputFields::inactive, |(note, _)| SpendInputFields {
-                        active: true,
-                        value: note.value,
-                        nonce: note.nonce,
-                        public_key: note.public_key,
-                        stake_public_key: note.stake_public_key,
-                        data: note.data,
-                    })
-            }),
-            std::array::from_fn(|slot| {
-                outputs
-                    .get(slot)
-                    .map_or_else(SpendOutputFields::inactive, |note| {
-                        SpendOutputFields::of(note)
-                    })
-            }),
-        ))
-    }
-
-    /// The nullifiers of the consumed notes. A program note is held by the zero key.
-    fn nullifiers(&self) -> impl Iterator<Item = NoteNullifier> {
-        let nullifier_key = ZkKey::zero().nullifier_key();
-        self.inputs
-            .iter()
-            .map(move |(note, _)| derive_note_nullifier(&note.commitment(), &nullifier_key))
-    }
-
-    fn deposits_hash(&self) -> Fr {
-        let deposits: Vec<_> = self
             .deposits
             .iter()
-            .map(|deposit| &deposit.deposit)
-            .collect();
-        program_deposits_hash(&deposits)
-    }
-
-    fn paid_value(&self) -> Result<Value> {
-        self.deposits
+            .map(|deposit| deposit.deposit.value)
+            .chain(self.inputs.iter().map(|note| note.opening.value))
+            .try_fold(0, |held: Value, value| held.checked_add(value))
+            .ok_or(Error::InvalidVaultStep("the value it moves overflows"))?;
+        self.payouts
             .iter()
-            .try_fold(0, |paid: Value, deposit| {
-                paid.checked_add(deposit.deposit.value)
-            })
-            .ok_or(Error::InvalidVaultStep("the value it moves overflows"))
+            .try_fold(held, |kept, (value, _)| kept.checked_sub(*value))
+            .ok_or(Error::InvalidVaultStep("it pays out more than it holds"))
     }
 }
 
@@ -457,27 +336,18 @@ pub fn vault_key() -> ProgramVerificationKey {
         .expect("the vault key is a valid program key")
 }
 
-/// The recipient as the intent of `deposit` commits to it.
-fn recipient_element(deposit: &ProgramDeposit, recipient: &DepositRecipient) -> Result<Fr> {
-    let nullifier = deposit
-        .inputs
-        .iter()
-        .next()
-        .ok_or(Error::InvalidVaultDeposit("it spends no note"))?;
-    Ok(Deposit::recipient_element(
-        recipient.account_id().value(),
-        nullifier.0,
-    ))
-}
-
-fn commitments<'note>(notes: impl Iterator<Item = &'note Note>) -> OutputCommitments {
-    OutputCommitments::try_from_iter(notes.map(Note::commitment))
-        .expect("the outputs of a spend fit a note list")
+/// The recipient as a deposit's intent commits to it.
+fn recipient_element(recipient: &DepositRecipient) -> Fr {
+    Deposit::recipient_element(recipient.account_id().value())
 }
 
 #[cfg(test)]
 mod tests {
     use logos_blockchain_core::mantle::ops::transfer::test_utils::prove_transfer;
+    use logos_blockchain_program_spend::{
+        ZkProgramSpendChainInputsData, ZkProgramSpendInputNoteData, ZkProgramSpendOutputNoteData,
+        ZkProgramSpendWalletInputsData, ZkProgramSpendWitnessInputsData,
+    };
     use logos_blockchain_zone_sdk::{
         Slot,
         binary_codec::canonical::BinaryEncode as _,
@@ -485,21 +355,29 @@ mod tests {
             channel::Channels,
             ledger::{VerifiableOperation as _, verification_mode::StandardMode},
             note_set::{CommitmentMmr, NoteSets, TxNoteState},
-            notes::NoteCommitment,
+            notes::{NoteNullifier, derive_note_nullifier},
             ops::{
-                ChannelInscribeProof, SignedOperation,
+                ChannelInscribeProof, ProgramStepProof, SignedOperation,
                 channel::{
                     MsgId, UnverifiedChannelKeys,
-                    inscribe::{InscriptionPreverificationContext, InscriptionValidationContext},
+                    inscribe::{
+                        InscriptionOp, InscriptionPreverificationContext,
+                        InscriptionValidationContext,
+                    },
+                    program_step::ProgramStep,
                 },
             },
-            programs::{Programs, RegisteredProgram},
+            programs::{Programs, RegisteredProgram, SpendInputFields, SpendOutputFields},
             transactions::{
                 hash::{TxHash, TxHashView},
                 states::Unverified,
             },
         },
-        key_management_system_service::keys::Ed25519Key,
+        key_management_system_service::keys::{Ed25519Key, ZkKey},
+        node_types::{
+            InputNullifiers, MerklePath, Note, OpId as _, OutputCommitments,
+            derive_program_output_nonce, program_deposits_hash, program_step_id,
+        },
     };
     use vault_circuit::SigningKey;
 
@@ -518,8 +396,187 @@ mod tests {
         }
     }
 
-    /// Runs Bedrock's checks of an inscription carrying `vault`, on a channel holding `notes`.
-    fn bedrock_accepts(vault: &VaultStep, notes: &[NoteCommitment]) {
+    /// The inscription of `vault` and the draft of its program step, built the way zone-sdk
+    /// builds them: `held` are the notes `vault` consumes with their paths to `root`.
+    #[expect(
+        clippy::arithmetic_side_effects,
+        reason = "an addition in the field does not overflow"
+    )]
+    fn built(
+        vault: &VaultStep,
+        held: &[(Note, MerklePath)],
+        root: Fr,
+    ) -> (InscriptionOp, ProgramStepDraft) {
+        let mut mini_block = vault.mini_block().unwrap();
+        let Some(StepSpec::Program(spec)) = mini_block.pop() else {
+            panic!("the mini-block ends with the vault's step");
+        };
+        let deposits: Vec<_> = vault
+            .deposits
+            .iter()
+            .map(|deposit| &deposit.deposit)
+            .collect();
+        let index = mini_block.len();
+        let parent = MsgId::root();
+
+        let nullifier_key = ZkKey::zero().nullifier_key();
+        let nullifiers: Vec<_> = held
+            .iter()
+            .map(|(note, _)| derive_note_nullifier(&note.commitment(), &nullifier_key))
+            .collect();
+        let first_input = nullifiers.first().copied().unwrap_or_else(|| {
+            NoteNullifier(
+                PublicInputs::op_id_element(&parent.into())
+                    + Fr::from(u64::try_from(index).unwrap()),
+            )
+        });
+        let program_notes: Vec<_> = spec
+            .program_outputs
+            .iter()
+            .enumerate()
+            .map(|(at, output)| ProgramNoteOpening {
+                value: output.value,
+                nonce: derive_program_output_nonce(&first_input, at, output.value, &PK0),
+                stake_public_key: output.stake_public_key,
+                data: output.data,
+            })
+            .collect();
+        let outputs: Vec<Note> = program_notes
+            .iter()
+            .map(|opening| opening.note(spec.program_id))
+            .chain(
+                spec.outputs
+                    .iter()
+                    .zip(program_notes.len()..)
+                    .map(|(output, at)| {
+                        Note::new(
+                            output.value,
+                            derive_program_output_nonce(
+                                &first_input,
+                                at,
+                                output.value,
+                                &output.public_key,
+                            ),
+                            output.public_key,
+                        )
+                    }),
+            )
+            .collect();
+
+        let input_fields = std::array::from_fn(|slot| {
+            held.get(slot)
+                .map_or_else(SpendInputFields::inactive, |(note, _)| SpendInputFields {
+                    active: true,
+                    value: note.value,
+                    nonce: note.nonce,
+                    public_key: note.public_key,
+                    stake_public_key: note.stake_public_key,
+                    data: note.data,
+                })
+        });
+        let output_fields = std::array::from_fn(|slot| {
+            outputs
+                .get(slot)
+                .map_or_else(SpendOutputFields::inactive, SpendOutputFields::of)
+        });
+        let step = ProgramStep {
+            program_id: spec.program_id,
+            inputs: InputNullifiers::try_from_iter(nullifiers).unwrap(),
+            program_outputs: OutputCommitments::try_from_iter(
+                outputs
+                    .iter()
+                    .take(program_notes.len())
+                    .map(Note::commitment),
+            )
+            .unwrap(),
+            outputs: OutputCommitments::try_from_iter(
+                outputs
+                    .iter()
+                    .skip(program_notes.len())
+                    .map(Note::commitment),
+            )
+            .unwrap(),
+            commitment_merkle_root: root,
+            program_step_id: program_step_id(&input_fields, &output_fields),
+            inscription: spec.inscription,
+        };
+        let step_id = step.program_step_id;
+
+        let steps = vault
+            .deposits
+            .iter()
+            .map(|deposit| Step::ProgramDeposit(deposit.deposit.clone()))
+            .chain([Step::Program(step)])
+            .collect::<Vec<_>>();
+        let op = InscriptionOp {
+            channel_id: channel(),
+            inscription: Inscription::default(),
+            parent,
+            signer: Ed25519Key::from_bytes(&SEED).public_key().into_unverified(),
+            mini_blocks: [steps.try_into().unwrap()].into(),
+        };
+        let op_id = PublicInputs::op_id_element(&op.op_id());
+
+        let witness = ZkProgramSpendWitnessInputsData {
+            wallet: ZkProgramSpendWalletInputsData {
+                inputs: std::array::from_fn(|slot| {
+                    held.get(slot).map_or_else(
+                        ZkProgramSpendInputNoteData::inactive,
+                        |(note, path)| ZkProgramSpendInputNoteData {
+                            stake_public_key: *note.stake_public_key.as_fr(),
+                            nonce: note.nonce,
+                            value: note.value,
+                            data: note.data,
+                            path_and_selectors: std::array::from_fn(|level| {
+                                path.path_and_selectors(level).into()
+                            }),
+                        },
+                    )
+                }),
+                outputs: std::array::from_fn(|slot| {
+                    outputs
+                        .get(slot)
+                        .map_or_else(ZkProgramSpendOutputNoteData::inactive, |note| {
+                            ZkProgramSpendOutputNoteData {
+                                public_key: *note.public_key.as_fr(),
+                                stake_public_key: *note.stake_public_key.as_fr(),
+                                nonce: note.nonce,
+                                value: note.value,
+                                program: note.program,
+                                data: note.data,
+                            }
+                        })
+                }),
+            },
+            chain: ZkProgramSpendChainInputsData {
+                inputs_active: std::array::from_fn(|slot| slot < held.len()),
+                outputs_active: std::array::from_fn(|slot| slot < outputs.len()),
+                outputs_of_program: std::array::from_fn(|slot| slot < program_notes.len()),
+                // No step before this one leaves a note: the deposits have no change.
+                tx_commitment_root: root,
+                program_id: spec.program_id,
+                paid_value: deposits.iter().map(|deposit| deposit.value).sum(),
+                msg: op_id,
+            },
+        };
+        let draft = ProgramStepDraft {
+            index,
+            witness: Box::new(witness),
+            program_notes,
+            outputs,
+            program_inputs: [step_id, program_deposits_hash(&deposits), op_id],
+        };
+        (op, draft)
+    }
+
+    /// Runs Bedrock's checks of the inscription carrying `vault`, on a channel whose note set
+    /// holds `notes`: `held` are the ones `vault` consumes.
+    fn bedrock_accepts(
+        vault: &VaultStep,
+        held: &[(Note, MerklePath)],
+        root: Fr,
+        notes: &[NoteCommitment],
+    ) {
         let sequencer = Ed25519Key::from_bytes(&SEED);
         let keys = UnverifiedChannelKeys::from(sequencer.public_key().into_unverified());
         let (channels, note_sets) =
@@ -535,16 +592,20 @@ mod tests {
             .register(RegisteredProgram::new(vault_key()).unwrap())
             .0;
 
-        let op = InscriptionOp {
-            channel_id: channel(),
-            inscription: Inscription::default(),
-            parent: MsgId::root(),
-            signer: sequencer.public_key().into_unverified(),
-            mini_blocks: [vault.mini_block().unwrap()].into(),
-        };
+        let (op, draft) = built(vault, held, root);
         let signature =
-            SigningKey::from_channel_seed(&SEED).sign(&vault.public_inputs(&op).unwrap());
-        let proofs = vault.prove(&op, vec![Some(signature)]).unwrap();
+            SigningKey::from_channel_seed(&SEED).sign(&VaultStep::public_inputs(&draft));
+        let (spend_proof, program_proof) = vault.prove(&draft, vec![Some(signature)]).unwrap();
+        let proofs = vault
+            .deposits
+            .iter()
+            .map(|deposit| StepProof::ZkTransfer(deposit.proof))
+            .chain([StepProof::ProgramStep(ProgramStepProof {
+                spend_proof,
+                program_proof,
+                program_notes: draft.program_notes,
+            })])
+            .collect();
 
         let tx_hash_view = TxHashView::new(TxHash::from([9; 32]));
         let inscribe_proof = ChannelInscribeProof::new(
@@ -568,6 +629,34 @@ mod tests {
         let mut batch = DeferredProofs::new();
         deferred.defer_into(&mut batch);
         batch.verify().expect("the proofs of the steps verify");
+    }
+
+    /// A vault note of `committee` worth 100, alone in its note set: with its path and root.
+    fn held_note(data: Fr) -> (Note, MerklePath, Fr) {
+        let held = Note {
+            value: 100,
+            nonce: Fr::from(21_u64),
+            public_key: *PK0,
+            stake_public_key: ZkPublicKey::zero(),
+            program: *VAULT_PROGRAM,
+            data,
+        };
+        let (mmr, path) = CommitmentMmr::new()
+            .push_with_paths(held.commitment(), &mut [])
+            .unwrap();
+        (held, path, mmr.frontier_root())
+    }
+
+    fn vault_note(note: &Note) -> VaultNote {
+        VaultNote {
+            commitment: note.commitment(),
+            opening: ProgramNoteOpening {
+                value: note.value,
+                nonce: note.nonce,
+                stake_public_key: note.stake_public_key,
+                data: note.data,
+            },
+        }
     }
 
     fn recipient() -> DepositRecipient {
@@ -604,10 +693,7 @@ mod tests {
             value: 1_000,
             intent: Deposit {
                 value: 1_000,
-                recipient: Deposit::recipient_element(
-                    recipient().account_id().value(),
-                    nullifier.0,
-                ),
+                recipient: recipient_element(&recipient()),
             }
             .intent(committee.id()),
             inscription: Inscription::try_new(
@@ -640,17 +726,14 @@ mod tests {
     #[test]
     fn bedrock_accepts_a_deposit_into_an_empty_vault() {
         let (deposit, note, root) = deposit(&committee());
-
         let vault = VaultStep {
             committee: committee(),
             inputs: vec![],
             deposits: vec![deposit],
             payouts: vec![],
-            commitment_merkle_root: root,
-            tx_commitment_root: root,
         };
 
-        bedrock_accepts(&vault, &[note.commitment()]);
+        bedrock_accepts(&vault, &[], root, &[note.commitment()]);
     }
 
     #[test]
@@ -682,25 +765,6 @@ mod tests {
     }
 
     #[test]
-    fn equal_deposits_into_an_empty_vault_make_different_notes() {
-        let kept_note = |nonce: u64| {
-            let (deposit, _, root) = deposit_of(&committee(), Fr::from(nonce));
-            let vault = VaultStep {
-                committee: committee(),
-                inputs: vec![],
-                deposits: vec![deposit],
-                payouts: vec![],
-                commitment_merkle_root: root,
-                tx_commitment_root: root,
-            };
-            vault.program_step().unwrap().program_outputs
-        };
-
-        // The same value to the same recipient: only the notes paid in differ.
-        assert_ne!(kept_note(11), kept_note(12));
-    }
-
-    #[test]
     fn a_step_its_committee_has_not_signed_is_not_proven() {
         let (deposit, _, root) = deposit(&committee());
         let vault = VaultStep {
@@ -708,22 +772,14 @@ mod tests {
             inputs: vec![],
             deposits: vec![deposit],
             payouts: vec![],
-            commitment_merkle_root: root,
-            tx_commitment_root: root,
         };
-        let op = InscriptionOp {
-            channel_id: channel(),
-            inscription: Inscription::default(),
-            parent: MsgId::root(),
-            signer: Ed25519Key::from_bytes(&SEED).public_key().into_unverified(),
-            mini_blocks: [vault.mini_block().unwrap()].into(),
-        };
+        let (_, draft) = built(&vault, &[], root);
         let stranger = SigningKey::from_channel_seed(&[16; 32]);
-        let signature = stranger.sign(&vault.public_inputs(&op).unwrap());
+        let signature = stranger.sign(&VaultStep::public_inputs(&draft));
 
         for signatures in [vec![], vec![None], vec![Some(signature)]] {
             assert!(matches!(
-                vault.prove(&op, signatures),
+                vault.prove(&draft, signatures),
                 Err(Error::InvalidVaultStep("its committee has not signed it"))
             ));
         }
@@ -731,24 +787,12 @@ mod tests {
 
     #[test]
     fn a_step_consuming_a_note_of_another_committee_is_refused() {
-        let held = Note {
-            value: 100,
-            nonce: Fr::from(21_u64),
-            public_key: *PK0,
-            stake_public_key: ZkPublicKey::zero(),
-            program: *VAULT_PROGRAM,
-            data: Fr::from(3_u64),
-        };
-        let (_, path) = CommitmentMmr::new()
-            .push_with_paths(held.commitment(), &mut [])
-            .unwrap();
+        let (held, _, _) = held_note(Fr::from(3_u64));
         let vault = VaultStep {
             committee: committee(),
-            inputs: vec![(held, path)],
+            inputs: vec![vault_note(&held)],
             deposits: vec![],
             payouts: vec![],
-            commitment_merkle_root: Fr::from(0_u64),
-            tx_commitment_root: Fr::from(0_u64),
         };
 
         assert!(matches!(
@@ -791,29 +835,15 @@ mod tests {
 
     #[test]
     fn bedrock_accepts_a_payout_from_a_vault_note() {
-        let held = Note {
-            value: 100,
-            nonce: Fr::from(21_u64),
-            public_key: *PK0,
-            stake_public_key: ZkPublicKey::zero(),
-            program: *VAULT_PROGRAM,
-            data: committee().id(),
-        };
-        let (mmr, path) = CommitmentMmr::new()
-            .push_with_paths(held.commitment(), &mut [])
-            .unwrap();
-        let root = mmr.frontier_root();
-
+        let (held, path, root) = held_note(committee().id());
         let vault = VaultStep {
             committee: committee(),
-            inputs: vec![(held, path)],
+            inputs: vec![vault_note(&held)],
             deposits: vec![],
             payouts: vec![(30, ZkKey::new(Fr::from(5_u64)).to_public_key())],
-            commitment_merkle_root: root,
-            tx_commitment_root: root,
         };
 
-        bedrock_accepts(&vault, &[held.commitment()]);
+        bedrock_accepts(&vault, &[(held, path)], root, &[held.commitment()]);
     }
 
     #[test]
@@ -823,8 +853,6 @@ mod tests {
             inputs: vec![],
             deposits: vec![],
             payouts: vec![(1, ZkKey::new(Fr::from(5_u64)).to_public_key())],
-            commitment_merkle_root: Fr::from(0_u64),
-            tx_commitment_root: Fr::from(0_u64),
         };
 
         assert!(matches!(

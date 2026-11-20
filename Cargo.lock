@@ -12047,7 +12047,6 @@ dependencies = [
  "kameo_actors",
  "lee",
  "logos-blockchain-core",
- "logos-blockchain-mmr",
  "logos-blockchain-program-spend",
  "logos-blockchain-zone-sdk",
  "mockall",

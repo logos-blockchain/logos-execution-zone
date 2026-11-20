@@ -267,7 +267,6 @@ logos-blockchain-groth16 = { git = "https://github.com/logos-blockchain/logos-bl
 logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "767cf967b23b471869a7cae4cb5a6fa54f9389ac" }
 logos-blockchain-key-management-system-keys = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "767cf967b23b471869a7cae4cb5a6fa54f9389ac" }
 logos-blockchain-program-spend = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "767cf967b23b471869a7cae4cb5a6fa54f9389ac" }
-logos-blockchain-mmr = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "767cf967b23b471869a7cae4cb5a6fa54f9389ac" }
 jf-poseidon2 = { git = "https://github.com/EspressoSystems/jellyfish.git", rev = "8d80230358e900f8d63765a937f63f4978ca1daa", features = [
   "bn254",
 ] }

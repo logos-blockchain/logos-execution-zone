@@ -49,8 +49,6 @@ const STEP_ID_DST: &[u8] = b"PROGRAM_STEP_ID_V1";
 const DEPOSITS_DST: &[u8] = b"PROGRAM_DEPOSITS_V1";
 const COMMITTEE_DST: &[u8] = b"LEZ_VAULT_COMMITTEE_V1";
 const INTENT_DST: &[u8] = b"LEZ_VAULT_INTENT_V1";
-const RECIPIENT_DST: &[u8] = b"LEZ_VAULT_RECIPIENT_V1";
-const NONCE_DST: &[u8] = b"LEZ_VAULT_NONCE_V1";
 const SIGNATURE_DST: &[u8] = b"LEZ_VAULT_SIG_V1";
 
 /// The keys that move the vault notes carrying its id, and how many of them must sign.
@@ -96,16 +94,10 @@ pub struct Deposit {
 }
 
 impl Deposit {
-    /// The recipient of a deposit crediting the zone account `account_id`, salted with the
-    /// deposit's first input nullifier. Bedrock spends a nullifier once, so no two deposits
-    /// share an intent, and the notes a step creates from its deposits alone never repeat.
+    /// The recipient of a deposit crediting the zone account `account_id`.
     #[must_use]
-    pub fn recipient_element(account_id: &[u8; 32], nullifier: Fr) -> Fr {
-        Poseidon2Bn254Hasher::digest(&[
-            domain_tag(RECIPIENT_DST),
-            Fr::from_le_bytes_mod_order(account_id),
-            nullifier,
-        ])
+    pub fn recipient_element(account_id: &[u8; 32]) -> Fr {
+        Fr::from_le_bytes_mod_order(account_id)
     }
 
     /// The intent the depositor signs: it pays `recipient` through the vault of `committee` only.
@@ -252,16 +244,6 @@ impl Signature {
         let e = challenge(&self.r, signer, public);
         EdwardsAffine::generator() * self.s == self.r + *signer * e
     }
-}
-
-/// The nonce the circuit requires for output `index` of a step that consumes no note.
-#[must_use]
-pub fn bootstrap_nonce(program_deposits_hash: Fr, index: usize) -> Fr {
-    Poseidon2Bn254Hasher::digest(&[
-        domain_tag(NONCE_DST),
-        program_deposits_hash,
-        Fr::from(u64::try_from(index).expect("an output index fits a u64")),
-    ])
 }
 
 /// Bedrock's `program_deposits_hash` over the value and intent of each deposit.
@@ -699,21 +681,14 @@ mod tests {
     }
 
     #[test]
-    fn step_consuming_nothing_needs_the_derived_nonces() {
+    fn step_consuming_nothing_takes_the_deposits_in() {
         let deposit = Deposit {
             value: 50,
             recipient: Fr::from(77_u64),
         };
-        let hash = deposits_hash(&[(deposit.value, deposit.intent(committee().id()))]);
         let mut step = Step::default();
-        step.outputs[0] = Some(OutputNote {
-            nonce: bootstrap_nonce(hash, 0),
-            ..vault_note(50, &committee())
-        });
-        assert!(is_satisfied(circuit(step.clone(), vec![deposit])));
-
         step.outputs[0] = Some(vault_note(50, &committee()));
-        assert!(!is_satisfied(circuit(step, vec![deposit])));
+        assert!(is_satisfied(circuit(step, vec![deposit])));
     }
 
     /// Run with `UPDATE_DEMO_KEY=1` after changing the circuit.
