@@ -271,7 +271,7 @@ pub fn setup(rng: &mut (impl RngCore + CryptoRng)) -> Result<ProvingKey<Bn254>, 
         successor: Committee::default(),
         successor_signatures: vec![],
     };
-    Groth16::<Bn254>::generate_random_parameters_with_reduction(blank, rng)
+    untraced(|| Groth16::<Bn254>::generate_random_parameters_with_reduction(blank, rng))
 }
 
 /// The keys of a setup whose randomness is public: anyone can forge proofs under them. For
@@ -313,7 +313,9 @@ pub fn prove(
     rng: &mut (impl RngCore + CryptoRng),
 ) -> Result<CompressedGroth16Proof, SynthesisError> {
     let public = circuit.public.to_array();
-    let proof = Groth16::<Bn254>::create_random_proof_with_reduction(circuit, proving_key, rng)?;
+    let proof = untraced(|| {
+        Groth16::<Bn254>::create_random_proof_with_reduction(circuit, proving_key, rng)
+    })?;
     let key = ark_groth16::prepare_verifying_key(&proving_key.vk);
     if !Groth16::<Bn254>::verify_proof(&key, &proof, &public)? {
         return Err(SynthesisError::Unsatisfiable);
@@ -324,6 +326,12 @@ pub fn prove(
         pi_c: proof.c,
     })
     .expect("the points of a proof compress"))
+}
+
+/// Runs `synthesis` with no log subscriber. arkworks opens a span for every constraint, which a
+/// subscriber records: enough of them to stall a setup and exhaust memory.
+fn untraced<T>(synthesis: impl FnOnce() -> T) -> T {
+    tracing::subscriber::with_default(tracing::subscriber::NoSubscriber::default(), synthesis)
 }
 
 /// A domain tag as Bedrock encodes them: the bytes as a little-endian integer.

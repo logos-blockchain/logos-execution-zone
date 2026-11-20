@@ -21,6 +21,7 @@ logos-blockchain-poseidon2.workspace = true
 rand.workspace = true
 rand_chacha.workspace = true
 sha2.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 logos-blockchain-core = { workspace = true, features = ["test-utils"] }
