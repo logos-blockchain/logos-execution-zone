@@ -8,18 +8,183 @@ use std::{
     time::Duration,
 };
 
-use anyhow::Context as _;
+use anyhow::{Context as _, bail, ensure};
+use bridge_core::{DepositMetadata, DepositRecipient};
+use chain_state::vault::VAULT_PROGRAM;
 use common::transaction::LeeTransaction;
 use integration_tests::{
-    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, no_seal, utils::account_balance,
+    TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, no_seal,
+    utils::{account_balance, get_account, wait_for_indexer_to_catch_up, wait_until},
 };
 use lee::{
-    Actor, execute_and_prove_with_cross_messages, privacy_preserving_transaction, program::Program,
+    AccountId, Actor, PrivateKey, PublicAccountEvidence, PublicKey,
+    execute_and_prove_with_cross_messages, privacy_preserving_transaction, program::Program,
     public_transaction,
 };
 use lee_core::{RootCall, execution_state::TransactionEntry};
-use sequencer_service_rpc::RpcClient as _;
+use logos_blockchain_zone_sdk::{
+    CommonHttpClient,
+    binary_codec::canonical::BinaryEncode as _,
+    core::mantle::{
+        Value,
+        gas::GasCost,
+        ops::channel::{deposit::Metadata, inscribe::Step},
+    },
+    http_api_common::{
+        bodies::channel::{
+            ChannelDepositRequestBody, ChannelDepositResponseBody, ChannelStepRequestBody,
+            ProgramDepositBody,
+        },
+        paths::CHANNEL_DEPOSIT,
+    },
+    node_types::Inscription,
+};
+use sequencer_service_rpc::{HexBytes, RpcClient as _};
+use test_fixtures::config::{
+    CHANNEL_SIGNING_KEY, UrlProtocol, addr_to_url, bedrock_channel_id, bedrock_funding_key,
+};
 use tokio::test;
+use vault_circuit::{Committee, Deposit, SigningKey};
+
+/// The indexer's reads, apart from the sequencer's methods of the same names.
+mod indexed {
+    use anyhow::Context as _;
+    use indexer_service_rpc::RpcClient as _;
+    use integration_tests::TestContext;
+    use lee::AccountId;
+
+    pub async fn account(
+        ctx: &TestContext,
+        account_id: AccountId,
+    ) -> anyhow::Result<Option<indexer_service_protocol::Account>> {
+        ctx.indexer_client()
+            .get_account(account_id.into())
+            .await
+            .context("Failed to read the account from the indexer")
+    }
+}
+
+/// Has the Bedrock test node's wallet pay `amount` into the zone's channel and deposit it to the
+/// vault for `recipient`. Returns the deposit as the sequencer takes it: the step, then its proof.
+async fn program_deposit(
+    ctx: &TestContext,
+    recipient: PublicKey,
+    amount: u64,
+) -> anyhow::Result<Vec<u8>> {
+    let node = CommonHttpClient::new(None);
+    let bedrock_url = addr_to_url(UrlProtocol::Http, ctx.bedrock_addr())?;
+    let holder = bedrock_funding_key();
+
+    let _: ChannelDepositResponseBody = node
+        .post(
+            bedrock_url.join(CHANNEL_DEPOSIT.trim_start_matches('/'))?,
+            &ChannelDepositRequestBody {
+                tip: None,
+                channel_id: bedrock_channel_id(),
+                amount,
+                holder_public_key: holder,
+                metadata: Metadata::default(),
+                change_public_key: holder,
+                funding_public_keys: vec![holder],
+                max_tx_fee: GasCost::new(Value::MAX),
+            },
+        )
+        .await
+        .context("Failed to pay into the channel")?;
+
+    let recipient = DepositRecipient::Identified(PublicAccountEvidence::Key(recipient));
+    // The vault of the one sequencer of the test.
+    let committee = Committee {
+        threshold: 1,
+        signers: vec![SigningKey::from_channel_seed(&CHANNEL_SIGNING_KEY).public_key()],
+    };
+    let intent = Deposit {
+        value: amount,
+        recipient: Deposit::recipient_element(recipient.account_id().value()),
+    }
+    .intent(committee.id());
+    let inscription = Inscription::try_new(borsh::to_vec(&DepositMetadata { recipient })?, 128)
+        .ok()
+        .context("The recipient does not fit the deposit's inscription")?;
+
+    // The wallet proves the step once it holds the channel note.
+    let request = || ChannelStepRequestBody {
+        tip: None,
+        channel_id: bedrock_channel_id(),
+        appended: Vec::new(),
+        payments: Vec::new(),
+        program_deposit: Some(ProgramDepositBody {
+            program_id: *VAULT_PROGRAM,
+            value: amount,
+            intent,
+        }),
+        inscription: inscription.clone(),
+        change_public_key: holder,
+        holder_public_keys: vec![holder],
+    };
+    let mut attempts = 0_u32;
+    let step = loop {
+        match node.channel_step(bedrock_url.clone(), request()).await {
+            Ok(step) => break step,
+            Err(err) if attempts >= 120 => {
+                return Err(err).context("The wallet never proved the deposit step");
+            }
+            Err(_) => {
+                attempts = attempts.saturating_add(1);
+                tokio::time::sleep(Duration::from_millis(500)).await;
+            }
+        }
+    };
+    let Step::ProgramDeposit(deposit) = step.step else {
+        bail!("The node answered with a step that is no program deposit");
+    };
+
+    let mut bytes = Vec::new();
+    deposit.encode_into(&mut bytes);
+    step.proof.encode_into(&mut bytes);
+    Ok(bytes)
+}
+
+#[test]
+async fn a_vault_deposit_is_minted_exactly_once() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let recipient = PublicKey::new_from_private_key(&PrivateKey::new_os_random());
+    let recipient_id = AccountId::from(&recipient);
+    let amount = 1_000_u64;
+
+    let deposit = program_deposit(&ctx, recipient, amount).await?;
+    ctx.sequencer_client()
+        .submit_program_deposit(HexBytes(deposit.clone()))
+        .await
+        .context("The sequencer refused the deposit")?;
+
+    wait_until("the deposit to credit its recipient", || async {
+        Ok(account_balance(&ctx, recipient_id).await? >= u128::from(amount))
+    })
+    .await?;
+    ensure!(
+        ctx.sequencer_client()
+            .submit_program_deposit(HexBytes(deposit))
+            .await
+            .is_err(),
+        "A minted deposit was admitted again"
+    );
+
+    // The indexer applies the block only if it finds the deposit in the block's inscription.
+    wait_for_indexer_to_catch_up(&ctx).await?;
+    tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+    ensure!(
+        account_balance(&ctx, recipient_id).await? == u128::from(amount),
+        "The deposit credited its recipient more than once"
+    );
+    let indexed = indexed::account(&ctx, recipient_id).await?;
+    ensure!(
+        indexed == Some(get_account(&ctx, recipient_id).await?.into()),
+        "The indexer and the sequencer disagree on the recipient: {indexed:?}"
+    );
+
+    Ok(())
+}
 
 #[test]
 async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {

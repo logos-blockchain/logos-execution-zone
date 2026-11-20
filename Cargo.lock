@@ -5095,6 +5095,7 @@ dependencies = [
  "borsh",
  "bridge_core",
  "bridge_lock_core",
+ "chain_state",
  "common",
  "core_ffi",
  "cross_zone",
@@ -5135,6 +5136,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber 0.3.23",
+ "vault_circuit",
  "wallet",
  "wrapped_token_core",
 ]
