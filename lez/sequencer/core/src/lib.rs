@@ -213,6 +213,8 @@ pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
 /// disposable.
 struct ConfigDraft {
     prepared: sequencer_bedrock_actor::protocol::PreparedConfig,
+    /// Production turns it has waited for its signatures.
+    turns_unsigned: u8,
     /// Submitted once; zone-sdk re-posts it from there on.
     submitted: bool,
     /// Channel slot the submission went out at, which starts the clock on
@@ -224,6 +226,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// Channel slots a submitted config gets to land before this node funds
     /// another; a margin over observed Bedrock confirmation lag.
     const CONFIG_LANDING_DEADLINE: SlotCount = 30;
+    /// Production turns a draft gets to collect its signatures. Funding one takes the node a
+    /// proof, which can leave the peers less than a turn to answer.
+    const CONFIG_SIGNING_TURNS: u8 = 3;
 
     #[expect(
         clippy::too_many_arguments,
@@ -578,15 +583,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// mempool transactions, publishes it via zone-sdk, and submits any
     /// committee-config update the new state calls for.
     pub async fn run_production_turn(&mut self) -> Result<u64> {
-        // A draft short of signatures is dropped here, before its fee-note
+        // A draft still short of signatures is dropped here, before its fee-note
         // reservation lapses and the block below spends that note.
-        if self
-            .config_draft
-            .as_ref()
-            .is_some_and(|draft| !draft.submitted)
-        {
-            warn!("A channel-config draft is still unsigned, funding another");
-            self.discard_config_draft().await;
+        if let Some(draft) = self.config_draft.as_mut().filter(|draft| !draft.submitted) {
+            draft.turns_unsigned = draft.turns_unsigned.saturating_add(1);
+            if draft.turns_unsigned >= Self::CONFIG_SIGNING_TURNS {
+                warn!("A channel-config draft is still unsigned, funding another");
+                self.discard_config_draft().await;
+            }
         }
 
         let built = self
@@ -717,6 +721,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         };
         self.config_draft = Some(ConfigDraft {
             prepared,
+            turns_unsigned: 0,
             submitted: false,
             submitted_at: None,
         });
