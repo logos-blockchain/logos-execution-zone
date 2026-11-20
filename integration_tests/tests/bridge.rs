@@ -32,10 +32,10 @@ use logos_blockchain_zone_sdk::{
     },
     http_api_common::{
         bodies::channel::{
-            ChannelDepositRequestBody, ChannelDepositResponseBody, ChannelStepRequestBody,
+            ChannelDepositRequestBody, ChannelPrepareDepositResponseBody, ChannelStepRequestBody,
             ProgramDepositBody,
         },
-        paths::CHANNEL_DEPOSIT,
+        paths::CHANNEL_PREPARE_DEPOSIT,
     },
     node_types::Inscription,
 };
@@ -75,9 +75,9 @@ async fn program_deposit(
     let bedrock_url = addr_to_url(UrlProtocol::Http, ctx.bedrock_addr())?;
     let holder = bedrock_funding_key();
 
-    let _: ChannelDepositResponseBody = node
+    let prepared: ChannelPrepareDepositResponseBody = node
         .post(
-            bedrock_url.join(CHANNEL_DEPOSIT.trim_start_matches('/'))?,
+            bedrock_url.join(CHANNEL_PREPARE_DEPOSIT.trim_start_matches('/'))?,
             &ChannelDepositRequestBody {
                 tip: None,
                 channel_id: bedrock_channel_id(),
@@ -89,6 +89,9 @@ async fn program_deposit(
                 max_tx_fee: GasCost::new(Value::MAX),
             },
         )
+        .await
+        .context("Failed to prepare the payment into the channel")?;
+    node.post_transaction(bedrock_url.clone(), prepared.transaction)
         .await
         .context("Failed to pay into the channel")?;
 

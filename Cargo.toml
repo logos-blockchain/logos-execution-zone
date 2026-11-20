@@ -259,14 +259,14 @@ strum = { version = "0.28.0", features = ["derive"] }
 mockall = "0.15.0"
 
 # FIXME: WIP branch for PUTXOs
-logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-zone-sdk.git", rev = "1f95999f474d2fae12a8ad4e3afd218678fb4799" }
+logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-zone-sdk.git", rev = "c55dcf048dfd4f5561feff5dab47f561729abed3" }
 
 # Bedrock's hash and Groth16 verifier, for the vault circuit. Keep on the node revision zone-sdk pins.
-logos-blockchain-poseidon2 = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "767cf967b23b471869a7cae4cb5a6fa54f9389ac" }
-logos-blockchain-groth16 = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "767cf967b23b471869a7cae4cb5a6fa54f9389ac" }
-logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "767cf967b23b471869a7cae4cb5a6fa54f9389ac" }
-logos-blockchain-key-management-system-keys = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "767cf967b23b471869a7cae4cb5a6fa54f9389ac" }
-logos-blockchain-program-spend = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "767cf967b23b471869a7cae4cb5a6fa54f9389ac" }
+logos-blockchain-poseidon2 = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f08cbf14e14d3da86c717a61658836bd5d49e3ce" }
+logos-blockchain-groth16 = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f08cbf14e14d3da86c717a61658836bd5d49e3ce" }
+logos-blockchain-core = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f08cbf14e14d3da86c717a61658836bd5d49e3ce" }
+logos-blockchain-key-management-system-keys = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f08cbf14e14d3da86c717a61658836bd5d49e3ce" }
+logos-blockchain-program-spend = { git = "https://github.com/logos-blockchain/logos-blockchain.git", rev = "f08cbf14e14d3da86c717a61658836bd5d49e3ce" }
 jf-poseidon2 = { git = "https://github.com/EspressoSystems/jellyfish.git", rev = "8d80230358e900f8d63765a937f63f4978ca1daa", features = [
   "bn254",
 ] }

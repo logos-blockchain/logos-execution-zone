@@ -8,7 +8,7 @@ use logos_blockchain_zone_sdk::{
     binary_codec::canonical::BinaryDecode as _,
     core::mantle::{
         batch::{DeferrableProof as _, DeferredProofs},
-        notes::NoteCommitment,
+        notes::{NoteCommitment, derive_program_output_nonce},
         ops::{
             ProgramProof, StepProof, ZkProgramSpendProof, ZkTransferProof,
             channel::{
@@ -23,8 +23,8 @@ use logos_blockchain_zone_sdk::{
     key_management_system_service::keys::{PK0, ZkPublicKey},
     node_types::{Inscription, ProgramNoteOpening, Value},
     sequencer::{
-        MiniBlockSpec, ProgramOutput, ProgramStepDraft, ProgramStepSpec, StepSpec, UserOutput,
-        prove_program_step,
+        MiniBlockRequest, PreparedProgramStep, ProgramOutput, ProgramStepRequest, StepRequest,
+        UserOutput, prove_program_step,
     },
 };
 use vault_circuit::{
@@ -147,7 +147,7 @@ pub struct VaultStep {
 impl VaultStep {
     /// The mini-block of the step for zone-sdk to build: the deposits, then the vault's program
     /// step.
-    pub fn mini_block(&self) -> Result<MiniBlockSpec> {
+    pub fn mini_block(&self) -> Result<MiniBlockRequest> {
         let committee = self.committee.id();
         if self
             .inputs
@@ -166,11 +166,30 @@ impl VaultStep {
             ));
         }
 
-        let deposits = self.deposits.iter().map(|deposit| StepSpec::Holder {
+        // A step consuming a note has its output nonces derived from that note. One consuming
+        // nothing names them: derived the same way from the first note its deposits spend, which
+        // Bedrock lets no other deposit spend.
+        let seed = if self.inputs.is_empty() {
+            Some(
+                self.deposits
+                    .iter()
+                    .find_map(|deposit| deposit.deposit.inputs.iter().next().copied())
+                    .ok_or(Error::InvalidVaultStep("it consumes nothing"))?,
+            )
+        } else {
+            None
+        };
+        let nonce = |index: usize, value: Value, public_key: &ZkPublicKey| {
+            seed.as_ref()
+                .map(|seed| derive_program_output_nonce(seed, index, value, public_key))
+        };
+        let kept_notes = usize::from(kept > 0);
+
+        let deposits = self.deposits.iter().map(|deposit| StepRequest::User {
             step: Step::ProgramDeposit(deposit.deposit.clone()),
             proof: StepProof::ZkTransfer(deposit.proof),
         });
-        let program = StepSpec::Program(ProgramStepSpec {
+        let program = StepRequest::Program(ProgramStepRequest {
             program_id: *VAULT_PROGRAM,
             inputs: self.inputs.iter().map(|note| note.commitment).collect(),
             program_outputs: (kept > 0)
@@ -178,15 +197,19 @@ impl VaultStep {
                     value: kept,
                     stake_public_key: ZkPublicKey::zero(),
                     data: committee,
+                    nonce: nonce(0, kept, &PK0),
                 })
                 .into_iter()
                 .collect(),
             outputs: self
                 .payouts
                 .iter()
-                .map(|(value, public_key)| UserOutput {
+                .zip(kept_notes..)
+                .map(|((value, public_key), index)| UserOutput {
                     public_key: *public_key,
+                    stake_public_key: ZkPublicKey::zero(),
                     value: *value,
+                    nonce: nonce(index, *value, public_key),
                 })
                 .collect(),
             inscription: Inscription::default(),
@@ -196,7 +219,7 @@ impl VaultStep {
 
     /// What a committee member signs to authorize the step zone-sdk built as `draft`.
     #[must_use]
-    pub const fn public_inputs(draft: &ProgramStepDraft) -> PublicInputs {
+    pub const fn public_inputs(draft: &PreparedProgramStep) -> PublicInputs {
         let [program_step_id, program_deposits_hash, op_id] = draft.program_inputs;
         PublicInputs {
             program_step_id,
@@ -206,11 +229,11 @@ impl VaultStep {
     }
 
     /// The spend and program proofs of the step zone-sdk built as `draft`, for
-    /// `ProgramInscription::step_proofs`. `signatures` holds one slot per committee member.
+    /// `PreparedProgramInscription::step_proofs`. `signatures` holds one slot per committee member.
     /// Takes seconds of CPU.
     pub fn prove(
         &self,
-        draft: &ProgramStepDraft,
+        draft: &PreparedProgramStep,
         signatures: Vec<Option<Signature>>,
     ) -> Result<(ZkProgramSpendProof, ProgramProof)> {
         let public = Self::public_inputs(draft);
@@ -392,9 +415,9 @@ mod tests {
         vault: &VaultStep,
         held: &[(Note, MerklePath)],
         root: Fr,
-    ) -> (InscriptionOp, ProgramStepDraft) {
+    ) -> (InscriptionOp, PreparedProgramStep) {
         let mut mini_block = vault.mini_block().unwrap();
-        let Some(StepSpec::Program(spec)) = mini_block.pop() else {
+        let Some(StepRequest::Program(spec)) = mini_block.pop() else {
             panic!("the mini-block ends with the vault's step");
         };
         let deposits: Vec<_> = vault
@@ -422,7 +445,9 @@ mod tests {
             .enumerate()
             .map(|(at, output)| ProgramNoteOpening {
                 value: output.value,
-                nonce: derive_program_output_nonce(&first_input, at, output.value, &PK0),
+                nonce: output.nonce.unwrap_or_else(|| {
+                    derive_program_output_nonce(&first_input, at, output.value, &PK0)
+                }),
                 stake_public_key: output.stake_public_key,
                 data: output.data,
             })
@@ -437,12 +462,14 @@ mod tests {
                     .map(|(output, at)| {
                         Note::new(
                             output.value,
-                            derive_program_output_nonce(
-                                &first_input,
-                                at,
-                                output.value,
-                                &output.public_key,
-                            ),
+                            output.nonce.unwrap_or_else(|| {
+                                derive_program_output_nonce(
+                                    &first_input,
+                                    at,
+                                    output.value,
+                                    &output.public_key,
+                                )
+                            }),
                             output.public_key,
                         )
                     }),
@@ -545,7 +572,7 @@ mod tests {
                 msg: op_id,
             },
         };
-        let draft = ProgramStepDraft {
+        let draft = PreparedProgramStep {
             index,
             witness: Box::new(witness),
             program_notes,
