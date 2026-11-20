@@ -94,7 +94,8 @@ impl SigningKeyState {
 }
 
 /// The address of `signature_program`, the `system_upgrader` PDA for its name. Its actor state
-/// holds each account's signing key.
+/// holds each account's signing key. Dispatched natively: only `SetKey`, from the signature program
+/// itself.
 #[must_use]
 pub fn signature_program_id() -> AccountId {
     AccountId::from_system_program_name(&SIGNATURE_PROGRAM_NAME)

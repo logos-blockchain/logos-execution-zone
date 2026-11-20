@@ -10,7 +10,7 @@ mod inner {
 
     use guests::{
         BRIDGE_ELF, BRIDGE_ID, CLOCK_ELF, CLOCK_ID, FEE_ELF, FEE_ID, SEQUENCER_STAKE_ELF,
-        SEQUENCER_STAKE_ID, SYSTEM_UPGRADER_ELF, SYSTEM_UPGRADER_ID,
+        SEQUENCER_STAKE_ID, SIGNATURE_ELF, SIGNATURE_ID, SYSTEM_UPGRADER_ELF, SYSTEM_UPGRADER_ID,
     };
     use lee::{AccountId, program::Program};
     use system_upgrader_core::SystemProgramName;
@@ -23,6 +23,7 @@ mod inner {
     pub use clock_core::CLOCK_NAME;
     pub use fee_core::FEE_NAME;
     pub use sequencer_stake_core::SEQUENCER_STAKE_NAME;
+    pub use signature_core::{SIGNATURE_PROGRAM_NAME, signature_program_id};
 
     #[must_use]
     #[inline]
@@ -63,6 +64,13 @@ mod inner {
     }
 
     pub use sequencer_stake_core::sequencer_stake_account_id;
+
+    /// The guest-callable part of the signature program, run privately for a manual rotation.
+    #[must_use]
+    #[inline]
+    pub const fn signature_program() -> Program {
+        Program::new_unchecked(SIGNATURE_ID, Cow::Borrowed(SIGNATURE_ELF))
+    }
 
     /// System programs every zone registers at genesis, by name.
     #[must_use]
@@ -1313,6 +1321,141 @@ mod inner {
             for (_, program) in builtin_programs() {
                 let rebuilt = Program::new(program.elf().to_vec().into()).unwrap();
                 assert_eq!(rebuilt.id(), program.id());
+            }
+        }
+
+        #[test]
+        fn signature_program_id_collides_with_no_reserved_address() {
+            let reserved = [
+                lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
+                lee_core::program::SYSTEM_UPGRADER_ACCOUNT_ID,
+                lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
+            ];
+            assert!(
+                !reserved
+                    .into_iter()
+                    .chain(builtin_program_account_ids())
+                    .any(|account_id| account_id == signature_program_id())
+            );
+        }
+
+        mod signature {
+            use lee::{
+                program::Program,
+                test_utils::{PINNED_ACCOUNT_ID, PINNED_SECRET},
+            };
+            use lee_core::{
+                account::{AccountId, Actor, ActorState},
+                program::{ReceiveInput, Transition},
+                signing_key::{KeyType, SignatureMessage, SigningKeyState},
+            };
+            use signature_core::{AccountRotation, Message};
+
+            use super::super::*;
+
+            const CYCLE_BUDGET: u64 = 64 << 20;
+
+            fn run(message: &[u8]) -> Result<Transition, lee::error::LeeError> {
+                let receiver = Actor::new(AccountId::new([80; 32]), signature_program_id());
+                let input = ReceiveInput {
+                    receiver,
+                    from: None,
+                    grants: [receiver].into(),
+                    pre_state: ActorState::empty(),
+                    message: message.to_vec(),
+                };
+                signature_program().handle_message_for_tests(&input, CYCLE_BUDGET)
+            }
+
+            fn rotation(secret: [u8; 32], account: AccountId, next: SigningKeyState) -> Vec<u8> {
+                borsh::to_vec(&Message::ManualRotation {
+                    rotations: vec![AccountRotation {
+                        secret,
+                        account,
+                        next,
+                    }],
+                })
+                .unwrap()
+            }
+
+            fn key(key_type: KeyType, byte: u8) -> SigningKeyState {
+                SigningKeyState {
+                    key_type,
+                    key_commitment: [byte; 32],
+                }
+            }
+
+            #[test]
+            fn the_guests_account_id_matches_the_pinned_vector() {
+                let next = key(KeyType::Schnorr, 3);
+                assert!(run(&rotation(PINNED_SECRET, PINNED_ACCOUNT_ID, next)).is_ok());
+                assert!(run(&rotation(PINNED_SECRET, AccountId::new([1; 32]), next)).is_err());
+            }
+
+            #[test]
+            fn manual_rotation_sends_one_set_key_per_account() {
+                let first = lee::signature::PublicAccountSecret::new([11; 32]);
+                let second = lee::signature::PublicAccountSecret::new([12; 32]);
+                let rotations = [
+                    (&first, key(KeyType::Schnorr, 3)),
+                    (&second, key(KeyType::Schnorr, 4)),
+                ];
+                let message = Message::ManualRotation {
+                    rotations: rotations
+                        .iter()
+                        .map(|(secret, next)| AccountRotation {
+                            secret: *secret.value(),
+                            account: lee::signature::public_account_id(secret),
+                            next: *next,
+                        })
+                        .collect(),
+                };
+
+                let response = run(&borsh::to_vec(&message).unwrap()).unwrap().response;
+
+                assert_eq!(response.post_state, None);
+                assert!(response.async_messages.is_empty());
+                assert!(response.events.is_empty());
+                let sent: Vec<(Actor, SignatureMessage)> = response
+                    .sync_messages
+                    .iter()
+                    .map(|sent| (sent.to, borsh::from_slice(&sent.message).unwrap()))
+                    .collect();
+                let expected: Vec<(Actor, SignatureMessage)> = rotations
+                    .iter()
+                    .map(|(secret, next)| {
+                        (
+                            Actor::new(
+                                lee::signature::public_account_id(secret),
+                                signature_program_id(),
+                            ),
+                            SignatureMessage::SetKey { next: *next },
+                        )
+                    })
+                    .collect();
+                assert_eq!(sent, expected);
+            }
+
+            #[test]
+            fn a_set_key_sent_to_the_guest_panics() {
+                let set_key = SignatureMessage::SetKey {
+                    next: key(KeyType::Schnorr, 3),
+                };
+                assert!(run(&borsh::to_vec(&set_key).unwrap()).is_err());
+            }
+
+            #[test]
+            fn manual_rotation_with_no_accounts_panics() {
+                let message = Message::ManualRotation {
+                    rotations: Vec::new(),
+                };
+                assert!(run(&borsh::to_vec(&message).unwrap()).is_err());
+            }
+
+            #[test]
+            fn the_signature_program_binary_matches_its_image_id() {
+                let rebuilt = Program::new(signature_program().elf().to_vec().into()).unwrap();
+                assert_eq!(rebuilt.id(), SIGNATURE_ID);
             }
         }
 

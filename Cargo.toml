@@ -57,6 +57,8 @@ members = [
   "lez/programs/fee",
   "lez/programs/fee/core",
   "lez/programs/sequencer_stake",
+  "lez/programs/signature",
+  "lez/programs/signature/core",
   "lez/core_ffi",
 
   "test_guest_core",
@@ -126,6 +128,7 @@ system_upgrader_core = { path = "lez/programs/system_upgrader/core" }
 fee_core = { path = "lez/programs/fee/core" }
 bridge_core = { path = "lez/programs/bridge/core" }
 sequencer_stake_core = { path = "lez/programs/sequencer_stake/core" }
+signature_core = { path = "lez/programs/signature/core" }
 build_utils = { path = "build_utils" }
 test_guest_core = { path = "test_guest_core" }
 test_methods = { path = "lee/state_machine/test_methods" }
