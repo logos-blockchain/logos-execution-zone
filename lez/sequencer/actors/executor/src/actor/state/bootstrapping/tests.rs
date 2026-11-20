@@ -1,9 +1,10 @@
 //! A bootstrapping executor refusing a channel that serves a different chain.
 
 use chain_state::{ChainMismatch, ingest_error::BlockIngestError};
-use common::{HashType, test_utils::produce_dummy_block};
+use common::{HashType, block::BedrockStatus, test_utils::produce_dummy_block};
 use sequencer_bedrock_actor::{mock::CannedChannel, protocol::Slot};
-use sequencer_storage_actor::{mock::CannedStore, protocol::ZoneAnchorRecord};
+use sequencer_core::storage::ZoneAnchorRecord;
+use sequencer_storage_actor::mock::CannedStore;
 use tokio::test;
 
 use crate::{
@@ -12,8 +13,8 @@ use crate::{
         tests::{
             Finalized, finalized_at, finalized_updates, initialize_state, sequencer_config,
             stored_chain::{
-                block_at, checkpoint_bytes, finalized_genesis_store, fresh_store, genesis,
-                with_finalized,
+                block_at, finalized_genesis_store, fresh_store, genesis, store_block,
+                stored_blocks, with_anchor, with_finalized,
             },
         },
     },
@@ -53,14 +54,14 @@ async fn refusal(store: CannedStore, history: Vec<Finalized>) -> Error {
 #[test]
 async fn fails_when_channel_serves_a_divergent_block() {
     let genesis = genesis();
-    let store = CannedStore {
-        anchor: Some(ZoneAnchorRecord {
+    let store = with_anchor(
+        finalized_genesis_store(),
+        ZoneAnchorRecord {
             slot: 100,
             block_id: 1,
             hash: genesis.header.hash,
-        }),
-        ..finalized_genesis_store()
-    };
+        },
+    );
 
     // The channel serves a different block at the anchor id/slot.
     let mut tampered = genesis;
@@ -79,14 +80,14 @@ async fn fails_when_channel_serves_a_divergent_block() {
 #[test]
 async fn fails_when_channel_is_missing() {
     let genesis = genesis();
-    let store = CannedStore {
-        anchor: Some(ZoneAnchorRecord {
+    let store = with_anchor(
+        finalized_genesis_store(),
+        ZoneAnchorRecord {
             slot: 100,
             block_id: 1,
             hash: genesis.header.hash,
-        }),
-        ..finalized_genesis_store()
-    };
+        },
+    );
 
     // Anchor present, but the channel does not exist on the connected chain.
     let err = refusal(store, Vec::new()).await;
@@ -101,16 +102,17 @@ async fn fails_when_channel_is_missing() {
 
 #[test]
 async fn committed_local_against_missing_channel_fails_without_anchor() {
-    // A sequencer that has committed blocks — a non-genesis tip plus a persisted
-    // checkpoint — but only ever produced (so it never recorded a per-block
+    // A sequencer that has committed blocks — a non-genesis tip the channel
+    // finalized — but only ever produced (so it never recorded a per-block
     // anchor). Restarting it against a wiped/missing channel must still fail,
     // driven by the committed-blocks invariant rather than an anchor probe.
     let genesis = genesis();
     let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![]);
-    let store = CannedStore {
-        checkpoint: Some(checkpoint_bytes()),
-        ..with_finalized(finalized_genesis_store(), block2)
-    };
+    let store = with_finalized(finalized_genesis_store(), block2);
+    for mut block in stored_blocks(&store.values) {
+        block.bedrock_status = BedrockStatus::Finalized;
+        store_block(&store.values, block);
+    }
 
     let err = refusal(store, Vec::new()).await;
     assert!(

@@ -22,7 +22,6 @@ use lee::{
     test_utils::{TestSigner, witness_for},
 };
 use lee_core::native_token::Message as NativeMessage;
-use mockall::predicate::{always, eq, function};
 use sequencer_bedrock_actor::{
     mock::{MockBedrockActor, SharedChannel, mock_msg_of},
     protocol::{
@@ -34,13 +33,13 @@ use sequencer_channel_signing_actor::ChannelSigningActor;
 use sequencer_core::{
     MsgId,
     config::{BedrockConfig, SequencerConfig},
+    storage::{CoreStorage, blocks::BlockRecord},
 };
-use sequencer_slasher_actor::SlasherActor;
+use sequencer_slasher_actor::{SlasherActor, storage::SlasherStorage};
 use sequencer_stake_core::{SequencerEntry, SequencerKey};
 use sequencer_storage_actor::{
-    StorageActorTrait,
+    encoding::BigEndian,
     mock::{MockStorageActor, SharedStore},
-    protocol::StoreUpdateOutcome,
 };
 use sharding_pool_actor::{RestartConfig, ShardingPoolActor, protocol::Reset};
 use tempfile::TempDir;
@@ -56,7 +55,8 @@ mod reconstruction;
 mod startup;
 pub(super) mod stored_chain;
 
-type MockExecutor = ExecutorActor<MockStorageActor, MockBedrockActor>;
+type MockExecutor =
+    ExecutorActor<MockStorageActor, MockBedrockActor, SlasherActor<MockStorageActor>>;
 
 /// Restarts the executor it supervises, as the service does.
 #[derive(kameo::Actor)]
@@ -198,19 +198,13 @@ fn transfer_from_payer_at(nonce: u128, max_fee: u128) -> LeeTransaction {
     PublicTransaction::new(message, witness_set).into()
 }
 
-async fn spawn_executor_on_empty_genesis() -> Result<(
-    ActorRef<ExecutorActor<MockStorageActor, MockBedrockActor>>,
-    TempDir,
-)> {
+async fn spawn_executor_on_empty_genesis() -> Result<(ActorRef<MockExecutor>, TempDir)> {
     spawn_executor_with(|config| config).await
 }
 
 async fn spawn_executor_with(
     configure: impl FnOnce(SequencerConfig) -> SequencerConfig,
-) -> Result<(
-    kameo::actor::ActorRef<ExecutorActor<MockStorageActor, MockBedrockActor>>,
-    TempDir,
-)> {
+) -> Result<(kameo::actor::ActorRef<MockExecutor>, TempDir)> {
     let (config, home) = sequencer_config();
     let config = configure(config);
     let storage_ref = MockStorageActor::spawn(prepare_mock_storage_with_empty_genesis());
@@ -224,7 +218,7 @@ async fn spawn_executor_with(
 }
 
 async fn submit(
-    executor: &kameo::actor::ActorRef<ExecutorActor<MockStorageActor, MockBedrockActor>>,
+    executor: &kameo::actor::ActorRef<MockExecutor>,
     transaction: LeeTransaction,
 ) -> std::result::Result<(), Option<crate::error::Error>> {
     executor
@@ -351,66 +345,11 @@ fn prepare_mock_storage_with_stake(
         )
         .expect("the genesis clock tick applies");
 
-    let mut mock_storage = MockStorageActor::new();
+    let mock_storage = MockStorageActor::new();
 
-    mock_storage
-        .expect_handle_get_first_block_id()
-        .returning(|_, _| Ok(Some(1)));
-
-    mock_storage
-        .expect_handle_get_last_block_id()
-        .returning(|_, _| Ok(Some(1)));
-
-    let genesis_block_clone = genesis_block.clone();
-    mock_storage
-        .expect_handle_get_block()
-        .with(
-            eq(sequencer_storage_actor::protocol::GetBlock { block_id: 1 }),
-            always(),
-        )
-        .returning(move |_, _| Ok(Some(genesis_block_clone.clone())));
-
-    let state_clone = state.clone();
-    mock_storage
-        .expect_handle_get_lee_state()
-        .returning(move |_, _| Ok(Some(state_clone.clone())));
-
-    let genesis_block_meta_clone = genesis_block_meta.clone();
-    mock_storage
-        .expect_handle_get_final_snapshot()
-        .returning(move |_, _| Ok(Some((state.clone(), genesis_block_meta_clone.clone()))));
-
-    mock_storage
-        .expect_handle_get_all_blocks()
-        .returning(move |_, _| Ok(vec![genesis_block.clone()]));
-
-    mock_storage
-        .expect_handle_get_zone_checkpoint()
-        .returning(|_, _| Ok(None));
-
-    mock_storage
-        .expect_handle_get_zone_anchor()
-        .returning(|_, _| Ok(None));
-
-    mock_storage
-        .expect_handle_get_channel_view_bytes()
-        .returning(|_, _| Ok(None));
-
-    mock_storage
-        .expect_handle_get_slash_record_bytes()
-        .returning(|_, _| Ok(None));
-
-    mock_storage
-        .expect_handle_get_system_approvals_bytes()
-        .returning(|_, _| Ok(None));
-
-    mock_storage
-        .expect_handle_get_latest_block_meta()
-        .returning(move |_, _| Ok(Some(genesis_block_meta.clone())));
-
-    mock_storage
-        .expect_handle_apply_store_update()
-        .returning(|_, _| Ok(StoreUpdateOutcome::default()));
+    stored_chain::store_block(mock_storage.values(), genesis_block);
+    stored_chain::store_head_state(mock_storage.values(), state.clone());
+    stored_chain::store_final_snapshot(mock_storage.values(), state, genesis_block_meta);
 
     mock_storage
 }
@@ -429,11 +368,11 @@ pub(super) fn spawn_bedrock_pool(
 }
 
 /// What an executor over `storage_ref` starts from, against `bedrock_pool_ref`.
-pub(super) async fn executor_args<S: StorageActorTrait>(
+pub(super) async fn executor_args<S: CoreStorage + SlasherStorage>(
     config: SequencerConfig,
     storage_ref: ActorRef<S>,
     bedrock_pool_ref: ActorRef<ShardingPoolActor<MockBedrockActor, ChannelId>>,
-) -> Args<S, MockBedrockActor> {
+) -> Args<S, MockBedrockActor, SlasherActor<S>> {
     let channel_signing_key = sequencer_core::load_or_create_signing_key(
         &config.home.join(sequencer_core::CHANNEL_SIGNING_KEY_FILE),
     )
@@ -454,11 +393,11 @@ pub(super) async fn executor_args<S: StorageActorTrait>(
 }
 
 /// Spawns an executor over `storage_ref` and waits until it has started.
-pub(super) async fn spawn_executor<S: StorageActorTrait>(
+pub(super) async fn spawn_executor<S: CoreStorage + SlasherStorage>(
     config: SequencerConfig,
     storage_ref: ActorRef<S>,
     bedrock_pool_ref: ActorRef<ShardingPoolActor<MockBedrockActor, ChannelId>>,
-) -> Result<ActorRef<ExecutorActor<S, MockBedrockActor>>> {
+) -> Result<ActorRef<ExecutorActor<S, MockBedrockActor, SlasherActor<S>>>> {
     let executor =
         ExecutorActor::spawn(Box::pin(executor_args(config, storage_ref, bedrock_pool_ref)).await);
     executor
@@ -470,7 +409,7 @@ pub(super) async fn spawn_executor<S: StorageActorTrait>(
 }
 
 /// A slasher over `storage_ref`, its committee empty until the executor hands it one.
-async fn spawn_slasher<S: StorageActorTrait>(
+async fn spawn_slasher<S: CoreStorage + SlasherStorage>(
     config: &SequencerConfig,
     storage_ref: &ActorRef<S>,
     channel_signing_key: &sequencer_bedrock_actor::protocol::Ed25519Key,
@@ -502,7 +441,7 @@ pub(super) async fn initialize_state(
     config: SequencerConfig,
     store: &SharedStore,
     channel: &SharedChannel,
-) -> crate::Result<State<MockStorageActor, MockBedrockActor>> {
+) -> crate::Result<State<MockStorageActor, MockBedrockActor, SlasherActor<MockStorageActor>>> {
     let channel_signing_key = sequencer_core::load_or_create_signing_key(
         &config.home.join(sequencer_core::CHANNEL_SIGNING_KEY_FILE),
     )
@@ -541,7 +480,9 @@ async fn spawn_on_genesis(
     config: SequencerConfig,
     storage_ref: ActorRef<MockStorageActor>,
     bedrock_pool_ref: ActorRef<ShardingPoolActor<MockBedrockActor, ChannelId>>,
-) -> Result<ActorRef<ExecutorActor<MockStorageActor, MockBedrockActor>>> {
+) -> Result<
+    ActorRef<ExecutorActor<MockStorageActor, MockBedrockActor, SlasherActor<MockStorageActor>>>,
+> {
     Box::pin(spawn_executor(config, storage_ref, bedrock_pool_ref)).await
 }
 
@@ -636,8 +577,8 @@ pub(super) fn finalized_updates(
 }
 
 /// Asks `executor` to handle every event of `events`, in order.
-pub(super) async fn feed<S: StorageActorTrait>(
-    executor: &ActorRef<ExecutorActor<S, MockBedrockActor>>,
+pub(super) async fn feed<S: CoreStorage + SlasherStorage>(
+    executor: &ActorRef<ExecutorActor<S, MockBedrockActor, SlasherActor<S>>>,
     events: impl IntoIterator<Item = ChannelEvent>,
 ) -> Result<()> {
     for event in events {
@@ -656,10 +597,7 @@ async fn a_publish_refused_as_stale_returns_its_transactions_to_the_mempool() ->
     let _res = logging::try_init();
 
     let (config, _home, sequencer_key) = staked_sequencer_config();
-    let mut mock_storage = prepare_mock_storage_with_stake(stake_entries(sequencer_key));
-    mock_storage
-        .expect_handle_get_pending_deposit_events()
-        .returning(|_msg, _ctx| Ok(Vec::new()));
+    let mock_storage = prepare_mock_storage_with_stake(stake_entries(sequencer_key));
 
     // The first publish loses the race; the second is served and its block
     // recorded, so the test can see what the retry carried.
@@ -751,10 +689,7 @@ async fn spawn_supervised_on_genesis(
     ActorRef<ShardingPoolActor<MockBedrockActor, ChannelId>>,
     mpsc::UnboundedReceiver<()>,
 )> {
-    let mut mock_storage = prepare_mock_storage_with_empty_genesis();
-    mock_storage
-        .expect_handle_get_pending_deposit_events()
-        .returning(|_msg, _ctx| Ok(Vec::new()));
+    let mock_storage = prepare_mock_storage_with_empty_genesis();
     let storage_ref = MockStorageActor::spawn(mock_storage);
 
     let (publisher_init_tx, publisher_inits) = mpsc::unbounded_channel();
@@ -857,10 +792,7 @@ async fn a_failed_production_turn_does_not_stop_the_actor() -> Result<()> {
     let _res = logging::try_init();
 
     let (config, _home) = sequencer_config();
-    let mut mock_storage = prepare_mock_storage_with_empty_genesis();
-    mock_storage
-        .expect_handle_get_pending_deposit_events()
-        .returning(|_msg, _ctx| Ok(Vec::new()));
+    let mock_storage = prepare_mock_storage_with_empty_genesis();
     let storage_ref = MockStorageActor::spawn(mock_storage);
 
     let executor = spawn_on_genesis(
@@ -951,28 +883,13 @@ async fn get_block_range_keeps_executor_responsive() -> Result<()> {
     let (config, _home) = sequencer_config();
 
     let (stalled_tx, mut stalled_rx) = mpsc::unbounded_channel();
-    #[expect(
-        clippy::collection_is_never_read,
-        reason = "Keeping the senders alive is what makes the asker wait forever"
-    )]
-    let mut held_replies = Vec::new();
     let mut mock_storage = prepare_mock_storage_with_empty_genesis();
-    mock_storage
-        .expect_handle_get_block()
-        .with(
-            function(|msg: &sequencer_storage_actor::protocol::GetBlock| {
-                (STALLED_FIRST..=STALLED_LAST).contains(&msg.block_id)
-            }),
-            always(),
-        )
-        .returning(move |_, ctx| {
-            // Holding the sender without ever sending leaves the asker waiting
-            // forever, while storage itself keeps draining its mailbox.
-            let (_delegated, reply_sender) = ctx.reply_sender();
-            held_replies.extend(reply_sender);
-            stalled_tx.send(()).expect("Test must still be listening");
-            Ok(None)
-        });
+    mock_storage.stall_reads::<BlockRecord>(
+        |key| {
+            (STALLED_FIRST..=STALLED_LAST).any(|block_id| BigEndian::new(&block_id).as_ref() == key)
+        },
+        move || stalled_tx.send(()).expect("Test must still be listening"),
+    );
 
     let storage_ref = MockStorageActor::spawn(mock_storage);
     let executor = spawn_on_genesis(

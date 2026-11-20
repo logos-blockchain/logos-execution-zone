@@ -160,17 +160,7 @@ async fn main() -> Result<()> {
     let channel_id = config.bedrock_config.channel_id;
     let watcher = BlockWatcherActor::spawn(BlockWatcherActor::default());
 
-    let mut storage = MockStorageActor::default();
-    storage
-        .expect_handle_get_zone_checkpoint()
-        .returning(|_msg, _ctx| Ok(None));
-    storage
-        .expect_handle_put_final_configs_bytes()
-        .returning(|_msg, _ctx| Ok(()));
-    storage
-        .expect_handle_update_zone_checkpoint()
-        .returning(|_msg, _ctx| Ok(()));
-    let storage_ref = MockStorageActor::spawn(storage);
+    let storage_ref = MockStorageActor::spawn(MockStorageActor::new());
 
     let bedrock_ref = BedrockActor::spawn(sequencer_bedrock_actor::actor::Args {
         node_url: config.bedrock_config.node_url,

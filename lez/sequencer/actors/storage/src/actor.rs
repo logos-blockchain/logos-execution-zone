@@ -1,91 +1,44 @@
-use std::{
-    collections::{BTreeMap, HashSet},
-    path::Path,
-    sync::Arc,
-};
+use std::path::Path;
 
-use common::{
-    HashType,
-    block::{BedrockStatus, Block, BlockMeta, TransactionReceipt},
-    transaction::{LeeTransaction, TxEvents},
-};
-use itertools::Itertools as _;
 use kameo::{
     Actor,
     actor::{ActorRef, WeakActorRef},
     error::ActorStopReason,
     message::{Context, Message},
 };
-use lee::{AccountId, V03State};
-use lee_core::BlockId;
-use tracing::debug;
 
-#[cfg(feature = "test-utils")]
-use crate::protocol::ResetAllBlocksToPending;
 use crate::{
-    Result, StorageActorTrait,
-    actor::tx_index::TransactionIndex,
+    Result, Storable, StorageActorTrait,
     error::Error,
     protocol::{
-        AtomicUpdate, DbDump, DeleteBlock, DeleteZoneCheckpoint, DumpDb, EventFilter,
-        GetAccountTransactions, GetAllBlocks, GetBlock, GetBlockByHash, GetBlockEvents,
-        GetChannelViewBytes, GetEventFilter, GetFinalConfigsBytes, GetFinalSnapshot,
-        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingDepositEvents,
-        GetSlashRecordBytes, GetSystemApprovalsBytes, GetTransactionByHash,
-        GetTransactionReceiptByHash, GetTxHashToBlockIdMapItem, GetZoneAnchor, GetZoneCheckpoint,
-        PendingDepositEventRecord, PutFinalConfigsBytes, PutSlashRecordBytes,
-        PutSystemApprovalsBytes, SetZoneAnchor, StoreUpdateOutcome, UpdateZoneCheckpoint,
-        WithdrawalReconciliationKey, ZoneAnchorRecord,
+        Count, DbDump, Delete, DumpDb, Get, GetFirst, GetLast, GetRange, Store, WriteBatch,
     },
 };
 
-mod conversions;
 pub mod db;
-mod encoding;
-mod entities;
-pub mod event_filter;
 #[cfg(test)]
 mod tests;
-mod tx_index;
 
 pub struct StorageActor {
     /// `None` after [`Actor::on_stop`] closed the database.
-    db: Option<db::Database<entities::ColumnFamily>>,
-    tx_index: TransactionIndex,
-}
-
-struct UpdatedBlocks {
-    written: BTreeMap<BlockId, entities::Block>,
-    removed: Vec<BlockId>,
-    /// Whether the stored chain moved.
-    chain_moved: bool,
-}
-
-#[derive(Debug)]
-struct AffectedAccountsMetaUpdate {
-    old_meta_length: u64,
-    updated_block_ids: Vec<u64>,
-    removed_block_ids: Vec<u64>,
+    db: Option<db::Database>,
 }
 
 impl StorageActor {
     /// Creates a new `StorageActor` with a database at `location`.
     /// If the database does not exist, it will be created.
     pub fn new(location: &Path) -> Result<Self> {
-        Self::new_inner(db::Database::new(location)?)
+        Ok(Self::new_inner(db::Database::new(location)?))
     }
 
     /// Creates a fresh database at `location` from `dump`.
     pub fn restore_from_dump(location: &Path, dump: &DbDump) -> Result<Self> {
         let dump = db::Dump::from_bytes(&dump.bytes)?;
-        Self::new_inner(db::Database::restore(location, &dump)?)
+        Ok(Self::new_inner(db::Database::restore(location, &dump)?))
     }
 
-    fn new_inner(db: db::Database<entities::ColumnFamily>) -> Result<Self> {
-        Ok(Self {
-            tx_index: Self::build_tx_index(&db)?,
-            db: Some(db),
-        })
+    const fn new_inner(db: db::Database) -> Self {
+        Self { db: Some(db) }
     }
 
     /// The open database.
@@ -94,530 +47,10 @@ impl StorageActor {
     ///
     /// If called after the actor has stopped, which can't happen for message handlers as kameo
     /// stops delivering messages before [`Actor::on_stop`].
-    const fn db(&self) -> &db::Database<entities::ColumnFamily> {
+    const fn db(&self) -> &db::Database {
         self.db
             .as_ref()
             .expect("Database is closed, the actor has already stopped")
-    }
-
-    /// The block holding `hash`, and the transaction's position in it.
-    fn block_with_transaction(&self, hash: HashType) -> Result<Option<(Block, usize)>> {
-        let Some(block_id) = self.tx_index.block_for_tx(&hash) else {
-            return Ok(None);
-        };
-        let Some(block) = self
-            .db()
-            .get::<entities::Block>(&encoding::BigEndian::new(&block_id))?
-        else {
-            return Ok(None);
-        };
-        let block = block.block;
-        Ok(block
-            .body
-            .transactions
-            .iter()
-            .position(|transaction| transaction.hash() == hash)
-            .map(|position| (block, position)))
-    }
-
-    fn build_tx_index(db: &db::Database<entities::ColumnFamily>) -> Result<TransactionIndex> {
-        debug!("Building the transaction index");
-
-        let index = db
-            .iter::<entities::Block>()
-            .map_ok(|block| block.block)
-            .fold_ok(TransactionIndex::default(), |mut index, block| {
-                index.update_from_block(&block);
-                index
-            })?;
-
-        debug!(
-            transaction_count = index.transaction_count(),
-            "Transaction index built"
-        );
-
-        Ok(index)
-    }
-
-    fn last_block(&self) -> Result<Option<Block>> {
-        self.db()
-            .iter::<entities::Block>()
-            .map_ok(|block| block.block)
-            .next_back()
-            .transpose()
-            .map_err(Into::into)
-    }
-
-    fn update_blocks(
-        &self,
-        batch: &mut db::WriteBatch,
-        new_blocks: Vec<Block>,
-        finalized_up_to: Option<BlockId>,
-        head_tip: Option<BlockMeta>,
-    ) -> Result<UpdatedBlocks> {
-        let last_stored_block_id = self.last_block()?.map_or(0, |block| block.header.block_id);
-
-        let (written, mut accounts_affected_transactions, written_differs) =
-            self.stage_new_blocks(batch, new_blocks, finalized_up_to)?;
-
-        let tip_moved = head_tip
-            .as_ref()
-            .is_some_and(|tip| tip.id != last_stored_block_id);
-
-        let highest_staged = written.last_key_value().map_or(0, |(id, _)| *id);
-        let highest_block_id = last_stored_block_id.max(highest_staged);
-        let removed = self.delete_stale_blocks(
-            batch,
-            highest_block_id,
-            head_tip,
-            &mut accounts_affected_transactions,
-        )?;
-
-        self.stage_affected_accounts_meta(batch, accounts_affected_transactions)?;
-
-        Ok(UpdatedBlocks {
-            chain_moved: written_differs || tip_moved || !removed.is_empty(),
-            written,
-            removed,
-        })
-    }
-
-    /// Produces map from `AccountId` to `AffectedAccountsMetaUpdate` for block.
-    ///
-    /// if `to_write` is true we consider block as finalized, else it is orphaned and will be
-    /// removed.
-    fn update_accounts_affected_txs_for_block(
-        &self,
-        block: &Block,
-        to_write: bool,
-        accounts_affected_transactions: &mut BTreeMap<AccountId, AffectedAccountsMetaUpdate>,
-    ) -> Result<()> {
-        let affected_accounts = block
-            .body
-            .transactions
-            .iter()
-            .flat_map(LeeTransaction::affected_public_account_ids);
-
-        for acc in affected_accounts {
-            let starting_meta_acc_opt = if accounts_affected_transactions.contains_key(&acc) {
-                None
-            } else {
-                self.db().get::<entities::AccountIdToBlockIdMetaLen>(&acc)?
-            };
-
-            let block_id = block.header.block_id;
-
-            accounts_affected_transactions
-                .entry(acc)
-                .and_modify(|meta_update| {
-                    if to_write {
-                        meta_update.updated_block_ids.push(block_id);
-                    } else {
-                        meta_update.removed_block_ids.push(block_id);
-                    }
-                })
-                .or_insert_with(|| {
-                    if to_write {
-                        AffectedAccountsMetaUpdate {
-                            old_meta_length: starting_meta_acc_opt.map_or(0, |val| val.length),
-                            updated_block_ids: vec![block_id],
-                            removed_block_ids: vec![],
-                        }
-                    } else {
-                        AffectedAccountsMetaUpdate {
-                            old_meta_length: starting_meta_acc_opt.map_or(0, |val| val.length),
-                            updated_block_ids: vec![],
-                            removed_block_ids: vec![block_id],
-                        }
-                    }
-                });
-        }
-
-        Ok(())
-    }
-
-    /// Stages every block this update writes, reporting whether any of them
-    /// differs from the payload the store already holds.
-    #[expect(
-        clippy::type_complexity,
-        reason = "Non-public helperfunction, responses are arguments for other functions"
-    )]
-    fn stage_new_blocks(
-        &self,
-        batch: &mut db::WriteBatch,
-        new_blocks: Vec<Block>,
-        finalized_up_to: Option<BlockId>,
-    ) -> Result<(
-        BTreeMap<BlockId, entities::Block>,
-        BTreeMap<AccountId, AffectedAccountsMetaUpdate>,
-        bool,
-    )> {
-        let mut to_write: BTreeMap<BlockId, entities::Block> = new_blocks
-            .into_iter()
-            .map(|block| (block.header.block_id, entities::Block { block }))
-            .collect();
-
-        if let Some(last_finalized) = finalized_up_to {
-            for (_, block) in to_write.range_mut(..=last_finalized) {
-                block.block.bedrock_status = BedrockStatus::Finalized;
-            }
-
-            self.db()
-                .iter::<entities::Block>()
-                .map_ok(|block| block.block)
-                .filter_ok(|block| {
-                    block.header.block_id <= last_finalized
-                        && matches!(block.bedrock_status, BedrockStatus::Pending)
-                })
-                .try_for_each(|block| {
-                    let mut block = block?;
-                    block.bedrock_status = BedrockStatus::Finalized;
-                    to_write
-                        .entry(block.header.block_id)
-                        .or_insert(entities::Block { block });
-                    Result::Ok(())
-                })?;
-        }
-
-        // Finality is irreversible, so a block the store already holds as
-        // finalized keeps that status when a later update writes it again. Only
-        // the same block: a competing one at that id is a different block, and
-        // inherits nothing from the one it replaces.
-        let mut differs_from_stored = false;
-        for (block_id, block) in &mut to_write {
-            match self
-                .db()
-                .get::<entities::Block>(&encoding::BigEndian::new(block_id))?
-            {
-                Some(stored) if stored.block.header.hash == block.block.header.hash => {
-                    if matches!(stored.block.bedrock_status, BedrockStatus::Finalized) {
-                        block.block.bedrock_status = BedrockStatus::Finalized;
-                    }
-                }
-                _ => differs_from_stored = true,
-            }
-        }
-
-        let mut accounts_affected_transactions: BTreeMap<AccountId, AffectedAccountsMetaUpdate> =
-            BTreeMap::new();
-
-        for (block_id, block) in &to_write {
-            self.db()
-                .put_batch(batch, &encoding::BigEndian::new(block_id), block)?;
-
-            // Atomic operation for block, no need for cumulative write.
-            self.db().put_batch(
-                batch,
-                &block.block.header.hash,
-                &entities::BlockHashToBlockIdMappingDestination {
-                    block_id: *block_id,
-                },
-            )?;
-
-            self.update_accounts_affected_txs_for_block(
-                &block.block,
-                true,
-                &mut accounts_affected_transactions,
-            )?;
-        }
-
-        Ok((
-            to_write,
-            accounts_affected_transactions,
-            differs_from_stored,
-        ))
-    }
-
-    fn delete_stale_blocks(
-        &self,
-        batch: &mut db::WriteBatch,
-        highest_block_id: BlockId,
-        head_tip: Option<BlockMeta>,
-        accounts_affected_transactions: &mut BTreeMap<AccountId, AffectedAccountsMetaUpdate>,
-    ) -> Result<Vec<BlockId>> {
-        let mut removed_block_ids = Vec::new();
-        if let Some(head_tip) = head_tip {
-            for stale_id in head_tip.id.saturating_add(1)..=highest_block_id {
-                // TODO: Handle absence of stale block
-                if let Some(block) = self
-                    .db()
-                    .get::<entities::Block>(&encoding::BigEndian::new(&stale_id))?
-                {
-                    self.db()
-                        .delete_batch::<entities::BlockHashToBlockIdMappingDestination>(
-                            batch,
-                            &block.block.header.hash,
-                        );
-
-                    self.update_accounts_affected_txs_for_block(
-                        &block.block,
-                        false,
-                        accounts_affected_transactions,
-                    )?;
-                }
-
-                self.db()
-                    .delete_batch::<entities::Block>(batch, &encoding::BigEndian::new(&stale_id));
-
-                self.db().delete_batch::<entities::BlockEvents>(
-                    batch,
-                    &encoding::BigEndian::new(&stale_id),
-                );
-
-                removed_block_ids.push(stale_id);
-            }
-        }
-        Ok(removed_block_ids)
-    }
-
-    fn drop_all_affected_account_entries_up_to_block_id(
-        &self,
-        batch: &mut db::WriteBatch,
-        account_id: AccountId,
-        meta_pre_state: u64,
-        last_affecting_block_id: BlockId,
-    ) -> Result<u64> {
-        let mut curr_meta_state = meta_pre_state;
-        let mut iteration_key;
-
-        for i in (0..meta_pre_state).rev() {
-            iteration_key = entities::AccountIdToBlockIdKey::new(account_id, i);
-
-            let block_id = self
-                .db()
-                .get::<entities::AccountIdToBlockIdDestination>(&iteration_key)?
-                .expect("Destination must be present, othervise map is invalid")
-                .block_id;
-
-            if block_id >= last_affecting_block_id {
-                self.db()
-                    .delete_batch::<entities::AccountIdToBlockIdDestination>(batch, &iteration_key);
-                curr_meta_state = curr_meta_state.saturating_sub(1);
-            } else {
-                break;
-            }
-        }
-
-        Ok(curr_meta_state)
-    }
-
-    fn stage_affected_accounts_meta(
-        &self,
-        batch: &mut db::WriteBatch,
-        accounts_affected_transactions: BTreeMap<AccountId, AffectedAccountsMetaUpdate>,
-    ) -> Result<()> {
-        // Cumulative write of accounts metadata.
-        for (
-            account_id,
-            AffectedAccountsMetaUpdate {
-                old_meta_length: meta_pre_state,
-                updated_block_ids: affecting_blocks_to_update,
-                removed_block_ids: affecting_blocks_to_remove,
-            },
-        ) in accounts_affected_transactions
-        {
-            // No need to attempt deletions, if nothing to delete
-            let mut result_meta = if affecting_blocks_to_remove.is_empty() {
-                meta_pre_state
-            } else {
-                self.drop_all_affected_account_entries_up_to_block_id(
-                    batch,
-                    account_id,
-                    meta_pre_state,
-                    *affecting_blocks_to_update.first().unwrap_or_else(|| {
-                        affecting_blocks_to_remove.first().expect("Must be present")
-                    }),
-                )?
-            };
-
-            for affecting_block_id in affecting_blocks_to_update {
-                let map_key = entities::AccountIdToBlockIdKey::new(account_id, result_meta);
-                self.db().put_batch(
-                    batch,
-                    &map_key,
-                    &entities::AccountIdToBlockIdDestination {
-                        block_id: affecting_block_id,
-                    },
-                )?;
-                result_meta = result_meta.saturating_add(1);
-            }
-
-            self.db().put_batch(
-                batch,
-                &account_id,
-                &entities::AccountIdToBlockIdMetaLen {
-                    length: result_meta,
-                },
-            )?;
-        }
-
-        Ok(())
-    }
-
-    /// Records the deposits `new_deposit_events` observes and drops the records
-    /// of `finalized_deposit_records`, returning how many were newly recorded.
-    fn update_pending_deposits(
-        &self,
-        batch: &mut db::WriteBatch,
-        new_deposit_events: Vec<PendingDepositEventRecord>,
-        finalized_deposit_records: &HashSet<HashType>,
-    ) -> Result<usize> {
-        #[expect(
-            clippy::iter_over_hash_type,
-            reason = "HashSet is more efficient and delete order doesn't matter"
-        )]
-        for finalized_deposit in finalized_deposit_records {
-            self.db()
-                .delete_batch::<entities::PendingDeposit>(batch, finalized_deposit);
-        }
-
-        let mut accepted_deposits_count = 0_usize;
-        for deposit in new_deposit_events
-            .into_iter()
-            .unique_by(|event| event.deposit_op_id)
-            .filter(|event| !finalized_deposit_records.contains(&event.deposit_op_id))
-        {
-            if self
-                .db()
-                .get::<entities::PendingDeposit>(&deposit.deposit_op_id)?
-                .is_some()
-            {
-                continue;
-            }
-
-            let deposit_op_id = deposit.deposit_op_id;
-            self.db().put_batch(
-                batch,
-                &deposit_op_id,
-                &entities::PendingDeposit::from(deposit),
-            )?;
-            accepted_deposits_count = accepted_deposits_count.saturating_add(1);
-        }
-
-        Ok(accepted_deposits_count)
-    }
-
-    /// Raises the intents `new_withdrawals` publishes and settles the ones
-    /// `consumed_withdrawals` reports, returning the reported withdrawals this
-    /// node holds no intent for.
-    fn update_pending_withdrawals(
-        &self,
-        batch: &mut db::WriteBatch,
-        new_withdrawals: HashSet<WithdrawalReconciliationKey>,
-        consumed_withdrawals: &HashSet<WithdrawalReconciliationKey>,
-    ) -> Result<Vec<WithdrawalReconciliationKey>> {
-        let mut unmatched_withdrawals = Vec::new();
-
-        #[expect(
-            clippy::iter_over_hash_type,
-            reason = "HashSet is more efficient and delete order doesn't matter"
-        )]
-        for consumed in consumed_withdrawals {
-            let key = entities::WithdrawalReconciliationKey::from(*consumed);
-            let matched = new_withdrawals.contains(consumed)
-                || self
-                    .db()
-                    .get::<entities::PendingWithdrawal>(&key)?
-                    .is_some();
-
-            if matched {
-                self.db()
-                    .delete_batch::<entities::PendingWithdrawal>(batch, &key);
-            } else {
-                unmatched_withdrawals.push(*consumed);
-            }
-        }
-
-        for new_withdrawal in new_withdrawals
-            .into_iter()
-            .filter(|withdrawal| !consumed_withdrawals.contains(withdrawal))
-        {
-            self.db().put_batch(
-                batch,
-                &entities::WithdrawalReconciliationKey::from(new_withdrawal),
-                &entities::PendingWithdrawal,
-            )?;
-        }
-
-        Ok(unmatched_withdrawals)
-    }
-
-    fn get_affecting_txs_for_account_id(
-        &self,
-        account_id: AccountId,
-        offset: u64,
-        limit: u64,
-    ) -> Result<Option<Vec<LeeTransaction>>> {
-        let meta_acc_opt: Option<entities::AccountIdToBlockIdMetaLen> =
-            self.db()
-                .get::<entities::AccountIdToBlockIdMetaLen>(&account_id)?;
-
-        let Some(meta_acc_data) = meta_acc_opt else {
-            return Ok(None);
-        };
-
-        let mut affecting_txs = vec![];
-        let mut local_offset = 0;
-        let mut local_limit = 0;
-
-        'outer: for i in 0..meta_acc_data.length {
-            let mapping_key = entities::AccountIdToBlockIdKey::new(account_id, i);
-
-            let block_id = self
-                .db()
-                .get::<entities::AccountIdToBlockIdDestination>(&mapping_key)?
-                .ok_or(Error::DatabaseError(anyhow::anyhow!(
-                    "Inconsistent map: account id to block id map points into nowhere"
-                )))?
-                .block_id;
-
-            let affecting_transactions = self
-                .db()
-                .get::<entities::Block>(&encoding::BigEndian::new(&block_id))?
-                .ok_or(Error::DatabaseError(anyhow::anyhow!(
-                    "Inconsistent map: account id to block id map points into absent block"
-                )))?
-                .block
-                .body
-                .transactions
-                .into_iter()
-                .filter(|tx| tx.affected_public_account_ids().contains(&account_id));
-
-            for aff_tx in affecting_transactions {
-                if local_offset >= offset {
-                    if local_limit < limit {
-                        affecting_txs.push(aff_tx);
-                        local_limit = local_limit.saturating_add(1);
-
-                        if local_limit >= limit {
-                            break 'outer;
-                        }
-                    }
-                } else {
-                    local_offset = local_offset.saturating_add(1);
-                }
-            }
-        }
-
-        Ok(Some(affecting_txs))
-    }
-
-    fn update_events(
-        &self,
-        batch: &mut db::WriteBatch,
-        events: Vec<(BlockId, Vec<TxEvents>)>,
-    ) -> Result<()> {
-        for (block_id, block_events) in events {
-            self.db().put_batch(
-                batch,
-                &encoding::BigEndian::new(&block_id),
-                &entities::BlockEvents {
-                    events: block_events,
-                },
-            )?;
-        }
-
-        Ok(())
     }
 }
 
@@ -637,7 +70,7 @@ impl Actor for StorageActor {
         _actor_ref: WeakActorRef<Self>,
         _reason: ActorStopReason,
     ) -> Result<()> {
-        let Self { db, tx_index: _ } = self;
+        let Self { db } = self;
 
         drop(db.take());
 
@@ -645,333 +78,102 @@ impl Actor for StorageActor {
     }
 }
 
-impl Message<GetBlock> for StorageActor {
-    type Reply = Result<Option<Block>>;
-
-    async fn handle(
-        &mut self,
-        GetBlock { block_id }: GetBlock,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        Ok(self
-            .db()
-            .get::<entities::Block>(&encoding::BigEndian::new(&block_id))?
-            .map(|block| block.block))
-    }
-}
-
-impl Message<GetAllBlocks> for StorageActor {
-    type Reply = Result<Vec<Block>>;
-
-    async fn handle(
-        &mut self,
-        GetAllBlocks: GetAllBlocks,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.db()
-            .iter::<entities::Block>()
-            .map_ok(|block| block.block)
-            .collect::<db::Result<_>>()
-            .map_err(Into::into)
-    }
-}
-
-impl Message<GetTransactionByHash> for StorageActor {
-    type Reply = Result<Option<(LeeTransaction, BlockId)>>;
-
-    async fn handle(
-        &mut self,
-        GetTransactionByHash { hash }: GetTransactionByHash,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        Ok(self
-            .block_with_transaction(hash)?
-            .map(|(mut block, position)| {
-                (
-                    block.body.transactions.swap_remove(position),
-                    block.header.block_id,
-                )
-            }))
-    }
-}
-
-impl Message<GetTransactionReceiptByHash> for StorageActor {
-    type Reply = Result<Option<TransactionReceipt>>;
-
-    async fn handle(
-        &mut self,
-        GetTransactionReceiptByHash { hash }: GetTransactionReceiptByHash,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        Ok(self
-            .block_with_transaction(hash)?
-            .and_then(|(block, position)| block.body.receipts.get(position).copied()))
-    }
-}
-
-impl Message<DeleteBlock> for StorageActor {
+impl<T: Storable> Message<Store<T>> for StorageActor {
     type Reply = Result<()>;
 
     async fn handle(
         &mut self,
-        DeleteBlock { block_id }: DeleteBlock,
+        Store { key, value }: Store<T>,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.db()
-            .delete::<entities::Block>(&encoding::BigEndian::new(&block_id))?;
-        self.tx_index.delete_block(block_id);
-        Ok(())
+        self.db().put(&key, &value)
     }
 }
 
-impl Message<GetFirstBlockId> for StorageActor {
-    type Reply = Result<Option<BlockId>>;
+impl<T: Storable> Message<Get<T>> for StorageActor {
+    type Reply = Result<Option<T>>;
 
     async fn handle(
         &mut self,
-        GetFirstBlockId: GetFirstBlockId,
+        Get { key }: Get<T>,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        Ok(self
-            .db()
-            .iter::<entities::Block>()
-            .next()
-            .transpose()?
-            .map(|block| block.block.header.block_id))
+        self.db().get(&key)
     }
 }
 
-impl Message<GetLastBlockId> for StorageActor {
-    type Reply = Result<Option<BlockId>>;
-
-    async fn handle(
-        &mut self,
-        GetLastBlockId: GetLastBlockId,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        Ok(self.last_block()?.map(|block| block.header.block_id))
-    }
-}
-
-impl Message<GetLatestBlockMeta> for StorageActor {
-    type Reply = Result<Option<BlockMeta>>;
-
-    async fn handle(
-        &mut self,
-        GetLatestBlockMeta: GetLatestBlockMeta,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        Ok(self.last_block()?.map(|block| BlockMeta::from(&block)))
-    }
-}
-
-impl Message<GetLeeState> for StorageActor {
-    type Reply = Result<Option<V03State>>;
-
-    async fn handle(
-        &mut self,
-        GetLeeState: GetLeeState,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        Ok(self
-            .db()
-            .get::<entities::LeeState>(&encoding::SingletonKey)?
-            .map(|state| {
-                Arc::into_inner(state.state.0).expect("This is the only strong reference")
-            }))
-    }
-}
-
-impl Message<GetZoneCheckpoint> for StorageActor {
-    type Reply = Result<Option<Vec<u8>>>;
-
-    async fn handle(
-        &mut self,
-        GetZoneCheckpoint: GetZoneCheckpoint,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        Ok(self
-            .db()
-            .get::<entities::ZoneCheckpoint>(&encoding::SingletonKey)?
-            .map(|checkpoint| checkpoint.bytes))
-    }
-}
-
-impl Message<UpdateZoneCheckpoint> for StorageActor {
+impl<T: Storable> Message<Delete<T>> for StorageActor {
     type Reply = Result<()>;
 
     async fn handle(
         &mut self,
-        UpdateZoneCheckpoint { bytes }: UpdateZoneCheckpoint,
+        Delete { key }: Delete<T>,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.db()
-            .put(&encoding::SingletonKey, &entities::ZoneCheckpoint { bytes })
-            .map_err(Into::into)
+        self.db().delete::<T>(&key)
     }
 }
 
-impl Message<GetSlashRecordBytes> for StorageActor {
-    type Reply = Result<Option<Vec<u8>>>;
+impl<T: Storable> Message<GetRange<T>> for StorageActor {
+    type Reply = Result<Vec<(T::Key, T)>>;
 
     async fn handle(
         &mut self,
-        GetSlashRecordBytes: GetSlashRecordBytes,
+        GetRange { start, end, limit }: GetRange<T>,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        Ok(self
-            .db()
-            .get::<entities::SlashRecord>(&encoding::SingletonKey)?
-            .map(|record| record.bytes))
+        self.db()
+            .iter_range::<T>(&start, end.as_ref())
+            .take(limit)
+            .collect()
     }
 }
 
-impl Message<PutSlashRecordBytes> for StorageActor {
+impl<T: Storable> Message<GetFirst<T>> for StorageActor {
+    type Reply = Result<Option<(T::Key, T)>>;
+
+    async fn handle(
+        &mut self,
+        _msg: GetFirst<T>,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.db().iter::<T>().next().transpose()
+    }
+}
+
+impl<T: Storable> Message<GetLast<T>> for StorageActor {
+    type Reply = Result<Option<(T::Key, T)>>;
+
+    async fn handle(
+        &mut self,
+        _msg: GetLast<T>,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.db().iter::<T>().next_back().transpose()
+    }
+}
+
+impl<T: Storable> Message<Count<T>> for StorageActor {
+    type Reply = Result<usize>;
+
+    async fn handle(
+        &mut self,
+        _msg: Count<T>,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self.db().count::<T>())
+    }
+}
+
+impl Message<WriteBatch> for StorageActor {
     type Reply = Result<()>;
 
     async fn handle(
         &mut self,
-        PutSlashRecordBytes { bytes }: PutSlashRecordBytes,
+        msg: WriteBatch,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.db()
-            .put(&encoding::SingletonKey, &entities::SlashRecord { bytes })
-            .map_err(Into::into)
-    }
-}
-
-impl Message<GetSystemApprovalsBytes> for StorageActor {
-    type Reply = Result<Option<Vec<u8>>>;
-
-    async fn handle(
-        &mut self,
-        GetSystemApprovalsBytes: GetSystemApprovalsBytes,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        Ok(self
-            .db()
-            .get::<entities::SystemApprovalsRecord>(&encoding::SingletonKey)?
-            .map(|record| record.bytes))
-    }
-}
-
-impl Message<PutSystemApprovalsBytes> for StorageActor {
-    type Reply = Result<()>;
-
-    async fn handle(
-        &mut self,
-        PutSystemApprovalsBytes { bytes }: PutSystemApprovalsBytes,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.db()
-            .put(
-                &encoding::SingletonKey,
-                &entities::SystemApprovalsRecord { bytes },
-            )
-            .map_err(Into::into)
-    }
-}
-
-impl Message<GetFinalConfigsBytes> for StorageActor {
-    type Reply = Result<Option<Vec<u8>>>;
-
-    async fn handle(
-        &mut self,
-        GetFinalConfigsBytes: GetFinalConfigsBytes,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        Ok(self
-            .db()
-            .get::<entities::FinalConfigs>(&encoding::SingletonKey)?
-            .map(|record| record.bytes))
-    }
-}
-
-impl Message<PutFinalConfigsBytes> for StorageActor {
-    type Reply = Result<()>;
-
-    async fn handle(
-        &mut self,
-        PutFinalConfigsBytes { bytes }: PutFinalConfigsBytes,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.db()
-            .put(&encoding::SingletonKey, &entities::FinalConfigs { bytes })
-            .map_err(Into::into)
-    }
-}
-
-impl Message<DeleteZoneCheckpoint> for StorageActor {
-    type Reply = Result<()>;
-
-    async fn handle(
-        &mut self,
-        DeleteZoneCheckpoint: DeleteZoneCheckpoint,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.db()
-            .delete::<entities::ZoneCheckpoint>(&encoding::SingletonKey)
-            .map_err(Into::into)
-    }
-}
-
-impl Message<GetZoneAnchor> for StorageActor {
-    type Reply = Result<Option<ZoneAnchorRecord>>;
-
-    async fn handle(
-        &mut self,
-        GetZoneAnchor: GetZoneAnchor,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        Ok(self
-            .db()
-            .get::<entities::ZoneAnchor>(&encoding::SingletonKey)?
-            .map(Into::into))
-    }
-}
-
-impl Message<SetZoneAnchor> for StorageActor {
-    type Reply = Result<()>;
-
-    async fn handle(
-        &mut self,
-        SetZoneAnchor { anchor }: SetZoneAnchor,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.db()
-            .put(&encoding::SingletonKey, &entities::ZoneAnchor::from(anchor))
-            .map_err(Into::into)
-    }
-}
-
-impl Message<GetChannelViewBytes> for StorageActor {
-    type Reply = Result<Option<Vec<u8>>>;
-
-    async fn handle(
-        &mut self,
-        GetChannelViewBytes: GetChannelViewBytes,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        Ok(self
-            .db()
-            .get::<entities::ChannelView>(&encoding::SingletonKey)?
-            .map(|view| view.bytes))
-    }
-}
-
-impl Message<GetPendingDepositEvents> for StorageActor {
-    type Reply = Result<Vec<PendingDepositEventRecord>>;
-
-    async fn handle(
-        &mut self,
-        GetPendingDepositEvents: GetPendingDepositEvents,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.db()
-            .iter::<entities::PendingDeposit>()
-            .map_ok(Into::into)
-            .collect::<db::Result<_>>()
-            .map_err(Into::into)
+        self.db().write(msg)
     }
 }
 
@@ -986,234 +188,5 @@ impl Message<DumpDb> for StorageActor {
         Ok(DbDump {
             bytes: self.db().dump()?.to_bytes()?,
         })
-    }
-}
-
-impl Message<AtomicUpdate> for StorageActor {
-    type Reply = Result<StoreUpdateOutcome>;
-
-    async fn handle(
-        &mut self,
-        msg: AtomicUpdate,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        let AtomicUpdate {
-            blocks,
-            channel_view,
-            head_tip,
-            head_state,
-            final_snapshot,
-            finalized_up_to,
-            new_deposit_events,
-            finalized_deposit_records,
-            consumed_withdrawals,
-            new_withdraw_intents,
-            zone_anchor,
-            events,
-        } = msg;
-
-        let mut batch = db::WriteBatch::default();
-
-        // Channel view
-        if let Some(bytes) = channel_view {
-            self.db().put_batch(
-                &mut batch,
-                &encoding::SingletonKey,
-                &entities::ChannelView { bytes },
-            )?;
-        }
-
-        // Zone anchor
-        if let Some(zone_anchor) = zone_anchor {
-            self.db().put_batch(
-                &mut batch,
-                &encoding::SingletonKey,
-                &entities::ZoneAnchor::from(zone_anchor),
-            )?;
-        }
-
-        // Blocks
-        let updated_blocks = self.update_blocks(&mut batch, blocks, finalized_up_to, head_tip)?;
-
-        // Deposits
-        let accepted_deposits_count = self.update_pending_deposits(
-            &mut batch,
-            new_deposit_events,
-            &finalized_deposit_records,
-        )?;
-
-        // Withdrawals
-        let unmatched_withdrawals = self.update_pending_withdrawals(
-            &mut batch,
-            new_withdraw_intents,
-            &consumed_withdrawals,
-        )?;
-
-        // State
-        if updated_blocks.chain_moved || final_snapshot.is_some() {
-            self.db().put_batch(
-                &mut batch,
-                &encoding::SingletonKey,
-                &entities::LeeState {
-                    state: encoding::BorshArc(head_state),
-                },
-            )?;
-        }
-
-        // Snapshot
-        if let Some((final_state, final_meta)) = final_snapshot {
-            self.db().put_batch(
-                &mut batch,
-                &encoding::SingletonKey,
-                &entities::FinalSnapshot {
-                    state: encoding::BorshArc(final_state),
-                    meta: final_meta,
-                },
-            )?;
-        }
-
-        // Events
-        self.update_events(&mut batch, events)?;
-
-        self.db().write(batch)?;
-
-        // Index is updated after the database write, so that if it fails, the store is still
-        // consistent.
-        for block in updated_blocks.written.values() {
-            self.tx_index.update_from_block(&block.block);
-        }
-        for block_id in updated_blocks.removed {
-            self.tx_index.delete_block(block_id);
-        }
-
-        Ok(StoreUpdateOutcome {
-            accepted_deposits: accepted_deposits_count,
-            unmatched_withdrawals,
-        })
-    }
-}
-
-impl Message<GetFinalSnapshot> for StorageActor {
-    type Reply = Result<Option<(V03State, BlockMeta)>>;
-
-    async fn handle(
-        &mut self,
-        GetFinalSnapshot: GetFinalSnapshot,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        Ok(self
-            .db()
-            .get::<entities::FinalSnapshot>(&encoding::SingletonKey)?
-            .map(|snapshot| {
-                let state =
-                    Arc::into_inner(snapshot.state.0).expect("This is the only strong reference");
-                (state, snapshot.meta)
-            }))
-    }
-}
-
-impl Message<GetBlockByHash> for StorageActor {
-    type Reply = Result<Option<BlockId>>;
-
-    async fn handle(
-        &mut self,
-        GetBlockByHash { block_hash }: GetBlockByHash,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        Ok(self
-            .db()
-            .get::<entities::BlockHashToBlockIdMappingDestination>(&block_hash)?
-            .map(|dest| dest.block_id))
-    }
-}
-
-impl Message<GetTxHashToBlockIdMapItem> for StorageActor {
-    type Reply = Result<Option<u64>>;
-
-    async fn handle(
-        &mut self,
-        GetTxHashToBlockIdMapItem { tx_hash }: GetTxHashToBlockIdMapItem,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        // TODO: Use DB map, when implemented.
-        Ok(self.tx_index.block_for_tx(&tx_hash))
-    }
-}
-
-impl Message<GetAccountTransactions> for StorageActor {
-    type Reply = Result<Option<Vec<LeeTransaction>>>;
-
-    async fn handle(
-        &mut self,
-        GetAccountTransactions {
-            account_id,
-            offset,
-            limit,
-        }: GetAccountTransactions,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.get_affecting_txs_for_account_id(account_id, offset, limit)
-    }
-}
-
-impl Message<GetBlockEvents> for StorageActor {
-    type Reply = Result<Option<Vec<TxEvents>>>;
-
-    async fn handle(
-        &mut self,
-        GetBlockEvents { block_id }: GetBlockEvents,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        Ok(self
-            .db()
-            .get::<entities::BlockEvents>(&encoding::BigEndian::new(&block_id))?
-            .map(|dest| dest.events))
-    }
-}
-
-impl Message<GetEventFilter> for StorageActor {
-    type Reply = Result<EventFilter>;
-
-    async fn handle(
-        &mut self,
-        GetEventFilter: GetEventFilter,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        // For now, storage is only archival.
-        // TODO: update sequencer configs to support custom archival policies.
-        Ok(EventFilter::Archival)
-    }
-}
-
-#[cfg(feature = "test-utils")]
-impl Message<ResetAllBlocksToPending> for StorageActor {
-    type Reply = Result<()>;
-
-    async fn handle(
-        &mut self,
-        ResetAllBlocksToPending: ResetAllBlocksToPending,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        let mut batch = db::WriteBatch::default();
-
-        let blocks_to_reset = self
-            .db()
-            .iter::<entities::Block>()
-            .map_ok(|block| block.block)
-            .filter_ok(|block| !matches!(block.bedrock_status, BedrockStatus::Pending));
-
-        for block in blocks_to_reset {
-            let mut block = block?;
-            block.bedrock_status = BedrockStatus::Pending;
-            self.db().put_batch(
-                &mut batch,
-                &encoding::BigEndian::new(&block.header.block_id),
-                &entities::Block { block },
-            )?;
-        }
-
-        self.db().write(batch)?;
-
-        Ok(())
     }
 }

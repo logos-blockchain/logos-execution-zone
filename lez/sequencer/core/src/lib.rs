@@ -13,7 +13,7 @@ use bridge_core::DepositMetadata;
 use chain_state::{AcceptOutcome, ChainState, ChannelEntry, PublishRecord, full_stake_releases};
 use common::{
     HashType,
-    block::{BedrockStatus, Block, BlockMeta, HashableBlockData, TransactionReceipt},
+    block::{BedrockStatus, Block, HashableBlockData, TransactionReceipt},
     system_upgrades::ProposalApprovals,
     transaction::{FeePayee, LeeTransaction, clock_invocation, fee_invocation},
 };
@@ -43,29 +43,38 @@ use sequencer_bedrock_actor::{
 use sequencer_bridge::Credited;
 use sequencer_channel_signing_actor::{ChannelSigningActor, protocol as channel_signing};
 use sequencer_slasher_actor::{
-    SlasherActor,
+    SlasherActorTrait,
     protocol::{Propose, Report, ReportedOffence, SetCommittee},
 };
 use sequencer_storage_actor::{
-    StorageActorTrait,
-    protocol::{
-        AtomicUpdate, GetAllBlocks, GetLeeState, GetPendingDepositEvents, GetSystemApprovalsBytes,
-        PendingDepositEventRecord, StoreUpdateOutcome, WithdrawalReconciliationKey,
-    },
+    protocol::{Get, Store},
+    utils::Pages,
 };
 use sharding_pool_actor::ShardingPoolActor;
 use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
-use crate::logging::{log_rewind, log_update};
+use crate::{
+    logging::{log_rewind, log_update},
+    storage::{
+        CoreStorage, HeadStateRecord,
+        blocks::{BlockRecord, StoredChain, chain_writes},
+        bridge::{
+            PendingDepositEventRecord, WithdrawalReconciliationKey, deposit_writes,
+            pending_deposits, withdrawal_writes,
+        },
+    },
+};
 
 pub mod committee_discovery;
 pub mod config;
+pub mod event_filter;
 pub mod faults;
 pub mod fees;
 pub mod logging;
 pub mod pending;
 pub mod release_finality;
+pub mod storage;
 pub mod system_approvals;
 
 /// File in a sequencer home holding the Ed25519 key the node signs its channel inscriptions with,
@@ -74,6 +83,9 @@ pub const CHANNEL_SIGNING_KEY_FILE: &str = "channel_signing_key";
 /// File in a sequencer home holding the public key of the Bedrock wallet key that pays its
 /// inscriptions, in hex.
 pub const BEDROCK_FUNDING_PUBLIC_KEY_FILE: &str = "bedrock_funding_public_key";
+
+/// How many stored blocks one read takes when going over all of them.
+const BLOCKS_PAGE: usize = 64;
 
 /// A number of Bedrock slots, as opposed to a [`Slot`] position.
 type SlotCount = u64;
@@ -162,7 +174,7 @@ pub enum AdmissionError {
     InvalidProof,
 }
 
-pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
+pub struct SequencerCore<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> {
     // TODO: Remove in favor of `sequencer_config` field
     channel_id: ChannelId,
     /// Two-tier chain state: production builds on its head; the publisher's
@@ -194,7 +206,7 @@ pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
     bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
     stake_config_pubsub_ref: ActorRef<PubSub<StakeConfigUpdate>>,
     /// Records offending inscriptions and proposes the slashes for them.
-    slasher_ref: ActorRef<SlasherActor<S>>,
+    slasher_ref: ActorRef<Sl>,
 }
 
 /// A funded channel config, from the moment zone-sdk funds it to the moment it
@@ -211,7 +223,7 @@ struct ConfigDraft {
     submitted_at: Option<Slot>,
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> SequencerCore<S, B, Sl> {
     /// Channel slots a submitted config gets to land before this node funds
     /// another; a margin over observed Bedrock confirmation lag.
     const CONFIG_LANDING_DEADLINE: SlotCount = 30;
@@ -229,16 +241,17 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         storage_ref: ActorRef<S>,
         bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
         stake_config_pubsub_ref: ActorRef<PubSub<StakeConfigUpdate>>,
-        slasher_ref: ActorRef<SlasherActor<S>>,
+        slasher_ref: ActorRef<Sl>,
         channel_signer: ActorRef<ChannelSigningActor>,
     ) -> Result<Self> {
         let channel_id = config.bedrock_config.channel_id;
 
         let state = storage_ref
-            .ask(GetLeeState)
+            .ask(Get::<HeadStateRecord>::default())
             .await
             .context("Failed to read state from store")?
-            .context("Store holds a chain but no state")?;
+            .context("Store holds a chain but no state")?
+            .into_state();
 
         let stake_config = committee_discovery::read_config(&state).context(
             "sequencer_stake config account is absent or undecodable; this chain's state is not \
@@ -250,10 +263,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .context("Failed to hand the slasher its committee")?;
 
         let system_approvals = storage_ref
-            .ask(GetSystemApprovalsBytes)
+            .ask(Get::<storage::SystemApprovalsRecord>::default())
             .await
             .context("Failed to read the system_upgrader approvals")?
-            .and_then(|bytes| {
+            .and_then(|storage::SystemApprovalsRecord { bytes }| {
                 let approvals = system_approvals::SystemApprovals::from_bytes(&bytes);
                 if approvals.is_none() {
                     warn!("Dropping persisted system_upgrader approvals that don't decode");
@@ -358,9 +371,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
         // The lock is held across the persist below so disk writes land in apply
         // order — the produce path persists under this same lock.
-        let (resubmit_txs, outcome, head_height) = {
+        let (resubmit_txs, recorded_deposits, unmatched_withdrawals, head_height) = {
             let mut chain = self.chain.lock().await;
 
+            let stored = StoredChain::of(&chain);
             let head_before: Vec<Block> = chain.head_blocks().cloned().collect();
             let head_tip_before = chain.head_tip().map(|tip| tip.block_id);
             let pin_before = chain.pin();
@@ -417,9 +431,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             self.report_offences(faults::judge(undecodable, &judged, finalized_signers))
                 .await;
             let newly_final = chain.take_newly_final();
-            let irreversible: Vec<&Block> = newly_final
+            let irreversible: Vec<Block> = newly_final
                 .iter()
                 .chain(&irreversible_redelivered)
+                .cloned()
                 .collect();
 
             match view {
@@ -448,26 +463,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 .flat_map(resubmittable_txs)
                 .collect();
 
-            let held_before: HashSet<HashType> =
-                head_before.iter().map(|block| block.header.hash).collect();
-            let mut to_persist = new_head_blocks(&chain, &held_before);
-            to_persist.extend(
-                newly_final
-                    .iter()
-                    .filter(|block| !held_before.contains(&block.header.hash))
-                    .cloned(),
-            );
-
-            // Snapshot the advanced final tier so a restart re-anchors on it.
-            let final_meta = (!newly_final.is_empty()).then(|| {
-                let tip = chain.final_tip().expect("advanced final tier has a tip");
-                BlockMeta::from(&tip)
-            });
             let head_tip_id = head_tip_after.unwrap_or(0);
-
-            // Every block at or below the highest finalized one is irreversible, so
-            // stored blocks there can be marked finalized.
-            let last_finalized = irreversible.iter().map(|block| block.header.block_id).max();
 
             // A deposit observed in a finalized block is permanently minted (its
             // receipt is now in the irreversible tier), so its pending record can be
@@ -481,30 +477,35 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 .collect();
             self.tell_final_mints(&finalized_deposit_ids).await;
 
-            let outcome = self
-                .storage_ref
-                .ask(AtomicUpdate {
-                    blocks: to_persist,
-                    final_snapshot: final_meta.map(|meta| (chain.share_final_state(), meta)),
-                    finalized_up_to: last_finalized,
-                    new_deposit_events: deposit_records,
-                    finalized_deposit_records: finalized_deposit_ids,
-                    consumed_withdrawals,
-                    events,
-                    ..chain_update(&chain)
-                })
-                .await
-                .unwrap_or_else(|err| {
-                    panic!("Failed to persist follow update: {:#}", anyhow!(err))
-                });
+            let persisted = async {
+                let mut writes = chain_writes(&stored, &chain, &irreversible, events);
+                let (deposit_records_writes, recorded_deposits) =
+                    deposit_writes(&self.storage_ref, deposit_records, &finalized_deposit_ids)
+                        .await?;
+                writes.append(deposit_records_writes);
+                let (withdrawal_records_writes, unmatched_withdrawals) =
+                    withdrawal_writes(&self.storage_ref, &HashSet::new(), &consumed_withdrawals)
+                        .await?;
+                writes.append(withdrawal_records_writes);
+                self.storage_ref.ask(writes).await?;
+                anyhow::Ok((recorded_deposits, unmatched_withdrawals))
+            }
+            .await;
+            let (recorded_deposits, unmatched_withdrawals) =
+                persisted.unwrap_or_else(|err| panic!("Failed to persist follow update: {err:#}"));
 
-            (resubmit_txs, outcome, head_tip_id)
+            (
+                resubmit_txs,
+                recorded_deposits,
+                unmatched_withdrawals,
+                head_tip_id,
+            )
         };
 
         sequencer_core_metrics::record_chain_height(head_height);
 
-        log_recorded_deposits(&outcome);
-        log_unmatched_withdrawals(&outcome);
+        log_recorded_deposits(recorded_deposits);
+        log_unmatched_withdrawals(&unmatched_withdrawals);
 
         self.resubmit_orphaned(resubmit_txs);
 
@@ -1293,9 +1294,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         //
         // Skip deposits whose receipt has a nonempty bridge actor state.
         // Reverting a block also reverts its receipts, allowing those deposits to be retried.
-        let deposit_records = self
-            .storage_ref
-            .ask(GetPendingDepositEvents)
+        let deposit_records = pending_deposits(&self.storage_ref)
             .await
             .context("Failed to load pending deposit events")?;
         let recorded_op_ids: HashSet<HashType> = deposit_records
@@ -1846,9 +1845,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     async fn persist_system_approvals(&mut self) -> Result<()> {
         if self.system_approvals.take_changed() {
             self.storage_ref
-                .ask(sequencer_storage_actor::protocol::PutSystemApprovalsBytes {
+                .ask(Store::from_value(storage::SystemApprovalsRecord {
                     bytes: self.system_approvals.to_bytes(),
-                })
+                }))
                 .await
                 .context("Failed to persist the system_upgrader approvals")?;
         }
@@ -1877,13 +1876,17 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
     /// Returns the list of stored pending blocks.
     pub async fn get_pending_blocks(&self) -> Result<Vec<Block>> {
-        Ok(self
-            .storage_ref
-            .ask(GetAllBlocks)
-            .await?
-            .into_iter()
-            .filter(|block| matches!(block.bedrock_status, BedrockStatus::Pending))
-            .collect())
+        let mut pending = Vec::new();
+        let mut pages = Pages::<_, BlockRecord>::new(&self.storage_ref, None, None, BLOCKS_PAGE);
+        while let Some(records) = pages.next().await? {
+            pending.extend(
+                records
+                    .into_iter()
+                    .map(|(_block_id, record)| record.block)
+                    .filter(|block| matches!(block.bedrock_status, BedrockStatus::Pending)),
+            );
+        }
+        Ok(pending)
     }
 
     /// Whether a block carrying nothing but `tx` and the appended system
@@ -2096,18 +2099,8 @@ fn config_target(
     })
 }
 
-/// Head blocks `chain` holds that are not in `held_before`, to be stored.
-#[must_use]
-pub fn new_head_blocks(chain: &ChainState, held_before: &HashSet<HashType>) -> Vec<Block> {
-    chain
-        .head_blocks()
-        .filter(|block| !held_before.contains(&block.header.hash))
-        .cloned()
-        .collect()
-}
-
 /// Records a block we published in the view of `chain` and persists it.
-pub async fn record_published_block<S: StorageActorTrait>(
+pub async fn record_published_block<S: CoreStorage>(
     chain: &mut ChainState,
     storage_ref: &ActorRef<S>,
     outcome: sequencer_bedrock_actor::protocol::PublishOutcome,
@@ -2120,6 +2113,7 @@ pub async fn record_published_block<S: StorageActorTrait>(
     } = outcome;
     let block_id = block.header.block_id;
 
+    let stored = StoredChain::of(chain);
     let record = chain.record_publish(ChannelEntry {
         msg: this_msg,
         parent,
@@ -2135,20 +2129,15 @@ pub async fn record_published_block<S: StorageActorTrait>(
                     "Produced block does not apply on the head it was built on"
                 );
             }
-            storage_ref
-                .ask(AtomicUpdate {
-                    blocks: if record == PublishRecord::Extended {
-                        vec![block.clone()]
-                    } else {
-                        Vec::new()
-                    },
-                    new_withdraw_intents: released_notes
-                        .iter()
-                        .map(withdrawal_reconciliation_key)
-                        .collect(),
-                    ..chain_update(chain)
-                })
-                .await?;
+            let mut writes = chain_writes(&stored, chain, &[], Vec::new());
+            let published = released_notes
+                .iter()
+                .map(withdrawal_reconciliation_key)
+                .collect();
+            let (withdrawals, _unmatched) =
+                withdrawal_writes(storage_ref, &published, &HashSet::new()).await?;
+            writes.append(withdrawals);
+            storage_ref.ask(writes).await?;
 
             if record == PublishRecord::Extended {
                 sequencer_core_metrics::record_chain_height(block_id);
@@ -2169,25 +2158,6 @@ pub async fn record_published_block<S: StorageActorTrait>(
     Ok(())
 }
 
-/// An update carrying the head and the view `chain` holds, and nothing else.
-#[must_use]
-pub fn chain_update(chain: &ChainState) -> AtomicUpdate {
-    AtomicUpdate {
-        blocks: Vec::new(),
-        channel_view: Some(chain.encode_view()),
-        head_tip: chain.head_tip().map(|tip| BlockMeta::from(&tip)),
-        head_state: chain.share_head_state(),
-        final_snapshot: None,
-        finalized_up_to: None,
-        new_deposit_events: Vec::new(),
-        finalized_deposit_records: HashSet::new(),
-        consumed_withdrawals: HashSet::new(),
-        new_withdraw_intents: HashSet::new(),
-        zone_anchor: None,
-        events: Vec::new(),
-    }
-}
-
 /// Placeholder receipts for a transaction being sized and the `system_upgrader` slot `trailing`
 /// reserves, if any; the trailing fee and clock txs carry none.
 fn reserved_receipts(trailing: &[LeeTransaction]) -> impl Iterator<Item = TransactionReceipt> {
@@ -2202,19 +2172,19 @@ pub fn max_transaction_size(state: &lee::V03State) -> Option<u64> {
         .map(|params| params.max_block_size.saturating_sub(config::BLOCK_OVERHEAD))
 }
 
-/// Logs the deposits a store update recorded.
-pub fn log_recorded_deposits(outcome: &StoreUpdateOutcome) {
-    if outcome.accepted_deposits > 0 {
+/// Logs the `recorded` deposits a store update records.
+pub fn log_recorded_deposits(recorded: usize) {
+    if recorded > 0 {
         info!(
-            deposits = outcome.accepted_deposits,
+            deposits = recorded,
             "Recorded Bedrock Deposit events, their mints are drained from the store on our next turn"
         );
     }
 }
 
-/// Logs the withdrawals a store update found no local intent for.
-pub fn log_unmatched_withdrawals(outcome: &StoreUpdateOutcome) {
-    for withdrawal in &outcome.unmatched_withdrawals {
+/// Logs the `unmatched` withdrawals a store update holds no intent for.
+pub fn log_unmatched_withdrawals(unmatched: &[WithdrawalReconciliationKey]) {
+    for withdrawal in unmatched {
         warn!(
             note_id = %hex::encode(withdrawal.released_note_id),
             "Unexpected Bedrock Withdraw event releasing a channel note this node published no withdrawal for"

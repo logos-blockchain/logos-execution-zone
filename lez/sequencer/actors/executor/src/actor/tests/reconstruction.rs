@@ -20,16 +20,23 @@ use sequencer_bedrock_actor::{
     mock::{CannedChannel, mock_msg_of},
     protocol::{Ed25519Key, Ed25519PublicKey, MsgId, Slot},
 };
+use sequencer_core::storage::{ZoneAnchorRecord, bridge::PendingDepositEventRecord};
+use sequencer_slasher_actor::storage::SlashRecord;
 use sequencer_storage_actor::{
-    mock::{CannedStore, MockStorageActor, SharedStore},
-    protocol::{PendingDepositEventRecord, ZoneAnchorRecord},
+    encoding::SingletonKey,
+    mock::{MockStorageActor, SharedStore},
 };
 use tokio::test;
 
 use super::{
     Finalized, finalized_at, finalized_updates, junk_at, ready, sequencer_config,
     spawn_bedrock_pool, spawn_executor,
-    stored_chain::{block_at, finalized_genesis_store, genesis, with_finalized, with_head},
+    stored_chain::{
+        block_at, finalized_genesis_store, genesis, store_final_snapshot, store_view,
+        stored_anchor, stored_blocks, stored_final_snapshot, stored_head_state,
+        stored_pending_deposits, stored_tip, stored_view, with_finalized, with_head,
+        with_pending_deposit,
+    },
 };
 use crate::protocol::GetLastBlockId;
 
@@ -44,23 +51,21 @@ fn anchor_at(block: &Block, slot: u64) -> ZoneAnchorRecord {
 /// Asserts `block`, read off the channel at `slot`, is stored as the final and the head tip, with
 /// the anchor on it.
 fn assert_reconstructed(store: &SharedStore, block: &Block, slot: u64) {
-    let stored = store.lock();
+    assert_eq!(stored_anchor(store), Some(anchor_at(block, slot)));
     assert_eq!(
-        stored.tip().map(|tip| tip.hash),
-        Some(block.header.hash),
-        "the block is the head tip"
-    );
-    assert_eq!(
-        stored.final_snapshot.as_ref().map(|(_, meta)| meta.hash),
+        stored_final_snapshot(&store.values()).map(|(_, meta)| meta.hash),
         Some(block.header.hash),
         "the block is final"
     );
-    assert_eq!(stored.anchor, Some(anchor_at(block, slot)));
+    assert_eq!(
+        stored_tip(&store.values()).map(|tip| tip.hash),
+        Some(block.header.hash),
+        "the block is the head tip"
+    );
 }
 
 fn stored_hashes(store: &SharedStore) -> Vec<HashType> {
-    store
-        .blocks()
+    stored_blocks(&store.values())
         .iter()
         .map(|block| block.header.hash)
         .collect()
@@ -146,6 +151,15 @@ fn deposit_tx(
     ))
 }
 
+/// Whether the slasher has stored a record, so it found an offence.
+fn slash_recorded(store: &SharedStore) -> bool {
+    store
+        .values()
+        .get::<SlashRecord>(&SingletonKey)
+        .expect("Failed to read the slash record")
+        .is_some()
+}
+
 /// Slashing exists because a sequencer can inscribe a non-block payload, and
 /// the channel keeps it forever. A replay that treated one as fatal would stop
 /// every later node from ever joining.
@@ -195,10 +209,7 @@ async fn reconstruction_reports_a_misplaced_block() -> Result<()> {
     )
     .await?;
 
-    assert!(
-        store.lock().slash_record.is_some(),
-        "the offence is recorded"
-    );
+    assert!(slash_recorded(&store), "the offence is recorded");
     Ok(())
 }
 
@@ -215,10 +226,7 @@ async fn reconstruction_reports_an_invalid_block() -> Result<()> {
     )
     .await?;
 
-    assert!(
-        store.lock().slash_record.is_some(),
-        "the offence is recorded"
-    );
+    assert!(slash_recorded(&store), "the offence is recorded");
     Ok(())
 }
 
@@ -238,10 +246,7 @@ async fn reconstruction_reports_an_undecodable_inscription() -> Result<()> {
     )
     .await?;
 
-    assert!(
-        store.lock().slash_record.is_some(),
-        "the offence is recorded"
-    );
+    assert!(slash_recorded(&store), "the offence is recorded");
     Ok(())
 }
 
@@ -257,17 +262,13 @@ async fn reconstruction_does_not_report_an_empty_inscription() -> Result<()> {
     )
     .await?;
 
-    assert!(store.lock().slash_record.is_none());
+    assert!(!slash_recorded(&store));
     Ok(())
 }
 
 /// The lineage the store's view restores to: its final entry and its held entries.
 fn stored_lineage(store: &SharedStore) -> Result<(MsgId, Vec<MsgId>)> {
-    let bytes = store
-        .lock()
-        .channel_view
-        .clone()
-        .expect("the store holds a view");
+    let bytes = stored_view(store).expect("the store holds a view");
     let mut chain = ChainState::from_final(V03State::default(), None);
     chain.restore_view(&bytes)?;
     let held = chain.view().iter().map(|entry| entry.msg).collect();
@@ -286,8 +287,8 @@ fn three_blocks() -> [Block; 3] {
 /// stored view, when `final_msg` is given, holds `held` chained on that final entry.
 fn final_through(block2: &Block, final_msg: Option<MsgId>, held: &[Block]) -> SharedStore {
     let mut store = with_head(finalized_genesis_store(), block2.clone());
-    let final_state = store.head_state.clone().expect("the store holds a chain");
-    store.final_snapshot = Some((final_state.clone(), BlockMeta::from(block2)));
+    let final_state = stored_head_state(&store.values).expect("the store holds a chain");
+    store_final_snapshot(&store.values, final_state.clone(), BlockMeta::from(block2));
     let mut chain = ChainState::from_final(final_state, Some(Tip::from(BlockMeta::from(block2))));
     let mut parent = final_msg.unwrap_or_else(MsgId::root);
     chain.apply_reconstructed(parent, None, &BTreeSet::new());
@@ -303,9 +304,36 @@ fn final_through(block2: &Block, final_msg: Option<MsgId>, held: &[Block]) -> Sh
         parent = mock_msg_of(block);
     }
     if final_msg.is_some() {
-        store.channel_view = Some(chain.encode_view());
+        store_view(&store, chain.encode_view());
     }
     store.share()
+}
+
+/// A view that does not decode leaves the chain on the final tier, so the stored blocks above it
+/// go, however many pages they take.
+#[test]
+async fn an_undecodable_view_drops_the_stored_head() -> Result<()> {
+    let genesis = genesis();
+    let mut store = finalized_genesis_store();
+    let final_state = stored_head_state(&store.values).expect("the store holds a chain");
+    let mut parent = genesis.header.hash;
+    for block_id in 2..=70 {
+        let block = block_at(block_id, parent, 0);
+        parent = block.header.hash;
+        store = with_head(store, block);
+    }
+    store_view(&store, b"not a view".to_vec());
+    let store = store.share();
+
+    start(&store, vec![finalized_at(&genesis, 10)]).await?;
+
+    assert_eq!(stored_hashes(&store), vec![genesis.header.hash]);
+    assert!(
+        stored_head_state(&store.values()) == Some(final_state),
+        "the head state is the final state"
+    );
+    stored_lineage(&store)?;
+    Ok(())
 }
 
 /// A warm start re-reads history below the stored final entry, where a block that does not apply
@@ -326,7 +354,7 @@ async fn a_reread_block_that_does_not_apply_is_not_reported() -> Result<()> {
     )
     .await?;
 
-    assert!(store.lock().slash_record.is_none());
+    assert!(!slash_recorded(&store));
     Ok(())
 }
 
@@ -496,7 +524,7 @@ async fn reconstruction_ignores_a_duplicate_height_the_final_tier_settled() -> R
         stored_hashes(&store),
         [genesis.header.hash, block2.header.hash]
     );
-    assert_eq!(store.lock().anchor, Some(anchor_at(&block2, 20)));
+    assert_eq!(stored_anchor(&store), Some(anchor_at(&block2, 20)));
     Ok(())
 }
 
@@ -534,15 +562,15 @@ async fn a_verified_own_block_settles_its_deposit_records() -> Result<()> {
         Some(genesis.header.hash),
         vec![deposit_tx(deposit_op_id, recipient, 400)],
     );
-    let store = CannedStore {
-        pending_deposits: vec![PendingDepositEventRecord {
+    let store = with_pending_deposit(
+        with_finalized(finalized_genesis_store(), block2.clone()),
+        &PendingDepositEventRecord {
             deposit_op_id: HashType(deposit_op_id),
             source_tx_hash: HashType([0; 32]),
             amount: 400,
             metadata: Vec::new(),
-        }],
-        ..with_finalized(finalized_genesis_store(), block2.clone())
-    }
+        },
+    )
     .share();
 
     start(
@@ -551,8 +579,8 @@ async fn a_verified_own_block_settles_its_deposit_records() -> Result<()> {
     )
     .await?;
 
-    assert_eq!(store.lock().anchor, Some(anchor_at(&block2, 20)));
-    assert!(store.lock().pending_deposits.is_empty());
+    assert_eq!(stored_anchor(&store), Some(anchor_at(&block2, 20)));
+    assert!(stored_pending_deposits(&store.values()).is_empty());
     Ok(())
 }
 
@@ -575,15 +603,15 @@ async fn reconstruction_reconciles_already_finished_deposit() -> Result<()> {
         Some(genesis.header.hash),
         vec![deposit_tx(deposit_op_id, recipient, deposit_amount)],
     );
-    let store = CannedStore {
-        pending_deposits: vec![PendingDepositEventRecord {
+    let store = with_pending_deposit(
+        finalized_genesis_store(),
+        &PendingDepositEventRecord {
             deposit_op_id: HashType(deposit_op_id),
             source_tx_hash: HashType([0; 32]),
             amount: deposit_amount,
             metadata: Vec::new(),
-        }],
-        ..finalized_genesis_store()
-    }
+        },
+    )
     .share();
 
     start(
@@ -595,10 +623,7 @@ async fn reconstruction_reconciles_already_finished_deposit() -> Result<()> {
     // The mint lands once and the record its L1 event left behind is dropped.
     assert_reconstructed(&store, &block2, 20);
     let stored = store.lock();
-    let head_state = stored
-        .head_state
-        .as_ref()
-        .expect("the head state is stored");
+    let head_state = stored_head_state(&stored.values).expect("the head state is stored");
     assert_eq!(
         head_state
             .get_account_by_id(recipient)
@@ -615,7 +640,7 @@ async fn reconstruction_reconciles_already_finished_deposit() -> Result<()> {
             .is_empty(),
         "the bridge claimed the deposit receipt"
     );
-    assert!(stored.pending_deposits.is_empty());
+    assert!(stored_pending_deposits(&stored.values).is_empty());
     Ok(())
 }
 

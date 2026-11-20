@@ -20,12 +20,7 @@ use logos_blockchain_zone_sdk::{
     core::mantle::NoteId,
     sequencer::{InscriptionInfo, PendingTx},
 };
-use sequencer_storage_actor::{
-    StorageActorTrait,
-    protocol::{
-        GetFinalConfigsBytes, GetZoneCheckpoint, PutFinalConfigsBytes, UpdateZoneCheckpoint,
-    },
-};
+use sequencer_storage_actor::protocol::{Get, Store};
 use tokio::select;
 use tracing::{info_span, warn};
 
@@ -37,25 +32,25 @@ use crate::{
     error::Error,
     protocol::{
         AccreditedKeys, ChangeChannelConfig, ChannelId, CheckChannelExists, CheckIsOurTurn,
-        CreateChannel, DeserializeOp as _, Ed25519PublicKey, FilterFinallyAbsent, FollowChannel,
-        FollowStart, GetAccreditedKeys, GetChannelNotes, GetChannelTipMessageId, GetChannelTipSlot,
-        HeaderId, InitializeChannelPublisher, LiveChannelConfig, MsgId, PendingBlock,
-        PrepareConfig, PreparePin, PreparedConfig, PreparedPin, PublishBlock, PublishOutcome,
-        PublishPin, SequencerCheckpoint, SequencerKey, SerializeOp as _, Slot,
-        UnverifiedEd25519PublicKey,
+        CreateChannel, Ed25519PublicKey, FilterFinallyAbsent, FollowChannel, FollowStart,
+        GetAccreditedKeys, GetChannelNotes, GetChannelTipMessageId, GetChannelTipSlot, HeaderId,
+        InitializeChannelPublisher, LiveChannelConfig, MsgId, PendingBlock, PrepareConfig,
+        PreparePin, PreparedConfig, PreparedPin, PublishBlock, PublishOutcome, PublishPin,
+        SequencerCheckpoint, SequencerKey, Slot, UnverifiedEd25519PublicKey,
     },
+    storage::{BedrockStorage, FinalConfigs, ZoneCheckpoint},
 };
 
 mod channel;
 mod delivery;
-mod finality;
+pub(crate) mod finality;
 #[cfg(test)]
 mod tests;
 
 /// Time one [`FilterFinallyAbsent`] may hold the actor; the blocks and configs it read are kept.
 const FILTER_FINALLY_ABSENT_BUDGET: Duration = Duration::from_secs(10);
 
-pub struct Args<S: StorageActorTrait> {
+pub struct Args<S: BedrockStorage> {
     pub node_url: Url,
     pub basic_auth: Option<BasicAuthCredentials>,
     pub channel_id: ChannelId,
@@ -77,7 +72,7 @@ pub struct Args<S: StorageActorTrait> {
 /// [`ChannelEvent`](crate::protocol::ChannelEvent) in turn, reading the channel on only once the
 /// recipient replied. Messages are still handled while it waits, as the recipient may ask some of
 /// its own on the way.
-pub struct BedrockActor<S: StorageActorTrait> {
+pub struct BedrockActor<S: BedrockStorage> {
     channel_id: ChannelId,
     backfill_batch_slots: NonZero<u64>,
     node: TimeoutNode<NodeHttpClient>,
@@ -93,7 +88,7 @@ pub struct BedrockActor<S: StorageActorTrait> {
     config_index: ConfigIndex,
 }
 
-impl<S: StorageActorTrait> BedrockActor<S> {
+impl<S: BedrockStorage> BedrockActor<S> {
     fn assert_channel_id(&self, channel_id: ChannelId) {
         assert_eq!(self.channel_id, channel_id, "Channel ID mismatch");
     }
@@ -128,10 +123,13 @@ impl<S: StorageActorTrait> BedrockActor<S> {
     /// The stored checkpoint, with the config index read up to its LIB, as zone-sdk's events
     /// resumed from it start after it.
     async fn resume_checkpoint(&mut self) -> Result<Option<SequencerCheckpoint>> {
-        let Some(bytes) = self.storage_ref.ask(GetZoneCheckpoint).await? else {
+        let Some(ZoneCheckpoint(checkpoint)) = self
+            .storage_ref
+            .ask(Get::<ZoneCheckpoint>::default())
+            .await?
+        else {
             return Ok(None);
         };
-        let checkpoint = SequencerCheckpoint::from_bytes(&bytes)?;
         let mut reader = NodeReader {
             node: &self.node,
             block_summary_cache: &mut self.block_summary_cache,
@@ -148,14 +146,11 @@ impl<S: StorageActorTrait> BedrockActor<S> {
         reason = "Helps to make returned future Send"
     )]
     async fn store_checkpoint(&mut self, checkpoint: &SequencerCheckpoint) {
-        let bytes = match checkpoint.to_bytes() {
-            Ok(bytes) => bytes.into(),
-            Err(err) => {
-                warn!(error = %err, "Failed to encode the zone checkpoint");
-                return;
-            }
-        };
-        if let Err(err) = self.storage_ref.ask(UpdateZoneCheckpoint { bytes }).await {
+        if let Err(err) = self
+            .storage_ref
+            .ask(Store::from_value(ZoneCheckpoint(checkpoint.clone())))
+            .await
+        {
             warn!(error = %err, "Failed to store the zone checkpoint");
         }
     }
@@ -166,20 +161,24 @@ impl<S: StorageActorTrait> BedrockActor<S> {
         published.outcome
     }
 
-    /// Stores the config index when its bytes are due.
+    /// Stores the config index when it is due.
     async fn store_config_index(&mut self) {
-        let Some(bytes) = self.config_index.bytes_to_store() else {
+        if !self.config_index.due_to_store() {
             return;
-        };
-        if let Err(err) = self.storage_ref.ask(PutFinalConfigsBytes { bytes }).await {
+        }
+        if let Err(err) = self
+            .storage_ref
+            .ask(Store::from_value(FinalConfigs(self.config_index.clone())))
+            .await
+        {
             warn!(error = %err, "Failed to store the channel's final configs");
         }
     }
 }
 
-impl<S: StorageActorTrait> BedrockActorTrait for BedrockActor<S> {}
+impl<S: BedrockStorage> BedrockActorTrait for BedrockActor<S> {}
 
-impl<S: StorageActorTrait> Actor for BedrockActor<S> {
+impl<S: BedrockStorage> Actor for BedrockActor<S> {
     type Args = Args<S>;
     type Error = Error;
 
@@ -199,20 +198,15 @@ impl<S: StorageActorTrait> Actor for BedrockActor<S> {
 
         // Following starts zone-sdk from this stored checkpoint: a cold start backfills from
         // slot 0, a restart's events start after its LIB.
-        let config_index = match storage_ref.ask(GetZoneCheckpoint).await? {
+        let config_index = match storage_ref.ask(Get::<ZoneCheckpoint>::default()).await? {
             None => ConfigIndex::starting_at(0),
-            Some(checkpoint_bytes) => {
-                let restored = storage_ref
-                    .ask(GetFinalConfigsBytes)
-                    .await?
-                    .and_then(|bytes| ConfigIndex::from_bytes(&bytes));
-                if let Some(index) = restored {
-                    index
-                } else {
-                    let checkpoint = SequencerCheckpoint::from_bytes(&checkpoint_bytes)?;
-                    ConfigIndex::starting_at(checkpoint.lib_slot.into_inner().saturating_add(1))
-                }
-            }
+            Some(ZoneCheckpoint(checkpoint)) => storage_ref
+                .ask(Get::<FinalConfigs>::default())
+                .await?
+                .map_or_else(
+                    || ConfigIndex::starting_at(checkpoint.lib_slot.into_inner().saturating_add(1)),
+                    |FinalConfigs(index)| index,
+                ),
         };
 
         Ok(Self {
@@ -277,7 +271,7 @@ impl<S: StorageActorTrait> Actor for BedrockActor<S> {
     }
 }
 
-impl<S: StorageActorTrait> Message<FollowChannel> for BedrockActor<S> {
+impl<S: BedrockStorage> Message<FollowChannel> for BedrockActor<S> {
     type Reply = Result<FollowStart>;
 
     async fn handle(
@@ -310,7 +304,7 @@ impl<S: StorageActorTrait> Message<FollowChannel> for BedrockActor<S> {
     }
 }
 
-impl<S: StorageActorTrait> Message<InitializeChannelPublisher> for BedrockActor<S> {
+impl<S: BedrockStorage> Message<InitializeChannelPublisher> for BedrockActor<S> {
     type Reply = Result<Vec<PendingBlock>>;
 
     async fn handle(
@@ -353,7 +347,7 @@ impl<S: StorageActorTrait> Message<InitializeChannelPublisher> for BedrockActor<
     }
 }
 
-impl<S: StorageActorTrait> Message<CreateChannel> for BedrockActor<S> {
+impl<S: BedrockStorage> Message<CreateChannel> for BedrockActor<S> {
     type Reply = Result<PublishOutcome>;
 
     async fn handle(
@@ -384,7 +378,7 @@ impl<S: StorageActorTrait> Message<CreateChannel> for BedrockActor<S> {
     }
 }
 
-impl<S: StorageActorTrait> Message<PublishBlock> for BedrockActor<S> {
+impl<S: BedrockStorage> Message<PublishBlock> for BedrockActor<S> {
     type Reply = Result<PublishOutcome>;
 
     async fn handle(
@@ -408,7 +402,7 @@ impl<S: StorageActorTrait> Message<PublishBlock> for BedrockActor<S> {
     }
 }
 
-impl<S: StorageActorTrait> Message<PreparePin> for BedrockActor<S> {
+impl<S: BedrockStorage> Message<PreparePin> for BedrockActor<S> {
     type Reply = Result<PreparedPin>;
 
     async fn handle(
@@ -430,7 +424,7 @@ impl<S: StorageActorTrait> Message<PreparePin> for BedrockActor<S> {
     }
 }
 
-impl<S: StorageActorTrait> Message<PublishPin> for BedrockActor<S> {
+impl<S: BedrockStorage> Message<PublishPin> for BedrockActor<S> {
     type Reply = Result<PublishOutcome>;
 
     async fn handle(
@@ -452,7 +446,7 @@ impl<S: StorageActorTrait> Message<PublishPin> for BedrockActor<S> {
     }
 }
 
-impl<S: StorageActorTrait> Message<PrepareConfig> for BedrockActor<S> {
+impl<S: BedrockStorage> Message<PrepareConfig> for BedrockActor<S> {
     type Reply = Result<PreparedConfig>;
 
     async fn handle(
@@ -481,7 +475,7 @@ impl<S: StorageActorTrait> Message<PrepareConfig> for BedrockActor<S> {
     }
 }
 
-impl<S: StorageActorTrait> Message<ChangeChannelConfig> for BedrockActor<S> {
+impl<S: BedrockStorage> Message<ChangeChannelConfig> for BedrockActor<S> {
     type Reply = Result<()>;
 
     async fn handle(
@@ -500,7 +494,7 @@ impl<S: StorageActorTrait> Message<ChangeChannelConfig> for BedrockActor<S> {
     }
 }
 
-impl<S: StorageActorTrait> Message<CheckChannelExists> for BedrockActor<S> {
+impl<S: BedrockStorage> Message<CheckChannelExists> for BedrockActor<S> {
     type Reply = Result<bool>;
 
     async fn handle(
@@ -519,7 +513,7 @@ impl<S: StorageActorTrait> Message<CheckChannelExists> for BedrockActor<S> {
     }
 }
 
-impl<S: StorageActorTrait> Message<CheckIsOurTurn> for BedrockActor<S> {
+impl<S: BedrockStorage> Message<CheckIsOurTurn> for BedrockActor<S> {
     type Reply = Result<bool>;
 
     async fn handle(
@@ -533,7 +527,7 @@ impl<S: StorageActorTrait> Message<CheckIsOurTurn> for BedrockActor<S> {
     }
 }
 
-impl<S: StorageActorTrait> Message<GetAccreditedKeys> for BedrockActor<S> {
+impl<S: BedrockStorage> Message<GetAccreditedKeys> for BedrockActor<S> {
     type Reply = Result<Option<AccreditedKeys>>;
 
     async fn handle(
@@ -559,7 +553,7 @@ impl<S: StorageActorTrait> Message<GetAccreditedKeys> for BedrockActor<S> {
     }
 }
 
-impl<S: StorageActorTrait> Message<GetChannelNotes> for BedrockActor<S> {
+impl<S: BedrockStorage> Message<GetChannelNotes> for BedrockActor<S> {
     type Reply = Result<HashSet<NoteId>>;
 
     async fn handle(
@@ -573,7 +567,7 @@ impl<S: StorageActorTrait> Message<GetChannelNotes> for BedrockActor<S> {
     }
 }
 
-impl<S: StorageActorTrait> Message<GetChannelTipSlot> for BedrockActor<S> {
+impl<S: BedrockStorage> Message<GetChannelTipSlot> for BedrockActor<S> {
     type Reply = Result<Option<Slot>>;
 
     async fn handle(
@@ -592,7 +586,7 @@ impl<S: StorageActorTrait> Message<GetChannelTipSlot> for BedrockActor<S> {
     }
 }
 
-impl<S: StorageActorTrait> Message<GetChannelTipMessageId> for BedrockActor<S> {
+impl<S: BedrockStorage> Message<GetChannelTipMessageId> for BedrockActor<S> {
     type Reply = Result<Option<MsgId>>;
 
     async fn handle(
@@ -611,7 +605,7 @@ impl<S: StorageActorTrait> Message<GetChannelTipMessageId> for BedrockActor<S> {
     }
 }
 
-impl<S: StorageActorTrait> Message<FilterFinallyAbsent> for BedrockActor<S> {
+impl<S: BedrockStorage> Message<FilterFinallyAbsent> for BedrockActor<S> {
     type Reply = Result<BTreeSet<SequencerKey>>;
 
     async fn handle(
@@ -724,7 +718,7 @@ impl L1Reader for NodeReader<'_> {
 }
 
 #[cfg(feature = "test-utils")]
-impl<S: StorageActorTrait> Message<PublishRawInscription> for BedrockActor<S> {
+impl<S: BedrockStorage> Message<PublishRawInscription> for BedrockActor<S> {
     type Reply = Result<PublishOutcome>;
 
     async fn handle(

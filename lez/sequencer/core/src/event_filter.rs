@@ -1,7 +1,9 @@
+//! Which events the store keeps, and the queries over them.
+
+use std::collections::{HashMap, HashSet};
+
 use common::{HashType, transaction::TxEvents};
 use lee_core::{BlockId, account::AccountId, program::TransactionEvent};
-
-use crate::protocol::{EventFilter, SelectorFilter};
 
 // Largest block span a single events range query may cover. Lives here so every surface
 // that serves the query (RPC service, FFI) enforces the identical bound.
@@ -11,6 +13,23 @@ pub const MAX_EVENT_QUERY_BLOCK_SPAN: u64 = 1000;
 // under the transport's response cap so this limit is the one that binds.
 pub const MAX_EVENT_QUERY_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
 const EVENT_RECORD_BASE_BYTES: usize = 256;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EventFilter {
+    /// Every event.
+    Archival,
+    /// Only events of the listed programs. Empty keeps nothing.
+    Sources(HashMap<AccountId, SelectorFilter>),
+}
+
+/// Which events of one program the store keeps.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelectorFilter {
+    /// Every event of the program.
+    All,
+    /// Only events with one of these selectors.
+    Only(HashSet<[u8; 8]>),
+}
 
 impl EventFilter {
     fn keeps(&self, event: &TransactionEvent) -> bool {

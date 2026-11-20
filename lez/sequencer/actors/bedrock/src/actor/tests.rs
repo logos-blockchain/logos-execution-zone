@@ -277,17 +277,6 @@ fn a_full_cache_keeps_the_newest_block_summaries_by_slot() {
 /// for that update, even when the reply and the publish reach the Bedrock actor together.
 #[tokio::test]
 async fn a_publish_sent_after_applying_an_update_is_not_refused_for_it() {
-    let mut storage = MockStorageActor::default();
-    storage
-        .expect_handle_get_zone_checkpoint()
-        .returning(|_msg, _ctx| Ok(None));
-    storage
-        .expect_handle_put_final_configs_bytes()
-        .returning(|_msg, _ctx| Ok(()));
-    storage
-        .expect_handle_update_zone_checkpoint()
-        .returning(|_msg, _ctx| Ok(()));
-
     let channel_id = ChannelId::from([1; 32]);
     // Nothing listens there, so a publish that is not refused fails reaching the node.
     let bedrock = TestBedrockActor::spawn(Args {
@@ -295,7 +284,7 @@ async fn a_publish_sent_after_applying_an_update_is_not_refused_for_it() {
         basic_auth: None,
         channel_id,
         backfill_batch_slots: NonZero::new(100).expect("not zero"),
-        storage_ref: MockStorageActor::spawn(storage),
+        storage_ref: MockStorageActor::spawn(MockStorageActor::new()),
     });
     let (publishes_tx, mut publishes) = mpsc::unbounded_channel();
     let follower = PublishingFollower::spawn(PublishingFollower {

@@ -22,6 +22,7 @@ borsh.workspace = true
 hex.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
+trait-set.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]

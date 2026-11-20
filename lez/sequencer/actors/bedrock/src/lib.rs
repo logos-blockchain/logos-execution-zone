@@ -14,6 +14,8 @@ pub mod error;
 #[cfg(feature = "mock")]
 pub mod mock;
 pub mod protocol;
+#[cfg(feature = "actor")]
+pub mod storage;
 pub mod r#trait;
 
 pub type Result<T> = std::result::Result<T, error::Error>;

@@ -43,6 +43,7 @@ tracing.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 rand.workspace = true
 borsh.workspace = true
+trait-set.workspace = true
 hex.workspace = true
 url.workspace = true
 num-bigint.workspace = true

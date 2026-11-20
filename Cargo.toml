@@ -261,6 +261,7 @@ zeroize = "1"
 criterion = { version = "0.8", features = ["html_reports"] }
 num-traits = "0.2.19"
 enum-iterator = "2.3.0"
+trait-set = "0.3.0"
 cbindgen = "0.29"
 glob = "0.3.4"
 
