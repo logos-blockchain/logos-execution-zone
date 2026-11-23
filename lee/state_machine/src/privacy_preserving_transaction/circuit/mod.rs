@@ -238,8 +238,8 @@ impl ExecutionEnvironment for Simulator<'_> {
         input: &ReceiveInput,
         view: &TransitionView<'_>,
     ) -> Result<Transition, LeeError> {
-        // The loader runs as Rust and is charged as in settlement, and only in a transaction
-        // without private accounts; it reads the declared accounts' loader states.
+        // The loader runs as Rust and is charged as in settlement; with private accounts, only
+        // messages that change nothing reach it. It reads the declared accounts' loader states.
         if input.receiver.program_account_id == PROGRAM_LOADER_ACCOUNT_ID {
             const ABSENT: &ActorState = &ActorState::empty();
             let states = self.public_actor_states;

@@ -44,6 +44,13 @@ pub enum Message {
     AssertEnvVar { env_var: Vec<u8> },
 }
 
+impl Message {
+    #[must_use]
+    pub const fn admitted_with_private_accounts(&self) -> bool {
+        matches!(self, Self::AssertEnvVar { .. })
+    }
+}
+
 #[must_use]
 pub fn assert_env_var(header: AccountId, env_var: Vec<u8>) -> SyncMessage {
     SyncMessage::new(

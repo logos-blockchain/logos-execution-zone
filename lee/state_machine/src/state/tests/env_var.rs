@@ -5,6 +5,7 @@ use program_loader_core::Message as LoaderMessage;
 use test_guest_core::env_var::{EnvVarConfig, EnvVarConsumerMessage};
 
 use super::*;
+use crate::simulate_privacy_preserving_transaction;
 
 const INPUT: u64 = 7;
 
@@ -93,6 +94,73 @@ impl Fixture {
             Actor::new(header, PROGRAM_LOADER_ACCOUNT_ID),
         ];
         self.call_with(header, env_var, public_actors)
+    }
+
+    fn loader(&self) -> Actor {
+        Actor::new(self.target, PROGRAM_LOADER_ACCOUNT_ID)
+    }
+
+    fn programs(&self) -> ProgramCatalog {
+        ProgramCatalog::from([(self.consumer_id, crate::test_methods::env_var_consumer())])
+    }
+
+    /// The dry run reads the target's header as it is now.
+    fn simulation(&self) -> Simulation {
+        let header = self
+            .state
+            .loader_actor_state(self.target)
+            .expect("the target holds a header")
+            .clone();
+        Simulation {
+            public_actor_states: HashMap::from([(self.loader(), header)]),
+            admitted_accounts: None,
+        }
+    }
+
+    /// `to` runs `Use` against the target, alongside a fresh private account.
+    fn proving_input(
+        &self,
+        to: Actor,
+        env_var: Vec<u8>,
+        public_actors: Vec<Actor>,
+    ) -> ProvingInput {
+        let message = EnvVarConsumerMessage::Use {
+            header: self.target,
+            env_var,
+            input: INPUT,
+        };
+        ProvingInput {
+            public_context: PublicExecutionContext::new(public_actors, []),
+            private_witnesses: vec![init_witness(&test_private_account_keys_1())],
+            ..proving_input(root(to, &message))
+        }
+    }
+
+    fn private_consumer(&self) -> Actor {
+        Actor::new(test_private_account_keys_1().account_id(), self.consumer_id)
+    }
+
+    fn prove(
+        &self,
+        input: ProvingInput,
+        simulation: &Simulation,
+    ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
+        execute_and_prove(
+            input,
+            simulation,
+            &self.programs(),
+            |_| SenderPresentation::Canonical,
+            |_, _| false,
+            no_seal,
+        )
+    }
+
+    fn settle(&mut self, proved: (PrivacyPreservingCircuitOutput, Proof)) -> Result<(), LeeError> {
+        self.state.transition_from_privacy_preserving_transaction(
+            &private_tx(proved, vec![], &[]),
+            1,
+            0,
+        )
     }
 
     fn consumer_state(&self) -> ActorState {
@@ -229,4 +297,121 @@ fn an_undeclared_target_is_rejected() {
         ExecutionError::UndeclaredActor { actor } if actor == loader
     ));
     assert_eq!(fixture.consumer_state(), ActorState::empty());
+}
+
+#[test]
+fn a_private_consumer_with_a_matching_env_var_proves_and_settles() {
+    let mut fixture = Fixture::new();
+    let input = fixture.proving_input(
+        fixture.private_consumer(),
+        config(3),
+        vec![fixture.loader()],
+    );
+
+    let proved = fixture
+        .prove(input, &fixture.simulation())
+        .expect("a matching env_var should prove");
+
+    fixture
+        .settle(proved)
+        .expect("a matching env_var should settle");
+}
+
+#[test]
+fn a_private_consumers_mismatched_env_var_fails_the_dry_run() {
+    let fixture = Fixture::new();
+    let input = fixture.proving_input(
+        fixture.private_consumer(),
+        config(5),
+        vec![fixture.loader()],
+    );
+
+    let dry_run = simulate_privacy_preserving_transaction(
+        &input,
+        &fixture.simulation(),
+        &fixture.programs(),
+        |_| SenderPresentation::Canonical,
+        |_, _| false,
+    );
+    let err = dry_run.expect_err("a mismatched env_var should fail the dry run");
+    assert!(
+        err.to_string().contains("the header's env_var differs"),
+        "unexpected error: {err}"
+    );
+
+    fixture
+        .prove(input, &fixture.simulation())
+        .expect_err("a mismatched env_var should not prove");
+}
+
+#[test]
+fn an_env_var_changed_after_proving_fails_at_settlement() {
+    let mut fixture = Fixture::new();
+    let input = fixture.proving_input(
+        fixture.private_consumer(),
+        config(3),
+        vec![fixture.loader()],
+    );
+    let proved = fixture
+        .prove(input, &fixture.simulation())
+        .expect("the env_var matches when proving");
+
+    fixture.write_header(&LoaderMessage::UpdateHeader {
+        first_segment: fixture.segments[0],
+        immutable: false,
+        env_var: config(4),
+    });
+
+    let err = fixture
+        .settle(proved)
+        .expect_err("a stale env_var should fail at settlement");
+    assert!(
+        err.to_string().contains("the header's env_var differs"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn a_private_consumers_undeclared_target_fails_the_dry_run() {
+    let fixture = Fixture::new();
+    let input = fixture.proving_input(fixture.private_consumer(), config(3), Vec::new());
+
+    let result = fixture.prove(input, &fixture.simulation());
+
+    let loader = fixture.loader();
+    assert!(matches!(
+        execution_error(result),
+        ExecutionError::UndeclaredActor { actor } if actor == loader
+    ));
+}
+
+#[test]
+fn a_public_consumer_in_a_privacy_transaction_asserts_an_env_var() {
+    let mut fixture = Fixture::new();
+    let caller = AccountId::new([0x45; 32]);
+    fixture
+        .state
+        .force_insert_account(caller, Account::funded(1));
+    let consumer = Actor::new(caller, fixture.consumer_id);
+    let input = fixture.proving_input(consumer, config(3), vec![consumer, fixture.loader()]);
+    let mut simulation = fixture.simulation();
+    simulation
+        .public_actor_states
+        .insert(consumer, ActorState::empty());
+
+    let proved = fixture
+        .prove(input, &simulation)
+        .expect("a public consumer's env_var assertion should prove");
+    fixture
+        .settle(proved)
+        .expect("a public consumer's env_var assertion should settle");
+
+    assert_eq!(
+        fixture
+            .state
+            .get_account_by_id(caller)
+            .data
+            .actor_state(fixture.consumer_id),
+        &product(3)
+    );
 }

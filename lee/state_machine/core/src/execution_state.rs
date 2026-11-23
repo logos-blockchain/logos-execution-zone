@@ -12,6 +12,7 @@ use crate::{
         PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent, ReceiveInput, SyncMessage, Transition,
         ValidityWindows,
     },
+    program_loader,
 };
 
 /// The wrapper carrying metadata of the top-level message.
@@ -1171,7 +1172,11 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
     ) -> Result<(), E::Error> {
         let to = delivery.envelope.to;
         // No code upgrade may land between a proof's image claims and the transitions it covers.
-        if to.program_account_id == PROGRAM_LOADER_ACCOUNT_ID && !M::admits_loader(self) {
+        if to.program_account_id == PROGRAM_LOADER_ACCOUNT_ID
+            && !M::admits_loader(self)
+            && !borsh::from_slice::<program_loader::Message>(&delivery.envelope.message)
+                .is_ok_and(|message| message.admitted_with_private_accounts())
+        {
             return Err(ExecutionError::LoaderOutsidePublicExecution { actor: to }.into());
         }
         if self.public_context.runs_publicly(to) {

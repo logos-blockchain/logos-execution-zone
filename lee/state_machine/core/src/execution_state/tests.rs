@@ -1117,6 +1117,109 @@ fn a_private_part_refuses_an_explicit_delivery_to_the_loader() {
     assert_eq!(order(&script), vec![(holder(&keys), None)]);
 }
 
+fn assert_env_var_to(loader: Actor) -> SyncMessage {
+    SyncMessage::new(
+        loader,
+        &program_loader::Message::AssertEnvVar {
+            env_var: vec![1, 2, 3],
+        },
+    )
+}
+
+fn update_header_to(loader: Actor) -> SyncMessage {
+    SyncMessage::new(
+        loader,
+        &program_loader::Message::UpdateHeader {
+            first_segment: id(5),
+            immutable: false,
+            env_var: Vec::new(),
+        },
+    )
+}
+
+#[test]
+fn a_private_actors_env_var_assertion_runs_in_every_part() {
+    let keys = Keys::new(1);
+    let loader = Actor::new(id(4), PROGRAM_LOADER_ACCOUNT_ID);
+    let script = || {
+        Script::default()
+            .on(holder(&keys), sending(vec![assert_env_var_to(loader)]))
+            .on(loader, sending(Vec::new()))
+    };
+
+    let Pipeline {
+        boundary, public, ..
+    } = pipeline(&[loader], &[keys.regular(false)], holder(&keys), script);
+
+    assert_eq!(
+        public_calls(&boundary)
+            .iter()
+            .map(|delivery| delivery.envelope.to)
+            .collect::<Vec<_>>(),
+        vec![loader]
+    );
+    assert_eq!(order(&public), vec![(loader, Some(holder(&keys)))]);
+}
+
+#[test]
+fn a_private_part_refuses_a_loader_write() {
+    let keys = Keys::new(1);
+    let loader = Actor::new(id(4), PROGRAM_LOADER_ACCOUNT_ID);
+    let mut script = Script::default().on(holder(&keys), sending(vec![update_header_to(loader)]));
+
+    let result = private_part(
+        public_context(vec![loader]),
+        &[keys.regular(false)],
+        root(holder(&keys)),
+        vec![Vec::new()],
+        &mut script,
+    );
+
+    assert!(matches!(
+        result,
+        Err(ExecutionError::LoaderOutsidePublicExecution { actor }) if actor == loader
+    ));
+}
+
+#[test]
+fn a_public_part_runs_an_env_var_assertion_from_its_live_subtree() {
+    let loader = Actor::new(id(4), PROGRAM_LOADER_ACCOUNT_ID);
+    let mut script = Script::default()
+        .on(ENTRY, sending(vec![assert_env_var_to(loader)]))
+        .on(loader, sending(Vec::new()));
+
+    public_part(
+        public_context(vec![ENTRY, loader]),
+        root_call(ENTRY),
+        Boundary::new(),
+        &mut script,
+    )
+    .expect("an env_var assertion should reach the loader");
+
+    assert_eq!(order(&script), vec![(ENTRY, None), (loader, Some(ENTRY))]);
+}
+
+#[test]
+fn a_public_part_refuses_a_loader_write_from_its_live_subtree() {
+    let loader = Actor::new(id(4), PROGRAM_LOADER_ACCOUNT_ID);
+    let mut script = Script::default()
+        .on(ENTRY, sending(vec![update_header_to(loader)]))
+        .on(loader, sending(Vec::new()));
+
+    let result = public_part(
+        public_context(vec![ENTRY, loader]),
+        root_call(ENTRY),
+        Boundary::new(),
+        &mut script,
+    );
+
+    assert!(matches!(
+        result,
+        Err(ExecutionError::LoaderOutsidePublicExecution { actor }) if actor == loader
+    ));
+    assert_eq!(order(&script), vec![(ENTRY, None)]);
+}
+
 // The public owner seeds two PDAs; the first enters the private relay, whose call back to it
 // carries its grant. `predicted_authorizations` is what the proof claims the relay received.
 fn relayed_grant(
