@@ -96,7 +96,7 @@
 
           # Pre-fetch the zkr zip so the sandboxed Rust build can't be blocked.
           recursionZkr = pkgs.fetchurl {
-            url = "https://risc0-artifacts.s3.us-west-2.amazonaws.com/zkr/${recursionZkrHash}.zip";
+            url = "https://artifacts.risczero.net/zkr/${recursionZkrHash}.zip";
             sha256 = recursionZkrHash;
           };
 
