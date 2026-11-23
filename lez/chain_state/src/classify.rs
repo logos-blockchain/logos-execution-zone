@@ -213,7 +213,7 @@ pub fn classify(tx: &LeeTransaction, is_genesis: bool) -> Result<FeeClass, Class
     };
 
     // System injections carry an empty witness set and are enumerated by
-    // shape: bridge deposits and cross-zone dispatches.
+    // shape: cross-zone dispatches and `system_upgrader` changes.
     if common::transaction::is_system_injection(tx) {
         return Ok(FeeClass::Exempt);
     }

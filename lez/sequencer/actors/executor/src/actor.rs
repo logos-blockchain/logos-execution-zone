@@ -52,8 +52,8 @@ use crate::{
         GetLastBlockId, GetMessagePath, GetProofsAndRoot, GetProofsAndRootReply, GetPublications,
         GetPublicationsReply, GetRecoveryBinding, GetStatus, GetSystemProposals,
         GetSystemProposalsReply, GetTransaction, GetTransactionReceipt, ProduceBlock,
-        RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, SubmitSystemApproval,
-        Transaction,
+        RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, SubmitProgramDeposit,
+        SubmitSystemApproval, Transaction,
     },
 };
 
@@ -819,6 +819,27 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<SubmitSystemApproval>
     }
 }
 
+impl<S: StorageActorTrait, B: BedrockActorTrait> Message<SubmitProgramDeposit>
+    for ExecutorActor<S, B>
+{
+    type Reply = Result<()>;
+
+    async fn handle(
+        &mut self,
+        SubmitProgramDeposit { deposit }: SubmitProgramDeposit,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        let State::Online(online) = &mut self.state else {
+            return Err(Error::NotOnline);
+        };
+        online
+            .sequencer_mut()
+            .admit_deposit(deposit)
+            .await
+            .map_err(Error::ProgramDepositRefused)
+    }
+}
+
 impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetBlockByHash> for ExecutorActor<S, B> {
     type Reply = Result<Option<u64>>;
 
@@ -906,22 +927,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEvent> for Execu
                     })
                     .await?;
             }
-            ChannelEventKind::FinalizedDeposit(deposit) => match &self.state {
-                State::Error(details) => panic!("Actor has encountered an error state: {details}"),
-                State::Bootstrapping(bootstrapping) => {
-                    bootstrapping.on_finalized_deposit(&deposit).await?;
-                }
-                // Online state listens for Publisher events
-                State::Online(_) => {}
-            },
-            ChannelEventKind::FinalizedWithdrawal(withdrawal) => match &self.state {
-                State::Error(details) => panic!("Actor has encountered an error state: {details}"),
-                State::Bootstrapping(bootstrapping) => {
-                    bootstrapping.on_finalized_withdrawal(&withdrawal).await?;
-                }
-                // Online state listens for Publisher events
-                State::Online(_) => {}
-            },
             ChannelEventKind::Publisher(publisher_event) => match &mut self.state {
                 State::Error(details) => panic!("Actor has encountered an error state: {details}"),
                 State::Bootstrapping(_) => {
@@ -947,9 +952,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEvent> for Execu
                             .sequencer_mut()
                             .on_channel_config_update(live_channel_config)
                             .await;
-                    }
-                    PublisherEvent::Deposits(deposits) => {
-                        online.sequencer_mut().on_observed_deposits(deposits).await;
                     }
                 },
             },

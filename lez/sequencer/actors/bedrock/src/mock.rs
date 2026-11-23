@@ -3,7 +3,7 @@
     reason = "`handle*` prefix is used for convenience with `Message` trait"
 )]
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 
 use kameo::{
     Actor,
@@ -18,11 +18,11 @@ use crate::{
     BedrockActorTrait, Result,
     error::Error,
     protocol::{
-        AccreditedKeys, ChangeChannelConfig, ChannelId, ChannelReadStream, ChannelSeq,
-        CheckChannelExists, CheckIsOurTurn, CreateChannel, FilterFinallyAbsent, FollowChannel,
-        GetAccreditedKeys, GetChannelNotes, GetChannelTipMessageId, GetChannelTipSlot,
-        InitializeChannelPublisher, MsgId, NoteId, PrepareConfig, PreparePin, PreparedConfig,
-        PreparedPin, PublishBlock, PublishOutcome, PublishPin, ReadChannel, SequencerKey, Slot,
+        AccreditedKeys, AdmitDeposit, ChangeChannelConfig, ChannelId, ChannelReadStream,
+        ChannelSeq, CheckChannelExists, CheckIsOurTurn, CreateChannel, FilterFinallyAbsent,
+        FollowChannel, GetAccreditedKeys, GetChannelTipMessageId, GetChannelTipSlot,
+        InitializeChannelPublisher, MsgId, PrepareConfig, PreparedConfig, PublishBlock,
+        PublishOutcome, ReadChannel, SequencerKey, Slot, VaultMint,
     },
 };
 
@@ -86,18 +86,6 @@ mockall::mock! {
             ctx: &mut Context<Self, Result<PublishOutcome>>
         ) -> Result<PublishOutcome>;
 
-        pub fn handle_prepare_pin(
-            &mut self,
-            msg: PreparePin,
-            ctx: &mut Context<Self, Result<PreparedPin>>
-        ) -> Result<PreparedPin>;
-
-        pub fn handle_publish_pin(
-            &mut self,
-            msg: PublishPin,
-            ctx: &mut Context<Self, Result<PublishOutcome>>
-        ) -> Result<PublishOutcome>;
-
         pub fn handle_prepare_config(
             &mut self,
             msg: PrepareConfig,
@@ -122,17 +110,17 @@ mockall::mock! {
             ctx: &mut Context<Self, Result<bool>>
         ) -> Result<bool>;
 
+        pub fn handle_admit_deposit(
+            &mut self,
+            msg: AdmitDeposit,
+            ctx: &mut Context<Self, Result<VaultMint>>
+        ) -> Result<VaultMint>;
+
         pub fn handle_get_accredited_keys(
             &mut self,
             msg: GetAccreditedKeys,
             ctx: &mut Context<Self, Result<Option<AccreditedKeys>>>
         ) -> Result<Option<AccreditedKeys>>;
-
-        pub fn handle_get_channel_notes(
-            &mut self,
-            msg: GetChannelNotes,
-            ctx: &mut Context<Self, Result<HashSet<NoteId>>>
-        ) -> Result<HashSet<NoteId>>;
 
         pub fn handle_get_channel_tip_slot(
             &mut self,
@@ -247,30 +235,6 @@ impl Message<PublishBlock> for MockBedrockActor {
     }
 }
 
-impl Message<PreparePin> for MockBedrockActor {
-    type Reply = Result<PreparedPin>;
-
-    async fn handle(
-        &mut self,
-        msg: PreparePin,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_prepare_pin(msg, ctx)
-    }
-}
-
-impl Message<PublishPin> for MockBedrockActor {
-    type Reply = Result<PublishOutcome>;
-
-    async fn handle(
-        &mut self,
-        msg: PublishPin,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_publish_pin(msg, ctx)
-    }
-}
-
 impl Message<PrepareConfig> for MockBedrockActor {
     type Reply = Result<PreparedConfig>;
 
@@ -307,6 +271,18 @@ impl Message<CheckChannelExists> for MockBedrockActor {
     }
 }
 
+impl Message<AdmitDeposit> for MockBedrockActor {
+    type Reply = Result<VaultMint>;
+
+    async fn handle(
+        &mut self,
+        msg: AdmitDeposit,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_admit_deposit(msg, ctx)
+    }
+}
+
 impl Message<CheckIsOurTurn> for MockBedrockActor {
     type Reply = Result<bool>;
 
@@ -328,18 +304,6 @@ impl Message<GetAccreditedKeys> for MockBedrockActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_get_accredited_keys(msg, ctx)
-    }
-}
-
-impl Message<GetChannelNotes> for MockBedrockActor {
-    type Reply = Result<HashSet<NoteId>>;
-
-    async fn handle(
-        &mut self,
-        msg: GetChannelNotes,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_get_channel_notes(msg, ctx)
     }
 }
 

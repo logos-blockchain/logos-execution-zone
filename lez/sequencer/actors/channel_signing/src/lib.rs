@@ -1,5 +1,4 @@
-//! Collects the accredited-key signatures a `ChannelConfigOp` needs, and those
-//! of the `ChannelTransfer` pinning a block on its deposits.
+//! Collects the accredited-key signatures a `ChannelConfigOp` needs.
 //!
 //! Bedrock verifies a config against the channel's own
 //! `configuration_threshold`, so raising it above one is a matter of gathering

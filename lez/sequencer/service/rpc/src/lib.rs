@@ -188,6 +188,11 @@ pub trait Rpc {
     #[method(name = "submitSystemApproval")]
     async fn submit_system_approval(&self, approval: HexBytes) -> Result<(), ErrorObjectOwned>;
 
+    /// Hands the node a holder-signed `ProgramDeposit` step with its proof, in Bedrock's
+    /// encoding, to bridge into the zone with the node's next inscription.
+    #[method(name = "submitProgramDeposit")]
+    async fn submit_program_deposit(&self, deposit: HexBytes) -> Result<(), ErrorObjectOwned>;
+
     #[method(name = "getSystemProposals")]
     async fn get_system_proposals(&self) -> Result<SystemProposalReport, ErrorObjectOwned>;
 }

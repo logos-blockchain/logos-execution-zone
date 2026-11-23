@@ -1,0 +1,29 @@
+[package]
+name = "vault_circuit"
+version = "0.1.0"
+edition = "2024"
+license = { workspace = true }
+
+[lints]
+workspace = true
+
+[dependencies]
+ark-bn254.workspace = true
+ark-ec.workspace = true
+ark-ed-on-bn254.workspace = true
+ark-ff.workspace = true
+ark-groth16.workspace = true
+ark-r1cs-std.workspace = true
+ark-relations.workspace = true
+jf-poseidon2.workspace = true
+logos-blockchain-groth16.workspace = true
+logos-blockchain-poseidon2.workspace = true
+rand.workspace = true
+rand_chacha.workspace = true
+sha2.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+logos-blockchain-core = { workspace = true, features = ["test-utils"] }
+logos-blockchain-key-management-system-keys.workspace = true
+logos-blockchain-groth16.workspace = true

@@ -6,7 +6,7 @@ default:
 # ---- Configuration ----
 ARTIFACTS := "artifacts"
 # Funded key of the local Bedrock node, `funding_pk` in bedrock/node-config.yaml.
-BEDROCK_FUNDING_PUBLIC_KEY := "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26"
+BEDROCK_FUNDING_PUBLIC_KEY := "756b77fcff387d7358943535aca10505f1bda72343ceadf45433c5dbf4e2c903"
 
 # On macOS the integration-test binary links pyo3 against the CommandLineTools
 # Python framework with no embedded rpath, so it needs this to launch. Empty on
@@ -103,6 +103,11 @@ run-bedrock *args:
 
 resolve-bedrock-node:
     @bash bedrock/tools/resolve_bedrock_node_in_docker.sh
+
+# Regenerate bedrock/deployment-settings*.yaml (genesis included) from bedrock/genesis/.
+regenerate-bedrock-settings:
+    @just resolve-bedrock-node
+    @bash bedrock/tools/regenerate_deployment_settings.sh
 
 resolve-host-bedrock-node:
     @python3 bedrock/tools/resolve_bedrock_node.py \

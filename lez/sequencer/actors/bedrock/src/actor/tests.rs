@@ -12,11 +12,11 @@ use logos_blockchain_zone_sdk::{
             channel::Channels,
             ledger::{VerifiableOperation as _, verification_mode::StandardMode},
             ops::{
-                Op, OpProof, SignedOperation,
+                ChannelInscribeProof, Op, OpProof, SignedOperation,
                 channel::{
                     ChannelId, MsgId, VerifiedChannelKeys,
                     config::ChannelConfigValidationContext,
-                    inscribe::{Inscription, InscriptionOp},
+                    inscribe::{Inscription, InscriptionOp, MiniBlocks},
                 },
             },
             transactions::{
@@ -46,14 +46,17 @@ fn inscribing_tx(channel: ChannelId, block: &Block) -> SignedOps<Unverified, Sta
         inscription,
         parent: MsgId::root(),
         signer: signer.public_key().into_unverified(),
+        mini_blocks: MiniBlocks::default(),
     });
     let raw = MantleTxBuilder::new()
         .extend_ops([op])
         .expect("ops fit")
         .build(ForkDigest::new([0; 32]))
         .expect("tx builds");
-    // Extraction never checks the proof, only that there is one per op.
-    let proof = OpProof::Ed25519Sig(signer.sign_payload(&[0; 32]));
+    // Extraction never checks the signature, only that the proof is an inscription's.
+    let proof = OpProof::ChannelInscribe(ChannelInscribeProof::without_steps(
+        signer.sign_payload(&[0; 32]),
+    ));
     SignedOps::from_parts(raw, OpProofs::from([proof])).expect("one proof per op")
 }
 
@@ -110,9 +113,8 @@ fn the_genesis_config_op_and_its_proof_pass_bedrock_verification() {
             finality_depth: 5,
         },
         NonZero::<u16>::MIN,
-        NonZero::<u16>::MIN,
     )
-    .expect("a one-key channel with thresholds of one is valid");
+    .expect("a one-key channel with a threshold of one is valid");
     let tx_hash_view = TxHashView::new(TxHash::from([7; 32]));
 
     let signed = SignedOperation::<_, Unverified, StandardMode>::new(op, genesis_config_proof())

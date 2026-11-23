@@ -84,19 +84,6 @@ pub enum Error {
     #[error("Failed to submit signed transaction")]
     SubmitSignedTransactionFailed(#[source] anyhow::Error),
 
-    #[error("Failed to publish atomic withdraw transaction")]
-    PublishAtomicWithdrawFailed(#[source] anyhow::Error),
-
-    // TODO: Not a technical limitation, but rather a complexity of dealing with zone sdk
-    #[error("Cannot publish block on parent with withdrawals")]
-    CannotPublishBlockOnParentWithWithdrawals,
-
-    #[error("Deposited note {0:?} is not a channel note on the current branch")]
-    DepositNoteNotOnBranch(logos_blockchain_zone_sdk::core::mantle::NoteId),
-
-    #[error("Failed to assemble the deposit pin transfer")]
-    DepositPinAssemblyFailed(#[source] anyhow::Error),
-
     #[error(
         "Tried to publish block which was built on channel sequence {provided} but the channel is at {current}"
     )]
@@ -104,6 +91,18 @@ pub enum Error {
         provided: ChannelSeq,
         current: ChannelSeq,
     },
+
+    #[error("Invalid vault deposit: {0}")]
+    InvalidVaultDeposit(&'static str),
+
+    #[error("Invalid vault step: {0}")]
+    InvalidVaultStep(&'static str),
+
+    #[error("zone-sdk refused the vault step")]
+    VaultStepRefused(#[source] anyhow::Error),
+
+    #[error("Failed to prove the vault step")]
+    VaultProofFailed(#[source] anyhow::Error),
 
     #[error("Zone-sdk error")]
     ZoneSdkError(#[from] logos_blockchain_zone_sdk::sequencer::Error),

@@ -1794,24 +1794,29 @@ mod accept_tests {
             .await
             .expect("accept genesis");
 
-        // A system-shaped bridge deposit (empty witness set, so fee-exempt by
+        // A system-shaped inbox dispatch (empty witness set, so fee-exempt by
         // classification) whose execution fails: the guest rejects the bogus
-        // accounts → StateTransition → retryable. A charged overdraft no
-        // longer works here: it reverts-with-fee inside a valid block.
-        let bogus_deposit = {
+        // accounts → StateTransition → retryable. A charged overdraft does
+        // not work here: it reverts-with-fee inside a valid block.
+        let bogus_dispatch = {
             let to = Actor::new(
                 lee::AccountId::new([1_u8; 32]),
-                programs::bridge_account_id(),
+                programs::cross_zone_inbox_account_id(),
             );
             let message = lee::public_transaction::Message::try_new(
                 to,
                 vec![to],
                 std::collections::BTreeMap::new(),
-                bridge_core::Message::Deposit {
-                    l1_deposit_op_id: [7_u8; 32],
-                    recipient_id: lee::AccountId::new([3_u8; 32]),
-                    amount: 5,
-                },
+                cross_zone_inbox_core::Message::Dispatch(cross_zone_inbox_core::CrossZoneMessage {
+                    src_zone: [7_u8; 32],
+                    src_block_id: 1,
+                    src_block_hash: [0_u8; 32],
+                    src_tx_index: 0,
+                    src_account_id: lee::AccountId::new([2_u8; 32]),
+                    target_account_id: lee::AccountId::new([3_u8; 32]),
+                    payload: Vec::new(),
+                    l1_inclusion_witness: None,
+                }),
             )
             .expect("valid message");
             common::transaction::LeeTransaction::Public(lee::PublicTransaction::new(
@@ -1819,7 +1824,7 @@ mod accept_tests {
                 lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
             ))
         };
-        let block = produce_dummy_block(2, Some(genesis.header.hash), vec![bogus_deposit]);
+        let block = produce_dummy_block(2, Some(genesis.header.hash), vec![bogus_dispatch]);
         let outcome = store.accept_block(&block, Slot::from(0)).await.unwrap();
 
         assert!(matches!(

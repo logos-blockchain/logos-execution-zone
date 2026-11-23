@@ -23,7 +23,6 @@ actor = [
   "dep:programs",
   "dep:system_accounts",
   "dep:fee_core",
-  "dep:bridge_core",
 
   "dep:tokio",
   "dep:futures",
@@ -65,7 +64,6 @@ cross_zone = { workspace = true, optional = true }
 system_accounts = { workspace = true, optional = true }
 programs = { workspace = true, optional = true }
 fee_core = { workspace = true, optional = true }
-bridge_core = { workspace = true, optional = true }
 
 kameo.workspace = true
 anyhow.workspace = true
@@ -83,7 +81,6 @@ mockall = { workspace = true, optional = true }
 lee = { workspace = true, features = ["test-utils"] }
 sequencer_storage_actor = { workspace = true, features = ["mock"] }
 sequencer_bedrock_actor = { workspace = true, features = ["mock"] }
-bridge_core.workspace = true
 chain_state.workspace = true
 cross_zone = { workspace = true, features = ["test-utils"] }
 cross_zone_inbox_core.workspace = true

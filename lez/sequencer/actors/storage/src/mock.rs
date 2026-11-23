@@ -28,13 +28,12 @@ use crate::{
         GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatchRetainedCount,
         GetDeadLetterDispatches, GetEventFilter, GetFinalConfigsBytes, GetFinalSnapshot,
         GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
-        GetPendingCrossZoneDispatchCount, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
-        GetSlashRecordBytes, GetSystemApprovalsBytes, GetTransactionByHash,
-        GetTransactionReceiptByHash, GetZoneAnchor, GetZoneCheckpoint,
-        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutFinalConfigsBytes,
+        GetPendingCrossZoneDispatchCount, GetPendingCrossZoneDispatches, GetSlashRecordBytes,
+        GetSystemApprovalsBytes, GetTransactionByHash, GetTransactionReceiptByHash, GetZoneAnchor,
+        GetZoneCheckpoint, PendingCrossZoneDispatchRecord, PutFinalConfigsBytes,
         PutSlashRecordBytes, PutSystemApprovalsBytes, RecordDispatchFailure,
         RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
-        StoreUpdateOutcome, UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
+        UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
     },
 };
 
@@ -168,17 +167,11 @@ mockall::mock! {
             ctx: &mut Context<Self, Result<Option<Vec<u8>>>>
         ) -> Result<Option<Vec<u8>>>;
 
-        pub fn handle_get_pending_deposit_events(
-            &mut self,
-            msg: GetPendingDepositEvents,
-            ctx: &mut Context<Self, Result<Vec<PendingDepositEventRecord>>>
-        ) -> Result<Vec<PendingDepositEventRecord>>;
-
         pub fn handle_apply_store_update(
             &mut self,
             msg: AtomicUpdate,
-            ctx: &mut Context<Self, Result<StoreUpdateOutcome>>
-        ) -> Result<StoreUpdateOutcome>;
+            ctx: &mut Context<Self, Result<()>>
+        ) -> Result<()>;
 
         pub fn handle_get_final_snapshot(
             &mut self,
@@ -574,18 +567,6 @@ impl Message<GetChannelViewBytes> for MockStorageActor {
     }
 }
 
-impl Message<GetPendingDepositEvents> for MockStorageActor {
-    type Reply = Result<Vec<PendingDepositEventRecord>>;
-
-    async fn handle(
-        &mut self,
-        msg: GetPendingDepositEvents,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_get_pending_deposit_events(msg, ctx)
-    }
-}
-
 impl Message<DumpDb> for MockStorageActor {
     type Reply = Result<DbDump>;
 
@@ -595,7 +576,7 @@ impl Message<DumpDb> for MockStorageActor {
 }
 
 impl Message<AtomicUpdate> for MockStorageActor {
-    type Reply = Result<StoreUpdateOutcome>;
+    type Reply = Result<()>;
 
     async fn handle(
         &mut self,

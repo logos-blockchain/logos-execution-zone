@@ -35,7 +35,6 @@ use sequencer_stake_core::{SequencerEntry, SequencerKey};
 use sequencer_storage_actor::{
     StorageActorTrait,
     mock::{MockStorageActor, SharedStore},
-    protocol::StoreUpdateOutcome,
 };
 use sharding_pool_actor::{RestartConfig, ShardingPoolActor, protocol::Reset};
 use tempfile::TempDir;
@@ -301,7 +300,7 @@ fn prepare_mock_storage_with_stake(
 
     mock_storage
         .expect_handle_apply_store_update()
-        .returning(|_, _| Ok(StoreUpdateOutcome::default()));
+        .returning(|_, _| Ok(()));
 
     mock_storage
         .expect_handle_get_dead_letter_dispatches()
@@ -347,7 +346,7 @@ pub(super) async fn executor_args<S: StorageActorTrait>(
     .expect("Failed to load or create channel signing key");
 
     let slasher_ref = spawn_slasher(&config, &storage_ref, &channel_signing_key).await;
-    let channel_signer_ref = spawn_channel_signer(&config, &channel_signing_key);
+    let channel_signer_ref = spawn_channel_signer(&channel_signing_key);
 
     Args {
         config,
@@ -395,14 +394,9 @@ async fn spawn_slasher<S: StorageActorTrait>(
 
 /// A channel-signing actor signing with `channel_signing_key`.
 fn spawn_channel_signer(
-    config: &SequencerConfig,
     channel_signing_key: &sequencer_bedrock_actor::protocol::Ed25519Key,
 ) -> ActorRef<ChannelSigningActor> {
-    ChannelSigningActor::spawn(ChannelSigningActor::new(
-        channel_signing_key.clone(),
-        config.bedrock_config.channel_id,
-        sequencer_core::inscribed_block_deposits,
-    ))
+    ChannelSigningActor::spawn(ChannelSigningActor::new(channel_signing_key.clone()))
 }
 
 /// Initializes the executor state over `store`, against a Bedrock serving `channel`.
@@ -418,7 +412,7 @@ pub(super) async fn initialize_state(
     let channel = channel.clone();
     let storage_ref = MockStorageActor::spawn(store.mock());
     let slasher_ref = spawn_slasher(&config, &storage_ref, &channel_signing_key).await;
-    let channel_signer_ref = spawn_channel_signer(&config, &channel_signing_key);
+    let channel_signer_ref = spawn_channel_signer(&channel_signing_key);
 
     Box::pin(State::initialize(Args {
         config,
@@ -493,10 +487,7 @@ async fn a_publish_refused_as_stale_returns_its_transactions_to_the_mempool() ->
     let _res = logging::try_init();
 
     let (config, _home, sequencer_key) = staked_sequencer_config();
-    let mut mock_storage = prepare_mock_storage_with_stake(stake_entries(sequencer_key));
-    mock_storage
-        .expect_handle_get_pending_deposit_events()
-        .returning(|_msg, _ctx| Ok(Vec::new()));
+    let mock_storage = prepare_mock_storage_with_stake(stake_entries(sequencer_key));
 
     // The first publish loses the race; the second is served and its block
     // recorded, so the test can see what the retry carried.
@@ -534,12 +525,11 @@ async fn a_publish_refused_as_stale_returns_its_transactions_to_the_mempool() ->
                             pending_txs: Vec::new(),
                             lib: HeaderId::from([0; 32]),
                             lib_slot: Slot::from(0),
-                            channel_notes: Vec::new(),
                             finalized_config: MsgId::root(),
                             funding: Vec::new(),
+                            program_notes: None,
                         },
                         seq: ChannelSeq::mocked(8),
-                        released_notes: Vec::new(),
                     })
                 });
             mock_bedrock
@@ -600,10 +590,7 @@ async fn a_publish_expects_the_sequence_the_publisher_started_at() -> Result<()>
     let _res = logging::try_init();
 
     let (config, _home, sequencer_key) = staked_sequencer_config();
-    let mut mock_storage = prepare_mock_storage_with_stake(stake_entries(sequencer_key));
-    mock_storage
-        .expect_handle_get_pending_deposit_events()
-        .returning(|_msg, _ctx| Ok(Vec::new()));
+    let mock_storage = prepare_mock_storage_with_stake(stake_entries(sequencer_key));
 
     let (expected_tx, mut expected_rx) = mpsc::unbounded_channel();
     let executor = spawn_on_genesis(
@@ -669,10 +656,7 @@ async fn spawn_supervised_on_genesis(
     ActorRef<ShardingPoolActor<MockBedrockActor, ChannelId>>,
     mpsc::UnboundedReceiver<()>,
 )> {
-    let mut mock_storage = prepare_mock_storage_with_empty_genesis();
-    mock_storage
-        .expect_handle_get_pending_deposit_events()
-        .returning(|_msg, _ctx| Ok(Vec::new()));
+    let mock_storage = prepare_mock_storage_with_empty_genesis();
     let storage_ref = MockStorageActor::spawn(mock_storage);
 
     let (publisher_init_tx, publisher_inits) = mpsc::unbounded_channel();
@@ -775,10 +759,7 @@ async fn a_failed_production_turn_does_not_stop_the_actor() -> Result<()> {
     let _res = logging::try_init();
 
     let (config, _home) = sequencer_config();
-    let mut mock_storage = prepare_mock_storage_with_empty_genesis();
-    mock_storage
-        .expect_handle_get_pending_deposit_events()
-        .returning(|_msg, _ctx| Ok(Vec::new()));
+    let mock_storage = prepare_mock_storage_with_empty_genesis();
     let storage_ref = MockStorageActor::spawn(mock_storage);
 
     let executor = spawn_on_genesis(

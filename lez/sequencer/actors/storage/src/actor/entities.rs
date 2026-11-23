@@ -195,48 +195,6 @@ impl db::Storable<ColumnFamily> for ChannelView {
     const TYPE_NAME: &'static str = db::type_name!(ChannelView);
 }
 
-/// An L1 deposit event observed but not yet seen finalized.
-#[derive(BorshSerialize, BorshDeserialize)]
-pub struct PendingDeposit {
-    pub deposit_op_id: HashType,
-    pub source_tx_hash: HashType,
-    pub amount: u64,
-    pub metadata: Vec<u8>,
-}
-
-impl db::Storable<ColumnFamily> for PendingDeposit {
-    type Key = HashType;
-
-    const COLUMN_FAMILY: ColumnFamily = ColumnFamily::Pending;
-    const TYPE_NAME: &'static str = db::type_name!(PendingDeposit);
-}
-
-/// Identity of one withdrawal: the id of the channel note it releases.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, BorshSerialize, BorshDeserialize)]
-pub struct WithdrawalReconciliationKey {
-    pub released_note_id: [u8; 32],
-}
-
-impl AsRef<[u8]> for WithdrawalReconciliationKey {
-    fn as_ref(&self) -> &[u8] {
-        &self.released_note_id
-    }
-}
-
-/// An L2 withdraw intent this sequencer published, awaiting the Bedrock event
-/// that reports it.
-///
-/// Carries no value: the key is the whole fact, and presence is the intent.
-#[derive(BorshSerialize, BorshDeserialize)]
-pub struct PendingWithdrawal;
-
-impl db::Storable<ColumnFamily> for PendingWithdrawal {
-    type Key = WithdrawalReconciliationKey;
-
-    const COLUMN_FAMILY: ColumnFamily = ColumnFamily::Pending;
-    const TYPE_NAME: &'static str = db::type_name!(PendingWithdrawal);
-}
-
 /// A cross-zone delivery read off a peer block but not yet known to be
 /// irreversibly delivered.
 #[derive(BorshSerialize, BorshDeserialize)]

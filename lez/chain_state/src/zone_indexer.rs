@@ -293,6 +293,7 @@ mod tests {
             id: MsgId::root(),
             data: Inscription::new_unchecked(vec![tag]),
             signer: UnverifiedEd25519PublicKey::from_bytes(&[0; 32]).expect("valid key"),
+            steps: logos_blockchain_zone_sdk::InscriptionSteps::default(),
         })
     }
 

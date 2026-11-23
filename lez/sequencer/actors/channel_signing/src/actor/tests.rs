@@ -5,34 +5,25 @@ use logos_blockchain_zone_sdk::{
     core::{
         crypto::ZkHash,
         era::ForkDigest,
-        events::DepositNote,
         mantle::{
             channel::{SlotTimeframe, SlotTimeout},
-            ledger::{Inputs, Outputs},
+            notes::NoteNullifier,
             ops::{
-                channel::{
-                    ChannelId, MsgId, VerifiedChannelKeys,
-                    channel_transfer::ChannelTransferOp,
-                    inscribe::{Inscription, InscriptionOp},
-                    withdraw::ChannelWithdrawOp,
-                },
+                channel::{ChannelId, MsgId, VerifiedChannelKeys, withdraw::ChannelWithdrawOp},
                 transfer::TransferOp,
             },
         },
     },
-    key_management_system_service::keys::{Ed25519Signature, ZkPublicKey},
+    key_management_system_service::keys::Ed25519Signature,
 };
 
 use super::*;
-use crate::protocol::ObservedDeposit;
 
 const CHANNEL: [u8; 32] = [1; 32];
 const OWN_SECRET: [u8; 32] = [9; 32];
 const PEER_SECRET: [u8; 32] = [8; 32];
 /// A four-node committee: Bedrock asks three signatures of the next config.
 const COMMITTEE: [[u8; 32]; 4] = [[1; 32], [2; 32], [3; 32], [4; 32]];
-/// The deposit the pins below spend a note of.
-const DEPOSIT: [u8; 32] = [6; 32];
 
 /// Stands in for the core, the only thing that can actually submit.
 struct SubmitSink(mpsc::UnboundedSender<Submission>);
@@ -74,7 +65,6 @@ fn target() -> ConfigTarget {
         posting_timeframe: 300,
         posting_timeout: 25,
         configuration_threshold: NonZero::new(2).unwrap(),
-        transfer_threshold: NonZero::new(1).unwrap(),
     }
 }
 
@@ -83,7 +73,6 @@ fn view(target: Option<ConfigTarget>) -> ChannelView {
     ChannelView {
         live_keys: live_keys(),
         required_signatures: 2,
-        transfer_signatures: 2,
         target,
     }
 }
@@ -97,25 +86,13 @@ fn draft_tx(target: &ConfigTarget) -> Ops {
         SlotTimeframe::from(target.posting_timeframe),
         SlotTimeout::from(target.posting_timeout),
         target.configuration_threshold,
-        target.transfer_threshold,
     )
     .expect("the target's threshold is reachable with its keys");
     Ops::new(ForkDigest::new([0; 32]), [Op::ChannelConfig(op)])
 }
 
 fn actor(secret: [u8; 32]) -> ActorRef<ChannelSigningActor> {
-    ChannelSigningActor::spawn(ChannelSigningActor::new(
-        key(secret),
-        ChannelId::from(CHANNEL),
-        listed_deposits,
-    ))
-}
-
-/// Reads a test inscription as the deposit op ids it lists; `None` for one
-/// that lists none whole.
-fn listed_deposits(inscription: &[u8]) -> Option<Vec<[u8; 32]>> {
-    let (op_ids, rest) = inscription.as_chunks::<32>();
-    rest.is_empty().then(|| op_ids.to_vec())
+    ChannelSigningActor::spawn(ChannelSigningActor::new(key(secret)))
 }
 
 async fn tell_view(actor: &ActorRef<ChannelSigningActor>, view: ChannelView) {
@@ -203,7 +180,6 @@ fn committee_target() -> ConfigTarget {
         posting_timeframe: 300,
         posting_timeout: 25,
         configuration_threshold: NonZero::new(4).unwrap(),
-        transfer_threshold: NonZero::new(1).unwrap(),
     }
 }
 
@@ -211,7 +187,6 @@ fn committee_view() -> ChannelView {
     ChannelView {
         live_keys: committee_keys(),
         required_signatures: 3,
-        transfer_signatures: 3,
         target: Some(committee_target()),
     }
 }
@@ -221,8 +196,10 @@ fn committee_view() -> ChannelView {
 fn rival_tx(target: &ConfigTarget, proposer: u8) -> Ops {
     let mut tx = draft_tx(target);
     tx.try_push(Op::Transfer(TransferOp::new(
-        Inputs::new(NoteId(ZkHash::from(u64::from(proposer)))),
-        Outputs::empty(),
+        [NoteNullifier(ZkHash::from(u64::from(proposer)))].into(),
+        [].into(),
+        ZkHash::from(0_u64),
+        0,
     )))
     .expect("a second op fits");
 
@@ -668,9 +645,8 @@ async fn a_peer_does_not_sign_a_config_it_did_not_ask_for() {
     // Same shape, but installing a committee this node never derived.
     let mut rogue = target();
     rogue.keys = vec![key(PEER_SECRET).public_key()];
-    // Thresholds a one-key committee can reach, so the op itself is well formed.
+    // A threshold a one-key committee can reach, so the op itself is well formed.
     rogue.configuration_threshold = NonZero::new(1).unwrap();
-    rogue.transfer_threshold = NonZero::new(1).unwrap();
     actor
         .ask(Wire::Draft(Draft {
             tx: Box::new(draft_tx(&rogue)),
@@ -716,7 +692,9 @@ async fn a_draft_bundling_a_withdrawal_is_not_signed() {
     let mut tx = draft_tx(&target());
     tx.try_push(Op::ChannelWithdraw(ChannelWithdrawOp {
         channel_id: ChannelId::from(CHANNEL),
-        inputs: Inputs::new(NoteId(ZkHash::from(7_u64))),
+        inputs: [NoteNullifier(ZkHash::from(7_u64))].into(),
+        outputs: [].into(),
+        commitment_merkle_root: ZkHash::from(0_u64),
     }))
     .expect("a second op fits");
     actor
@@ -751,313 +729,4 @@ async fn a_draft_carrying_two_configs_is_not_signed() {
         outbound.try_recv().is_err(),
         "a transaction must carry exactly one config to be signed"
     );
-}
-
-fn deposit_note() -> DepositNote {
-    DepositNote {
-        note_id: NoteId(ZkHash::from(7_u64)),
-        value: 100,
-        pk: ZkPublicKey::from(ZkHash::from(3_u64)),
-    }
-}
-
-/// `inscription` by `signer`, pinned by a transfer of `inputs` into `outputs`;
-/// unfunded.
-fn pin_tx_of(signer: &Ed25519Key, inscription: Vec<u8>, inputs: Inputs, outputs: Outputs) -> Ops {
-    let inscription = InscriptionOp {
-        channel_id: ChannelId::from(CHANNEL),
-        inscription: Inscription::new_unchecked(inscription),
-        parent: MsgId::root(),
-        signer: signer.public_key().into_unverified(),
-    };
-    let transfer = ChannelTransferOp {
-        channel_id: ChannelId::from(CHANNEL),
-        inputs,
-        outputs,
-    };
-    Ops::new(
-        ForkDigest::new([0; 32]),
-        [
-            Op::ChannelInscribe(inscription),
-            Op::ChannelTransfer(transfer),
-        ],
-    )
-}
-
-fn deposit_input() -> Inputs {
-    Inputs::new(deposit_note().note_id)
-}
-
-/// The deposit note re-created unchanged.
-fn deposit_output() -> Outputs {
-    let note = deposit_note();
-    Outputs::new([Note::new(note.value, note.pk)])
-}
-
-/// A block by `signer` minting the deposit its transfer re-creates; unfunded.
-fn pin_tx(signer: &Ed25519Key) -> Ops {
-    pin_tx_of(signer, DEPOSIT.to_vec(), deposit_input(), deposit_output())
-}
-
-async fn observe_deposit(actor: &ActorRef<ChannelSigningActor>) {
-    actor
-        .ask(ObservedDeposits(vec![ObservedDeposit {
-            op_id: DEPOSIT,
-            notes: vec![deposit_note()],
-        }]))
-        .await
-        .expect("the actor should accept deposits");
-}
-
-/// Whether `actor` signs a peer's `tx`, with the deposit observed.
-async fn signs_peer_pin(actor: &ActorRef<ChannelSigningActor>, tx: Ops) -> bool {
-    let mut outbound = publisher(actor).await;
-    actor
-        .ask(Wire::Draft(Draft { tx: Box::new(tx) }))
-        .await
-        .expect("the actor should accept a peer draft");
-
-    matches!(outbound.try_recv(), Ok(Wire::Signature(_)))
-}
-
-#[tokio::test]
-async fn a_pin_needing_only_our_signature_is_answered_at_once() {
-    let actor = actor(OWN_SECRET);
-    tell_view(
-        &actor,
-        ChannelView {
-            transfer_signatures: 1,
-            ..view(None)
-        },
-    )
-    .await;
-    let mut outbound = publisher(&actor).await;
-
-    let signatures = actor
-        .ask(SignPin(Box::new(pin_tx(&key(OWN_SECRET)))))
-        .await
-        .expect("a reply")
-        .expect("this node is accredited");
-
-    let indices: Vec<u16> = signatures
-        .iter()
-        .map(|indexed| indexed.channel_key_index)
-        .collect();
-    assert_eq!(indices, vec![0]);
-    assert!(
-        outbound.try_recv().is_err(),
-        "a pin our signature completes needs no peer"
-    );
-}
-
-#[tokio::test]
-async fn a_pin_is_announced_and_answered_once_a_peer_signs() {
-    let actor = actor(OWN_SECRET);
-    tell_view(&actor, view(None)).await;
-    let mut outbound = publisher(&actor).await;
-    let tx = pin_tx(&key(OWN_SECRET));
-
-    let pending = tokio::spawn({
-        let actor = actor.clone();
-        let tx = tx.clone();
-        async move { actor.ask(SignPin(Box::new(tx))).await }
-    });
-    assert!(
-        matches!(outbound.recv().await, Some(Wire::Draft(_))),
-        "the pin should be announced"
-    );
-    peer_signs(&actor, &tx).await;
-
-    let signatures = pending
-        .await
-        .expect("the producer task")
-        .expect("a reply")
-        .expect("this node is accredited");
-    let indices: Vec<u16> = signatures
-        .iter()
-        .map(|indexed| indexed.channel_key_index)
-        .collect();
-    assert_eq!(indices, vec![0, 1]);
-}
-
-#[tokio::test]
-async fn a_peer_signs_a_pin() {
-    let actor = actor(PEER_SECRET);
-    tell_view(&actor, view(None)).await;
-    observe_deposit(&actor).await;
-
-    assert!(signs_peer_pin(&actor, pin_tx(&key(OWN_SECRET))).await);
-}
-
-/// The same signatures satisfy a withdraw sitting beside the transfer.
-#[tokio::test]
-async fn a_pin_bundling_a_withdrawal_is_not_signed() {
-    let actor = actor(PEER_SECRET);
-    tell_view(&actor, view(None)).await;
-    observe_deposit(&actor).await;
-
-    let mut tx = pin_tx(&key(OWN_SECRET));
-    tx.try_push(Op::ChannelWithdraw(ChannelWithdrawOp {
-        channel_id: ChannelId::from(CHANNEL),
-        inputs: Inputs::new(NoteId(ZkHash::from(8_u64))),
-    }))
-    .expect("a third op fits");
-
-    assert!(!signs_peer_pin(&actor, tx).await);
-}
-
-#[tokio::test]
-async fn a_pin_by_a_key_outside_the_committee_is_not_signed() {
-    let actor = actor(PEER_SECRET);
-    tell_view(&actor, view(None)).await;
-    observe_deposit(&actor).await;
-
-    assert!(!signs_peer_pin(&actor, pin_tx(&key([5; 32]))).await);
-}
-
-/// Our signature over the draft would also prove its inscription, so a block
-/// signed as us must never get it.
-#[tokio::test]
-async fn a_pin_inscribed_as_us_is_not_signed() {
-    let actor = actor(PEER_SECRET);
-    tell_view(&actor, view(None)).await;
-    observe_deposit(&actor).await;
-
-    assert!(!signs_peer_pin(&actor, pin_tx(&key(PEER_SECRET))).await);
-}
-
-#[tokio::test]
-async fn a_pin_of_an_unobserved_deposit_is_not_signed() {
-    let actor = actor(PEER_SECRET);
-    tell_view(&actor, view(None)).await;
-
-    assert!(!signs_peer_pin(&actor, pin_tx(&key(OWN_SECRET))).await);
-}
-
-#[tokio::test]
-async fn a_pin_of_a_deposit_minted_in_a_final_block_is_not_signed() {
-    let actor = actor(PEER_SECRET);
-    tell_view(&actor, view(None)).await;
-    observe_deposit(&actor).await;
-    actor
-        .ask(FinalMints(vec![DEPOSIT]))
-        .await
-        .expect("the actor should accept final mints");
-
-    assert!(!signs_peer_pin(&actor, pin_tx(&key(OWN_SECRET))).await);
-}
-
-/// Balanced, so Bedrock would take it, but the stake moves to another key.
-#[tokio::test]
-async fn a_pin_re_keying_a_deposit_note_is_not_signed() {
-    let actor = actor(PEER_SECRET);
-    tell_view(&actor, view(None)).await;
-    observe_deposit(&actor).await;
-
-    let output = Note::new(deposit_note().value, ZkPublicKey::from(ZkHash::from(4_u64)));
-    let tx = pin_tx_of(
-        &key(OWN_SECRET),
-        DEPOSIT.to_vec(),
-        deposit_input(),
-        Outputs::new([output]),
-    );
-
-    assert!(!signs_peer_pin(&actor, tx).await);
-}
-
-#[tokio::test]
-async fn a_pin_on_a_deposit_its_block_does_not_mint_is_not_signed() {
-    let actor = actor(PEER_SECRET);
-    tell_view(&actor, view(None)).await;
-    observe_deposit(&actor).await;
-
-    let tx = pin_tx_of(
-        &key(OWN_SECRET),
-        [5_u8; 32].to_vec(),
-        deposit_input(),
-        deposit_output(),
-    );
-
-    assert!(!signs_peer_pin(&actor, tx).await);
-}
-
-#[tokio::test]
-async fn a_pin_inscribing_no_block_is_not_signed() {
-    let actor = actor(PEER_SECRET);
-    tell_view(&actor, view(None)).await;
-    observe_deposit(&actor).await;
-
-    let tx = pin_tx_of(
-        &key(OWN_SECRET),
-        vec![7_u8; 8],
-        deposit_input(),
-        deposit_output(),
-    );
-
-    assert!(!signs_peer_pin(&actor, tx).await);
-}
-
-#[tokio::test]
-async fn a_pin_spending_no_note_is_not_signed() {
-    let actor = actor(PEER_SECRET);
-    tell_view(&actor, view(None)).await;
-    observe_deposit(&actor).await;
-
-    let tx = pin_tx_of(
-        &key(OWN_SECRET),
-        DEPOSIT.to_vec(),
-        Inputs::empty(),
-        Outputs::empty(),
-    );
-
-    assert!(!signs_peer_pin(&actor, tx).await);
-}
-
-/// A peer's L1 node can be behind the proposer's, so its draft can arrive
-/// before the deposit does.
-#[tokio::test]
-async fn a_pin_is_signed_once_its_deposit_is_observed() {
-    let actor = actor(PEER_SECRET);
-    tell_view(&actor, view(None)).await;
-    let mut outbound = publisher(&actor).await;
-
-    actor
-        .ask(Wire::Draft(Draft {
-            tx: Box::new(pin_tx(&key(OWN_SECRET))),
-        }))
-        .await
-        .expect("the actor should accept a peer draft");
-    assert!(outbound.try_recv().is_err());
-    observe_deposit(&actor).await;
-
-    assert!(matches!(outbound.try_recv(), Ok(Wire::Signature(_))));
-}
-
-#[tokio::test]
-async fn only_the_latest_pins_wait_for_their_deposit() {
-    let actor = actor(PEER_SECRET);
-    tell_view(&actor, view(None)).await;
-    let mut outbound = publisher(&actor).await;
-
-    // Distinct pins of the one deposit: each block lists it a different
-    // number of times.
-    for listed in 1..=PARKED_PINS.saturating_add(1) {
-        let tx = pin_tx_of(
-            &key(OWN_SECRET),
-            DEPOSIT.repeat(listed),
-            deposit_input(),
-            deposit_output(),
-        );
-        actor
-            .ask(Wire::Draft(Draft { tx: Box::new(tx) }))
-            .await
-            .expect("the actor should accept a peer draft");
-    }
-    observe_deposit(&actor).await;
-
-    let mut signed = 0_usize;
-    while let Ok(Wire::Signature(_)) = outbound.try_recv() {
-        signed = signed.saturating_add(1);
-    }
-    assert_eq!(signed, PARKED_PINS);
 }

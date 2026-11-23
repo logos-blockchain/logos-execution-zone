@@ -461,7 +461,17 @@ impl IndexerCore {
                         ZoneMessage::Deposit(_) | ZoneMessage::Withdraw(_) => continue,
                     };
 
-                    let block: Block = match borsh::from_slice(&zone_block.data) {
+                    let block: Block = match borsh::from_slice(&zone_block.data).and_then(
+                        |block| {
+                            if chain_state::vault::mints_backed(&block, &zone_block.steps) {
+                                Ok(block)
+                            } else {
+                                Err(std::io::Error::other(
+                                    "the block's mints differ from the vault's deposits",
+                                ))
+                            }
+                        },
+                    ) {
                         Ok(b) => b,
                         Err(error) => {
                             // The stall must be durable before the cursor moves.

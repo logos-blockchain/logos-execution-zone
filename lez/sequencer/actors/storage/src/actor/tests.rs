@@ -25,11 +25,10 @@ use crate::{
         GetCrossZonePeerFloorBytes, GetCrossZonePeerTip, GetDeadLetterDispatchCount,
         GetDeadLetterDispatchRetainedCount, GetDeadLetterDispatches, GetFinalSnapshot,
         GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
-        GetPendingCrossZoneDispatchCount, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
-        GetTransactionByHash, GetTransactionReceiptByHash, GetZoneCheckpoint,
-        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RecordDispatchFailure,
-        RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip,
-        UpdateZoneCheckpoint, WithdrawalReconciliationKey, ZoneCheckpointRecord,
+        GetPendingCrossZoneDispatchCount, GetPendingCrossZoneDispatches, GetTransactionByHash,
+        GetTransactionReceiptByHash, GetZoneCheckpoint, PendingCrossZoneDispatchRecord,
+        RecordDispatchFailure, RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes,
+        SetCrossZonePeerTip, UpdateZoneCheckpoint, ZoneCheckpointRecord,
     },
 };
 
@@ -42,11 +41,7 @@ fn bookkeeping_update() -> AtomicUpdate {
         head_state: Arc::new(V03State::new()),
         final_snapshot: None,
         finalized_up_to: None,
-        new_deposit_events: Vec::new(),
-        finalized_deposit_records: HashSet::new(),
         finalized_dispatch_records: HashSet::new(),
-        consumed_withdrawals: HashSet::new(),
-        new_withdraw_intents: HashSet::new(),
         zone_anchor: None,
         events: Vec::new(),
         channel_view: None,
@@ -68,21 +63,6 @@ async fn stored_checkpoint(storage_ref: &ActorRef<StorageActor>) -> Option<Vec<u
         .await
         .expect("Failed to read the checkpoint")
         .map(|checkpoint| checkpoint.bytes)
-}
-
-fn withdrawal_key(byte: u8) -> WithdrawalReconciliationKey {
-    WithdrawalReconciliationKey {
-        released_note_id: [byte; 32],
-    }
-}
-
-fn deposit_record(byte: u8) -> PendingDepositEventRecord {
-    PendingDepositEventRecord {
-        deposit_op_id: HashType([byte; 32]),
-        source_tx_hash: HashType([byte; 32]),
-        amount: u64::from(byte),
-        metadata: Vec::new(),
-    }
 }
 
 /// An update pinning the head to `head_tip` and writing `blocks`, nothing else.
@@ -666,160 +646,6 @@ async fn shrink_only_reorg_rewinds_the_tip() {
             .expect("Failed to look the transaction up"),
         None,
         "The swept block's transactions must leave the index with it"
-    );
-}
-
-/// The reconciliation is a set membership test, so an intent has to outlive the
-/// update that raised it and every later update that touches the set.
-#[tokio::test]
-async fn withdraw_intents_survive_later_updates() {
-    let dir = tempfile::tempdir().expect("Failed to create temp dir");
-    let storage_ref = spawn_with_blocks(dir.path(), vec![]).await;
-
-    // Raised one at a time, as the produce path does: each update must leave the
-    // earlier intents alone.
-    for byte in 1..=3 {
-        storage_ref
-            .ask(AtomicUpdate {
-                new_withdraw_intents: HashSet::from([withdrawal_key(byte)]),
-                ..bookkeeping_update()
-            })
-            .await
-            .expect("Failed to raise the intent");
-    }
-
-    let outcome = storage_ref
-        .ask(AtomicUpdate {
-            consumed_withdrawals: (1..=3).map(withdrawal_key).collect(),
-            ..bookkeeping_update()
-        })
-        .await
-        .expect("Failed to reconcile the events");
-
-    assert!(
-        outcome.unmatched_withdrawals.is_empty(),
-        "Every reported note was published by this node, so none is unmatched"
-    );
-}
-
-/// The outcome reports the events this node cannot account for — never the
-/// intents it is still waiting on.
-#[tokio::test]
-async fn withdraw_event_without_an_intent_is_reported_unmatched() {
-    let dir = tempfile::tempdir().expect("Failed to create temp dir");
-    let storage_ref = spawn_with_blocks(dir.path(), vec![]).await;
-
-    storage_ref
-        .ask(AtomicUpdate {
-            new_withdraw_intents: HashSet::from([withdrawal_key(1)]),
-            ..bookkeeping_update()
-        })
-        .await
-        .expect("Failed to raise the intent");
-
-    // Note 2 was never published here; note 1 is still outstanding and must not
-    // be reported just because another event arrived.
-    let outcome = storage_ref
-        .ask(AtomicUpdate {
-            consumed_withdrawals: HashSet::from([withdrawal_key(2)]),
-            ..bookkeeping_update()
-        })
-        .await
-        .expect("Failed to reconcile the event");
-
-    assert_eq!(outcome.unmatched_withdrawals, vec![withdrawal_key(2)]);
-}
-
-/// A settled intent is gone for good, so a re-delivered event has nothing left
-/// to match.
-#[tokio::test]
-async fn consumed_withdrawal_is_not_matched_twice() {
-    let dir = tempfile::tempdir().expect("Failed to create temp dir");
-    let storage_ref = spawn_with_blocks(dir.path(), vec![]).await;
-
-    storage_ref
-        .ask(AtomicUpdate {
-            new_withdraw_intents: HashSet::from([withdrawal_key(1)]),
-            ..bookkeeping_update()
-        })
-        .await
-        .expect("Failed to raise the intent");
-    let first = storage_ref
-        .ask(AtomicUpdate {
-            consumed_withdrawals: HashSet::from([withdrawal_key(1)]),
-            ..bookkeeping_update()
-        })
-        .await
-        .expect("Failed to reconcile the event");
-    assert!(first.unmatched_withdrawals.is_empty());
-
-    let second = storage_ref
-        .ask(AtomicUpdate {
-            consumed_withdrawals: HashSet::from([withdrawal_key(1)]),
-            ..bookkeeping_update()
-        })
-        .await
-        .expect("Failed to reconcile the re-delivery");
-
-    assert_eq!(second.unmatched_withdrawals, vec![withdrawal_key(1)]);
-}
-
-/// `accepted_deposits` is what the caller logs as newly owed mints, so a
-/// re-delivery of an already-pending deposit must count for nothing.
-#[tokio::test]
-async fn only_newly_recorded_deposits_are_counted() {
-    let dir = tempfile::tempdir().expect("Failed to create temp dir");
-    let storage_ref = spawn_with_blocks(dir.path(), vec![]).await;
-
-    let first = storage_ref
-        .ask(AtomicUpdate {
-            new_deposit_events: vec![deposit_record(1), deposit_record(2)],
-            ..bookkeeping_update()
-        })
-        .await
-        .expect("Failed to record the deposits");
-    assert_eq!(first.accepted_deposits, 2);
-
-    // One already pending, one new: only the new one is owed.
-    let second = storage_ref
-        .ask(AtomicUpdate {
-            new_deposit_events: vec![deposit_record(2), deposit_record(3)],
-            ..bookkeeping_update()
-        })
-        .await
-        .expect("Failed to record the deposits");
-    assert_eq!(second.accepted_deposits, 1);
-
-    let pending = storage_ref
-        .ask(GetPendingDepositEvents)
-        .await
-        .expect("Failed to read the pending deposits");
-    assert_eq!(pending.len(), 3);
-}
-
-/// Backfill can deliver a deposit and its finalization in one event: the record
-/// is owed nothing, and counting it would log a mint that never comes.
-#[tokio::test]
-async fn deposit_finalized_in_the_same_update_is_never_recorded() {
-    let dir = tempfile::tempdir().expect("Failed to create temp dir");
-    let storage_ref = spawn_with_blocks(dir.path(), vec![]).await;
-
-    let outcome = storage_ref
-        .ask(AtomicUpdate {
-            new_deposit_events: vec![deposit_record(1)],
-            finalized_deposit_records: HashSet::from([HashType([1; 32])]),
-            ..bookkeeping_update()
-        })
-        .await
-        .expect("Failed to apply the update");
-
-    assert_eq!(outcome.accepted_deposits, 0);
-    assert!(
-        storage_ref
-            .ask(GetPendingDepositEvents)
-            .await
-            .expect("Failed to read the pending deposits")
-            .is_empty()
     );
 }
 
@@ -1467,37 +1293,6 @@ async fn acc_id_to_tx_map_corectness() {
             block_3_clock_tx.into(),
             block_4_clock_tx.into()
         ])
-    );
-}
-
-/// A record goes by its own op id, never because some other deposit finalized.
-#[tokio::test]
-async fn only_the_finalized_deposit_record_is_dropped() {
-    let dir = tempfile::tempdir().expect("Failed to create temp dir");
-    let storage_ref = spawn_with_blocks(dir.path(), vec![]).await;
-
-    storage_ref
-        .ask(AtomicUpdate {
-            new_deposit_events: vec![deposit_record(1), deposit_record(2)],
-            ..bookkeeping_update()
-        })
-        .await
-        .expect("Failed to record the deposits");
-
-    storage_ref
-        .ask(AtomicUpdate {
-            finalized_deposit_records: HashSet::from([HashType([1; 32])]),
-            ..bookkeeping_update()
-        })
-        .await
-        .expect("Failed to settle the deposit");
-
-    assert_eq!(
-        storage_ref
-            .ask(GetPendingDepositEvents)
-            .await
-            .expect("Failed to read the pending deposits"),
-        vec![deposit_record(2)]
     );
 }
 

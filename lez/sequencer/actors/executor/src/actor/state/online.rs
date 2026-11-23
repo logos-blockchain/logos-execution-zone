@@ -314,9 +314,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                 .ask(sequencer_bedrock_actor::protocol::PublishBlock {
                     channel_id: config.bedrock_config.channel_id,
                     block: block.clone(),
-                    withdrawals: Vec::new(),
                     parent: None,
                     expected_seq: None,
+                    bridge: sequencer_bedrock_actor::protocol::BridgeMoves::default(),
                 })
                 .await
                 .map_err(SendErrorExt::flatten)?;
@@ -377,7 +377,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                         keys,
                         channel_params,
                         configuration_threshold,
-                        transfer_threshold: configuration_threshold,
                     })
                     .await
                     .map_err(SendErrorExt::flatten)?
@@ -386,9 +385,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
                 .ask(sequencer_bedrock_actor::protocol::PublishBlock {
                     channel_id,
                     block: genesis.clone(),
-                    withdrawals: Vec::new(),
                     parent: None,
                     expected_seq: None,
+                    bridge: sequencer_bedrock_actor::protocol::BridgeMoves::default(),
                 })
                 .await
                 .map_err(SendErrorExt::flatten)?,

@@ -1372,6 +1372,56 @@ mod inner {
         }
 
         #[test]
+        fn bridge_withdraw_returns_the_amount_to_custody_and_emits_the_payout() {
+            let signer = lee::PrivateKey::try_new([0x44; 32]).unwrap();
+            let sender_id = AccountId::from(&lee::PublicKey::new_from_private_key(&signer));
+            let custody = bridge_core::compute_bridge_account_id(bridge_account_id());
+            let mut state = V03State::new()
+                .with_public_accounts([
+                    (custody, Account::default()),
+                    (sender_id, Account::funded(9)),
+                ])
+                .with_programs_at([(bridge_account_id(), bridge(), true)]);
+
+            let root = Actor::new(sender_id, bridge_account_id());
+            let message = public_transaction::Message::try_new(
+                root,
+                [
+                    root,
+                    Actor::native_balance(sender_id),
+                    Actor::native_balance(custody),
+                ],
+                std::collections::BTreeMap::from([(sender_id, lee_core::account::Nonce(0))]),
+                bridge_core::Message::Withdraw {
+                    amount: 4,
+                    bedrock_account_pk: [6; 32],
+                },
+            )
+            .unwrap();
+            let witness_set = public_transaction::WitnessSet::for_message(&message, &[&signer]);
+            let tx = PublicTransaction::new(message, witness_set);
+            let events = state.transition_from_public_transaction(&tx, 1, 0).unwrap();
+
+            assert_eq!(events.len(), 1);
+            assert_eq!(
+                bridge_core::event::Withdraw::from_bytes(&events[0].event.data).unwrap(),
+                bridge_core::event::Withdraw {
+                    sender_id,
+                    amount: 4,
+                    bedrock_account_pk: [6; 32],
+                }
+            );
+            assert_eq!(
+                state.get_account_by_id(sender_id).data,
+                Account::funded(5).data
+            );
+            assert_eq!(
+                state.get_account_by_id(custody).data,
+                Account::funded(4).data
+            );
+        }
+
+        #[test]
         fn builtin_constructors_carry_their_ids_and_elfs() {
             let bridge_program = bridge();
             let sequencer_stake_program = sequencer_stake();

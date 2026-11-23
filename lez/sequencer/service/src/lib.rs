@@ -361,11 +361,7 @@ pub fn run(
         info!("Slasher Actor spawned");
 
         let channel_signer_ref = ChannelSigningActor::spawn_with_mailbox(
-            ChannelSigningActor::new(
-                channel_signing_key.clone(),
-                bedrock_config.channel_id,
-                sequencer_core::inscribed_block_deposits,
-            ),
+            ChannelSigningActor::new(channel_signing_key.clone()),
             kameo::mailbox::bounded(sequencer_channel_signing_actor::MAILBOX_CAPACITY),
         );
         actor_handle::record_mailbox_capacity(&channel_signer_ref);
@@ -730,14 +726,13 @@ fn bedrock_actor_args(
                 pending_txs: Vec::new(),
                 lib: HeaderId::from([0; 32]),
                 lib_slot: Slot::from(0),
-                channel_notes: Vec::new(),
                 finalized_config: MsgId::root(),
                 funding: Vec::new(),
+                program_notes: None,
             },
             // Block ids only grow, so a sequence derived from them continues the
             // stored one across restarts and the store keeps each new checkpoint.
             seq: ChannelSeq::mocked(block_id.saturating_add(1)),
-            released_notes: Vec::new(),
         }
     };
     let create_outcome = outcome.clone();
