@@ -174,6 +174,7 @@ fn staging(upgrade: &Upgrade) -> Actor {
             image_id: upgrade.image_id,
             immutable: false,
             activation_height: ACTIVATION_HEIGHT,
+            env_var: Vec::new(),
         },
     )
 }
@@ -200,6 +201,7 @@ fn schedule_message(upgrade: &Upgrade, committee_size: usize) -> Message {
         image_id: upgrade.image_id,
         immutable: false,
         activation_height: ACTIVATION_HEIGHT,
+        env_var: Vec::new(),
     };
     Message::Schedule {
         name: programs::CLOCK_NAME,
@@ -208,6 +210,7 @@ fn schedule_message(upgrade: &Upgrade, committee_size: usize) -> Message {
         immutable: false,
         activation_height: ACTIVATION_HEIGHT,
         approvals: approvals(&proposal, committee_size),
+        env_var: Vec::new(),
     }
 }
 

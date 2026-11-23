@@ -139,7 +139,7 @@ impl SystemApprovals {
                 usable.sort_by_key(|approval| std::cmp::Reverse(approval.valid_until));
                 usable.truncate(threshold);
                 Some(ProposalApprovals {
-                    proposal: *proposal,
+                    proposal: proposal.clone(),
                     approvals: usable,
                 })
             })
@@ -230,19 +230,21 @@ mod tests {
             image_id: [7; 8],
             immutable: false,
             activation_height: ACTIVATION_HEIGHT,
+            env_var: Vec::new(),
         }
     }
 
     fn signed_of(proposal: Proposal, seed: u8, valid_until: BlockId) -> SignedApproval {
+        let signature = key(seed)
+            .sign(&approval_message(CHANNEL_ID, &proposal, valid_until))
+            .to_bytes()
+            .to_vec();
         SignedApproval {
             proposal,
             approval: Approval {
                 signer: sequencer_key(seed),
                 valid_until,
-                signature: key(seed)
-                    .sign(&approval_message(CHANNEL_ID, &proposal, valid_until))
-                    .to_bytes()
-                    .to_vec(),
+                signature,
             },
         }
     }
@@ -257,6 +259,7 @@ mod tests {
             first_segment: AccountId::new([index; 32]),
             image_id: [7; 8],
             immutable: false,
+            env_var: Vec::new(),
         }
     }
 

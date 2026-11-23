@@ -223,9 +223,10 @@ mod tests {
             first_segment: lee::AccountId::new([9; 32]),
             image_id: [7; 8],
             immutable: false,
+            env_var: Vec::new(),
         };
         let signed = SignedApproval {
-            proposal,
+            proposal: proposal.clone(),
             approval: Approval {
                 signer: sequencer_stake_core::SequencerKey::new(signer).unwrap(),
                 valid_until,

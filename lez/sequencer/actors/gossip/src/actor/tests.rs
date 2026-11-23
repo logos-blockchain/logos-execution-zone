@@ -553,10 +553,11 @@ async fn a_system_approval_published_by_one_node_reaches_the_others() {
         image_id: [7; 8],
         immutable: false,
         activation_height: 50,
+        env_var: Vec::new(),
     };
     let key = SigningKey::from_bytes(&[62; 32]);
     let sent = SignedApproval {
-        proposal,
+        proposal: proposal.clone(),
         approval: Approval {
             signer: SequencerKey::new(key.verifying_key().to_bytes()).expect("valid key"),
             valid_until: 40,

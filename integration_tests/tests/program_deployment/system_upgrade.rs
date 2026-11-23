@@ -130,7 +130,7 @@ async fn submit_approvals(
         committee_approvals(ctx, proposal, now.saturating_add(APPROVAL_LIFETIME)).await?
     {
         let signed = system_upgrader_core::SignedApproval {
-            proposal: *proposal,
+            proposal: proposal.clone(),
             approval,
         };
         ctx.sequencer_client()
@@ -185,6 +185,7 @@ async fn schedule_bridge_upgrade(
             image_id,
             immutable: false,
             activation_height,
+            env_var: Vec::new(),
         },
     )
     .await?;
@@ -193,9 +194,10 @@ async fn schedule_bridge_upgrade(
         image_id,
         immutable: false,
         activation_height,
+        env_var: Vec::new(),
     };
     wait_until("the upgrade to be scheduled", || async {
-        Ok(scheduled(ctx, &programs::BRIDGE_NAME).await? == Some(expected))
+        Ok(scheduled(ctx, &programs::BRIDGE_NAME).await?.as_ref() == Some(&expected))
     })
     .await?;
     Ok(activation_height)
@@ -374,6 +376,7 @@ async fn an_approved_system_program_installs_and_runs() -> Result<()> {
             first_segment: segment_ids[0],
             image_id: new_code.id(),
             immutable: false,
+            env_var: Vec::new(),
         },
     )
     .await?;

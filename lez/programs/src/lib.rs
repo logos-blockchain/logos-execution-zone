@@ -268,13 +268,14 @@ mod inner {
             }
 
             fn schedule_proposal(name: SystemProgramName, first_segment: AccountId) -> Proposal {
-                schedule_proposal_for(name, first_segment, false)
+                schedule_proposal_for(name, first_segment, false, Vec::new())
             }
 
             fn schedule_proposal_for(
                 name: SystemProgramName,
                 first_segment: AccountId,
                 immutable: bool,
+                env_var: Vec<u8>,
             ) -> Proposal {
                 Proposal::Schedule {
                     name,
@@ -282,6 +283,7 @@ mod inner {
                     image_id: ping_receiver().id(),
                     immutable,
                     activation_height: ACTIVATION_HEIGHT,
+                    env_var,
                 }
             }
 
@@ -370,13 +372,14 @@ mod inner {
                 first_segment: AccountId,
                 approvals: Vec<Approval>,
             ) -> PublicTransaction {
-                schedule_tx_for(name, first_segment, false, approvals)
+                schedule_tx_for(name, first_segment, false, Vec::new(), approvals)
             }
 
             fn schedule_tx_for(
                 name: SystemProgramName,
                 first_segment: AccountId,
                 immutable: bool,
+                env_var: Vec<u8>,
                 approvals: Vec<Approval>,
             ) -> PublicTransaction {
                 let upgrade = ScheduledUpgrade {
@@ -384,6 +387,7 @@ mod inner {
                     image_id: ping_receiver().id(),
                     immutable,
                     activation_height: ACTIVATION_HEIGHT,
+                    env_var: env_var.clone(),
                 };
                 system_upgrader_tx(
                     &[
@@ -398,6 +402,7 @@ mod inner {
                         immutable,
                         activation_height: ACTIVATION_HEIGHT,
                         approvals,
+                        env_var,
                     },
                 )
             }
@@ -406,13 +411,15 @@ mod inner {
             fn approved_schedule_tx_for(
                 first_segment: AccountId,
                 immutable: bool,
+                env_var: Vec<u8>,
             ) -> PublicTransaction {
                 schedule_tx_for(
                     CLOCK_NAME,
                     first_segment,
                     immutable,
+                    env_var.clone(),
                     approvals_for(
-                        &schedule_proposal_for(CLOCK_NAME, first_segment, immutable),
+                        &schedule_proposal_for(CLOCK_NAME, first_segment, immutable, env_var),
                         &[1, 2],
                         VALID_UNTIL,
                     ),
@@ -429,6 +436,7 @@ mod inner {
                     image_id: ping_receiver().id(),
                     immutable: false,
                     activation_height,
+                    env_var: Vec::new(),
                 };
                 let proposal = Proposal::Schedule {
                     name: CLOCK_NAME,
@@ -436,6 +444,7 @@ mod inner {
                     image_id: ping_receiver().id(),
                     immutable: false,
                     activation_height,
+                    env_var: Vec::new(),
                 };
                 system_upgrader_tx(
                     &[
@@ -450,6 +459,7 @@ mod inner {
                         immutable: false,
                         activation_height,
                         approvals: approvals_for(&proposal, &[1, 2], VALID_UNTIL),
+                        env_var: Vec::new(),
                     },
                 )
             }
@@ -497,19 +507,21 @@ mod inner {
             }
 
             fn install_tx(name: SystemProgramName, first_segment: AccountId) -> PublicTransaction {
-                install_tx_for(name, first_segment, false)
+                install_tx_for(name, first_segment, false, Vec::new())
             }
 
             fn install_tx_for(
                 name: SystemProgramName,
                 first_segment: AccountId,
                 immutable: bool,
+                env_var: Vec<u8>,
             ) -> PublicTransaction {
                 let proposal = Proposal::Install {
                     name,
                     first_segment,
                     image_id: ping_receiver().id(),
                     immutable,
+                    env_var: env_var.clone(),
                 };
                 system_upgrader_tx(
                     &[committee_actor(), loader_actor(&name)],
@@ -519,6 +531,7 @@ mod inner {
                         image_id: ping_receiver().id(),
                         immutable,
                         approvals: approvals_for(&proposal, &[1, 2], VALID_UNTIL),
+                        env_var,
                     },
                 )
             }
@@ -561,6 +574,7 @@ mod inner {
                     image_id: ping_receiver().id(),
                     immutable: false,
                     activation_height: ACTIVATION_HEIGHT,
+                    env_var: Vec::new(),
                 })
             }
 
@@ -605,7 +619,7 @@ mod inner {
                 let (mut state, ids) = staged();
                 state
                     .transition_from_public_transaction(
-                        &approved_schedule_tx_for(ids[0], true),
+                        &approved_schedule_tx_for(ids[0], true, Vec::new()),
                         1,
                         0,
                     )
@@ -861,6 +875,7 @@ mod inner {
                     image_id,
                     immutable: false,
                     activation_height: ACTIVATION_HEIGHT,
+                    env_var: Vec::new(),
                 };
                 let proposal = Proposal::Schedule {
                     name: CLOCK_NAME,
@@ -868,6 +883,7 @@ mod inner {
                     image_id,
                     immutable: false,
                     activation_height: ACTIVATION_HEIGHT,
+                    env_var: Vec::new(),
                 };
                 let tx = system_upgrader_tx(
                     &[
@@ -882,6 +898,7 @@ mod inner {
                         immutable: false,
                         activation_height: ACTIVATION_HEIGHT,
                         approvals: approvals_for(&proposal, &[1, 2], VALID_UNTIL),
+                        env_var: Vec::new(),
                     },
                 );
 
@@ -906,6 +923,7 @@ mod inner {
                     first_segment: ids[0],
                     image_id,
                     immutable: false,
+                    env_var: Vec::new(),
                 };
                 let tx = system_upgrader_tx(
                     &[committee_actor(), loader_actor(&name)],
@@ -915,6 +933,7 @@ mod inner {
                         image_id,
                         immutable: false,
                         approvals: approvals_for(&proposal, &[1, 2], VALID_UNTIL),
+                        env_var: Vec::new(),
                     },
                 );
 
@@ -1044,6 +1063,7 @@ mod inner {
                             &[1, 2],
                             VALID_UNTIL,
                         ),
+                        env_var: Vec::new(),
                     },
                 );
                 let message = public_transaction::Message::try_new(
@@ -1107,7 +1127,11 @@ mod inner {
                 let program = AccountId::from_system_program_name(&name);
 
                 state
-                    .transition_from_public_transaction(&install_tx_for(name, ids[0], true), 1, 0)
+                    .transition_from_public_transaction(
+                        &install_tx_for(name, ids[0], true, Vec::new()),
+                        1,
+                        0,
+                    )
                     .expect("a new system program installs immutable");
                 assert_eq!(
                     state.get_program_image_id(program),
@@ -1123,6 +1147,7 @@ mod inner {
                             name,
                             ids[0],
                             false,
+                            Vec::new(),
                             approvals_for(&schedule_proposal(name, ids[0]), &[1, 2], VALID_UNTIL),
                         ),
                         2,
@@ -1133,6 +1158,70 @@ mod inner {
                     err.to_string()
                         .contains("AssertMutable target is immutable"),
                     "got: {err}"
+                );
+            }
+
+            #[test]
+            fn an_upgrade_sets_the_approved_env_var() {
+                let (mut state, ids) = staged();
+
+                state
+                    .transition_from_public_transaction(
+                        &approved_schedule_tx_for(ids[0], false, vec![1, 2, 3]),
+                        1,
+                        0,
+                    )
+                    .expect("scheduling succeeds");
+                assert_eq!(
+                    schedule(&state).map(|upgrade| upgrade.env_var),
+                    Some(vec![1, 2, 3])
+                );
+                state
+                    .transition_from_public_transaction(
+                        &apply_tx(ACTIVATION_HEIGHT),
+                        ACTIVATION_HEIGHT,
+                        0,
+                    )
+                    .expect("the upgrade applies at its height");
+
+                assert_eq!(header(&state, clock_account_id()).env_var, vec![1, 2, 3]);
+            }
+
+            #[test]
+            fn scheduling_an_env_var_over_the_cap_is_refused() {
+                let (mut state, ids) = staged();
+
+                let err = state
+                    .transition_from_public_transaction(
+                        &approved_schedule_tx_for(
+                            ids[0],
+                            false,
+                            vec![0; program_loader_core::MAX_ENV_VAR_LEN + 1],
+                        ),
+                        1,
+                        0,
+                    )
+                    .expect_err("an oversized env_var can't be scheduled");
+                assert!(err.to_string().contains("env_var exceeds"), "got: {err}");
+                assert_eq!(schedule(&state), None);
+            }
+
+            #[test]
+            fn installing_sets_the_approved_env_var() {
+                let (mut state, ids) = staged();
+                let name = SystemProgramName::new(b"new_system_program");
+
+                state
+                    .transition_from_public_transaction(
+                        &install_tx_for(name, ids[0], false, vec![4, 5]),
+                        1,
+                        0,
+                    )
+                    .expect("a new system program installs");
+
+                assert_eq!(
+                    header(&state, AccountId::from_system_program_name(&name)).env_var,
+                    vec![4, 5]
                 );
             }
 

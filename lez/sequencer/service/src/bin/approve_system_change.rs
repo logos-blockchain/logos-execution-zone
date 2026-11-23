@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use anyhow::{Result, anyhow, ensure};
 use clap::{Parser, Subcommand};
 use lee::{AccountId, ProgramId};
-use lee_core::BlockId;
+use lee_core::{BlockId, program_loader::MAX_ENV_VAR_LEN};
 use system_upgrader_core::{Approval, Proposal, SequencerKey, SignedApproval, SystemProgramName};
 
 /// Several producer rotations and a reorg's worth of blocks, for a `Schedule` to land in.
@@ -59,6 +59,10 @@ enum ProposalArgs {
         immutable: bool,
         #[clap(long)]
         activation_height: BlockId,
+        /// The program's `env_var` once the upgrade applies, as hex (`""` for none). Required:
+        /// the upgrade replaces the current one.
+        #[clap(long)]
+        env_var_hex: String,
     },
     /// Withdraw `name`'s pending upgrade, if it is exactly this one. Approvals are checked when the
     /// change lands, so a cancel needs the current committee's signatures.
@@ -82,24 +86,31 @@ enum ProposalArgs {
         /// Install the program frozen.
         #[clap(long)]
         immutable: bool,
+        /// The program's `env_var`, as hex; empty if omitted.
+        #[clap(long)]
+        env_var_hex: Option<String>,
     },
 }
 
-impl From<ProposalArgs> for Proposal {
-    fn from(args: ProposalArgs) -> Self {
-        match args {
+impl TryFrom<ProposalArgs> for Proposal {
+    type Error = anyhow::Error;
+
+    fn try_from(args: ProposalArgs) -> Result<Self> {
+        Ok(match args {
             ProposalArgs::Schedule {
                 name,
                 first_segment,
                 image_id,
                 immutable,
                 activation_height,
+                env_var_hex,
             } => Self::Schedule {
                 name,
                 first_segment,
                 image_id,
                 immutable,
                 activation_height,
+                env_var: parse_env_var(&env_var_hex)?,
             },
             ProposalArgs::Cancel {
                 name,
@@ -115,14 +126,31 @@ impl From<ProposalArgs> for Proposal {
                 first_segment,
                 image_id,
                 immutable,
+                env_var_hex,
             } => Self::Install {
                 name,
                 first_segment,
                 image_id,
                 immutable,
+                env_var: env_var_hex
+                    .as_deref()
+                    .map(parse_env_var)
+                    .transpose()?
+                    .unwrap_or_default(),
             },
-        }
+        })
     }
+}
+
+fn parse_env_var(hex: &str) -> Result<Vec<u8>> {
+    let env_var = hex::decode(hex.trim_start_matches("0x"))
+        .map_err(|err| anyhow!("--env-var-hex isn't hex: {err}"))?;
+    ensure!(
+        env_var.len() <= MAX_ENV_VAR_LEN,
+        "--env-var-hex is {} bytes, over the {MAX_ENV_VAR_LEN}-byte cap",
+        env_var.len()
+    );
+    Ok(env_var)
 }
 
 fn parse_name(name: &str) -> Result<SystemProgramName> {
@@ -203,7 +231,7 @@ fn main() -> Result<()> {
         proposal,
     } = Args::parse();
 
-    let proposal = Proposal::from(proposal);
+    let proposal = Proposal::try_from(proposal)?;
     let valid_until = valid_until(&proposal, tip, requested, min_lead)?;
 
     let config = sequencer_service::SequencerConfig::from_path(&config_path)?;
@@ -239,6 +267,7 @@ mod tests {
             image_id: [2; 8],
             immutable: false,
             activation_height,
+            env_var: Vec::new(),
         }
     }
 
@@ -279,6 +308,7 @@ mod tests {
             first_segment: AccountId::new([1; 32]),
             image_id: [2; 8],
             immutable: false,
+            env_var: Vec::new(),
         };
         assert!(valid_until(&install, 100, None, 100).is_err(), "none");
         assert_eq!(valid_until(&install, 100, Some(120), 100).unwrap(), 120);
@@ -293,5 +323,49 @@ mod tests {
             .collect();
         assert_eq!(parse_image_id(&hex::encode(&bytes)).unwrap(), image_id);
         assert!(parse_image_id(&hex::encode(&bytes[1..])).is_err());
+    }
+
+    fn schedule_args(env_var: &[&str]) -> Result<Args, clap::Error> {
+        let image_id = "00".repeat(32);
+        let first_segment = AccountId::new([1; 32]).to_string();
+        let mut args = vec![
+            "approve_system_change",
+            "config.json",
+            "--tip",
+            "1",
+            "schedule",
+            "--name",
+            "clock",
+            "--first-segment",
+            &first_segment,
+            "--image-id",
+            &image_id,
+            "--activation-height",
+            "200",
+        ];
+        args.extend(env_var);
+        Args::try_parse_from(args)
+    }
+
+    fn scheduled_env_var(env_var_hex: &str) -> Vec<u8> {
+        let Args { proposal, .. } = schedule_args(&["--env-var-hex", env_var_hex]).unwrap();
+        let Proposal::Schedule { env_var, .. } = Proposal::try_from(proposal).unwrap() else {
+            panic!("a schedule");
+        };
+        env_var
+    }
+
+    #[test]
+    fn a_schedule_must_state_its_env_var() {
+        assert!(schedule_args(&[]).is_err());
+        assert_eq!(scheduled_env_var("0x0102"), vec![1, 2]);
+        assert!(scheduled_env_var("").is_empty());
+    }
+
+    #[test]
+    fn an_env_var_must_be_hex_within_the_cap() {
+        assert!(parse_env_var("zz").is_err());
+        assert!(parse_env_var(&"00".repeat(MAX_ENV_VAR_LEN)).is_ok());
+        assert!(parse_env_var(&"00".repeat(MAX_ENV_VAR_LEN + 1)).is_err());
     }
 }

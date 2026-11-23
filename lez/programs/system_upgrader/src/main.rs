@@ -48,6 +48,7 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
             image_id,
             immutable,
             activation_height,
+            env_var,
             ..
         } => {
             assert!(
@@ -68,7 +69,10 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
                 image_id,
                 immutable,
                 activation_height,
+                env_var: env_var.clone(),
             };
+            let staging = staging_actor(&name, &upgrade);
+            let seed = staging_seed(&name, &upgrade);
             *pending = Some(upgrade);
             // The loader checks the header is mutable, validates the chain and checks its image ID
             // is the approved one now, so `Apply` can't fail.
@@ -80,15 +84,15 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
                 ))
                 .send(
                     SyncMessage::new(
-                        staging_actor(&name, &upgrade),
+                        staging,
                         &LoaderMessage::CreateHeaderOf {
                             first_segment,
                             image_id,
                             immutable: false,
-                            env_var: Vec::new(),
+                            env_var,
                         },
                     )
-                    .with_pda_seeds([staging_seed(&name, &upgrade)]),
+                    .with_pda_seeds([seed]),
                 )
         }
         Message::Apply {
@@ -110,7 +114,7 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
                     &LoaderMessage::UpdateHeader {
                         first_segment: upgrade.first_segment,
                         immutable: upgrade.immutable,
-                        env_var: Vec::new(),
+                        env_var: upgrade.env_var,
                     },
                 ))
         }
@@ -122,8 +126,10 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
         } => {
             let pending = pending_mut(&mut registry, &name);
             assert!(
-                pending.is_some_and(|upgrade| upgrade.first_segment == first_segment
-                    && upgrade.activation_height == activation_height),
+                pending
+                    .as_ref()
+                    .is_some_and(|upgrade| upgrade.first_segment == first_segment
+                        && upgrade.activation_height == activation_height),
                 "the upgrade does not match the system program's schedule"
             );
             *pending = None;
@@ -135,6 +141,7 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
             first_segment,
             image_id,
             immutable,
+            env_var,
             ..
         } => {
             assert!(
@@ -147,7 +154,7 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
                     first_segment,
                     image_id,
                     immutable,
-                    env_var: Vec::new(),
+                    env_var,
                 },
             ))
         }

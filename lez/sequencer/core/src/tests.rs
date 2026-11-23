@@ -2544,6 +2544,7 @@ fn resubmittable_txs_keeps_an_approved_system_change_and_drops_apply() {
         immutable: false,
         activation_height: 5,
         approvals: vec![],
+        env_var: Vec::new(),
     });
     let apply = system_upgrader_tx(&system_upgrader_core::Message::Apply {
         name: programs::CLOCK_NAME,
@@ -7340,6 +7341,7 @@ fn state_with_clock_upgrade_due_at(activation_height: lee_core::BlockId) -> lee:
             image_id: [0; 8],
             immutable: false,
             activation_height,
+            env_var: Vec::new(),
         }),
     );
     genesis.with_public_accounts([(
@@ -7412,7 +7414,7 @@ fn an_approved_change_is_built_with_its_approvals_and_actors() {
     }];
 
     let built = super::build_approved_txs(vec![common::system_upgrades::ProposalApprovals {
-        proposal,
+        proposal: proposal.clone(),
         approvals: approvals.clone(),
     }]);
     let [(TransactionOrigin::Sequencer, tx, Some(built_proposal))] = built.as_slice() else {
@@ -7499,6 +7501,7 @@ async fn an_approved_change_has_room_in_a_full_block() {
                 image_id: [0; 8],
                 immutable: false,
                 activation_height: ACTIVATION_HEIGHT,
+                env_var: Vec::new(),
             }),
         );
         state.force_insert_account(
@@ -7544,7 +7547,10 @@ async fn an_approved_change_has_room_in_a_full_block() {
     };
     for approval in [own, peers] {
         sequencer
-            .submit_system_approval(SignedApproval { proposal, approval })
+            .submit_system_approval(SignedApproval {
+                proposal: proposal.clone(),
+                approval,
+            })
             .await
             .unwrap();
     }

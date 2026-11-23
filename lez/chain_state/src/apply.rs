@@ -1106,6 +1106,7 @@ mod tests {
                 image_id: [0; 8],
                 immutable: false,
                 activation_height: 1,
+                env_var: Vec::new(),
             }),
         );
         let mut state = initial_state(true).with_public_accounts([(
@@ -1145,6 +1146,7 @@ mod tests {
                 image_id: new_code.id(),
                 immutable: false,
                 activation_height: 1,
+                env_var: Vec::new(),
             }),
         );
         let mut state = initial_state(true)

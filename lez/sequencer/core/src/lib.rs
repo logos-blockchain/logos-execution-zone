@@ -1992,7 +1992,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .system_approvals
             .proposals()
             .map(|(proposal, approvals)| ProposalApprovals {
-                proposal: *proposal,
+                proposal: proposal.clone(),
                 approvals: approvals.cloned().collect(),
             })
             .collect();
@@ -2585,7 +2585,7 @@ fn build_approved_txs(
         .filter_map(|approved| {
             let proposal = approved.proposal;
             system_upgrader_tx(system_upgrader_core::Message::approved(
-                proposal,
+                proposal.clone(),
                 approved.approvals,
             ))
             .map_err(|err| {

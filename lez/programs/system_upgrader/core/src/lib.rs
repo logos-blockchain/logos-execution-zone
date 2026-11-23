@@ -33,6 +33,8 @@ pub enum Message {
         image_id: ProgramId,
         immutable: bool,
         activation_height: BlockId,
+        /// The program's `env_var` once the upgrade applies.
+        env_var: Vec<u8>,
         approvals: Vec<Approval>,
     },
     /// Applies `name`'s pending upgrade and clears it. Valid only in block `activation_height`.
@@ -53,6 +55,7 @@ pub enum Message {
         first_segment: AccountId,
         image_id: ProgramId,
         immutable: bool,
+        env_var: Vec<u8>,
         approvals: Vec<Approval>,
     },
 }
@@ -60,7 +63,7 @@ pub enum Message {
 impl Message {
     /// The message carrying out `proposal`, with `approvals` of it.
     #[must_use]
-    pub const fn approved(proposal: Proposal, approvals: Vec<Approval>) -> Self {
+    pub fn approved(proposal: Proposal, approvals: Vec<Approval>) -> Self {
         match proposal {
             Proposal::Schedule {
                 name,
@@ -68,12 +71,14 @@ impl Message {
                 image_id,
                 immutable,
                 activation_height,
+                env_var,
             } => Self::Schedule {
                 name,
                 first_segment,
                 image_id,
                 immutable,
                 activation_height,
+                env_var,
                 approvals,
             },
             Proposal::Cancel {
@@ -91,11 +96,13 @@ impl Message {
                 first_segment,
                 image_id,
                 immutable,
+                env_var,
             } => Self::Install {
                 name,
                 first_segment,
                 image_id,
                 immutable,
+                env_var,
                 approvals,
             },
         }
@@ -112,6 +119,7 @@ impl Message {
                 image_id,
                 immutable,
                 activation_height,
+                env_var,
                 ..
             } => vec![
                 committee_actor(),
@@ -123,6 +131,7 @@ impl Message {
                         image_id: *image_id,
                         immutable: *immutable,
                         activation_height: *activation_height,
+                        env_var: env_var.clone(),
                     },
                 ),
             ],
@@ -143,6 +152,7 @@ impl Message {
                 image_id,
                 immutable,
                 activation_height,
+                env_var,
                 approvals,
             } => Some((
                 Proposal::Schedule {
@@ -151,6 +161,7 @@ impl Message {
                     image_id: *image_id,
                     immutable: *immutable,
                     activation_height: *activation_height,
+                    env_var: env_var.clone(),
                 },
                 approvals,
             )),
@@ -172,6 +183,7 @@ impl Message {
                 first_segment,
                 image_id,
                 immutable,
+                env_var,
                 approvals,
             } => Some((
                 Proposal::Install {
@@ -179,6 +191,7 @@ impl Message {
                     first_segment: *first_segment,
                     image_id: *image_id,
                     immutable: *immutable,
+                    env_var: env_var.clone(),
                 },
                 approvals,
             )),
@@ -189,7 +202,7 @@ impl Message {
 
 /// What the committee approves: the change itself, naming the action so an approval for one can't
 /// be used for another, and the image ID of the code it installs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, BorshSerialize, BorshDeserialize)]
 pub enum Proposal {
     Schedule {
         name: SystemProgramName,
@@ -197,6 +210,7 @@ pub enum Proposal {
         image_id: ProgramId,
         immutable: bool,
         activation_height: BlockId,
+        env_var: Vec<u8>,
     },
     Cancel {
         name: SystemProgramName,
@@ -208,6 +222,7 @@ pub enum Proposal {
         first_segment: AccountId,
         image_id: ProgramId,
         immutable: bool,
+        env_var: Vec<u8>,
     },
 }
 
@@ -229,7 +244,7 @@ impl Proposal {
 }
 
 /// A pending upgrade, stored in the [`Registry`] under the system program's name.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ScheduledUpgrade {
     pub first_segment: AccountId,
     /// What the chain at `first_segment` computes to, checked by the loader at `Schedule`.
@@ -237,6 +252,8 @@ pub struct ScheduledUpgrade {
     /// Whether `Apply` leaves the header immutable.
     pub immutable: bool,
     pub activation_height: BlockId,
+    /// The program's `env_var` once `Apply` runs.
+    pub env_var: Vec<u8>,
 }
 
 /// Every upgradable system program, by name, with its pending upgrade, if any. Held in the
@@ -264,7 +281,7 @@ impl Registry {
     /// `name`'s pending upgrade; `None` if nothing is pending or `name` isn't registered.
     #[must_use]
     pub fn scheduled(&self, name: &SystemProgramName) -> Option<ScheduledUpgrade> {
-        self.programs.get(name).copied().flatten()
+        self.programs.get(name).cloned().flatten()
     }
 }
 
@@ -350,6 +367,7 @@ pub fn staging_seed(name: &SystemProgramName, upgrade: &ScheduledUpgrade) -> Pda
     hasher.update(upgrade.first_segment.value());
     hasher.update(borsh::to_vec(&upgrade.image_id).expect("an image ID serializes"));
     hasher.update(upgrade.activation_height.to_le_bytes());
+    hasher.update(Sha256::digest(&upgrade.env_var));
     PdaSeed::new(hasher.finalize().into())
 }
 
@@ -383,6 +401,28 @@ mod tests {
             image_id: [2; 8],
             immutable: false,
             activation_height: 10,
+            env_var: vec![3],
+        }
+    }
+
+    fn with_env_var(proposal: Proposal, env_var: Vec<u8>) -> Proposal {
+        match proposal {
+            Proposal::Schedule {
+                name,
+                first_segment,
+                image_id,
+                immutable,
+                activation_height,
+                ..
+            } => Proposal::Schedule {
+                name,
+                first_segment,
+                image_id,
+                immutable,
+                activation_height,
+                env_var,
+            },
+            other @ (Proposal::Cancel { .. } | Proposal::Install { .. }) => other,
         }
     }
 
@@ -416,6 +456,10 @@ mod tests {
             !verify_approval(&approval, [6; 32], &proposal()),
             "another zone"
         );
+        assert!(
+            !verify_approval(&approval, CHANNEL_ID, &with_env_var(proposal(), vec![4])),
+            "another env_var"
+        );
 
         let mut extended = approval;
         extended.valid_until = 10;
@@ -440,6 +484,7 @@ mod tests {
             image_id,
             immutable,
             activation_height,
+            env_var,
         } = proposal()
         else {
             unreachable!();
@@ -450,9 +495,11 @@ mod tests {
             image_id,
             immutable,
             activation_height: activation_height + 1,
+            env_var,
         };
         assert_eq!(proposal().hash(), proposal().hash());
         assert_ne!(proposal().hash(), later.hash());
+        assert_ne!(proposal().hash(), with_env_var(proposal(), vec![4]).hash());
     }
 
     #[test]
@@ -464,18 +511,29 @@ mod tests {
             image_id,
             immutable,
             activation_height,
+            env_var,
         } = proposal()
         else {
             unreachable!();
         };
-        let staging = staging_actor(
-            &name,
-            &ScheduledUpgrade {
-                first_segment,
-                image_id,
-                immutable,
-                activation_height,
-            },
+        let upgrade = ScheduledUpgrade {
+            first_segment,
+            image_id,
+            immutable,
+            activation_height,
+            env_var,
+        };
+        let staging = staging_actor(&name, &upgrade);
+        assert_ne!(
+            staging,
+            staging_actor(
+                &name,
+                &ScheduledUpgrade {
+                    env_var: vec![4],
+                    ..upgrade
+                }
+            ),
+            "another env_var stages elsewhere"
         );
         assert_eq!(
             message.actors(),
