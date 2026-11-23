@@ -10,7 +10,9 @@ use lee_core::{
     RootCall,
     program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader},
 };
-use program_loader_core::{LoaderActorState as _, MAX_PROGRAM_SEGMENTS, Message, build_segments};
+use program_loader_core::{
+    LoaderActorState as _, MAX_ENV_VAR_LEN, MAX_PROGRAM_SEGMENTS, Message, build_segments,
+};
 
 use crate::{AccountIdentity, ExecutionFailureKind, WalletCore, WalletSequencerClient};
 
@@ -85,14 +87,16 @@ impl<C: WalletSequencerClient> ProgramLoader<'_, C> {
         target: AccountId,
         first_segment: AccountId,
         immutable: bool,
+        env_var: Vec<u8>,
         payer: Option<AccountId>,
     ) -> Result<HashType, ExecutionFailureKind> {
+        check_env_var(&env_var)?;
         self.send(
             target,
             &Message::CreateHeader {
                 first_segment,
                 immutable,
-                env_var: Vec::new(),
+                env_var,
             },
             payer,
         )
@@ -101,24 +105,62 @@ impl<C: WalletSequencerClient> ProgramLoader<'_, C> {
 
     /// Rewrites an existing header at `header` — an ordinary `is_authorized`-gated data
     /// mutation, so `header`'s own (still-authorized) key must sign. Same `image_id` handling as
-    /// [`Self::create_header`]; see [`Self::send`] for `payer`.
+    /// [`Self::create_header`]; `env_var: None` keeps the header's current one. See
+    /// [`Self::send`] for `payer`.
     pub async fn update_header(
         &self,
         header: AccountId,
         first_segment: AccountId,
         immutable: bool,
+        env_var: Option<Vec<u8>>,
         payer: Option<AccountId>,
     ) -> Result<HashType, ExecutionFailureKind> {
+        let env_var = self.updated_env_var(header, env_var).await?;
         self.send(
             header,
             &Message::UpdateHeader {
                 first_segment,
                 immutable,
-                env_var: Vec::new(),
+                env_var,
             },
             payer,
         )
         .await
+    }
+
+    /// The header at `header`, if it holds one.
+    pub async fn header(
+        &self,
+        header: AccountId,
+    ) -> Result<Option<ProgramHeader>, ExecutionFailureKind> {
+        let account = self
+            .0
+            .get_account_view(Actor::new(header, PROGRAM_LOADER_ACCOUNT_ID))
+            .await
+            .map_err(ExecutionFailureKind::SequencerError)?
+            .unwrap_or_default();
+        Ok(ProgramHeader::from_loader_actor_state(
+            account.data.actor_state(PROGRAM_LOADER_ACCOUNT_ID),
+        ))
+    }
+
+    /// `env_var`, or the header's current one if `None`, checked against the cap.
+    async fn updated_env_var(
+        &self,
+        header: AccountId,
+        env_var: Option<Vec<u8>>,
+    ) -> Result<Vec<u8>, ExecutionFailureKind> {
+        let env_var = match env_var {
+            Some(env_var) => env_var,
+            None => {
+                self.header(header)
+                    .await?
+                    .ok_or(ExecutionFailureKind::AccountDataError(header))?
+                    .env_var
+            }
+        };
+        check_env_var(&env_var)?;
+        Ok(env_var)
     }
 
     /// Chunks `bytecode` into `segments.len()` pieces (must match exactly — this never
@@ -134,16 +176,26 @@ impl<C: WalletSequencerClient> ProgramLoader<'_, C> {
         segments: &[AccountId],
         bytecode: Vec<u8>,
         immutable: bool,
+        env_var: Vec<u8>,
         payer: Option<AccountId>,
     ) -> Result<AccountId> {
-        self.upload_segments_and_header(header, segments, bytecode, immutable, false, payer)
-            .await?;
+        check_env_var(&env_var)?;
+        self.upload_segments_and_header(
+            header,
+            segments,
+            bytecode,
+            immutable,
+            HeaderWrite::Create(env_var),
+            payer,
+        )
+        .await?;
         Ok(header)
     }
 
     /// Like [`Self::deploy`], but signs the final step with `UpdateHeader` against an existing
-    /// header account instead of claiming a new one. Segments are always freshly uploaded —
-    /// segments are write-once, so there's no reuse of a prior chain.
+    /// header account instead of claiming a new one; `env_var: None` keeps the header's current
+    /// one. Segments are always freshly uploaded — segments are write-once, so there's no reuse
+    /// of a prior chain.
     ///
     /// FIXME: the previous chain's segment accounts are never reclaimed, so they accumulate
     /// across updates. Consider addressing alongside resumable uploads.
@@ -153,10 +205,20 @@ impl<C: WalletSequencerClient> ProgramLoader<'_, C> {
         segments: &[AccountId],
         bytecode: Vec<u8>,
         immutable: bool,
+        env_var: Option<Vec<u8>>,
         payer: Option<AccountId>,
     ) -> Result<()> {
-        self.upload_segments_and_header(header, segments, bytecode, immutable, true, payer)
-            .await
+        // Before uploading, so a missing header or an oversized env_var strands no segment.
+        let env_var = self.updated_env_var(header, env_var).await?;
+        self.upload_segments_and_header(
+            header,
+            segments,
+            bytecode,
+            immutable,
+            HeaderWrite::Update(env_var),
+            payer,
+        )
+        .await
     }
 
     async fn upload_segments_and_header(
@@ -165,7 +227,7 @@ impl<C: WalletSequencerClient> ProgramLoader<'_, C> {
         segments: &[AccountId],
         bytecode: Vec<u8>,
         immutable: bool,
-        update_existing_header: bool,
+        header_write: HeaderWrite,
         payer: Option<AccountId>,
     ) -> Result<()> {
         if bytecode.is_empty() {
@@ -195,14 +257,15 @@ impl<C: WalletSequencerClient> ProgramLoader<'_, C> {
         }
 
         let first_segment = segments[0];
-        let tx_hash = if update_existing_header {
-            self.update_header(header, first_segment, immutable, payer)
+        let tx_hash = match header_write {
+            HeaderWrite::Update(env_var) => self
+                .update_header(header, first_segment, immutable, Some(env_var), payer)
                 .await
-                .context("failed to update header")?
-        } else {
-            self.create_header(header, first_segment, immutable, payer)
+                .context("failed to update header")?,
+            HeaderWrite::Create(env_var) => self
+                .create_header(header, first_segment, immutable, env_var, payer)
                 .await
-                .context("failed to create header")?
+                .context("failed to create header")?,
         };
         self.0
             .await_inclusion(tx_hash)
@@ -320,4 +383,16 @@ impl<C: WalletSequencerClient> ProgramLoader<'_, C> {
         }
         Ok(chain)
     }
+}
+
+enum HeaderWrite {
+    Create(Vec<u8>),
+    Update(Vec<u8>),
+}
+
+const fn check_env_var(env_var: &[u8]) -> Result<(), ExecutionFailureKind> {
+    if env_var.len() > MAX_ENV_VAR_LEN {
+        return Err(ExecutionFailureKind::EnvVarTooLong { len: env_var.len() });
+    }
+    Ok(())
 }

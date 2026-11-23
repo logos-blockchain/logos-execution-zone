@@ -105,6 +105,7 @@ async fn deploy_chat(
             &segments,
             program.elf().to_vec(),
             true,
+            Vec::new(),
             Some(payer_id),
         )
         .await

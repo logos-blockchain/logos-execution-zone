@@ -188,6 +188,11 @@ pub enum ExecutionFailureKind {
     UnwitnessedClaim(AccountId),
     #[error(transparent)]
     SegmentChain(#[from] program_loader_core::SegmentChainError),
+    #[error(
+        "env_var is {len} bytes, over the {max}-byte cap",
+        max = program_loader_core::MAX_ENV_VAR_LEN
+    )]
+    EnvVarTooLong { len: usize },
     #[error("Program bytecode is not a valid RISC0 program binary")]
     InvalidProgramBinary(#[source] anyhow::Error),
     #[error(

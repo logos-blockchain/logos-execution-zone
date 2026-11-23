@@ -51,6 +51,9 @@ pub enum ProgramLoaderSubcommand {
         /// Whether the deployed program self-declares as immutable (not protocol-enforced).
         #[arg(long)]
         immutable: bool,
+        /// Bytes attached to the header, as hex; empty if omitted.
+        #[arg(long)]
+        env_var_hex: Option<String>,
         /// An existing, funded account to pay the fee from. See `WriteSegment`'s `payer`.
         #[arg(long)]
         payer: Option<CliAccountMention>,
@@ -67,6 +70,9 @@ pub enum ProgramLoaderSubcommand {
         /// Whether the deployed program self-declares as immutable (not protocol-enforced).
         #[arg(long)]
         immutable: bool,
+        /// Bytes attached to the header, as hex; the header's current ones if omitted.
+        #[arg(long)]
+        env_var_hex: Option<String>,
         /// An existing, funded account to pay the fee from. `header`'s own balance may not have
         /// been funded either — see `WriteSegment`'s `payer`.
         #[arg(long)]
@@ -91,6 +97,9 @@ pub enum ProgramLoaderSubcommand {
         /// Whether the deployed program self-declares as immutable (not protocol-enforced).
         #[arg(long)]
         immutable: bool,
+        /// Bytes attached to the header, as hex; empty if omitted.
+        #[arg(long)]
+        env_var_hex: Option<String>,
         /// An existing, funded account to pay every segment/header transaction's fee. See
         /// `WriteSegment`'s `payer`.
         #[arg(long)]
@@ -114,6 +123,9 @@ pub enum ProgramLoaderSubcommand {
         /// Whether the deployed program self-declares as immutable (not protocol-enforced).
         #[arg(long)]
         immutable: bool,
+        /// Bytes attached to the header, as hex; the header's current ones if omitted.
+        #[arg(long)]
+        env_var_hex: Option<String>,
         /// An existing, funded account to pay every segment/header transaction's fee. See
         /// `WriteSegment`'s `payer`.
         #[arg(long)]
@@ -153,6 +165,7 @@ impl ProgramLoaderSubcommand {
         target: CliAccountMention,
         first_segment: AccountId,
         immutable: bool,
+        env_var: Vec<u8>,
         payer: Option<CliAccountMention>,
         wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
@@ -166,7 +179,7 @@ impl ProgramLoaderSubcommand {
             .await?;
 
         let tx_hash = ProgramLoader(wallet_core)
-            .create_header(target_id, first_segment, immutable, payer_id)
+            .create_header(target_id, first_segment, immutable, env_var, payer_id)
             .await?;
 
         println!("Header uploaded at {target_id}");
@@ -177,6 +190,7 @@ impl ProgramLoaderSubcommand {
         header: CliAccountMention,
         first_segment: AccountId,
         immutable: bool,
+        env_var: Option<Vec<u8>>,
         payer: Option<CliAccountMention>,
         wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
@@ -190,7 +204,7 @@ impl ProgramLoaderSubcommand {
             .await?;
 
         let tx_hash = ProgramLoader(wallet_core)
-            .update_header(header_id, first_segment, immutable, payer_id)
+            .update_header(header_id, first_segment, immutable, env_var, payer_id)
             .await?;
 
         println!("Header {header_id} updated");
@@ -202,6 +216,7 @@ impl ProgramLoaderSubcommand {
         header: CliAccountMention,
         segments: Vec<CliAccountMention>,
         immutable: bool,
+        env_var: Vec<u8>,
         payer: Option<CliAccountMention>,
         wallet_core: &WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
@@ -218,7 +233,14 @@ impl ProgramLoaderSubcommand {
             .with_context(|| format!("failed to read program binary at {}", elf.display()))?;
 
         let account_id = ProgramLoader(wallet_core)
-            .deploy(header_id, &segment_ids, bytecode, immutable, payer_id)
+            .deploy(
+                header_id,
+                &segment_ids,
+                bytecode,
+                immutable,
+                env_var,
+                payer_id,
+            )
             .await?;
 
         println!("Program deployed. Header account id: {account_id}");
@@ -230,6 +252,7 @@ impl ProgramLoaderSubcommand {
         header: CliAccountMention,
         segments: Vec<CliAccountMention>,
         immutable: bool,
+        env_var: Option<Vec<u8>>,
         payer: Option<CliAccountMention>,
         wallet_core: &WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
@@ -246,7 +269,14 @@ impl ProgramLoaderSubcommand {
             .with_context(|| format!("failed to read program binary at {}", elf.display()))?;
 
         ProgramLoader(wallet_core)
-            .update(header_id, &segment_ids, bytecode, immutable, payer_id)
+            .update(
+                header_id,
+                &segment_ids,
+                bytecode,
+                immutable,
+                env_var,
+                payer_id,
+            )
             .await?;
 
         println!("Program {header_id} updated");
@@ -275,36 +305,86 @@ impl WalletSubcommand for ProgramLoaderSubcommand {
                 target,
                 first_segment,
                 immutable,
+                env_var_hex,
                 payer,
             } => {
-                Self::handle_create_header(target, first_segment, immutable, payer, wallet_core)
-                    .await
+                let env_var = parse_env_var_hex(env_var_hex.as_deref())?.unwrap_or_default();
+                Self::handle_create_header(
+                    target,
+                    first_segment,
+                    immutable,
+                    env_var,
+                    payer,
+                    wallet_core,
+                )
+                .await
             }
             Self::UpdateHeader {
                 header,
                 first_segment,
                 immutable,
+                env_var_hex,
                 payer,
             } => {
-                Self::handle_update_header(header, first_segment, immutable, payer, wallet_core)
-                    .await
+                let env_var = parse_env_var_hex(env_var_hex.as_deref())?;
+                Self::handle_update_header(
+                    header,
+                    first_segment,
+                    immutable,
+                    env_var,
+                    payer,
+                    wallet_core,
+                )
+                .await
             }
             Self::Deploy {
                 elf,
                 header,
                 segments,
                 immutable,
+                env_var_hex,
                 payer,
-            } => Self::handle_deploy(elf, header, segments, immutable, payer, wallet_core).await,
+            } => {
+                let env_var = parse_env_var_hex(env_var_hex.as_deref())?.unwrap_or_default();
+                Self::handle_deploy(
+                    elf,
+                    header,
+                    segments,
+                    immutable,
+                    env_var,
+                    payer,
+                    wallet_core,
+                )
+                .await
+            }
             Self::Update {
                 elf,
                 header,
                 segments,
                 immutable,
+                env_var_hex,
                 payer,
-            } => Self::handle_update(elf, header, segments, immutable, payer, wallet_core).await,
+            } => {
+                let env_var = parse_env_var_hex(env_var_hex.as_deref())?;
+                Self::handle_update(
+                    elf,
+                    header,
+                    segments,
+                    immutable,
+                    env_var,
+                    payer,
+                    wallet_core,
+                )
+                .await
+            }
         }
     }
+}
+
+fn parse_env_var_hex(env_var_hex: Option<&str>) -> Result<Option<Vec<u8>>> {
+    env_var_hex
+        .map(|hex| hex::decode(hex.trim_start_matches("0x")).context("--env-var-hex isn't hex"))
+        .transpose()
 }
 
 fn resolve_public<C: WalletSequencerClient>(
@@ -316,5 +396,24 @@ fn resolve_public<C: WalletSequencerClient>(
         AccountIdWithPrivacy::Private(_) => {
             bail!("program_loader accounts must be public, not private")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_env_var_hex;
+
+    #[test]
+    fn env_var_hex_parses_with_or_without_a_prefix() {
+        assert_eq!(parse_env_var_hex(None).unwrap(), None);
+        assert_eq!(parse_env_var_hex(Some("0102")).unwrap(), Some(vec![1, 2]));
+        assert_eq!(parse_env_var_hex(Some("0x0102")).unwrap(), Some(vec![1, 2]));
+        assert_eq!(parse_env_var_hex(Some("")).unwrap(), Some(Vec::new()));
+    }
+
+    #[test]
+    fn env_var_hex_rejects_invalid_hex() {
+        assert!(parse_env_var_hex(Some("0xzz")).is_err());
+        assert!(parse_env_var_hex(Some("123")).is_err());
     }
 }

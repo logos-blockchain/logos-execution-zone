@@ -166,6 +166,7 @@ async fn bloat_account(
             &segments,
             writer.elf().to_vec(),
             true,
+            Vec::new(),
             Some(payer.account_id),
         )
         .await?;
@@ -178,7 +179,13 @@ async fn bloat_account(
         // has not spent yet, and the sequencer rejects the later two on nonce mismatch.
         let payer_nonce_before = get_account(ctx, payer.account_id).await?.nonce;
         ProgramLoader(ctx.wallet())
-            .create_header(header, segments[0], true, Some(payer.account_id))
+            .create_header(
+                header,
+                segments[0],
+                true,
+                Vec::new(),
+                Some(payer.account_id),
+            )
             .await
             .map_err(|e| anyhow::anyhow!("{e}"))?;
         wait_until(&format!("header {header} to be created"), || async {

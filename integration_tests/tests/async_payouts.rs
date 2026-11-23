@@ -62,7 +62,14 @@ async fn deploy(ctx: &mut TestContext, program: &Program) -> Result<AccountId> {
         segments.push(new_account(ctx, false, None).await?);
     }
     ProgramLoader(ctx.wallet())
-        .deploy(header, &segments, program.elf().to_vec(), true, Some(payer))
+        .deploy(
+            header,
+            &segments,
+            program.elf().to_vec(),
+            true,
+            Vec::new(),
+            Some(payer),
+        )
         .await
 }
 

@@ -37,7 +37,7 @@ pub async fn deploy_program<C: WalletSequencerClient>(
     wallet_core.store_persistent_data()?;
 
     let program_id = ProgramLoader(wallet_core)
-        .deploy(header, &segments, bytecode, true, Some(payer))
+        .deploy(header, &segments, bytecode, true, Vec::new(), Some(payer))
         .await?;
     println!("Deployed Program with {{\"program_id\":\"{program_id}\"}}");
     Ok(program_id)

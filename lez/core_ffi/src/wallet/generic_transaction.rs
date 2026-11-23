@@ -18,7 +18,7 @@ use crate::{
         FfiAccountMention, FfiBytes32, WalletHandle, block_on, c_string_or_null,
         fees::{FfiDeclaredFee, FfiDryRunReport, SendResult as _},
         lifecycle::get_wallet,
-        map_execution_error, read_optional_account_id,
+        list, map_execution_error, read_optional_account_id,
     },
 };
 
@@ -67,31 +67,38 @@ pub enum FfiProgramKind {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy)]
 pub struct FfiProgramHeader {
     pub image_id: FfiBytes32,
     pub program_first_segment: FfiBytes32,
     pub immutable: bool,
+    /// `env_var_size` bytes; may be null when `env_var_size` is 0.
+    pub env_var_data: *const u8,
+    pub env_var_size: usize,
 }
 
-impl From<&FfiProgramHeader> for ProgramHeader {
-    fn from(value: &FfiProgramHeader) -> Self {
+impl Default for FfiProgramHeader {
+    fn default() -> Self {
         Self {
-            image_id: bytes_to_program_id(value.image_id.data),
-            program_first_segment: value.program_first_segment.into(),
-            immutable: value.immutable,
-            env_var: Vec::new(),
+            image_id: FfiBytes32::default(),
+            program_first_segment: FfiBytes32::default(),
+            immutable: false,
+            env_var_data: std::ptr::null(),
+            env_var_size: 0,
         }
     }
 }
 
-impl From<ProgramHeader> for FfiProgramHeader {
-    fn from(value: ProgramHeader) -> Self {
-        Self {
-            image_id: FfiBytes32::from_bytes(program_id_to_bytes(value.image_id)),
+impl TryFrom<&FfiProgramHeader> for ProgramHeader {
+    type Error = FfiOperationError;
+
+    fn try_from(value: &FfiProgramHeader) -> Result<Self, Self::Error> {
+        Ok(Self {
+            image_id: bytes_to_program_id(value.image_id.data),
             program_first_segment: value.program_first_segment.into(),
             immutable: value.immutable,
-        }
+            env_var: unsafe { list(value.env_var_data, value.env_var_size) }?.to_vec(),
+        })
     }
 }
 
@@ -186,7 +193,7 @@ impl TryFrom<&FfiProgramCatalog> for ProgramCatalog {
                 FfiProgramKind::ProgramDisclosed => ProgramKind::Disclosed,
                 FfiProgramKind::ProgramShadow => ProgramKind::Shadow,
                 FfiProgramKind::ProgramUndisclosed => ProgramKind::Undisclosed {
-                    program_header: (&entry.program_header).into(),
+                    program_header: (&entry.program_header).try_into()?,
                     membership_proof: (&entry.membership_proof).try_into()?,
                 },
             };
@@ -234,16 +241,7 @@ impl Default for FfiTransactionResult {
     }
 }
 
-/// Same little-endian word packing `AccountId::from_builtin_program` uses, so a header's
-/// `image_id` round-trips identically whichever type it's read back through.
-fn program_id_to_bytes(program_id: ProgramId) -> [u8; 32] {
-    let bytes: Vec<u8> = program_id
-        .iter()
-        .flat_map(|word| word.to_le_bytes())
-        .collect();
-    bytes.try_into().expect("8 u32 words are exactly 32 bytes")
-}
-
+/// Same little-endian word packing `AccountId::from_builtin_program` uses.
 fn bytes_to_program_id(bytes: [u8; 32]) -> ProgramId {
     let mut program_id = [0_u32; 8];
     for (word, chunk) in program_id.iter_mut().zip(bytes.as_chunks::<4>().0) {
@@ -549,7 +547,48 @@ pub unsafe extern "C" fn wallet_ffi_free_transaction_result(result: *mut FfiTran
 
 #[cfg(test)]
 mod tests {
-    use crate::wallet::generic_transaction::FfiProgram;
+    use lee_core::program::ProgramHeader;
+
+    use crate::{
+        error::FfiOperationError,
+        wallet::generic_transaction::{FfiProgram, FfiProgramHeader},
+    };
+
+    #[test]
+    fn program_header_carries_its_env_var() {
+        let env_var = [1_u8, 2, 3];
+        let ffi = FfiProgramHeader {
+            immutable: true,
+            env_var_data: env_var.as_ptr(),
+            env_var_size: env_var.len(),
+            ..FfiProgramHeader::default()
+        };
+
+        let header = ProgramHeader::try_from(&ffi).unwrap();
+
+        assert!(header.immutable);
+        assert_eq!(header.env_var, env_var);
+    }
+
+    #[test]
+    fn program_header_with_no_env_var_may_be_null() {
+        let header = ProgramHeader::try_from(&FfiProgramHeader::default()).unwrap();
+
+        assert!(header.env_var.is_empty());
+    }
+
+    #[test]
+    fn program_header_rejects_a_null_env_var_with_a_size() {
+        let ffi = FfiProgramHeader {
+            env_var_size: 3,
+            ..FfiProgramHeader::default()
+        };
+
+        assert!(matches!(
+            ProgramHeader::try_from(&ffi),
+            Err(FfiOperationError::NullPointer)
+        ));
+    }
 
     #[test]
     fn program_cast_consistency() {

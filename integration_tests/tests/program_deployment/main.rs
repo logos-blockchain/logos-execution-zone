@@ -18,6 +18,7 @@ use wallet::{
     AccountIdentity, DryRunReport, ExecutionFailureKind,
     cli::{Command, programs::program_loader::ProgramLoaderSubcommand},
     config::WalletConfigOverrides,
+    program_facades::program_loader::ProgramLoader,
 };
 
 mod system_upgrade;
@@ -49,6 +50,7 @@ async fn deploy_and_execute_program() -> Result<()> {
             &segment_ids,
             deployed.elf().to_vec(),
             true,
+            Vec::new(),
             Some(payer_id),
         )
         .await?;
@@ -136,6 +138,94 @@ async fn deploy_and_execute_program() -> Result<()> {
 }
 
 #[test]
+async fn deploy_and_update_env_var() -> Result<()> {
+    let mut ctx = TestContext::new().await?;
+    let deployed = test_programs::scripted();
+    let payer_id = ctx.existing_public_accounts()[0];
+    let user_elf = deployed.user_elf().expect("valid ProgramBinary");
+
+    let mut segment_ids = Vec::new();
+    for _ in 0..program_loader_core::segment_count(&user_elf) {
+        segment_ids.push(new_account(&mut ctx, false, None).await?);
+    }
+
+    // Over the cap, nothing is uploaded.
+    let refused_header = new_account(&mut ctx, false, None).await?;
+    let refused = ProgramLoader(ctx.wallet())
+        .deploy(
+            refused_header,
+            &segment_ids,
+            deployed.elf().to_vec(),
+            false,
+            vec![0; program_loader_core::MAX_ENV_VAR_LEN + 1],
+            Some(payer_id),
+        )
+        .await;
+    assert!(
+        matches!(
+            refused
+                .as_ref()
+                .map_err(|err| err.downcast_ref::<ExecutionFailureKind>()),
+            Err(Some(ExecutionFailureKind::EnvVarTooLong { .. }))
+        ),
+        "an oversized env_var should be refused before uploading, got {refused:?}"
+    );
+    let segment = get_account(&ctx, segment_ids[0]).await?;
+    assert!(
+        segment
+            .data
+            .actor_state(lee_core::program::PROGRAM_LOADER_ACCOUNT_ID)
+            .is_empty(),
+        "no segment should be uploaded for a refused deploy"
+    );
+
+    let header_id = new_account(&mut ctx, false, None).await?;
+    ProgramLoader(ctx.wallet())
+        .deploy(
+            header_id,
+            &segment_ids,
+            deployed.elf().to_vec(),
+            false,
+            vec![1, 2, 3],
+            Some(payer_id),
+        )
+        .await?;
+    assert_eq!(env_var(&ctx, header_id).await?, vec![1, 2, 3]);
+
+    // Without an env_var, an update keeps the header's current one.
+    let kept = ProgramLoader(ctx.wallet())
+        .update_header(header_id, segment_ids[0], false, None, Some(payer_id))
+        .await
+        .map_err(|err| anyhow::anyhow!("{err}"))?;
+    ctx.wallet().poll_transaction(kept).await?;
+    assert_eq!(env_var(&ctx, header_id).await?, vec![1, 2, 3]);
+
+    let replaced = ProgramLoader(ctx.wallet())
+        .update_header(
+            header_id,
+            segment_ids[0],
+            false,
+            Some(vec![4]),
+            Some(payer_id),
+        )
+        .await
+        .map_err(|err| anyhow::anyhow!("{err}"))?;
+    ctx.wallet().poll_transaction(replaced).await?;
+    assert_eq!(env_var(&ctx, header_id).await?, vec![4]);
+
+    Ok(())
+}
+
+async fn env_var(ctx: &TestContext, header_id: lee::AccountId) -> Result<Vec<u8>> {
+    Ok(ProgramLoader(ctx.wallet())
+        .header(header_id)
+        .await
+        .map_err(|err| anyhow::anyhow!("{err}"))?
+        .expect("the header is deployed")
+        .env_var)
+}
+
+#[test]
 async fn deploy_invalid_program_fails() -> Result<()> {
     // Invalid program bytecode is rejected when the wallet decodes it as a `ProgramBinary`
     // before uploading, so the deploy never lands. Shrink the wallet's polling window so the
@@ -165,6 +255,7 @@ async fn deploy_invalid_program_fails() -> Result<()> {
         header: public_mention(header_id),
         segments: vec![public_mention(segment_id)],
         immutable: true,
+        env_var_hex: None,
         payer: None,
     });
 

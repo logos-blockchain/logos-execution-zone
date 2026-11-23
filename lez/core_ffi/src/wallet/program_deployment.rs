@@ -20,6 +20,11 @@ unsafe fn read_bytes(data: *const u8, size: usize) -> Vec<u8> {
     unsafe { slice::from_raw_parts(data, size) }.to_vec()
 }
 
+/// `None` for a null `data`, otherwise its `size` bytes.
+unsafe fn read_optional_bytes(data: *const u8, size: usize) -> Option<Vec<u8>> {
+    (!data.is_null()).then(|| unsafe { read_bytes(data, size) })
+}
+
 /// Reads a `FfiBytes32` array from an FFI pointer/length pair into `AccountId`s.
 unsafe fn read_account_ids(data: *const FfiBytes32, len: usize) -> Vec<AccountId> {
     unsafe { slice::from_raw_parts(data, len) }
@@ -114,6 +119,8 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_write_segment(
 /// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
 /// - `target` must be a valid pointer to a `FfiBytes32`; the wallet must hold its signing key
 /// - `first_segment` must be a valid pointer to a `FfiBytes32` for an already-uploaded segment
+/// - `env_var_data` may be null (an empty `env_var`), otherwise a valid pointer to `env_var_size`
+///   bytes
 /// - `payer` may be null (self-pay from the transaction's own accounts), otherwise a valid pointer
 ///   to a `FfiBytes32` for a funded account whose signing key the wallet holds
 /// - `out_result` must be a valid pointer to a `FfiTransactionResult` struct
@@ -123,6 +130,8 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_create_header(
     target: *const FfiBytes32,
     first_segment: *const FfiBytes32,
     immutable: bool,
+    env_var_data: *const u8,
+    env_var_size: usize,
     payer: *const FfiBytes32,
     out_result: *mut FfiTransactionResult,
 ) -> FfiOperationError {
@@ -153,7 +162,8 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_create_header(
         return FfiOperationError::NetworkError;
     }
 
-    let sent = block_on(loader.create_header(target, first_segment, immutable, payer));
+    let env_var = unsafe { read_optional_bytes(env_var_data, env_var_size) }.unwrap_or_default();
+    let sent = block_on(loader.create_header(target, first_segment, immutable, env_var, payer));
     match unsafe { (*out_result).record(&wallet, sent) } {
         Ok(tx_hash) => {
             write_result(out_result, tx_hash);
@@ -175,6 +185,8 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_create_header(
 /// - `header` must be a valid pointer to a `FfiBytes32` for an existing header the wallet is still
 ///   authorized over
 /// - `first_segment` must be a valid pointer to a `FfiBytes32` for an already-uploaded segment
+/// - `env_var_data` may be null (keep the header's current `env_var`), otherwise a valid pointer
+///   to `env_var_size` bytes
 /// - `payer` may be null (self-pay from the transaction's own accounts), otherwise a valid pointer
 ///   to a `FfiBytes32` for a funded account whose signing key the wallet holds
 /// - `out_result` must be a valid pointer to a `FfiTransactionResult` struct
@@ -184,6 +196,8 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_update_header(
     header: *const FfiBytes32,
     first_segment: *const FfiBytes32,
     immutable: bool,
+    env_var_data: *const u8,
+    env_var_size: usize,
     payer: *const FfiBytes32,
     out_result: *mut FfiTransactionResult,
 ) -> FfiOperationError {
@@ -214,7 +228,8 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_update_header(
         return FfiOperationError::NetworkError;
     }
 
-    let sent = block_on(loader.update_header(header, first_segment, immutable, payer));
+    let env_var = unsafe { read_optional_bytes(env_var_data, env_var_size) };
+    let sent = block_on(loader.update_header(header, first_segment, immutable, env_var, payer));
     match unsafe { (*out_result).record(&wallet, sent) } {
         Ok(tx_hash) => {
             write_result(out_result, tx_hash);
@@ -241,6 +256,8 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_update_header(
 /// - `segments` must be a valid pointer to `segments_len` contiguous `FfiBytes32`s, in chain order
 ///   (first chunk first); the wallet must hold every segment's signing key
 /// - `elf_data` must be a valid pointer to `elf_size` bytes
+/// - `env_var_data` may be null (an empty `env_var`), otherwise a valid pointer to `env_var_size`
+///   bytes
 /// - `payer` may be null (self-pay from the transaction's own accounts), otherwise a valid pointer
 ///   to a `FfiBytes32` for a funded account whose signing key the wallet holds
 /// - `out_result` must be a valid pointer to a `FfiTransactionResult` struct
@@ -253,6 +270,8 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_deploy(
     elf_data: *const u8,
     elf_size: usize,
     immutable: bool,
+    env_var_data: *const u8,
+    env_var_size: usize,
     payer: *const FfiBytes32,
     out_result: *mut FfiTransactionResult,
 ) -> FfiOperationError {
@@ -277,8 +296,16 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_deploy(
     let elf = unsafe { read_bytes(elf_data, elf_size) };
     let payer = unsafe { read_optional_account_id(payer) };
 
-    let sent = block_on(ProgramLoader(&wallet).deploy(header, &segment_ids, elf, immutable, payer))
-        .map_err(upload_failure);
+    let env_var = unsafe { read_optional_bytes(env_var_data, env_var_size) }.unwrap_or_default();
+    let sent = block_on(ProgramLoader(&wallet).deploy(
+        header,
+        &segment_ids,
+        elf,
+        immutable,
+        env_var,
+        payer,
+    ))
+    .map_err(upload_failure);
     match unsafe { (*out_result).record(&wallet, sent) } {
         Ok(header_account_id) => {
             write_result(out_result, header_account_id);
@@ -307,6 +334,8 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_deploy(
 /// - `segments` must be a valid pointer to `segments_len` contiguous `FfiBytes32`s, in chain order;
 ///   the wallet must hold every segment's signing key
 /// - `elf_data` must be a valid pointer to `elf_size` bytes
+/// - `env_var_data` may be null (keep the header's current `env_var`), otherwise a valid pointer
+///   to `env_var_size` bytes
 /// - `payer` may be null (self-pay from the transaction's own accounts), otherwise a valid pointer
 ///   to a `FfiBytes32` for a funded account whose signing key the wallet holds
 /// - `out_result` must be a valid pointer to a `FfiTransactionResult` struct
@@ -319,6 +348,8 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_update(
     elf_data: *const u8,
     elf_size: usize,
     immutable: bool,
+    env_var_data: *const u8,
+    env_var_size: usize,
     payer: *const FfiBytes32,
     out_result: *mut FfiTransactionResult,
 ) -> FfiOperationError {
@@ -343,8 +374,16 @@ pub unsafe extern "C" fn wallet_ffi_program_loader_update(
     let elf = unsafe { read_bytes(elf_data, elf_size) };
     let payer = unsafe { read_optional_account_id(payer) };
 
-    let sent = block_on(ProgramLoader(&wallet).update(header, &segment_ids, elf, immutable, payer))
-        .map_err(upload_failure);
+    let env_var = unsafe { read_optional_bytes(env_var_data, env_var_size) };
+    let sent = block_on(ProgramLoader(&wallet).update(
+        header,
+        &segment_ids,
+        elf,
+        immutable,
+        env_var,
+        payer,
+    ))
+    .map_err(upload_failure);
     match unsafe { (*out_result).record(&wallet, sent) } {
         Ok(updated) => {
             write_result(out_result, updated.map(|()| header));
