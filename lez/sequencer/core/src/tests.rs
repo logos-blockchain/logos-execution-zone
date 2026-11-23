@@ -6000,7 +6000,7 @@ fn privately_staked_state(
         lee_core::Nullifier::for_account_initialization(&funding.account_id(), &funding.nsk()),
     )]);
     let private_witnesses = vec![
-        init_witness(&ownership),
+        init_witness(&ownership).with_signer_programs([program_id]),
         update_witness(&state, &funding, funding_account),
     ];
     prove_and_settle(
@@ -6185,7 +6185,10 @@ fn a_private_withdrawal_to_a_private_destination_is_received_only_by_proof() {
         )
     };
     let request_block = 4;
-    let private_witnesses = vec![update_witness(&state, &ownership, staked_ownership)];
+    let private_witnesses = vec![
+        update_witness(&state, &ownership, staked_ownership)
+            .with_signer_programs([programs::sequencer_stake_account_id()]),
+    ];
     // The request proves the destination's recovery binding, which the keeper's release reuses.
     prove_and_settle(
         &mut state,

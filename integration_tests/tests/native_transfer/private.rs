@@ -551,6 +551,7 @@ fn prove_init_with_commitment_root(
                 kind: WitnessKind::Regular(RegularKey::Authorized(ask)),
                 nullifier: NullifierWitness::Init { commitment_root },
                 address_openings: BTreeSet::new(),
+                signer_programs: BTreeSet::from([lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID]),
             }],
             dummy_inputs: Vec::new(),
             ciphertext_padding: None,

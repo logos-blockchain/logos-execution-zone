@@ -346,6 +346,7 @@ fn note_ciphertext_is_padded_to_the_requested_length() {
                 membership_proof: commitment_set.get_proof_for(&commitment).unwrap(),
             },
             address_openings: BTreeSet::new(),
+            signer_programs: BTreeSet::from([lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID]),
         },
         &Script::default(),
         Some(PAD),
@@ -524,6 +525,7 @@ fn unauthorized_update(
             membership_proof,
         },
         address_openings: BTreeSet::new(),
+        signer_programs: BTreeSet::new(),
     }
 }
 
@@ -695,7 +697,7 @@ fn direct_input(
             claims: Vec::new(),
             root: root(Actor::new(keys.account_id(), program_account_id), script),
             public_context: PublicExecutionContext::default(),
-            private_witnesses: vec![init_witness(&keys)],
+            private_witnesses: vec![init_witness(&keys).with_signer_programs([program_account_id])],
             dummy_inputs: Vec::new(),
             ciphertext_padding: None,
             recoveries: Vec::new(),
@@ -726,7 +728,11 @@ fn scripted_root_input(script: &Script, is_authorized: bool) -> ReceiveInput {
         receiver,
         from: None,
         is_authorized,
-        grants: is_authorized.then_some(receiver).into_iter().collect(),
+        grants: if is_authorized {
+            BTreeSet::from([receiver, Actor::native_balance(keys.account_id())])
+        } else {
+            BTreeSet::new()
+        },
         pre_state: ActorState::empty(),
         message: borsh::to_vec(script).unwrap(),
     }

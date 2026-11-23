@@ -106,6 +106,7 @@ pub fn init_witness(keys: &TestPrivateKeys) -> PrivateWitness {
             commitment_root: DUMMY_COMMITMENT_HASH,
         },
         address_openings: BTreeSet::new(),
+        signer_programs: BTreeSet::from([lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID]),
     }
 }
 
@@ -124,6 +125,7 @@ pub fn update_witness(
             membership_proof,
         },
         address_openings: BTreeSet::new(),
+        signer_programs: BTreeSet::from([lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID]),
     }
 }
 

@@ -4337,43 +4337,35 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_private_account_rejects_mentions_that_differ_in_authorization() {
+    async fn a_private_account_marks_only_the_programs_its_authorizing_mentions_select() {
         let (mut wallet, _home, _sequencer, _served) = wallet_with_a_received_message().await;
-        let payer = wallet
-            .find_pending_message(1)
-            .await
-            .unwrap()
-            .unwrap()
-            .recipient
-            .account_id();
-        // Not the payer, whose mentions all authorize.
         let (other, _) = wallet.create_new_account_private(None);
+        let unmarked = AccountId::new([5; 32]);
 
-        let result = wallet
-            .send_tx_with_pre_check(
-                vec![
-                    AccountIdentity::PrivateOwned(other).balance(),
-                    AccountIdentity::PrivateOwned(other)
-                        .select_program_actor_state(AccountId::new([5; 32]))
-                        .without_authorization(),
-                ],
-                0,
-                Vec::new(),
-                &ProgramCatalog::default(),
-                None,
-                AsyncDelivery::default(),
-                Some(payer),
-                |_| Ok(()),
-            )
-            .await;
-        assert!(
-            matches!(
-                result,
-                Err(ExecutionFailureKind::ConflictingAccountIdentity(account_id))
-                    if account_id == other
-            ),
-            "{:?}",
-            result.as_ref().map(|(hash, _)| hash)
+        let manager = crate::account_manager::AccountManager::new(
+            &wallet,
+            vec![
+                AccountIdentity::PrivateOwned(other).balance(),
+                AccountIdentity::PrivateOwned(other)
+                    .select_program_actor_state(unmarked)
+                    .without_authorization(),
+            ],
+            None,
+            None,
+            &[],
+        )
+        .await
+        .unwrap();
+
+        let witnesses = manager.private_witnesses().unwrap();
+        let witness = witnesses
+            .iter()
+            .find(|witness| witness.account_id() == other)
+            .unwrap();
+        assert!(witness.kind.is_authorized());
+        assert_eq!(
+            witness.signer_programs,
+            BTreeSet::from([NATIVE_TOKEN_PROGRAM_ID])
         );
     }
 
@@ -5028,7 +5020,7 @@ mod tests {
     // The recipient pays the receipt's fee, but its key authorizes only the fee entry: the transfer
     // the message asks of it runs only when the caller mentions it as authorizing.
     #[tokio::test]
-    async fn a_receipt_runs_unauthorized_unless_its_caller_authorizes_the_recipient() {
+    async fn a_receipt_runs_unauthorized_even_when_its_caller_authorizes_the_recipient() {
         let (mut wallet, _home, _sequencer, served) = wallet_with_a_received_message().await;
         let recipient = wallet
             .find_pending_message(1)
@@ -5057,21 +5049,25 @@ mod tests {
             )) if account_id == recipient
         ));
 
+        // A message someone else wrote carries no grant, so marking the recipient changes nothing.
         let pending = wallet.find_pending_message(1).await.unwrap().unwrap();
-        wallet
-            .receive_pending_message_with(
-                pending,
-                vec![AccountIdentity::PrivateOwned(recipient).balance()],
-                &ProgramCatalog::default(),
-                None,
-                AsyncDelivery::default(),
-            )
-            .await
-            .unwrap();
         assert!(matches!(
-            served.lock().unwrap().submitted.as_slice(),
-            [LeeTransaction::PrivacyPreserving(_)]
+            wallet
+                .receive_pending_message_with(
+                    pending,
+                    vec![AccountIdentity::PrivateOwned(recipient).balance()],
+                    &ProgramCatalog::default(),
+                    None,
+                    AsyncDelivery::default(),
+                )
+                .await,
+            Err(ExecutionFailureKind::TransactionBuildError(
+                LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::NativeTransferFailed(
+                    TransferError::UnauthorizedSender { account_id }
+                ))
+            )) if account_id == recipient
         ));
+        assert!(served.lock().unwrap().submitted.is_empty());
     }
 
     #[tokio::test]

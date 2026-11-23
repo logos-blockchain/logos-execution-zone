@@ -144,15 +144,20 @@ impl Keys {
                 commitment_root: [8; 32],
             },
             address_openings: BTreeSet::new(),
+            signer_programs: BTreeSet::new(),
         }
     }
 
     fn regular(&self, ask: bool) -> PrivateWitness {
-        self.witness(WitnessKind::Regular(if ask {
+        let witness = self.witness(WitnessKind::Regular(if ask {
             RegularKey::Authorized(self.ask)
         } else {
             RegularKey::Nullifying(self.nsk())
-        }))
+        }));
+        PrivateWitness {
+            signer_programs: BTreeSet::from([id(8), native_token::NATIVE_TOKEN_PROGRAM_ID]),
+            ..witness
+        }
     }
 
     fn pda(&self, program: AccountId, seed: PdaSeed) -> PrivateWitness {
@@ -813,6 +818,93 @@ fn an_async_root_to_a_signer_actor_carries_no_grant() {
 }
 
 #[test]
+fn a_private_root_grants_only_the_actors_its_witness_marks() {
+    let keys = Keys::new(1);
+    let (marked, unmarked) = (holder(&keys), Actor::new(keys.regular_id(), id(7)));
+    let mut script = Script::default()
+        .on(
+            marked,
+            sending_when(
+                None,
+                vec![send_to(unmarked), send_to(marked).with_grants([marked])],
+            ),
+        )
+        .on(unmarked, sending(Vec::new()));
+
+    private_part(
+        PublicExecutionContext::default(),
+        &[keys.regular(true)],
+        root(marked),
+        Vec::new(),
+        &mut script,
+    )
+    .unwrap();
+
+    assert_eq!(
+        authorized(&script),
+        vec![(marked, true), (unmarked, false), (marked, true)]
+    );
+}
+
+// A public root holds the private account's signer grant and attaches it to its debit; a third
+// party the root calls never held it, so naming the private actor gets it nothing.
+#[test]
+fn a_private_signer_grant_reaches_its_actor_only_from_a_public_holder() {
+    let keys = Keys::new(1);
+    let alice = holder(&keys);
+    let (amm, scam) = (actor(2, 9), actor(3, 7));
+    let scripted = || {
+        Script::default()
+            .on(
+                amm,
+                sending(vec![send_to(alice).with_grants([alice]), send_to(scam)]),
+            )
+            .on(scam, sending(vec![send_to(alice).with_grants([alice])]))
+            .on(alice, sending(Vec::new()))
+    };
+
+    let Pipeline {
+        whole,
+        private,
+        boundary,
+        ..
+    } = pipeline(&[amm, scam], &[keys.regular(true)], amm, scripted);
+
+    let reached = |script: &Script| {
+        authorized(script)
+            .into_iter()
+            .filter(|(actor, _)| *actor == alice)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(reached(&whole), vec![(alice, true), (alice, false)]);
+    assert_eq!(reached(&private), reached(&whole));
+    assert!(boundary.iter().all(|step| match step {
+        PrivateToPublic(delivery) | PublicToPrivate(delivery) => delivery.grants.is_empty(),
+        EndPrivateSubtree | EndPublicSubtree => true,
+    }));
+}
+
+#[test]
+fn a_public_program_attaches_a_private_actor_only_as_the_destination() {
+    let keys = Keys::new(1);
+    let alice = holder(&keys);
+    let (amm, peer) = (actor(2, 9), actor(3, 7));
+    let mut script = Script::default().on(amm, sending(vec![send_to(peer).with_grants([alice])]));
+
+    let result = whole(
+        public_context(vec![amm, peer]),
+        &[keys.regular(true)],
+        root(amm),
+        &mut script,
+    );
+
+    assert!(matches!(
+        result,
+        Err(ExecutionError::UnheldGrant { actor }) if actor == alice
+    ));
+}
+
+#[test]
 fn a_seeded_program_cannot_debit_another_actor_of_the_pda() {
     let pool = actor(1, 9);
     let seed = PdaSeed::new([5; 32]);
@@ -1175,36 +1267,47 @@ fn predicted_cross_messages_must_match_the_recorded_public_deliveries() {
 }
 
 #[test]
-fn a_private_credential_holds_from_any_origin_beside_a_seed_grant() {
+fn a_private_signer_grant_returns_from_a_public_actor_beside_a_seed_grant() {
     let keys = Keys::new(1);
     let owner = holder(&keys);
     let vault = actor(2, 9);
     let seed = PdaSeed::new([5; 32]);
     let custody = Actor::new(keys.pda_id(vault.program_account_id, seed), id(8));
     let mut script = Script::default()
-        .on(owner, sending_when(None, vec![send_to(vault)]))
+        .on(
+            owner,
+            sending_when(None, vec![send_to(vault).with_grants([owner])]),
+        )
         .on(custody, sending(Vec::new()));
     let predicted = vec![vec![
-        delivery(vault, owner, &[]),
+        Delivery {
+            grants: BTreeSet::from([Target::Actor(owner)]),
+            ..delivery(vault, owner, &[])
+        },
         Delivery {
             pda_seeds: BTreeSet::from([seed]),
             ..delivery(vault, custody, &[])
         },
     ]];
 
-    private_part(
+    let boundary = private_part(
         public_context(vec![vault]),
         &[keys.regular(true), keys.pda(vault.program_account_id, seed)],
         root(owner),
         predicted,
         &mut script,
     )
-    .unwrap();
+    .unwrap()
+    .boundary;
 
     assert_eq!(
         authorized(&script),
         vec![(owner, true), (owner, true), (custody, true)]
     );
+    assert!(boundary.iter().all(|step| match step {
+        PrivateToPublic(delivery) | PublicToPrivate(delivery) => delivery.grants.is_empty(),
+        EndPrivateSubtree | EndPublicSubtree => true,
+    }));
 }
 
 #[test]
@@ -1730,10 +1833,10 @@ fn a_public_part_publishes_live_events() {
     assert_eq!(events, vec![(ENTRY, event)]);
 }
 
-// A public transition asks a private account's native balance to pay: the private transition runs
-// under the account's own credential, and without it the debit is refused.
+// A public root asks a private account's native balance to pay, attaching the payer's signer
+// grant: the prediction carries it, and it authorizes only when the payer's witness does.
 #[test]
-fn a_public_transition_requests_a_private_debit_that_the_private_credential_authorizes() {
+fn a_public_root_attaches_a_private_signer_grant_to_a_private_debit() {
     let keys = Keys::new(1);
     let (requester, payee) = (actor(2, 9), Actor::native_balance(id(3)));
     let payer = Actor::native_balance(keys.regular_id());
@@ -1746,15 +1849,18 @@ fn a_public_transition_requests_a_private_debit_that_the_private_credential_auth
             &[keys.regular(credential)],
             root(requester),
             vec![
-                vec![delivery(
-                    requester,
-                    payer,
-                    &borsh::to_vec(&native_token::Message::Transfer {
-                        to: payee.account_id,
-                        amount: 0,
-                    })
-                    .unwrap(),
-                )],
+                vec![Delivery {
+                    grants: BTreeSet::from([Target::Actor(payer)]),
+                    ..delivery(
+                        requester,
+                        payer,
+                        &borsh::to_vec(&native_token::Message::Transfer {
+                            to: payee.account_id,
+                            amount: 0,
+                        })
+                        .unwrap(),
+                    )
+                }],
                 Vec::new(),
             ],
             &mut script,
@@ -1965,7 +2071,10 @@ fn a_fee_only_payer_authorizes_the_fee_entry_alone() {
             root(payer),
             Vec::new(),
             Some(fee),
-            &[keys.witness(WitnessKind::Regular(kind))],
+            &[PrivateWitness {
+                signer_programs: BTreeSet::from([native_token::NATIVE_TOKEN_PROGRAM_ID]),
+                ..keys.witness(WitnessKind::Regular(kind))
+            }],
         )?
         .execute(&mut script)?;
         Ok::<_, ExecutionError>(authorized(&script))

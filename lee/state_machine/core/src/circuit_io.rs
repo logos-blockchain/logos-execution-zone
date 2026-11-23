@@ -278,6 +278,8 @@ pub struct PrivateWitness {
     pub nullifier: NullifierWitness,
     /// Blinding factors used for private execution.
     pub address_openings: BTreeSet<[u8; 32]>,
+    /// Programs whose actor on this account an authorized witness grants at the root.
+    pub signer_programs: BTreeSet<AccountId>,
 }
 
 /// Struct representing a presentation of a private sender address.
@@ -368,6 +370,12 @@ impl Default for DummyOutput {
 }
 
 impl PrivateWitness {
+    #[must_use]
+    pub fn with_signer_programs(mut self, programs: impl IntoIterator<Item = AccountId>) -> Self {
+        self.signer_programs.extend(programs);
+        self
+    }
+
     #[must_use]
     pub const fn is_pda(&self) -> bool {
         matches!(self.kind, WitnessKind::Pda { .. })
@@ -577,6 +585,7 @@ mod tests {
                 commitment_root: [5; 32],
             },
             address_openings: BTreeSet::from([[6; 32]]),
+            signer_programs: BTreeSet::new(),
         }
     }
 
@@ -811,6 +820,7 @@ mod tests {
                 commitment_root: [5; 32],
             },
             address_openings: BTreeSet::new(),
+            signer_programs: BTreeSet::new(),
         };
         let program = AccountId::new([6; 32]);
         let seed = PdaSeed::new([7; 32]);
@@ -842,6 +852,7 @@ mod tests {
                 account: account.clone(),
                 membership_proof: (4, vec![[11; 32]]),
             },
+            signer_programs: BTreeSet::from([AccountId::new([12; 32])]),
             ..receiver()
         };
         let pda = PrivateWitness {
@@ -867,6 +878,8 @@ mod tests {
             &[11; 32],
             &[1, 0, 0, 0], // address_openings: one
             &[6; 32],
+            &[1, 0, 0, 0], // signer_programs: one
+            &[12; 32],
         ]
         .concat();
         let expected_pda: Vec<u8> = [
@@ -880,6 +893,7 @@ mod tests {
             &[0], // nullifier: Init
             &[5; 32],
             &[0, 0, 0, 0], // address_openings: none
+            &[0, 0, 0, 0], // signer_programs: none
         ]
         .concat();
 

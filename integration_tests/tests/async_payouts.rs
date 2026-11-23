@@ -93,6 +93,7 @@ async fn spend_input(ctx: &TestContext, input: AccountId, seed: u8) -> Result<Pr
             membership_proof,
         },
         address_openings: BTreeSet::new(),
+        signer_programs: BTreeSet::from([lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID]),
     })
 }
 

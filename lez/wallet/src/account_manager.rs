@@ -399,10 +399,10 @@ impl AccountManager {
             .into_iter()
             .map(AccountMention::normalized)
             .collect();
-        // A public account signs when any of its mentions authorizes.
-        let signing_public: HashSet<AccountId> = mentions
+        // An account signs, or its witness authorizes, when any of its mentions authorizes.
+        let signing: HashSet<AccountId> = mentions
             .iter()
-            .filter(|mention| mention.identity.is_public() && mention.authorizes)
+            .filter(|mention| mention.authorizes)
             .map(|mention| mention.identity.account_id())
             .collect();
 
@@ -415,15 +415,13 @@ impl AccountManager {
             } = mention;
             let account_id = identity.account_id();
             let is_payer = fee_payer == Some(account_id);
+            let marks_signer = authorizes;
             payer_authorized |= is_payer && authorizes;
             // The payer's witness takes its authorization key however it is mentioned, scoped to
             // the fee entry below unless the transaction authorizes it.
             let authorizes = authorizes || is_payer;
-            let account_authorizes = if identity.is_public() {
-                signing_public.contains(&account_id)
-            } else {
-                authorizes
-            };
+            let account_authorizes =
+                signing.contains(&account_id) || (is_payer && !identity.is_public());
             let actor_state_selector = Actor::new(account_id, program_account_id);
 
             let known =
@@ -471,6 +469,9 @@ impl AccountManager {
 
             if let State::Private(pre) = &mut states[index] {
                 pre.address_openings.extend(address_openings);
+                if marks_signer {
+                    pre.signer_programs.insert(program_account_id);
+                }
             }
             rows.push(Row {
                 account: index,
@@ -751,6 +752,7 @@ impl AccountManager {
                         },
                     },
                     address_openings: pre.address_openings.clone(),
+                    signer_programs: pre.signer_programs.clone(),
                 })
             })
             .collect()
@@ -985,6 +987,8 @@ struct AccountPreparedData {
     proof: Option<MembershipProof>,
     random_seed: [u8; 32],
     address_openings: BTreeSet<[u8; 32]>,
+    /// Programs whose actor on this account the transaction's root may act on.
+    signer_programs: BTreeSet<AccountId>,
 }
 
 /// Builds a witness kind from the account kind and the key holding the account.
@@ -1167,6 +1171,7 @@ fn prepared_data(
         proof: None,
         random_seed: random_bytes(),
         address_openings: BTreeSet::new(),
+        signer_programs: BTreeSet::new(),
     }
 }
 
@@ -1406,6 +1411,7 @@ mod tests {
             proof: None,
             random_seed: [0; 32],
             address_openings: BTreeSet::new(),
+            signer_programs: BTreeSet::new(),
         }))
     }
 
@@ -1496,6 +1502,7 @@ mod tests {
             proof: None,
             random_seed: [0; 32],
             address_openings: BTreeSet::new(),
+            signer_programs: BTreeSet::new(),
         }))
     }
 
@@ -1719,6 +1726,7 @@ mod tests {
             proof: None,
             random_seed: [0; 32],
             address_openings: BTreeSet::new(),
+            signer_programs: BTreeSet::new(),
         };
 
         let manager = manager(vec![State::Private(Box::new(pre))]);
@@ -1751,6 +1759,7 @@ mod tests {
             proof: Some((0, Vec::new())),
             random_seed: [0; 32],
             address_openings: BTreeSet::new(),
+            signer_programs: BTreeSet::new(),
         }));
 
         let manager = manager(vec![owned]);
@@ -2066,6 +2075,7 @@ mod tests {
             proof: None,
             random_seed: [0; 32],
             address_openings: BTreeSet::from([[9; 32]]),
+            signer_programs: BTreeSet::new(),
         }))])
         .presenter(None);
 

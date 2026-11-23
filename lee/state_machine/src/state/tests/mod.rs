@@ -360,6 +360,7 @@ pub fn init_pda_witness(keys: &TestPrivateKeys, binding: (AccountId, PdaSeed)) -
             commitment_root: DUMMY_COMMITMENT_HASH,
         },
         address_openings: BTreeSet::new(),
+        signer_programs: BTreeSet::new(),
     }
 }
 
@@ -381,6 +382,7 @@ pub fn update_pda_witness(
             membership_proof,
         },
         address_openings: BTreeSet::new(),
+        signer_programs: BTreeSet::new(),
     }
 }
 

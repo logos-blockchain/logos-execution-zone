@@ -294,6 +294,9 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
                         membership_proof: proof,
                     },
                     address_openings: BTreeSet::new(),
+                    signer_programs: BTreeSet::from([
+                        lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
+                    ]),
                 },
                 PrivateWitness {
                     vpk: recipient_vpk,
@@ -303,6 +306,9 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
                         commitment_root: DUMMY_COMMITMENT_HASH,
                     },
                     address_openings: BTreeSet::new(),
+                    signer_programs: BTreeSet::from([
+                        lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
+                    ]),
                 },
             ],
             dummy_inputs: Vec::new(),

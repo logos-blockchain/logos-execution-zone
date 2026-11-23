@@ -84,6 +84,7 @@ fn private_account(tag: u8, account: Option<Account>) -> (AccountId, PrivateWitn
         kind: WitnessKind::Regular(RegularKey::Authorized(ask)),
         nullifier,
         address_openings: BTreeSet::new(),
+        signer_programs: BTreeSet::from([lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID]),
     };
     (account_id, witness)
 }
@@ -227,7 +228,8 @@ fn prove_scripted_transfers(
             to: RECIPIENT_ID,
             amount: AMOUNT_TO_TRANSFER,
         },
-    );
+    )
+    .with_grants([Actor::native_balance(sender_id)]);
     let script =
         (0..num_transfers).fold(Script::default(), |script, _| script.send(transfer.clone()));
 

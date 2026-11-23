@@ -596,9 +596,12 @@ fn a_private_roots_public_outputs_settle_against_live_state() {
     let tx = root.prove(
         &Script::default()
             .send_sync(written_to, &Script::write(vec![5; 4]))
-            .send_sync(
-                Actor::native_balance(root.account_id),
-                &transfer(recipient.account_id, amount),
+            .send(
+                SyncMessage::new(
+                    Actor::native_balance(root.account_id),
+                    &transfer(recipient.account_id, amount),
+                )
+                .with_grants([Actor::native_balance(root.account_id)]),
             ),
         vec![written_to, recipient],
     );

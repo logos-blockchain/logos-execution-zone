@@ -109,9 +109,12 @@ fn a_private_account_may_act_under_two_actor_states_in_one_transaction() {
             private_witnesses: vec![update_witness(&keys, pre_account.clone(), membership_proof)],
             ..proving_input(root(
                 Actor::new(sender_id, program_id),
-                &Script::write(written.clone()).send_sync(
-                    Actor::native_balance(sender_id),
-                    &transfer(recipient.account_id, amount),
+                &Script::write(written.clone()).send(
+                    SyncMessage::new(
+                        Actor::native_balance(sender_id),
+                        &transfer(recipient.account_id, amount),
+                    )
+                    .with_grants([Actor::native_balance(sender_id)]),
                 ),
             ))
         },
@@ -876,6 +879,7 @@ fn a_private_balance_decrease_without_the_credential_is_refused_when_proving() {
                         membership_proof,
                     },
                     address_openings: BTreeSet::new(),
+                    signer_programs: BTreeSet::new(),
                 },
                 PrivateWitness {
                     vpk: recipient_keys.vpk(),
@@ -885,6 +889,7 @@ fn a_private_balance_decrease_without_the_credential_is_refused_when_proving() {
                         commitment_root: DUMMY_COMMITMENT_HASH,
                     },
                     address_openings: BTreeSet::new(),
+                    signer_programs: BTreeSet::new(),
                 },
             ],
             ..proving_input(root(

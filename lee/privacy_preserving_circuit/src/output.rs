@@ -209,6 +209,7 @@ fn private_action(
         kind,
         nullifier: _,
         address_openings: _,
+        signer_programs: _,
     } = witness;
     let account_id = witness.account_id();
     let (nullifier, root, nonce) = witness
@@ -304,6 +305,7 @@ mod tests {
                     membership_proof: (0, Vec::new()),
                 },
                 address_openings: BTreeSet::new(),
+                signer_programs: BTreeSet::new(),
             }
         }
 

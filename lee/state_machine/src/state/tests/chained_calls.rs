@@ -208,7 +208,8 @@ fn private_sent_calls(number_of_calls: u32) {
     let send = SyncMessage::new(
         Actor::native_balance(from_account_id),
         &transfer(to_account_id, amount),
-    );
+    )
+    .with_grants([Actor::native_balance(from_account_id)]);
     let script =
         (0..number_of_calls).fold(Script::default(), |script, _| script.send(send.clone()));
 
