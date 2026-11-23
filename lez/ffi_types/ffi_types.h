@@ -76,7 +76,7 @@ typedef struct FfiDelivery {
   struct FfiActor from;
   struct FfiActor to;
   FfiMessageDataList message;
-  FfiAccountIdList inherited_authorizations;
+  FfiActorList inherited_authorizations;
   bool inherits_entry_authorizations;
   FfiPdaSeedList pda_seeds;
 } FfiDelivery;

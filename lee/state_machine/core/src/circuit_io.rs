@@ -636,7 +636,10 @@ mod tests {
                             to: public,
                             message: vec![6],
                         },
-                        inherited_authorizations: BTreeSet::from([AccountId::new([7; 32])]),
+                        inherited_authorizations: BTreeSet::from([Actor::new(
+                            AccountId::new([7; 32]),
+                            AccountId::new([10; 32]),
+                        )]),
                         inherits_entry_authorizations: false,
                         pda_seeds: BTreeSet::from([PdaSeed::new([8; 32])]),
                     }),
@@ -703,8 +706,8 @@ mod tests {
         };
 
         let expected: Vec<u8> = [
-            &[245, 3, 0, 0][..], // frame length: the 1013 bytes below
-            &[1, 0, 0, 0],       // public_context.actors: one actor
+            &[21, 4, 0, 0][..], // frame length: the 1045 bytes below
+            &[1, 0, 0, 0],      // public_context.actors: one actor
             &[0; 32],
             &[1; 32],
             &[0],          // Authority::None
@@ -720,8 +723,9 @@ mod tests {
             &[1; 32],
             &[1, 0, 0, 0], // message
             &[6],
-            &[1, 0, 0, 0], // inherited_authorizations: one account
+            &[1, 0, 0, 0], // inherited_authorizations: one actor
             &[7; 32],
+            &[10; 32],
             &[0],          // inherits_entry_authorizations: false
             &[1, 0, 0, 0], // pda_seeds: one seed
             &[8; 32],

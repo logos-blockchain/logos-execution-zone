@@ -665,25 +665,26 @@ fn a_revisited_actor_sees_its_staged_write() {
 }
 
 #[test]
-fn a_seed_grants_its_pda_and_the_grant_is_inherited_downstream() {
+fn a_seed_grants_its_pda_actor_and_the_grant_is_inherited_downstream() {
     let (owner, forwarder, relay) = (actor(1, 9), actor(2, 7), actor(3, 8));
     let seed = PdaSeed::new([5; 32]);
-    let vault = Actor::new(
-        AccountId::for_public_pda(&owner.program_account_id, &seed),
-        owner.program_account_id,
-    );
-    let seeded = SyncMessage {
-        pda_seeds: BTreeSet::from([seed]),
-        ..send_to(vault)
-    };
+    let vault = public_pda(owner.program_account_id, seed);
+    let vault_sibling = Actor::new(vault.account_id, id(6));
     let mut script = Script::default()
-        .on(owner, sending(vec![seeded, send_to(forwarder)]))
-        .on(vault, sending_when(Some(owner), vec![send_to(relay)]))
+        .on(
+            owner,
+            sending(vec![seeded_to(vault, seed), send_to(forwarder)]),
+        )
+        .on(
+            vault,
+            sending_when(Some(owner), vec![send_to(relay), send_to(vault_sibling)]),
+        )
         .on(relay, sending(vec![send_to(vault)]))
+        .on(vault_sibling, sending(Vec::new()))
         .on(forwarder, sending(vec![send_to(vault)]));
 
     public_transaction(
-        public_context(vec![owner, forwarder, relay, vault]),
+        public_context(vec![owner, forwarder, relay, vault, vault_sibling]),
         owner,
         &mut script,
     )
@@ -696,9 +697,62 @@ fn a_seed_grants_its_pda_and_the_grant_is_inherited_downstream() {
             (vault, true),
             (relay, false),
             (vault, true),
+            (vault_sibling, false),
             (forwarder, false),
             (vault, false),
         ]
+    );
+}
+
+#[test]
+fn a_seeded_program_cannot_debit_another_actor_of_the_pda() {
+    let pool = actor(1, 9);
+    let seed = PdaSeed::new([5; 32]);
+    let (scam_token, token) = (id(6), id(7));
+    let vault = AccountId::for_public_pda(&pool.program_account_id, &seed);
+    let (scam_holding, holding) = (Actor::new(vault, scam_token), Actor::new(vault, token));
+    let mut script = Script::default()
+        .on(pool, sending(vec![seeded_to(scam_holding, seed)]))
+        .on(scam_holding, sending(vec![send_to(holding)]))
+        .on(holding, sending(Vec::new()));
+
+    public_transaction(
+        public_context(vec![pool, scam_holding, holding]),
+        pool,
+        &mut script,
+    )
+    .unwrap();
+
+    assert_eq!(
+        authorized(&script),
+        vec![(pool, false), (scam_holding, true), (holding, false)]
+    );
+}
+
+#[test]
+fn a_program_seeds_each_actor_of_its_pda_it_needs() {
+    let pool = actor(1, 9);
+    let seed = PdaSeed::new([5; 32]);
+    let vault = AccountId::for_public_pda(&pool.program_account_id, &seed);
+    let (holding_a, holding_b) = (Actor::new(vault, id(6)), Actor::new(vault, id(7)));
+    let mut script = Script::default()
+        .on(
+            pool,
+            sending(vec![seeded_to(holding_a, seed), seeded_to(holding_b, seed)]),
+        )
+        .on(holding_a, sending(Vec::new()))
+        .on(holding_b, sending(Vec::new()));
+
+    public_transaction(
+        public_context(vec![pool, holding_a, holding_b]),
+        pool,
+        &mut script,
+    )
+    .unwrap();
+
+    assert_eq!(
+        authorized(&script),
+        vec![(pool, false), (holding_a, true), (holding_b, true)]
     );
 }
 
@@ -1176,7 +1230,7 @@ fn a_private_part_refuses_an_explicit_delivery_to_the_loader() {
 // The public owner seeds two PDAs; the first enters the private relay, whose call back to it
 // carries its grant. `predicted_authorizations` is what the proof claims the relay received.
 fn relayed_grant(
-    predicted_authorizations: BTreeSet<AccountId>,
+    predicted_authorizations: BTreeSet<Actor>,
 ) -> (Result<PublicOutcome, ExecutionError>, Script) {
     let keys = Keys::new(1);
     let relay = holder(&keys);
@@ -1226,7 +1280,7 @@ fn a_public_grant_crosses_a_private_relay_and_authorizes_the_reply() {
     let vault = public_pda(ENTRY.program_account_id, PdaSeed::new([5; 32]));
     let sibling = public_pda(ENTRY.program_account_id, PdaSeed::new([6; 32]));
 
-    let (result, script) = relayed_grant(BTreeSet::from([vault.account_id]));
+    let (result, script) = relayed_grant(BTreeSet::from([vault]));
 
     assert!(result.is_ok());
     assert_eq!(
@@ -1244,7 +1298,7 @@ fn a_public_grant_crosses_a_private_relay_and_authorizes_the_reply() {
 fn a_predicted_cross_message_must_claim_exactly_the_delivered_grants() {
     let sibling = public_pda(ENTRY.program_account_id, PdaSeed::new([6; 32]));
 
-    for claimed in [BTreeSet::from([sibling.account_id]), BTreeSet::new()] {
+    for claimed in [BTreeSet::from([sibling]), BTreeSet::new()] {
         assert!(matches!(
             relayed_grant(claimed).0,
             Err(ExecutionError::CrossMessageMismatch { index: 0 })
@@ -1357,7 +1411,7 @@ fn a_private_seed_grant_reaches_its_subtree_but_not_a_sibling_call() {
         vec![
             (owner, false),
             (custody, true),
-            (forwarded, true),
+            (forwarded, false),
             (relay, false),
             (custody, true),
             (custody, false),
@@ -1423,9 +1477,7 @@ fn a_private_grant_survives_its_own_public_detour_but_not_a_sibling_call() {
     assert_eq!(authorized(&private_script), expected);
     assert!(boundary.iter().all(|step| match step {
         PrivateToPublic(delivery) | PublicToPrivate(delivery) => {
-            !delivery
-                .inherited_authorizations
-                .contains(&custody.account_id)
+            !delivery.inherited_authorizations.contains(&custody)
         }
         EndPrivateSubtree | EndPublicSubtree => true,
     }));
@@ -1449,7 +1501,7 @@ fn a_predicted_grant_over_a_private_account_authorizes_nothing() {
         ],
         root(owner),
         vec![vec![Delivery {
-            inherited_authorizations: BTreeSet::from([custody.account_id]),
+            inherited_authorizations: BTreeSet::from([custody]),
             ..delivery(peer, custody, &[])
         }]],
         &mut script,
@@ -3451,7 +3503,7 @@ fn a_selected_async_message_whose_boundary_step_misstates_its_sender_destination
             ..selected.envelope.clone()
         }),
         Delivery {
-            inherited_authorizations: BTreeSet::from([ENTRY.account_id]),
+            inherited_authorizations: BTreeSet::from([ENTRY]),
             ..selected.clone()
         },
         Delivery {

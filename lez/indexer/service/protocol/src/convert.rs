@@ -1589,7 +1589,7 @@ mod tests {
                                 to: actor(8, 9),
                                 message: vec![10],
                             },
-                            inherited_authorizations: BTreeSet::from([account_id(14)]),
+                            inherited_authorizations: BTreeSet::from([actor(14, 90)]),
                             inherits_entry_authorizations: true,
                             pda_seeds: BTreeSet::from([lee_core::program::PdaSeed::new([15; 32])]),
                         },

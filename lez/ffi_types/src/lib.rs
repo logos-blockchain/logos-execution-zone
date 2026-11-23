@@ -407,7 +407,7 @@ pub struct FfiDelivery {
     pub from: FfiActor,
     pub to: FfiActor,
     pub message: FfiMessageDataList,
-    pub inherited_authorizations: FfiAccountIdList,
+    pub inherited_authorizations: FfiActorList,
     pub inherits_entry_authorizations: bool,
     pub pda_seeds: FfiPdaSeedList,
 }
@@ -892,9 +892,7 @@ fn empty_sealed_message() -> FfiSealedMessage {
     }
 }
 
-fn inherited_authorizations_to_ffi(
-    inherited_authorizations: BTreeSet<AccountId>,
-) -> FfiAccountIdList {
+fn inherited_authorizations_to_ffi(inherited_authorizations: BTreeSet<Actor>) -> FfiActorList {
     inherited_authorizations
         .into_iter()
         .map(Into::into)
@@ -902,10 +900,8 @@ fn inherited_authorizations_to_ffi(
         .into()
 }
 
-fn inherited_authorizations_from_ffi(
-    inherited_authorizations: FfiAccountIdList,
-) -> BTreeSet<AccountId> {
-    let std_vec: Vec<FfiAccountId> = inherited_authorizations.into();
+fn inherited_authorizations_from_ffi(inherited_authorizations: FfiActorList) -> BTreeSet<Actor> {
+    let std_vec: Vec<FfiActor> = inherited_authorizations.into();
     std_vec.into_iter().map(Into::into).collect()
 }
 
@@ -964,7 +960,7 @@ mod tests {
                 to: actor(2, 3),
                 message: vec![4],
             },
-            inherited_authorizations: BTreeSet::from([account_id(5)]),
+            inherited_authorizations: BTreeSet::from([actor(5, 6)]),
             inherits_entry_authorizations: true,
             pda_seeds: BTreeSet::from([PdaSeed::new([6; 32])]),
         };
@@ -974,7 +970,7 @@ mod tests {
                 to: actor(9, 10),
                 message: vec![11],
             },
-            inherited_authorizations: BTreeSet::from([account_id(12)]),
+            inherited_authorizations: BTreeSet::from([actor(12, 6)]),
             inherits_entry_authorizations: false,
             pda_seeds: BTreeSet::from([PdaSeed::new([13; 32])]),
         };

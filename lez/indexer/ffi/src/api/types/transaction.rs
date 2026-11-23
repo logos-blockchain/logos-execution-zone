@@ -648,7 +648,7 @@ mod tests {
                 boundary: vec![
                     BoundaryStep::PrivateToPublic(repeated.clone()),
                     BoundaryStep::PrivateToPublic(Delivery {
-                        inherited_authorizations: vec![account_id(15)],
+                        inherited_authorizations: vec![actor(15, 90)],
                         pda_seeds: vec![PdaSeed([16; 32])],
                         ..delivery(actor(12, 62), actor(9, 10), 11)
                     }),

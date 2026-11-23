@@ -129,7 +129,7 @@ pub struct PrivatePartOutcome {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct Delivery<S> {
     pub envelope: MessageEnvelope<S>,
-    pub inherited_authorizations: BTreeSet<AccountId>,
+    pub inherited_authorizations: BTreeSet<Actor>,
     pub inherits_entry_authorizations: bool,
     pub pda_seeds: BTreeSet<PdaSeed>,
 }
@@ -395,7 +395,7 @@ impl Delivery<Sender> {
         from: Actor,
         to: Actor,
         message: MessageData,
-        inherited_authorizations: BTreeSet<AccountId>,
+        inherited_authorizations: BTreeSet<Actor>,
         inherits_entry_authorizations: bool,
         pda_seeds: BTreeSet<PdaSeed>,
     ) -> Self {
@@ -725,7 +725,7 @@ impl PrivateMode {
     fn deliver_predicted_cross_messages(
         &mut self,
         executor: &mut Executor<'_, Self>,
-        withheld: &BTreeSet<AccountId>,
+        withheld: &BTreeSet<Actor>,
     ) -> Result<(), ExecutionError> {
         let index = self.next_public_segment;
         let cross_messages = self
@@ -796,7 +796,7 @@ impl Mode for PrivateMode {
             .inherited_authorizations
             .iter()
             .copied()
-            .filter(|account_id| executor.is_private(account_id))
+            .filter(|actor| executor.is_private(&actor.account_id))
             .collect();
         Ok(self.deliver_predicted_cross_messages(executor, &withheld)?)
     }
@@ -1154,7 +1154,9 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
             to: Actor::native_balance(payer),
             message,
         });
-        delivery.inherited_authorizations.insert(payer);
+        delivery
+            .inherited_authorizations
+            .insert(Actor::native_balance(payer));
         self.work_stack.push(WorkItem::Deliver(Box::new(delivery)));
     }
 
@@ -1282,7 +1284,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         let mut disclosed = delivery.with_from(from);
         disclosed
             .inherited_authorizations
-            .retain(|account_id| !self.is_private(account_id));
+            .retain(|actor| !self.is_private(&actor.account_id));
         disclosed
     }
 
@@ -1447,7 +1449,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         &mut self,
         actor: Actor,
         delivery: &Delivery<Sender>,
-    ) -> Result<(bool, BTreeSet<AccountId>), ExecutionError> {
+    ) -> Result<(bool, BTreeSet<Actor>), ExecutionError> {
         let account_id = actor.account_id;
         let issuer = delivery.envelope.from.issuer();
         let entry = self
@@ -1476,10 +1478,10 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         let mut authorizations = delivery.inherited_authorizations.clone();
         if let Some((program, seed)) = granted {
             bind_family(&mut self.pda_family_binding, program, seed, account_id)?;
-            authorizations.insert(account_id);
+            authorizations.insert(actor);
         }
         Ok((
-            credential || authorizations.contains(&account_id),
+            credential || authorizations.contains(&actor),
             authorizations,
         ))
     }

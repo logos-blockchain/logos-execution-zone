@@ -442,6 +442,14 @@ typedef struct FfiPublicTransactionBody {
   FfiSignaturePubKeyList witness_set;
 } FfiPublicTransactionBody;
 
+typedef struct FfiVec_FfiActor {
+  struct FfiActor *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiActor;
+
+typedef struct FfiVec_FfiActor FfiActorList;
+
 typedef struct FfiVec_FfiBytes32 {
   struct FfiBytes32 *entries;
   uintptr_t len;
@@ -454,7 +462,7 @@ typedef struct FfiDelivery {
   struct FfiActor from;
   struct FfiActor to;
   FfiMessageDataList message;
-  FfiAccountIdList inherited_authorizations;
+  FfiActorList inherited_authorizations;
   bool inherits_entry_authorizations;
   FfiPdaSeedList pda_seeds;
 } FfiDelivery;

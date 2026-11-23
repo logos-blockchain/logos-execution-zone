@@ -880,7 +880,7 @@ mod tests {
                     boundary: vec![
                         BoundaryStep::PrivateToPublic(repeated.clone()),
                         BoundaryStep::PrivateToPublic(Delivery {
-                            inherited_authorizations: BTreeSet::from([account_id(14)]),
+                            inherited_authorizations: BTreeSet::from([actor(14, 61)]),
                             pda_seeds: BTreeSet::from([PdaSeed::new([15; 32])]),
                             ..delivery(actor(11, 61), actor(8, 9), 10)
                         }),
@@ -1048,7 +1048,7 @@ mod tests {
         edit(&mut body.message.boundary, |steps| {
             for slot in end_of_subtree_deliveries(steps) {
                 let filled = Delivery {
-                    inherited_authorizations: BTreeSet::from([account_id(30)]),
+                    inherited_authorizations: BTreeSet::from([actor(30, 33)]),
                     pda_seeds: BTreeSet::from([PdaSeed::new([31; 32])]),
                     ..delivery(actor(32, 33), actor(34, 35), 36)
                 };
