@@ -7,7 +7,10 @@
 //! The loader is protocol code that runs only at public settlement: [`handle_message`] handles each
 //! message against the target's live loader actor state.
 use borsh::{BorshDeserialize, BorshSerialize};
-pub use lee_core::program::{ProgramHeader, immutable_mirror_commitment};
+pub use lee_core::{
+    program::{ProgramHeader, immutable_mirror_commitment},
+    program_loader::Message,
+};
 use lee_core::{
     Commitment,
     account::{AccountId, ActorState},
@@ -22,38 +25,6 @@ pub const MAX_PROGRAM_SEGMENTS: usize = 20;
 ///
 /// This is a client-side batching choice, not a limit enforced by the program.
 pub const MAX_SEGMENT_DATA_LEN: usize = 96 * 1024;
-
-/// Variants are append-only. Borsh encodes the variant as a leading tag byte, so inserting one
-/// ahead of `WriteSegment` shifts every existing encoding.
-#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
-pub enum Message {
-    /// Writes a new segment to the target's empty loader actor state; the target must be
-    /// authorized.
-    ///
-    /// If `next_segment` is `Some`, that account must already hold a valid [`ProgramSegment`].
-    /// Segments are immutable and linked from tail to head.
-    WriteSegment {
-        bytecode: Vec<u8>,
-        next_segment: Option<AccountId>,
-    },
-    CreateHeader {
-        first_segment: AccountId,
-        immutable: bool,
-    },
-    UpdateHeader {
-        first_segment: AccountId,
-        immutable: bool,
-    },
-    /// Creates a header as [`Message::CreateHeader`] does, but fails unless the chain's image ID
-    /// is `image_id`.
-    CreateHeaderOf {
-        first_segment: AccountId,
-        image_id: ProgramId,
-        immutable: bool,
-    },
-    /// Fails unless the target holds a mutable header. Changes nothing.
-    AssertMutable,
-}
 
 /// One link in a program's bytecode chain: a chunk of the ELF plus where the next chunk lives,
 /// tail-to-head — the account itself carries no notion of "first" or "last".

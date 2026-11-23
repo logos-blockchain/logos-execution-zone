@@ -35,6 +35,7 @@ mod frame;
 pub mod native_token;
 mod nullifier;
 pub mod program;
+pub mod program_loader;
 mod recovery;
 mod sealing;
 
