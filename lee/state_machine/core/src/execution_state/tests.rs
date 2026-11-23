@@ -3744,6 +3744,67 @@ fn a_receipt_root_to_a_private_pda_grants_its_receiver_nothing() {
     );
 }
 
+// An async message carries no grant, so a private PDA's program acts on its own PDA in the
+// claiming turn by seeding again.
+#[test]
+fn a_private_pda_acts_on_an_async_message_by_reseeding_in_the_claiming_turn() {
+    let (keys, seed) = (Keys::new(1), PdaSeed::new([5; 32]));
+    let custody = Actor::new(keys.pda_id(id(5), seed), id(5));
+    let sender = actor(4, 5);
+    let mut script = Script::default().on(
+        custody,
+        sending_when(Some(sender), vec![seeded_to(custody, seed)]),
+    );
+
+    private_part(
+        PublicExecutionContext::default(),
+        &[keys.pda(id(5), seed)],
+        TransactionEntry::Async(stored(sender, custody, b"stored")),
+        Vec::new(),
+        &mut script,
+    )
+    .unwrap();
+
+    assert_eq!(authorized(&script), vec![(custody, false), (custody, true)]);
+}
+
+// The root hands the signer's grant to a counterparty for a round trip: it comes back on the
+// callback only if the counterparty attaches it, and the counterparty could have used it meanwhile.
+#[test]
+fn a_grant_handed_to_a_counterparty_returns_only_if_the_counterparty_attaches_it() {
+    let (signer, amm, lender) = (actor(1, 9), actor(2, 7), actor(3, 8));
+    for (returns, expected) in [(true, true), (false, false)] {
+        let mut script = Script::default()
+            .on(amm, move |input| {
+                let response = if input.from.is_none() {
+                    Response::keep_state().send(send_to(lender).with_grants([signer]))
+                } else {
+                    Response::keep_state()
+                        .send(send_to(signer).with_grants(input.grants.get(&signer).copied()))
+                };
+                echo(input, response)
+            })
+            .on(lender, move |input| {
+                let callback = send_to(amm);
+                let callback = if returns {
+                    callback.with_grants([signer])
+                } else {
+                    callback
+                };
+                echo(input, Response::keep_state().send(callback))
+            })
+            .on(signer, sending(Vec::new()));
+
+        public_transaction(signed_amm_call(signer, amm, lender), amm, &mut script).unwrap();
+
+        assert_eq!(
+            authorized(&script).last(),
+            Some(&(signer, expected)),
+            "returns {returns}"
+        );
+    }
+}
+
 #[test]
 fn a_selected_async_message_whose_boundary_step_misstates_its_sender_destination_or_grants_is_refused()
  {
