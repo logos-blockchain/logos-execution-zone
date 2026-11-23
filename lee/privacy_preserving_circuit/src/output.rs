@@ -475,8 +475,7 @@ mod tests {
                     to: Actor::native_balance(inbox),
                     message: borsh::to_vec(&native_token::Message::Credit(amount)).unwrap(),
                 },
-                inherited_authorizations: BTreeSet::new(),
-                inherits_entry_authorizations: true,
+                grants: BTreeSet::new(),
                 pda_seeds: BTreeSet::new(),
             })
         };

@@ -3,6 +3,7 @@ use crate::primitives::types::{
     actor::{
         FfiActor, FfiBoundaryStep, FfiDeclaredActor, FfiNonceEntry, FfiPrivateAction,
         FfiPublicAccountEvidence, FfiPublication, FfiRecoveryBinding, FfiSignaturePubKeyEntry,
+        FfiTarget,
     },
     transaction::FfiTransaction,
 };
@@ -16,6 +17,8 @@ pub type FfiProof = FfiVecU8;
 pub type FfiProgramDeploymentMessage = FfiVecU8;
 
 pub type FfiActorList = FfiVec<FfiActor>;
+
+pub type FfiTargetList = FfiVec<FfiTarget>;
 
 pub type FfiDeclaredActorList = FfiVec<FfiDeclaredActor>;
 

@@ -547,7 +547,7 @@ mod tests {
         AccountId, Actor, Authority, BoundaryStep, Ciphertext, Commitment, CommitmentSetDigest,
         DeclaredActor, Delivery, EncryptedNote, EphemeralPublicKey, FeeDeclaration, FeeFallback,
         MessageEnvelope, Nullifier, PrivateAction, ProvenFee, PublicExecutionContext, Publication,
-        RootCall, SealedMessage,
+        RootCall, SealedMessage, Target,
     };
 
     use super::*;
@@ -580,8 +580,7 @@ mod tests {
                 to,
                 message: vec![message],
             },
-            inherited_authorizations: vec![],
-            inherits_entry_authorizations: true,
+            grants: vec![],
             pda_seeds: vec![],
         }
     }
@@ -648,14 +647,14 @@ mod tests {
                 boundary: vec![
                     BoundaryStep::PrivateToPublic(repeated.clone()),
                     BoundaryStep::PrivateToPublic(Delivery {
-                        inherited_authorizations: vec![actor(15, 90)],
+                        grants: vec![Target::Actor(actor(15, 90))],
                         pda_seeds: vec![PdaSeed([16; 32])],
                         ..delivery(actor(12, 62), actor(9, 10), 11)
                     }),
                     BoundaryStep::PrivateToPublic(delivery(actor(40, 90), actor(41, 42), 43)),
                     BoundaryStep::PrivateToPublic(repeated.clone()),
                     BoundaryStep::PublicToPrivate(Delivery {
-                        inherits_entry_authorizations: false,
+                        grants: vec![Target::Withheld(2)],
                         ..delivery(actor(17, 18), actor(19, 20), 21)
                     }),
                     BoundaryStep::EndPrivateSubtree,

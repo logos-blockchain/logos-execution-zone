@@ -11,7 +11,7 @@ use lee::{
 };
 use lee_core::{
     Commitment, EncryptedNote, FeeFallback, Nullifier, PrivateAction, ProvenFee, RecoveryBinding,
-    SealedMessage, account::Nonce, encryption::Ciphertext, program::PdaSeed,
+    SealedMessage, Target, account::Nonce, encryption::Ciphertext, program::PdaSeed,
 };
 
 /// 32-byte array type for `AccountId`, keys, hashes, etc.
@@ -202,6 +202,8 @@ impl<T> FfiVec<T> {
 pub type FfiVecU8 = FfiVec<u8>;
 
 pub type FfiActorList = FfiVec<FfiActor>;
+
+pub type FfiTargetList = FfiVec<FfiTarget>;
 
 pub type FfiDeclaredActorList = FfiVec<FfiDeclaredActor>;
 
@@ -403,12 +405,53 @@ impl TryFrom<FfiPublicAccountEvidence> for PublicAccountEvidence {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy)]
+pub enum FfiTargetKind {
+    Actor = 0x0,
+    Withheld,
+}
+
+/// A grant on a delivery: `actor` for `Actor`, `withheld` for `Withheld`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FfiTarget {
+    pub kind: FfiTargetKind,
+    pub actor: FfiActor,
+    pub withheld: u32,
+}
+
+impl From<Target> for FfiTarget {
+    fn from(value: Target) -> Self {
+        match value {
+            Target::Actor(actor) => Self {
+                kind: FfiTargetKind::Actor,
+                actor: actor.into(),
+                withheld: 0,
+            },
+            Target::Withheld(index) => Self {
+                kind: FfiTargetKind::Withheld,
+                actor: FfiActor::default(),
+                withheld: index,
+            },
+        }
+    }
+}
+
+impl From<FfiTarget> for Target {
+    fn from(value: FfiTarget) -> Self {
+        match value.kind {
+            FfiTargetKind::Actor => Self::Actor(value.actor.into()),
+            FfiTargetKind::Withheld => Self::Withheld(value.withheld),
+        }
+    }
+}
+
+#[repr(C)]
 pub struct FfiDelivery {
     pub from: FfiActor,
     pub to: FfiActor,
     pub message: FfiMessageDataList,
-    pub inherited_authorizations: FfiActorList,
-    pub inherits_entry_authorizations: bool,
+    pub grants: FfiTargetList,
     pub pda_seeds: FfiPdaSeedList,
 }
 
@@ -416,8 +459,7 @@ impl From<Delivery<Actor>> for FfiDelivery {
     fn from(value: Delivery<Actor>) -> Self {
         let Delivery {
             envelope: MessageEnvelope { from, to, message },
-            inherited_authorizations,
-            inherits_entry_authorizations,
+            grants,
             pda_seeds,
         } = value;
 
@@ -425,8 +467,7 @@ impl From<Delivery<Actor>> for FfiDelivery {
             from: from.into(),
             to: to.into(),
             message: message.into(),
-            inherited_authorizations: inherited_authorizations_to_ffi(inherited_authorizations),
-            inherits_entry_authorizations,
+            grants: grants_to_ffi(grants),
             pda_seeds: pda_seeds
                 .into_iter()
                 .map(pda_seed_to_ffi)
@@ -444,10 +485,7 @@ impl From<FfiDelivery> for Delivery<Actor> {
                 to: value.to.into(),
                 message: value.message.into(),
             },
-            inherited_authorizations: inherited_authorizations_from_ffi(
-                value.inherited_authorizations,
-            ),
-            inherits_entry_authorizations: value.inherits_entry_authorizations,
+            grants: grants_from_ffi(value.grants),
             pda_seeds: {
                 let std_vec: Vec<_> = value.pda_seeds.into();
                 std_vec.into_iter().map(ffi_to_pda_seed).collect()
@@ -870,8 +908,7 @@ fn empty_delivery() -> FfiDelivery {
         from: FfiActor::default(),
         to: FfiActor::default(),
         message: Vec::new().into(),
-        inherited_authorizations: Vec::new().into(),
-        inherits_entry_authorizations: false,
+        grants: Vec::new().into(),
         pda_seeds: Vec::new().into(),
     }
 }
@@ -892,16 +929,16 @@ fn empty_sealed_message() -> FfiSealedMessage {
     }
 }
 
-fn inherited_authorizations_to_ffi(inherited_authorizations: BTreeSet<Actor>) -> FfiActorList {
-    inherited_authorizations
+fn grants_to_ffi(grants: BTreeSet<Target>) -> FfiTargetList {
+    grants
         .into_iter()
         .map(Into::into)
         .collect::<Vec<_>>()
         .into()
 }
 
-fn inherited_authorizations_from_ffi(inherited_authorizations: FfiActorList) -> BTreeSet<Actor> {
-    let std_vec: Vec<FfiActor> = inherited_authorizations.into();
+fn grants_from_ffi(grants: FfiTargetList) -> BTreeSet<Target> {
+    let std_vec: Vec<FfiTarget> = grants.into();
     std_vec.into_iter().map(Into::into).collect()
 }
 
@@ -960,8 +997,7 @@ mod tests {
                 to: actor(2, 3),
                 message: vec![4],
             },
-            inherited_authorizations: BTreeSet::from([actor(5, 6)]),
-            inherits_entry_authorizations: true,
+            grants: BTreeSet::from([Target::Actor(actor(5, 6))]),
             pda_seeds: BTreeSet::from([PdaSeed::new([6; 32])]),
         };
         let cross_message = Delivery {
@@ -970,8 +1006,7 @@ mod tests {
                 to: actor(9, 10),
                 message: vec![11],
             },
-            inherited_authorizations: BTreeSet::from([actor(12, 6)]),
-            inherits_entry_authorizations: false,
+            grants: BTreeSet::from([Target::Withheld(4)]),
             pda_seeds: BTreeSet::from([PdaSeed::new([13; 32])]),
         };
         let zeroed = || unsafe { std::mem::zeroed::<FfiBoundaryStep>() };

@@ -315,8 +315,7 @@ fn delivery<S>(from: S, to: Actor, message: &[u8]) -> Delivery<S> {
             to,
             message: message.to_vec(),
         },
-        inherited_authorizations: BTreeSet::new(),
-        inherits_entry_authorizations: true,
+        grants: BTreeSet::new(),
         pda_seeds: BTreeSet::new(),
     }
 }
@@ -1247,7 +1246,10 @@ fn relayed_grant(
         root(owner),
         vec![
             vec![Delivery {
-                inherited_authorizations: predicted_authorizations,
+                grants: predicted_authorizations
+                    .into_iter()
+                    .map(Target::Actor)
+                    .collect(),
                 ..delivery(vault, relay, ENTER)
             }],
             Vec::new(),
@@ -1325,7 +1327,10 @@ fn a_withheld_private_grant_authorizes_the_return_through_a_public_actor() {
             pda_keys.pda(owner.program_account_id, seed),
         ],
         root(owner),
-        vec![vec![delivery(peer, custody, &[])]],
+        vec![vec![Delivery {
+            grants: BTreeSet::from([Target::Withheld(0)]),
+            ..delivery(peer, custody, &[])
+        }]],
         &mut private_script,
     )
     .unwrap();
@@ -1335,10 +1340,9 @@ fn a_withheld_private_grant_authorizes_the_return_through_a_public_actor() {
         vec![(owner, false), (custody, true), (custody, true)]
     );
     let boundary = private_outcome.boundary;
-    assert!(
-        public_calls(&boundary)[0]
-            .inherited_authorizations
-            .is_empty()
+    assert_eq!(
+        public_calls(&boundary)[0].grants,
+        BTreeSet::from([Target::Withheld(0)])
     );
 
     let mut public_script = Script::default()
@@ -1477,7 +1481,7 @@ fn a_private_grant_survives_its_own_public_detour_but_not_a_sibling_call() {
     assert_eq!(authorized(&private_script), expected);
     assert!(boundary.iter().all(|step| match step {
         PrivateToPublic(delivery) | PublicToPrivate(delivery) => {
-            !delivery.inherited_authorizations.contains(&custody)
+            !delivery.grants.contains(&Target::Actor(custody))
         }
         EndPrivateSubtree | EndPublicSubtree => true,
     }));
@@ -1501,7 +1505,7 @@ fn a_predicted_grant_over_a_private_account_authorizes_nothing() {
         ],
         root(owner),
         vec![vec![Delivery {
-            inherited_authorizations: BTreeSet::from([custody]),
+            grants: BTreeSet::from([Target::Actor(custody)]),
             ..delivery(peer, custody, &[])
         }]],
         &mut script,
@@ -1512,7 +1516,31 @@ fn a_predicted_grant_over_a_private_account_authorizes_nothing() {
     assert_eq!(authorized(&script), vec![(owner, false), (custody, false)]);
     assert!(matches!(
         boundary.as_slice(),
-        [PrivateToPublic(_), PublicToPrivate(forged), EndPrivateSubtree, EndPublicSubtree] if forged.inherited_authorizations.is_empty()
+        [PrivateToPublic(_), PublicToPrivate(forged), EndPrivateSubtree, EndPublicSubtree] if forged.grants.is_empty()
+    ));
+}
+
+#[test]
+fn a_predicted_placeholder_no_crossing_withheld_is_refused() {
+    let keys = Keys::new(1);
+    let owner = holder(&keys);
+    let peer = actor(3, 9);
+    let mut script = Script::default().on(owner, sending(vec![send_to(peer)]));
+
+    let result = private_part(
+        public_context(vec![peer]),
+        &[keys.regular(false)],
+        root(owner),
+        vec![vec![Delivery {
+            grants: BTreeSet::from([Target::Withheld(0)]),
+            ..delivery(peer, owner, &[])
+        }]],
+        &mut script,
+    );
+
+    assert!(matches!(
+        result,
+        Err(ExecutionError::UnknownWithheldGrant { index: 0 })
     ));
 }
 
@@ -2754,8 +2782,8 @@ fn a_promoted_async_message_delegates_no_authorization_but_keeps_transaction_cre
 
 // The private `owner` seeds its PDA `custody`, which calls public `peer`; peer calls custody and
 // reaches public `relay`, asynchronously when `asynchronous` and otherwise by a call, whose call
-// back reseeds custody when `regrant`. `forge` flips the inheritance the proof claims for that
-// callback.
+// back reseeds custody when `regrant`. `forge` flips whether the proof claims custody's withheld
+// grant for that callback.
 fn custody_callbacks(
     asynchronous: bool,
     regrant: bool,
@@ -2817,8 +2845,9 @@ fn custody_callbacks(
         let forged = predicted_cross_messages[0]
             .last_mut()
             .expect("relay's callback is the last cross message of peer's call");
-        assert!(forged.inherited_authorizations.is_empty());
-        forged.inherits_entry_authorizations = !forged.inherits_entry_authorizations;
+        if !forged.grants.remove(&Target::Withheld(0)) {
+            forged.grants.insert(Target::Withheld(0));
+        }
     }
     let mut private_script = script();
     let boundary = private_part(
@@ -2833,7 +2862,7 @@ fn custody_callbacks(
     let inheritance = boundary
         .iter()
         .filter_map(|step| match step {
-            PublicToPrivate(delivery) => Some(delivery.inherits_entry_authorizations),
+            PublicToPrivate(delivery) => Some(delivery.grants.contains(&Target::Withheld(0))),
             PrivateToPublic(_) | EndPrivateSubtree | EndPublicSubtree => None,
         })
         .collect();
@@ -2881,7 +2910,7 @@ fn a_withheld_private_grant_returns_along_calls_but_not_across_a_promoted_async_
 }
 
 #[test]
-fn settlement_refuses_a_forged_inheritance_bit_beside_matching_authorizations() {
+fn settlement_refuses_a_forged_withheld_placeholder() {
     for asynchronous in [false, true] {
         let (_, in_private, inheritance, settled) = custody_callbacks(asynchronous, false, true);
 
@@ -3113,10 +3142,7 @@ fn a_selected_public_async_message_into_a_private_account_is_a_predicted_cross_m
     } = pipeline(&[ENTRY], &[keys.regular(false)], ENTRY, || scripted(b"m"));
     assert_eq!(
         predicted_cross_messages,
-        vec![vec![Delivery {
-            inherits_entry_authorizations: false,
-            ..delivery(ENTRY, owner, b"m")
-        }]]
+        vec![vec![delivery(ENTRY, owner, b"m")]]
     );
     assert!(matches!(
         public_part(
@@ -3503,11 +3529,11 @@ fn a_selected_async_message_whose_boundary_step_misstates_its_sender_destination
             ..selected.envelope.clone()
         }),
         Delivery {
-            inherited_authorizations: BTreeSet::from([ENTRY]),
+            grants: BTreeSet::from([Target::Actor(ENTRY)]),
             ..selected.clone()
         },
         Delivery {
-            inherits_entry_authorizations: true,
+            grants: BTreeSet::from([Target::Withheld(0)]),
             ..selected.clone()
         },
     ] {

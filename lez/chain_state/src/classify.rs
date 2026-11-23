@@ -264,8 +264,7 @@ mod tests {
                 to,
                 message: borsh::to_vec(message).expect("serializes"),
             },
-            inherited_authorizations: BTreeSet::new(),
-            inherits_entry_authorizations: true,
+            grants: BTreeSet::new(),
             pda_seeds: BTreeSet::new(),
         })
     }

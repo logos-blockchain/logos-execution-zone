@@ -17,6 +17,11 @@ typedef enum FfiBoundaryStepKind {
   FfiBoundaryStepKind_EndPublicSubtree,
 } FfiBoundaryStepKind;
 
+typedef enum FfiTargetKind {
+  FfiTargetKind_Actor = 0,
+  FfiTargetKind_Withheld,
+} FfiTargetKind;
+
 typedef enum FfiPublicationKind {
   FfiPublicationKind_Clear = 0,
   FfiPublicationKind_Sealed,
@@ -442,13 +447,22 @@ typedef struct FfiPublicTransactionBody {
   FfiSignaturePubKeyList witness_set;
 } FfiPublicTransactionBody;
 
-typedef struct FfiVec_FfiActor {
-  struct FfiActor *entries;
+/**
+ * A grant on a delivery: `actor` for `Actor`, `withheld` for `Withheld`.
+ */
+typedef struct FfiTarget {
+  enum FfiTargetKind kind;
+  struct FfiActor actor;
+  uint32_t withheld;
+} FfiTarget;
+
+typedef struct FfiVec_FfiTarget {
+  struct FfiTarget *entries;
   uintptr_t len;
   uintptr_t capacity;
-} FfiVec_FfiActor;
+} FfiVec_FfiTarget;
 
-typedef struct FfiVec_FfiActor FfiActorList;
+typedef struct FfiVec_FfiTarget FfiTargetList;
 
 typedef struct FfiVec_FfiBytes32 {
   struct FfiBytes32 *entries;
@@ -462,8 +476,7 @@ typedef struct FfiDelivery {
   struct FfiActor from;
   struct FfiActor to;
   FfiMessageDataList message;
-  FfiActorList inherited_authorizations;
-  bool inherits_entry_authorizations;
+  FfiTargetList grants;
   FfiPdaSeedList pda_seeds;
 } FfiDelivery;
 

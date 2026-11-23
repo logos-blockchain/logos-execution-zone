@@ -761,7 +761,7 @@ mod tests {
         MessageEnvelope, PublicExecutionContext, RootCall,
     };
     use lee_core::{
-        Commitment, EncryptedNote, SealedMessage, account::Nonce, encryption::Ciphertext,
+        Commitment, EncryptedNote, SealedMessage, Target, account::Nonce, encryption::Ciphertext,
         program::PdaSeed,
     };
 
@@ -839,8 +839,7 @@ mod tests {
                 to,
                 message: vec![message],
             },
-            inherited_authorizations: BTreeSet::new(),
-            inherits_entry_authorizations: true,
+            grants: BTreeSet::new(),
             pda_seeds: BTreeSet::new(),
         }
     }
@@ -880,14 +879,14 @@ mod tests {
                     boundary: vec![
                         BoundaryStep::PrivateToPublic(repeated.clone()),
                         BoundaryStep::PrivateToPublic(Delivery {
-                            inherited_authorizations: BTreeSet::from([actor(14, 61)]),
+                            grants: BTreeSet::from([Target::Actor(actor(14, 61))]),
                             pda_seeds: BTreeSet::from([PdaSeed::new([15; 32])]),
                             ..delivery(actor(11, 61), actor(8, 9), 10)
                         }),
                         BoundaryStep::PrivateToPublic(delivery(actor(40, 90), actor(41, 42), 43)),
                         BoundaryStep::PrivateToPublic(repeated),
                         BoundaryStep::PublicToPrivate(Delivery {
-                            inherits_entry_authorizations: false,
+                            grants: BTreeSet::from([Target::Withheld(1)]),
                             ..delivery(actor(16, 17), actor(18, 19), 20)
                         }),
                         BoundaryStep::EndPrivateSubtree,
@@ -1021,8 +1020,7 @@ mod tests {
                 program_account_id: FfiBytes32::default(),
             },
             message: FfiVec::default(),
-            inherited_authorizations: FfiVec::default(),
-            inherits_entry_authorizations: false,
+            grants: FfiVec::default(),
             pda_seeds: FfiVec::default(),
         }
     }
@@ -1048,7 +1046,7 @@ mod tests {
         edit(&mut body.message.boundary, |steps| {
             for slot in end_of_subtree_deliveries(steps) {
                 let filled = Delivery {
-                    inherited_authorizations: BTreeSet::from([actor(30, 33)]),
+                    grants: BTreeSet::from([Target::Actor(actor(30, 33)), Target::Withheld(0)]),
                     pda_seeds: BTreeSet::from([PdaSeed::new([31; 32])]),
                     ..delivery(actor(32, 33), actor(34, 35), 36)
                 };

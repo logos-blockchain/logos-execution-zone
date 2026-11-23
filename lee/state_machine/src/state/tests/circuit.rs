@@ -156,8 +156,7 @@ fn a_private_account_may_act_under_two_actor_states_in_one_transaction() {
                     to: recipient,
                     message: credit,
                 },
-                inherited_authorizations: BTreeSet::new(),
-                inherits_entry_authorizations: true,
+                grants: BTreeSet::new(),
                 pda_seeds: BTreeSet::new(),
             }),
             BoundaryStep::EndPublicSubtree,
@@ -330,7 +329,7 @@ fn a_delegated_public_pda_is_authorized_at_settlement_but_not_exported_as_a_gran
         panic!("the statement makes exactly one public call");
     };
     assert_eq!(delegated.envelope.to, callee);
-    assert!(delegated.inherited_authorizations.is_empty());
+    assert!(delegated.grants.is_empty());
     assert_eq!(delegated.pda_seeds, BTreeSet::from([DELEGATED_SEED]));
 
     V03State::new()

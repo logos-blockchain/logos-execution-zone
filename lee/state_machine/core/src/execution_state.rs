@@ -4,7 +4,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    FeeTransfer, PrivateWitness, RootCall, SenderPresentation,
+    FeeTransfer, PrivateWitness, RootCall, SenderPresentation, Target, WithheldIndex,
     account::{AccountData, AccountId, Actor, ActorState},
     native_token,
     program::{
@@ -129,8 +129,7 @@ pub struct PrivatePartOutcome {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct Delivery<S> {
     pub envelope: MessageEnvelope<S>,
-    pub inherited_authorizations: BTreeSet<Actor>,
-    pub inherits_entry_authorizations: bool,
+    pub grants: BTreeSet<Target>,
     pub pda_seeds: BTreeSet<PdaSeed>,
 }
 
@@ -272,6 +271,9 @@ pub enum ExecutionError {
     #[error("No predicted cross messages were supplied for public segment {index}")]
     MissingPredictedCrossMessages { index: usize },
 
+    #[error("A delivery claims withheld grant {index}, which no crossing withheld")]
+    UnknownWithheldGrant { index: WithheldIndex },
+
     #[error(
         "Predicted cross messages were supplied for public segments the execution never entered"
     )]
@@ -374,8 +376,7 @@ impl<S> Delivery<S> {
                 to: self.envelope.to,
                 message: self.envelope.message.clone(),
             },
-            inherited_authorizations: self.inherited_authorizations.clone(),
-            inherits_entry_authorizations: self.inherits_entry_authorizations,
+            grants: self.grants.clone(),
             pda_seeds: self.pda_seeds.clone(),
         }
     }
@@ -385,8 +386,7 @@ impl Delivery<Sender> {
     const fn entry(envelope: MessageEnvelope<Sender>) -> Self {
         Self {
             envelope,
-            inherited_authorizations: BTreeSet::new(),
-            inherits_entry_authorizations: true,
+            grants: BTreeSet::new(),
             pda_seeds: BTreeSet::new(),
         }
     }
@@ -395,8 +395,7 @@ impl Delivery<Sender> {
         from: Actor,
         to: Actor,
         message: MessageData,
-        inherited_authorizations: BTreeSet<Actor>,
-        inherits_entry_authorizations: bool,
+        grants: BTreeSet<Target>,
         pda_seeds: BTreeSet<PdaSeed>,
     ) -> Self {
         Self {
@@ -405,8 +404,7 @@ impl Delivery<Sender> {
                 to,
                 message,
             },
-            inherited_authorizations,
-            inherits_entry_authorizations,
+            grants,
             pda_seeds,
         }
     }
@@ -431,6 +429,8 @@ struct Executor<'witnesses, M: Mode> {
     candidates: PromotionCounters,
     /// Public accounts admitted so far in this transaction.
     admitted_public_accounts: HashSet<AccountId>,
+    /// Private actors whose grants crossed to the public side, indexed by `Target::Withheld`.
+    withheld: Vec<Actor>,
 }
 
 /// Per sender placement, numbers every async message whose destination is not declared in the
@@ -719,13 +719,9 @@ impl Mode for WholeMode {
 }
 
 impl PrivateMode {
-    // Each cross message still inheriting its entry's authorizations re-enters with the private
-    // grants withheld from the public call it answers; a predicted grant over a private account is
-    // never authority.
     fn deliver_predicted_cross_messages(
         &mut self,
         executor: &mut Executor<'_, Self>,
-        withheld: &BTreeSet<Actor>,
     ) -> Result<(), ExecutionError> {
         let index = self.next_public_segment;
         let cross_messages = self
@@ -741,10 +737,13 @@ impl PrivateMode {
             // A prediction is a public call into the private part. Aimed at a public actor it
             // would be recorded as a proven call and replayed publicly unchecked.
             executor.require_private(cross_message.envelope.to)?;
-            let mut delivery = executor.disclose(cross_message, Sender::Call(sender));
-            if delivery.inherits_entry_authorizations {
-                delivery.inherited_authorizations.extend(withheld);
-            }
+            // The public side holds a private grant only as a placeholder, so a predicted grant
+            // over a private actor is never authority.
+            let mut delivery = cross_message.with_from(Sender::Call(sender));
+            delivery.grants.retain(|target| match target {
+                Target::Actor(actor) => !executor.is_private(&actor.account_id),
+                Target::Withheld(_) => true,
+            });
             executor
                 .work_stack
                 .push(WorkItem::Deliver(Box::new(delivery)));
@@ -772,7 +771,7 @@ impl Mode for PrivateMode {
         &mut self,
         executor: &mut Executor<'_, Self>,
     ) -> Result<(), ExecutionError> {
-        self.deliver_predicted_cross_messages(executor, &BTreeSet::new())
+        self.deliver_predicted_cross_messages(executor)
     }
 
     fn deliver_to_public<E: ExecutionEnvironment>(
@@ -786,19 +785,12 @@ impl Mode for PrivateMode {
             .from
             .actor()
             .expect("only a call from a private transition crosses into public execution");
-        self.boundary.push(BoundaryStep::PrivateToPublic(
-            executor.disclose(&delivery, sender),
-        ));
+        self.boundary
+            .push(BoundaryStep::PrivateToPublic(delivery.with_from(sender)));
         executor
             .work_stack
             .push(WorkItem::Resume(PrivateContinuation::EndPublicSubtree));
-        let withheld = delivery
-            .inherited_authorizations
-            .iter()
-            .copied()
-            .filter(|actor| executor.is_private(&actor.account_id))
-            .collect();
-        Ok(self.deliver_predicted_cross_messages(executor, &withheld)?)
+        Ok(self.deliver_predicted_cross_messages(executor)?)
     }
 
     fn deliver_to_private<E: ExecutionEnvironment>(
@@ -938,7 +930,7 @@ impl Mode for PublicMode {
         let Some(BoundaryStep::PublicToPrivate(predicted)) = self.boundary.get(index) else {
             return Err(ExecutionError::BoundaryMismatch { index }.into());
         };
-        // The live grants are the disclosed part of the authority the proven transition ran under.
+        // The live grants, private ones as placeholders, are what the proven transition received.
         let live = delivery
             .envelope
             .from
@@ -1073,6 +1065,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
             async_messages: Vec::new(),
             candidates: PromotionCounters::default(),
             admitted_public_accounts: HashSet::new(),
+            withheld: Vec::new(),
         };
         for (alias, account_id) in openings {
             executor.register_alias(alias, account_id)?;
@@ -1155,8 +1148,8 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
             message,
         });
         delivery
-            .inherited_authorizations
-            .insert(Actor::native_balance(payer));
+            .grants
+            .insert(Target::Actor(Actor::native_balance(payer)));
         self.work_stack.push(WorkItem::Deliver(Box::new(delivery)));
     }
 
@@ -1194,9 +1187,8 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
             if M::CHECKS_ADMISSION {
                 self.admit(&delivery, environment)?;
             }
-            // Each public subtree's private callbacks start out inheriting what its entry withheld.
             if self.opens_public_subtree(&delivery) {
-                delivery.inherits_entry_authorizations = true;
+                self.withhold(&mut delivery.grants);
             }
             mode.deliver_to_public(self, delivery, environment)
         } else {
@@ -1278,14 +1270,46 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         }
     }
 
-    // No public handler can observe a grant over a private account, so a boundary or prediction
-    // discloses only the other grants; the private part restores the withheld ones on re-entry.
-    fn disclose<F, T>(&self, delivery: &Delivery<F>, from: T) -> Delivery<T> {
-        let mut disclosed = delivery.with_from(from);
-        disclosed
-            .inherited_authorizations
-            .retain(|actor| !self.is_private(&actor.account_id));
-        disclosed
+    // A grant over a private actor crosses to the public side as a placeholder, numbered in the
+    // order the execution first withholds it, which every mode shares.
+    fn withhold(&mut self, grants: &mut BTreeSet<Target>) {
+        let private: Vec<Actor> = grants
+            .iter()
+            .filter_map(|target| match target {
+                Target::Actor(actor) if self.is_private(&actor.account_id) => Some(*actor),
+                Target::Actor(_) | Target::Withheld(_) => None,
+            })
+            .collect();
+        for actor in private {
+            grants.remove(&Target::Actor(actor));
+            let index = self
+                .withheld
+                .iter()
+                .position(|withheld| *withheld == actor)
+                .unwrap_or_else(|| {
+                    let index = self.withheld.len();
+                    self.withheld.push(actor);
+                    index
+                });
+            grants.insert(Target::Withheld(
+                WithheldIndex::try_from(index)
+                    .expect("bounded by the transaction's private actors"),
+            ));
+        }
+    }
+
+    fn restore(&self, grants: &BTreeSet<Target>) -> Result<BTreeSet<Target>, ExecutionError> {
+        grants
+            .iter()
+            .map(|target| match *target {
+                Target::Withheld(index) => usize::try_from(index)
+                    .ok()
+                    .and_then(|index| self.withheld.get(index))
+                    .map(|actor| Target::Actor(*actor))
+                    .ok_or(ExecutionError::UnknownWithheldGrant { index }),
+                Target::Actor(_) => Ok(*target),
+            })
+            .collect()
     }
 
     // A private delivery from a declared public actor is where the execution crosses into a proven
@@ -1297,7 +1321,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
             .from
             .actor()
             .filter(|&sender| self.public_context.runs_publicly(sender))
-            .map(|sender| self.disclose(delivery, sender))
+            .map(|sender| delivery.with_from(sender))
     }
 
     fn process_actor_message<E: ExecutionEnvironment>(
@@ -1306,7 +1330,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         environment: &mut E,
     ) -> Result<(), E::Error> {
         let actor = self.resolve(delivery.envelope.to);
-        let (is_authorized, authorizations) = self.authorize(actor, &delivery)?;
+        let (is_authorized, grants) = self.authorize(actor, &delivery)?;
         let entry = self
             .accounts
             .get_mut(&actor.account_id)
@@ -1379,8 +1403,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
                         self.sender(actor, call_reply(to), environment)?,
                         to,
                         message,
-                        authorizations.clone(),
-                        delivery.inherits_entry_authorizations,
+                        grants.clone(),
                         pda_seeds,
                     ))
                 },
@@ -1408,7 +1431,6 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
                     body.to,
                     body.message,
                     BTreeSet::new(),
-                    false,
                     BTreeSet::new(),
                 ));
             } else {
@@ -1449,7 +1471,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         &mut self,
         actor: Actor,
         delivery: &Delivery<Sender>,
-    ) -> Result<(bool, BTreeSet<Actor>), ExecutionError> {
+    ) -> Result<(bool, BTreeSet<Target>), ExecutionError> {
         let account_id = actor.account_id;
         let issuer = delivery.envelope.from.issuer();
         let entry = self
@@ -1475,15 +1497,16 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
                 )
             }
         };
-        let mut authorizations = delivery.inherited_authorizations.clone();
+        let mut grants = if self.is_private(&account_id) {
+            self.restore(&delivery.grants)?
+        } else {
+            delivery.grants.clone()
+        };
         if let Some((program, seed)) = granted {
             bind_family(&mut self.pda_family_binding, program, seed, account_id)?;
-            authorizations.insert(actor);
+            grants.insert(Target::Actor(actor));
         }
-        Ok((
-            credential || authorizations.contains(&actor),
-            authorizations,
-        ))
+        Ok((credential || grants.contains(&Target::Actor(actor)), grants))
     }
 
     fn public(self) -> PublicOutcome {

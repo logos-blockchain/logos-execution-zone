@@ -13,7 +13,7 @@ use crate::{
     PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, Proof, ProvenFee,
     PublicAccountEvidence, PublicExecutionContext, PublicKey, PublicMessage, PublicTransaction,
     Publication, RecoveryBinding, RootCall, SealedMessage, Selector, Signature, StallReason,
-    Transaction, TransactionReceipt, ValidityWindow, WitnessSet,
+    Target, Transaction, TransactionReceipt, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -421,17 +421,12 @@ impl<S: Into<T>, T> From<lee_core::execution_state::Delivery<S>> for Delivery<T>
     fn from(value: lee_core::execution_state::Delivery<S>) -> Self {
         let lee_core::execution_state::Delivery {
             envelope,
-            inherited_authorizations,
-            inherits_entry_authorizations,
+            grants,
             pda_seeds,
         } = value;
         Self {
             envelope: envelope.into(),
-            inherited_authorizations: inherited_authorizations
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-            inherits_entry_authorizations,
+            grants: grants.into_iter().map(Into::into).collect(),
             pda_seeds: pda_seeds.into_iter().map(Into::into).collect(),
         }
     }
@@ -441,18 +436,31 @@ impl<S: Into<T>, T> From<Delivery<S>> for lee_core::execution_state::Delivery<T>
     fn from(value: Delivery<S>) -> Self {
         let Delivery {
             envelope,
-            inherited_authorizations,
-            inherits_entry_authorizations,
+            grants,
             pda_seeds,
         } = value;
         Self {
             envelope: envelope.into(),
-            inherited_authorizations: inherited_authorizations
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-            inherits_entry_authorizations,
+            grants: grants.into_iter().map(Into::into).collect(),
             pda_seeds: pda_seeds.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<lee_core::Target> for Target {
+    fn from(value: lee_core::Target) -> Self {
+        match value {
+            lee_core::Target::Actor(actor) => Self::Actor(actor.into()),
+            lee_core::Target::Withheld(index) => Self::Withheld(index),
+        }
+    }
+}
+
+impl From<Target> for lee_core::Target {
+    fn from(value: Target) -> Self {
+        match value {
+            Target::Actor(actor) => Self::Actor(actor.into()),
+            Target::Withheld(index) => Self::Withheld(index),
         }
     }
 }
@@ -1551,8 +1559,7 @@ mod tests {
                 to: actor(4, 5),
                 message: vec![6],
             },
-            inherited_authorizations: BTreeSet::new(),
-            inherits_entry_authorizations: true,
+            grants: BTreeSet::new(),
             pda_seeds: BTreeSet::new(),
         };
         let clear = lee_core::program::Publication::Clear(lee_core::program::MessageEnvelope {
@@ -1589,8 +1596,10 @@ mod tests {
                                 to: actor(8, 9),
                                 message: vec![10],
                             },
-                            inherited_authorizations: BTreeSet::from([actor(14, 90)]),
-                            inherits_entry_authorizations: true,
+                            grants: BTreeSet::from([
+                                lee_core::Target::Actor(actor(14, 90)),
+                                lee_core::Target::Withheld(3),
+                            ]),
                             pda_seeds: BTreeSet::from([lee_core::program::PdaSeed::new([15; 32])]),
                         },
                     ),
@@ -1601,8 +1610,7 @@ mod tests {
                                 to: actor(41, 42),
                                 message: vec![43],
                             },
-                            inherited_authorizations: BTreeSet::new(),
-                            inherits_entry_authorizations: true,
+                            grants: BTreeSet::new(),
                             pda_seeds: BTreeSet::new(),
                         },
                     ),
@@ -1614,8 +1622,7 @@ mod tests {
                                 to: actor(18, 19),
                                 message: vec![20],
                             },
-                            inherited_authorizations: BTreeSet::new(),
-                            inherits_entry_authorizations: false,
+                            grants: BTreeSet::new(),
                             pda_seeds: BTreeSet::new(),
                         },
                     ),

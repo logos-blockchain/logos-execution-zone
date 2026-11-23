@@ -139,8 +139,7 @@ pub fn credit(from: Actor, to: Actor, amount: Balance) -> Delivery<Actor> {
             to,
             message: borsh::to_vec(&NativeMessage::Credit(amount)).unwrap(),
         },
-        inherited_authorizations: BTreeSet::new(),
-        inherits_entry_authorizations: false,
+        grants: BTreeSet::new(),
         pda_seeds: BTreeSet::new(),
     }
 }

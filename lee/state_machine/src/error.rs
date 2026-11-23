@@ -139,6 +139,7 @@ impl From<ExecutionError> for LeeError {
             | ExecutionError::TransitionInputMismatch { .. }
             | ExecutionError::PublicAndPrivate { .. }
             | ExecutionError::MissingPredictedCrossMessages { .. }
+            | ExecutionError::UnknownWithheldGrant { .. }
             | ExecutionError::UnusedPredictedCrossMessages
             | ExecutionError::UnwitnessedFeePayer { .. }
             | ExecutionError::FeePayerWithoutAuthorization { .. }

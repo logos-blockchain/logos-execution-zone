@@ -557,7 +557,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        Commitment, EncryptedNote, Nullifier, SealedMessage,
+        Commitment, EncryptedNote, Nullifier, SealedMessage, Target,
         account::{Account, AccountId, Actor},
         encryption::{Ciphertext, EphemeralPublicKey},
         execution_state::{Authority, BoundaryStep, Delivery},
@@ -636,11 +636,10 @@ mod tests {
                             to: public,
                             message: vec![6],
                         },
-                        inherited_authorizations: BTreeSet::from([Actor::new(
+                        grants: BTreeSet::from([Target::Actor(Actor::new(
                             AccountId::new([7; 32]),
                             AccountId::new([10; 32]),
-                        )]),
-                        inherits_entry_authorizations: false,
+                        ))]),
                         pda_seeds: BTreeSet::from([PdaSeed::new([8; 32])]),
                     }),
                     BoundaryStep::PublicToPrivate(Delivery {
@@ -649,8 +648,7 @@ mod tests {
                             to: private,
                             message: vec![9],
                         },
-                        inherited_authorizations: BTreeSet::new(),
-                        inherits_entry_authorizations: true,
+                        grants: BTreeSet::new(),
                         pda_seeds: BTreeSet::new(),
                     }),
                     BoundaryStep::EndPrivateSubtree,
@@ -706,7 +704,7 @@ mod tests {
         };
 
         let expected: Vec<u8> = [
-            &[21, 4, 0, 0][..], // frame length: the 1045 bytes below
+            &[20, 4, 0, 0][..], // frame length: the 1044 bytes below
             &[1, 0, 0, 0],      // public_context.actors: one actor
             &[0; 32],
             &[1; 32],
@@ -723,10 +721,10 @@ mod tests {
             &[1; 32],
             &[1, 0, 0, 0], // message
             &[6],
-            &[1, 0, 0, 0], // inherited_authorizations: one actor
+            &[1, 0, 0, 0], // grants: one
+            &[0],          // Target::Actor
             &[7; 32],
             &[10; 32],
-            &[0],          // inherits_entry_authorizations: false
             &[1, 0, 0, 0], // pda_seeds: one seed
             &[8; 32],
             &[1],     // BoundaryStep::PublicToPrivate
@@ -736,8 +734,7 @@ mod tests {
             &[3; 32],
             &[1, 0, 0, 0], // message
             &[9],
-            &[0, 0, 0, 0], // inherited_authorizations: none
-            &[1],          // inherits_entry_authorizations: true
+            &[0, 0, 0, 0], // grants: none
             &[0, 0, 0, 0], // pda_seeds: none
             &[2],          // BoundaryStep::EndPrivateSubtree
             &[3],          // BoundaryStep::EndPublicSubtree
