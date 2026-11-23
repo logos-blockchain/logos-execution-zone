@@ -587,12 +587,15 @@ fn a_program_deployed_earlier_in_the_transaction_is_dispatchable_by_a_later_call
         vec![deployer, header, deployed],
         vec![Nonce(0)],
         Script::default()
-            .send_sync(
-                header,
-                &LoaderMessage::CreateHeader {
-                    first_segment: segment_account_ids[0],
-                    immutable: true,
-                },
+            .send(
+                SyncMessage::new(
+                    header,
+                    &LoaderMessage::CreateHeader {
+                        first_segment: segment_account_ids[0],
+                        immutable: true,
+                    },
+                )
+                .with_grants([header]),
             )
             .send_sync(deployed, &Script::write(vec![7; 4])),
         &[&header_key],

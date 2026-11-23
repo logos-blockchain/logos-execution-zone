@@ -121,12 +121,15 @@ fn stake(
                 has_record,
             },
         ))
-        .send_sync(
-            Actor::native_balance(funding),
-            &native_token::Message::Transfer {
-                to: stake_funds_account_id(program, &ownership),
-                amount,
-            },
+        .send(
+            SyncMessage::new(
+                Actor::native_balance(funding),
+                &native_token::Message::Transfer {
+                    to: stake_funds_account_id(program, &ownership),
+                    amount,
+                },
+            )
+            .with_grants([Actor::native_balance(funding)]),
         )
 }
 
@@ -1033,7 +1036,8 @@ mod tests {
                             to: funds_of(OWNER),
                             amount: MINIMUM,
                         },
-                    ),
+                    )
+                    .with_grants([Actor::native_balance(FUNDING)]),
                 ],
                 Vec::new()
             )

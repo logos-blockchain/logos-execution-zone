@@ -274,6 +274,9 @@ pub enum ExecutionError {
     #[error("A delivery claims withheld grant {index}, which no crossing withheld")]
     UnknownWithheldGrant { index: WithheldIndex },
 
+    #[error("A sync message attaches a grant over {actor:?} that its sender does not hold")]
+    UnheldGrant { actor: Actor },
+
     #[error(
         "Predicted cross messages were supplied for public segments the execution never entered"
     )]
@@ -299,8 +302,6 @@ pub enum ExecutionError {
 
 enum AccountEntry {
     Public {
-        /// Programs whose actor on this account the transaction's signatures authorize.
-        signed: BTreeSet<AccountId>,
         loaded: BTreeMap<AccountId, ActorState>,
     },
     Private {
@@ -1017,23 +1018,16 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
                 )
             })
             .collect();
-        for (actor, authority) in &public_context.actors {
+        for actor in public_context.actors.keys() {
             let account_id = actor.account_id;
             if witness_index.contains_key(&account_id) {
                 return Err(ExecutionError::PublicAndPrivate { account_id });
             }
-            let entry = accounts
+            accounts
                 .entry(account_id)
                 .or_insert_with(|| AccountEntry::Public {
-                    signed: BTreeSet::new(),
                     loaded: BTreeMap::new(),
                 });
-            if *authority == Authority::Signer
-                && public_context.authorized_accounts.contains(&account_id)
-                && let AccountEntry::Public { signed, .. } = entry
-            {
-                signed.insert(actor.program_account_id);
-            }
         }
         // Public seed grants land only at declared, proof-bound addresses, so none can conflict.
         if let Some(account_id) = pda_family_binding
@@ -1092,13 +1086,15 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
             mode.start_with_transaction_root(&mut executor)?;
             // push fee work (before root)
             executor.queue_fee(fee);
-            let (from, to, message) = match root {
-                TransactionEntry::Sync(RootCall { to, message }) => (None, to, message),
+            let (from, to, message, grants) = match root {
+                TransactionEntry::Sync(RootCall { to, message }) => {
+                    (None, to, message, executor.root_grants())
+                }
                 TransactionEntry::Async(MessageBody { from, to, message }) => {
-                    (Some(from), to, message)
+                    (Some(from), to, message, BTreeSet::new())
                 }
             };
-            executor.queue_entry(from, to, message);
+            executor.queue_entry(from, to, message, grants);
         } else {
             // push fee transfer & start without root
             executor.queue_fee(fee);
@@ -1108,20 +1104,42 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         // push all claims (in reverse), they will be popped first
         // so that the balance becomes `current + claimed`
         for MessageBody { from, to, message } in claims.rev() {
-            executor.queue_entry(Some(from), to, message);
+            executor.queue_entry(Some(from), to, message, BTreeSet::new());
         }
         Ok(executor)
     }
 
-    fn queue_entry(&mut self, from: Option<Actor>, to: Actor, message: MessageData) {
-        self.work_stack
-            .push(WorkItem::Deliver(Box::new(Delivery::entry(
-                MessageEnvelope {
-                    from: Sender::Root { from },
-                    to,
-                    message,
-                },
-            ))));
+    // A signature authorizes only the transaction's own root call: claims, async roots and
+    // promoted messages were written by someone else.
+    fn root_grants(&self) -> BTreeSet<Target> {
+        self.public_context
+            .actors
+            .iter()
+            .filter(|(actor, authority)| {
+                **authority == Authority::Signer
+                    && self
+                        .public_context
+                        .authorized_accounts
+                        .contains(&actor.account_id)
+            })
+            .map(|(actor, _)| Target::Actor(*actor))
+            .collect()
+    }
+
+    fn queue_entry(
+        &mut self,
+        from: Option<Actor>,
+        to: Actor,
+        message: MessageData,
+        grants: BTreeSet<Target>,
+    ) {
+        let mut delivery = Delivery::entry(MessageEnvelope {
+            from: Sender::Root { from },
+            to,
+            message,
+        });
+        delivery.grants = grants;
+        self.work_stack.push(WorkItem::Deliver(Box::new(delivery)));
     }
 
     fn queue_fee(&mut self, fee: Option<FeeTransfer>) {
@@ -1298,18 +1316,70 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         }
     }
 
-    fn restore(&self, grants: &BTreeSet<Target>) -> Result<BTreeSet<Target>, ExecutionError> {
-        grants
-            .iter()
-            .map(|target| match *target {
-                Target::Withheld(index) => usize::try_from(index)
-                    .ok()
-                    .and_then(|index| self.withheld.get(index))
-                    .map(|actor| Target::Actor(*actor))
-                    .ok_or(ExecutionError::UnknownWithheldGrant { index }),
-                Target::Actor(_) => Ok(*target),
-            })
-            .collect()
+    // A placeholder reaching a private actor authorizes only that actor: its public sender
+    // attached it by naming the destination.
+    fn restore(
+        &self,
+        receiver: Actor,
+        grants: &BTreeSet<Target>,
+    ) -> Result<BTreeSet<Target>, ExecutionError> {
+        let mut restored = BTreeSet::new();
+        for target in grants {
+            match *target {
+                Target::Withheld(index) => {
+                    let actor = usize::try_from(index)
+                        .ok()
+                        .and_then(|index| self.withheld.get(index))
+                        .ok_or(ExecutionError::UnknownWithheldGrant { index })?;
+                    if *actor == receiver {
+                        restored.insert(Target::Actor(receiver));
+                    }
+                }
+                Target::Actor(_) => {
+                    restored.insert(*target);
+                }
+            }
+        }
+        Ok(restored)
+    }
+
+    // A private sender holds every actor its transaction's authorized witnesses cover.
+    fn witness_authorizes(&self, sender: Actor, actor: Actor) -> bool {
+        !self.public_context.runs_publicly(sender)
+            && matches!(
+                self.accounts.get(&actor.account_id),
+                Some(AccountEntry::Private { witness_index, .. })
+                    if self.witnesses[*witness_index].kind.is_authorized()
+            )
+    }
+
+    // A sync message carries exactly the grants its sender attaches, each of which it must hold.
+    // A public sender can't see a private grant, so it attaches one by naming the private
+    // destination, which carries the placeholders it holds.
+    fn attach(
+        &self,
+        sender: Actor,
+        held: &BTreeSet<Target>,
+        to: Actor,
+        attached: BTreeSet<Actor>,
+    ) -> Result<BTreeSet<Target>, ExecutionError> {
+        let mut grants = BTreeSet::new();
+        for actor in attached {
+            if held.contains(&Target::Actor(actor)) || self.witness_authorizes(sender, actor) {
+                grants.insert(Target::Actor(actor));
+            } else if actor == to
+                && self.public_context.runs_publicly(sender)
+                && !self.public_context.runs_publicly(to)
+            {
+                grants.extend(
+                    held.iter()
+                        .filter(|target| matches!(target, Target::Withheld(_))),
+                );
+            } else {
+                return Err(ExecutionError::UnheldGrant { actor });
+            }
+        }
+        Ok(grants)
     }
 
     // A private delivery from a declared public actor is where the execution crosses into a proven
@@ -1407,13 +1477,14 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
                      to,
                      message,
                      pda_seeds,
-                     grants: _,
+                     grants: attached,
                  }| {
+                    let attached = self.attach(actor, &grants, to, attached)?;
                     Ok(Delivery::sent(
                         self.sender(actor, call_reply(to), environment)?,
                         to,
                         message,
-                        grants.clone(),
+                        attached,
                         pda_seeds,
                     ))
                 },
@@ -1489,8 +1560,8 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
             .get(&account_id)
             .ok_or(ExecutionError::UndeclaredActor { actor })?;
         let (credential, granted) = match entry {
-            AccountEntry::Public { signed, .. } => (
-                signed.contains(&actor.program_account_id),
+            AccountEntry::Public { .. } => (
+                false,
                 issuer.and_then(|issuer| {
                     delivery
                         .pda_seeds
@@ -1508,7 +1579,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
             }
         };
         let mut grants = if self.is_private(&account_id) {
-            self.restore(&delivery.grants)?
+            self.restore(actor, &delivery.grants)?
         } else {
             delivery.grants.clone()
         };

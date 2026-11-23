@@ -643,7 +643,7 @@ fn admission_evidence_admits_an_absent_account_without_authorizing_it() {
     let evidenced = state.transition_from_public_transaction(
         &delivering(
             receiver(),
-            spend.clone(),
+            spend,
             vec![PublicAccountEvidence::Key(receiver_pk())],
             vec![],
             &[],
@@ -660,7 +660,16 @@ fn admission_evidence_admits_an_absent_account_without_authorizing_it() {
     assert_eq!(state, before);
     state
         .transition_from_public_transaction(
-            &delivering(receiver(), spend, vec![], vec![Nonce(0)], &[&key]),
+            &delivering(
+                receiver(),
+                Script::default().send(
+                    SyncMessage::new(receiver(), &Script::default().authorized())
+                        .with_grants([receiver()]),
+                ),
+                vec![],
+                vec![Nonce(0)],
+                &[&key],
+            ),
             1,
             0,
         )

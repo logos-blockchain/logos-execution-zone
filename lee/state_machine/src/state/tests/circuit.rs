@@ -343,15 +343,18 @@ fn a_delegated_public_pda_is_authorized_at_settlement_but_not_exported_as_a_gran
 }
 
 #[test]
-fn a_wrong_seed_leaves_a_signer_on_its_credential() {
+fn a_wrong_seed_leaves_an_attached_signer_grant_in_force() {
     let signer_keys = test_public_account_keys_1();
     let signer_id = signer_keys.account_id();
     let callee = Actor::new(signer_id, TWIN);
     let wrong_seed = PdaSeed::new([88; 32]);
 
     let proven = prove_public_outputs(
-        &Script::default()
-            .send(SyncMessage::new(callee, &authorized()).with_pda_seeds(vec![wrong_seed])),
+        &Script::default().send(
+            SyncMessage::new(callee, &authorized())
+                .with_pda_seeds(vec![wrong_seed])
+                .with_grants([callee]),
+        ),
         vec![callee],
         [signer_id].into(),
     );
@@ -363,7 +366,7 @@ fn a_wrong_seed_leaves_a_signer_on_its_credential() {
             1,
             0,
         )
-        .expect("an unmatched seed must leave the credential in force");
+        .expect("an unmatched seed must leave the attached grant in force");
 }
 
 #[test]

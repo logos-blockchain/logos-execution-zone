@@ -2,6 +2,7 @@ use super::*;
 
 fn native_send(from: AccountId, to: AccountId, amount: u128) -> SyncMessage {
     SyncMessage::new(Actor::native_balance(from), &transfer(to, amount))
+        .with_grants([Actor::native_balance(from)])
 }
 
 #[test]
@@ -84,7 +85,10 @@ fn execution_that_requires_authentication_of_a_program_derived_account_id_succee
             Actor::native_balance(to),
         ],
         vec![],
-        Script::default().send(native_send(from, to, amount).with_pda_seeds(vec![pda_seed])),
+        Script::default().send(
+            SyncMessage::new(Actor::native_balance(from), &transfer(to, amount))
+                .with_pda_seeds(vec![pda_seed]),
+        ),
         &[],
     );
 

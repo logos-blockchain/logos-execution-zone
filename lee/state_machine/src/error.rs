@@ -140,6 +140,7 @@ impl From<ExecutionError> for LeeError {
             | ExecutionError::PublicAndPrivate { .. }
             | ExecutionError::MissingPredictedCrossMessages { .. }
             | ExecutionError::UnknownWithheldGrant { .. }
+            | ExecutionError::UnheldGrant { .. }
             | ExecutionError::UnusedPredictedCrossMessages
             | ExecutionError::UnwitnessedFeePayer { .. }
             | ExecutionError::FeePayerWithoutAuthorization { .. }

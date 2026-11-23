@@ -371,7 +371,8 @@ fn a_failing_public_transition_leaves_the_state_untouched() {
     let overdraft: u128 = 11;
 
     // The builder's snapshot funds the overdraft, so it proves and only fails once settled.
-    let script = Script::write(vec![1]).send_sync(sender, &transfer(recipient_id, overdraft));
+    let script = Script::write(vec![1])
+        .send(SyncMessage::new(sender, &transfer(recipient_id, overdraft)).with_grants([sender]));
     let proven = execute_and_prove(
         ProvingInput {
             public_context: PublicExecutionContext::new(
