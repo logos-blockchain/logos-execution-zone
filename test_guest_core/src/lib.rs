@@ -8,6 +8,7 @@ use lee_core::{
 };
 
 pub mod chat;
+pub mod env_var;
 pub mod guests;
 
 // `live_payout` pays from the public PDA of its program under this seed.

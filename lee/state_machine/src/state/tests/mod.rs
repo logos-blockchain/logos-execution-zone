@@ -45,6 +45,7 @@ use crate::{
 mod chained_calls;
 mod circuit;
 mod deploy;
+mod env_var;
 mod events;
 mod flash_swap;
 mod genesis;

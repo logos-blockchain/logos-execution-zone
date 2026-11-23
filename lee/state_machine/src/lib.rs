@@ -108,6 +108,14 @@ mod test_methods {
     }
 
     #[must_use]
+    pub const fn env_var_consumer() -> Program {
+        Program::new_unchecked(
+            test_methods::ENV_VAR_CONSUMER_ID,
+            Cow::Borrowed(test_methods::ENV_VAR_CONSUMER_ELF),
+        )
+    }
+
+    #[must_use]
     pub const fn scripted() -> Program {
         Program::new_unchecked(
             test_methods::SCRIPTED_ID,
