@@ -4546,6 +4546,7 @@ mod tests {
             image_id: program.id(),
             program_first_segment: segments[0],
             immutable: false,
+            env_var: Vec::new(),
         };
         served
             .accounts

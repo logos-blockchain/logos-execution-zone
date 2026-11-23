@@ -209,6 +209,7 @@ async fn a_private_pda_receives_and_spends() -> Result<()> {
         program_loader_core::Message::CreateHeader {
             first_segment: segment_ids[0],
             immutable: true,
+            env_var: Vec::new(),
         },
         common::test_utils::test_fee_declaration(payer.account_id),
     )?;

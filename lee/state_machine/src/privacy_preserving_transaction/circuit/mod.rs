@@ -741,7 +741,7 @@ fn prove(
                 membership_proof,
             } => program_image_witnesses.push(ProgramImageWitness::Undisclosed {
                 account_id: *account_id,
-                program_header: *program_header,
+                program_header: program_header.clone(),
                 membership_proof: membership_proof.clone(),
             }),
             ProgramKind::Shadow => shadow_program_witnesses.push(ShadowProgramWitness {

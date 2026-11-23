@@ -1050,6 +1050,7 @@ fn deploy_immutable_header(state: &mut V03State) -> (AccountId, ProgramHeader) {
         &LoaderMessage::CreateHeader {
             first_segment: segment_account_ids[0],
             immutable: true,
+            env_var: Vec::new(),
         },
         &[&header_key],
     );
@@ -1063,6 +1064,7 @@ fn deploy_immutable_header(state: &mut V03State) -> (AccountId, ProgramHeader) {
             image_id: program.id(),
             program_first_segment: segment_account_ids[0],
             immutable: true,
+            env_var: Vec::new(),
         },
     )
 }
@@ -1133,6 +1135,7 @@ fn private_claim_with_no_matching_commitment_is_rejected() {
         image_id: crate::test_methods::scripted().id(),
         program_first_segment: AccountId::new([1; 32]),
         immutable: true,
+        env_var: Vec::new(),
     };
 
     let fabricated_membership_proof = (0, vec![[0xab; 32]; 4]);

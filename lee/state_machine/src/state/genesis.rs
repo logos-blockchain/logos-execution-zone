@@ -98,17 +98,18 @@ impl V03State {
             image_id: program.id(),
             program_first_segment: segment_account_ids[0],
             immutable,
+            env_var: Vec::new(),
         };
+        if immutable {
+            let commitment = immutable_mirror_commitment(header_account_id, &program_header);
+            self.private_state.0.extend(&[commitment]);
+        }
+
         let header = Account::default().with_actor_state(
             PROGRAM_LOADER_ACCOUNT_ID,
             ActorState::from(program_header.to_loader_actor_state()),
         );
         self.public_state.insert_mut(header_account_id, header);
-
-        if immutable {
-            let commitment = immutable_mirror_commitment(header_account_id, &program_header);
-            self.private_state.0.extend(&[commitment]);
-        }
     }
 }
 

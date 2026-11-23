@@ -78,6 +78,7 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
                     image_id: program.id(),
                     program_first_segment: segment_account_ids[0],
                     immutable: true,
+                    env_var: Vec::new(),
                 }
                 .to_loader_actor_state(),
             ),
@@ -185,6 +186,7 @@ fn program_with_more_than_max_segments_is_rejected() {
                     image_id: header_program_id,
                     program_first_segment: segment_account_ids[0],
                     immutable: true,
+                    env_var: Vec::new(),
                 }
                 .to_loader_actor_state(),
             ),
@@ -234,6 +236,7 @@ fn program_with_more_than_max_segments_is_rejected_at_deploy_time() {
         &LoaderMessage::CreateHeader {
             first_segment: segment_account_ids[0],
             immutable: true,
+            env_var: Vec::new(),
         },
         &[&header_key],
     );
@@ -284,6 +287,7 @@ fn write_segment_then_create_header_deploys_a_dispatchable_program() {
         &LoaderMessage::CreateHeader {
             first_segment: segment_account_ids[0],
             immutable: true,
+            env_var: Vec::new(),
         },
         &[&header_key],
     );
@@ -335,6 +339,7 @@ fn create_header_rejects_a_shadow_derived_target_the_signer_does_not_control() {
         &LoaderMessage::CreateHeader {
             first_segment: segment_account_ids[0],
             immutable: true,
+            env_var: Vec::new(),
         },
         &[&unrelated_key],
     );
@@ -364,6 +369,7 @@ fn a_header_sized_segment_is_stored_as_a_segment_not_a_header() {
 
     let mut bytecode = vec![0_u8; 28];
     bytecode.extend_from_slice(segments[0].value());
+    bytecode.extend_from_slice(&[0; 4]);
     let untagged = borsh::to_vec(&ProgramSegment {
         bytecode: bytecode.clone(),
         next_segment: None,
@@ -418,6 +424,7 @@ fn create_header_immutable_from_birth_lands_immutable_mirror_commitment() {
         &LoaderMessage::CreateHeader {
             first_segment: segment_account_ids[0],
             immutable: true,
+            env_var: Vec::new(),
         },
         &[&header_key],
     );
@@ -430,6 +437,7 @@ fn create_header_immutable_from_birth_lands_immutable_mirror_commitment() {
         image_id: program.id(),
         program_first_segment: segment_account_ids[0],
         immutable: true,
+        env_var: Vec::new(),
     };
     let commitment =
         program_loader_core::immutable_mirror_commitment(header_account_id, &expected_header);
@@ -457,6 +465,7 @@ fn create_header_mutable_leaves_commitment_tree_unchanged() {
         &LoaderMessage::CreateHeader {
             first_segment: segment_account_ids[0],
             immutable: false,
+            env_var: Vec::new(),
         },
         &[&header_key],
     );
@@ -489,6 +498,7 @@ fn update_header_flip_to_immutable_lands_immutable_mirror_commitment() {
         &LoaderMessage::CreateHeader {
             first_segment: segment_account_ids[0],
             immutable: false,
+            env_var: Vec::new(),
         },
         &[&header_key],
     );
@@ -505,6 +515,7 @@ fn update_header_flip_to_immutable_lands_immutable_mirror_commitment() {
         &LoaderMessage::UpdateHeader {
             first_segment: segment_account_ids[0],
             immutable: true,
+            env_var: Vec::new(),
         },
         &[&header_key],
     );
@@ -522,6 +533,7 @@ fn update_header_flip_to_immutable_lands_immutable_mirror_commitment() {
         image_id: program.id(),
         program_first_segment: segment_account_ids[0],
         immutable: true,
+        env_var: Vec::new(),
     };
     let commitment =
         program_loader_core::immutable_mirror_commitment(header_account_id, &expected_header);
@@ -529,6 +541,87 @@ fn update_header_flip_to_immutable_lands_immutable_mirror_commitment() {
         state.get_proof_for_commitment(&commitment).is_some(),
         "the landed commitment must match the now-immutable header"
     );
+}
+
+fn stored_header(state: &V03State, header_account_id: AccountId) -> ProgramHeader {
+    ProgramHeader::from_loader_actor_state(
+        state
+            .loader_actor_state(header_account_id)
+            .expect("the header account has a loader actor state"),
+    )
+    .expect("the loader actor state holds a header")
+}
+
+/// `UpdateHeader` replaces the stored `env_var`.
+#[test]
+fn create_and_update_header_store_env_var() {
+    let mut state = V03State::new();
+    let program = crate::test_methods::scripted();
+    let segment_account_ids = force_insert_segment_chain(&mut state, program.elf(), 0x05);
+
+    let header_key = PrivateKey::try_new([0x5A; 32]).unwrap();
+    let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
+    let at_cap = vec![7; program_loader_core::MAX_ENV_VAR_LEN];
+
+    let create_tx = loader_tx(
+        header_account_id,
+        vec![Nonce(0)],
+        &LoaderMessage::CreateHeader {
+            first_segment: segment_account_ids[0],
+            immutable: false,
+            env_var: at_cap.clone(),
+        },
+        &[&header_key],
+    );
+    state
+        .transition_from_public_transaction(&create_tx, 1, 0)
+        .expect("a CreateHeader with an env_var at the cap should succeed");
+    assert_eq!(stored_header(&state, header_account_id).env_var, at_cap);
+
+    let current_nonce = state.get_account_by_id(header_account_id).nonce;
+    let update_tx = loader_tx(
+        header_account_id,
+        vec![current_nonce],
+        &LoaderMessage::UpdateHeader {
+            first_segment: segment_account_ids[0],
+            immutable: false,
+            env_var: vec![1, 2, 3],
+        },
+        &[&header_key],
+    );
+    state
+        .transition_from_public_transaction(&update_tx, 2, 0)
+        .expect("an UpdateHeader with a new env_var should succeed");
+    assert_eq!(
+        stored_header(&state, header_account_id).env_var,
+        vec![1, 2, 3]
+    );
+}
+
+#[test]
+fn create_header_of_stores_env_var() {
+    let mut state = V03State::new();
+    let program = crate::test_methods::scripted();
+    let segment_account_ids = force_insert_segment_chain(&mut state, program.elf(), 0x06);
+
+    let header_key = PrivateKey::try_new([0x6B; 32]).unwrap();
+    let header_account_id = AccountId::from(&PublicKey::new_from_private_key(&header_key));
+
+    let tx = loader_tx(
+        header_account_id,
+        vec![Nonce(0)],
+        &LoaderMessage::CreateHeaderOf {
+            first_segment: segment_account_ids[0],
+            image_id: program.id(),
+            immutable: false,
+            env_var: vec![4, 5],
+        },
+        &[&header_key],
+    );
+    state
+        .transition_from_public_transaction(&tx, 1, 0)
+        .expect("a CreateHeaderOf with an env_var should succeed");
+    assert_eq!(stored_header(&state, header_account_id).env_var, vec![4, 5]);
 }
 
 fn write_segments(
@@ -591,6 +684,7 @@ fn a_program_deployed_earlier_in_the_transaction_is_dispatchable_by_a_later_call
                 &LoaderMessage::CreateHeader {
                     first_segment: segment_account_ids[0],
                     immutable: true,
+                    env_var: Vec::new(),
                 },
             )
             .send_sync(deployed, &Script::write(vec![7; 4])),

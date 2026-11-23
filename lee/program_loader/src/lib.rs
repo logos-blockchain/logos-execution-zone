@@ -7,15 +7,15 @@
 //! The loader is protocol code that runs only at public settlement: [`handle_message`] handles each
 //! message against the target's live loader actor state.
 use borsh::{BorshDeserialize, BorshSerialize};
-pub use lee_core::{
-    program::{ProgramHeader, immutable_mirror_commitment},
-    program_loader::Message,
-};
 use lee_core::{
     Commitment,
     account::{AccountId, ActorState},
     native_token::NATIVE_TOKEN_PROGRAM_ID,
     program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramId, ReceiveInput, Response, Transition},
+};
+pub use lee_core::{
+    program::{ProgramHeader, immutable_mirror_commitment},
+    program_loader::{MAX_ENV_VAR_LEN, Message},
 };
 
 /// Hard cap on a deployed program's segment chain length, bounding a resolution walk.
@@ -196,18 +196,20 @@ pub fn handle_message<'state>(
         Message::CreateHeader {
             first_segment,
             immutable,
+            env_var,
         } => {
             assert!(input.pre_state.is_empty(), "header target already deployed");
             assert!(
                 input.is_authorized,
                 "CreateHeader target must be an authorized account"
             );
-            header_write(input, first_segment, immutable, None, &actor_state)
+            header_write(input, first_segment, immutable, env_var, None, &actor_state)
         }
         Message::CreateHeaderOf {
             first_segment,
             image_id,
             immutable,
+            env_var,
         } => {
             assert!(input.pre_state.is_empty(), "header target already deployed");
             assert!(
@@ -218,6 +220,7 @@ pub fn handle_message<'state>(
                 input,
                 first_segment,
                 immutable,
+                env_var,
                 Some(image_id),
                 &actor_state,
             )
@@ -225,6 +228,7 @@ pub fn handle_message<'state>(
         Message::UpdateHeader {
             first_segment,
             immutable,
+            env_var,
         } => {
             let old_header = ProgramHeader::from_loader_actor_state(&input.pre_state).expect(
                 "UpdateHeader target must already hold a valid header \u{2014} use CreateHeader to make one",
@@ -237,7 +241,7 @@ pub fn handle_message<'state>(
                 input.is_authorized,
                 "UpdateHeader target must be authorized by the signer"
             );
-            header_write(input, first_segment, immutable, None, &actor_state)
+            header_write(input, first_segment, immutable, env_var, None, &actor_state)
         }
         Message::AssertMutable => {
             let header = ProgramHeader::from_loader_actor_state(&input.pre_state)
@@ -270,10 +274,11 @@ fn header_write<'state>(
     input: &ReceiveInput,
     first_segment: AccountId,
     immutable: bool,
+    env_var: Vec<u8>,
     expected_image_id: Option<ProgramId>,
     actor_state: impl Fn(AccountId) -> &'state ActorState,
 ) -> (Vec<u8>, Option<Commitment>) {
-    let header = build_header(first_segment, immutable, actor_state);
+    let header = build_header(first_segment, immutable, env_var, actor_state);
     if let Some(expected) = expected_image_id {
         assert_eq!(
             header.image_id, expected,
@@ -288,12 +293,18 @@ fn header_write<'state>(
 fn build_header<'state>(
     first_segment: AccountId,
     immutable: bool,
+    env_var: Vec<u8>,
     actor_state: impl Fn(AccountId) -> &'state ActorState,
 ) -> ProgramHeader {
+    assert!(
+        env_var.len() <= MAX_ENV_VAR_LEN,
+        "env_var exceeds {MAX_ENV_VAR_LEN} bytes"
+    );
     ProgramHeader {
         image_id: compute_image_id(first_segment, actor_state),
         program_first_segment: first_segment,
         immutable,
+        env_var,
     }
 }
 

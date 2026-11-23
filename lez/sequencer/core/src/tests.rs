@@ -2091,6 +2091,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
         program_loader_core::Message::CreateHeader {
             first_segment: segment_id,
             immutable: true,
+            env_var: Vec::new(),
         },
         common::test_utils::test_fee_declaration(payer.account_id),
     )

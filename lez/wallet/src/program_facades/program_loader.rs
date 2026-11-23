@@ -92,6 +92,7 @@ impl<C: WalletSequencerClient> ProgramLoader<'_, C> {
             &Message::CreateHeader {
                 first_segment,
                 immutable,
+                env_var: Vec::new(),
             },
             payer,
         )
@@ -113,6 +114,7 @@ impl<C: WalletSequencerClient> ProgramLoader<'_, C> {
             &Message::UpdateHeader {
                 first_segment,
                 immutable,
+                env_var: Vec::new(),
             },
             payer,
         )

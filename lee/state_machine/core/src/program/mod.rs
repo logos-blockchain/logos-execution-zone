@@ -556,7 +556,7 @@ impl Response {
 /// Lives at whatever account address the deployer chose — never a fixed bijection of the
 /// bytecode, so the same bytecode may be deployed more than once at different addresses, each a
 /// distinct instance for dispatch, PDA-derivation, and ownership purposes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct ProgramHeader {
     /// The bytecode's real `image_id`, always recomputed from the segment chain at
     /// deploy/update time — never trusted from a caller-supplied value.
@@ -565,6 +565,8 @@ pub struct ProgramHeader {
     pub program_first_segment: AccountId,
     /// Once `true`, this header can never be updated again.
     pub immutable: bool,
+    /// Bytes the deployer attaches to the program, opaque to the protocol.
+    pub env_var: Vec<u8>,
 }
 
 pub type BlockValidityWindow = ValidityWindow<BlockId>;

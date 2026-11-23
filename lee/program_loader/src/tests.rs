@@ -35,7 +35,10 @@ impl ActorStates {
     }
 
     fn header(self, account_id: AccountId, header: &ProgramHeader) -> Self {
-        self.with(account_id, ActorState::from(header.to_loader_actor_state()))
+        self.with(
+            account_id,
+            ActorState::from(header.clone().to_loader_actor_state()),
+        )
     }
 
     fn read<'actor_states>(
@@ -111,9 +114,18 @@ fn write_segment_rejects_an_unauthorized_target() {
 
 #[test]
 fn write_segment_stores_header_sized_bytecode_as_a_segment() {
-    let next_id = AccountId::new([1; 32]);
+    // Untagged, its last five bytes would be the header's `immutable` and empty `env_var` length.
+    let mut next_id = [1; 32];
+    next_id[27..].fill(0);
+    let next_id = AccountId::new(next_id);
     let actor_states = ActorStates::default().segment(next_id, vec![9], None);
-    for (bytecode_len, next_segment) in [(60, None), (28, Some(next_id))] {
+    for (bytecode_len, next_segment) in [(64, None), (32, Some(next_id))] {
+        let untagged = borsh::to_vec(&ProgramSegment {
+            bytecode: vec![0; bytecode_len],
+            next_segment,
+        })
+        .unwrap();
+        assert!(borsh::from_slice::<ProgramHeader>(&untagged).is_ok());
         let message = Message::WriteSegment {
             bytecode: vec![0; bytecode_len],
             next_segment,
@@ -177,12 +189,14 @@ fn create_header_rejects_an_occupied_loader_actor_state() {
             image_id: [0; 8],
             program_first_segment: AccountId::new([2; 32]),
             immutable: false,
+            env_var: Vec::new(),
         },
     );
     let pre_state = actor_states.read()(target_id).clone();
     let message = Message::CreateHeader {
         first_segment: AccountId::new([2; 32]),
         immutable: false,
+        env_var: Vec::new(),
     };
 
     let _transition = handle_message(
@@ -204,6 +218,7 @@ fn create_header_rejects_a_chain_that_does_not_end() {
     let message = Message::CreateHeader {
         first_segment,
         immutable: false,
+        env_var: Vec::new(),
     };
 
     let _transition = handle_message(
@@ -219,6 +234,7 @@ fn update_header_rejects_a_target_with_no_existing_header() {
     let message = Message::UpdateHeader {
         first_segment: AccountId::new([2; 32]),
         immutable: false,
+        env_var: Vec::new(),
     };
 
     let _transition = handle_message(
@@ -238,12 +254,14 @@ fn update_header_rejects_an_immutable_header() {
             image_id: [0; 8],
             program_first_segment: first_segment,
             immutable: true,
+            env_var: Vec::new(),
         },
     );
     let pre_state = actor_states.read()(target_id).clone();
     let message = Message::UpdateHeader {
         first_segment,
         immutable: false,
+        env_var: Vec::new(),
     };
 
     let _transition = handle_message(
@@ -311,12 +329,14 @@ fn update_header_rejects_an_unauthorized_caller() {
             image_id: [0; 8],
             program_first_segment: first_segment,
             immutable: false,
+            env_var: Vec::new(),
         },
     );
     let pre_state = actor_states.read()(target_id).clone();
     let message = Message::UpdateHeader {
         first_segment,
         immutable: false,
+        env_var: Vec::new(),
     };
 
     let _transition = handle_message(
@@ -332,6 +352,7 @@ fn a_header_may_not_be_created_for_the_native_token_program() {
     let message = Message::CreateHeader {
         first_segment: segment_id,
         immutable: false,
+        env_var: Vec::new(),
     };
 
     let _transition = handle_message(
@@ -366,6 +387,7 @@ fn a_header_cannot_be_created_at_the_loader_address() {
     let message = Message::CreateHeader {
         first_segment,
         immutable: true,
+        env_var: Vec::new(),
     };
 
     let _transition = handle_message(
@@ -436,6 +458,7 @@ fn linked_header() -> ProgramHeader {
         image_id: [60, 0, 0, 0, 0, 0, 0, 0],
         program_first_segment: AccountId::new([3; 32]),
         immutable: false,
+        env_var: Vec::new(),
     }
 }
 
@@ -447,6 +470,7 @@ fn create_header_rejects_a_chain_linking_to_a_header() {
     let message = Message::CreateHeader {
         first_segment: linked_header_id,
         immutable: true,
+        env_var: Vec::new(),
     };
 
     let _transition = handle_message(
@@ -479,6 +503,7 @@ fn get_program_via_reads_the_loader_actor_state() {
         image_id: [7; 8],
         program_first_segment: segment_account,
         immutable: false,
+        env_var: Vec::new(),
     };
     let segment = ProgramSegment {
         bytecode: vec![1, 2, 3],
@@ -514,6 +539,7 @@ fn get_program_via_does_not_follow_a_link_to_a_header() {
         image_id: [7; 8],
         program_first_segment: linked_header_account,
         immutable: true,
+        env_var: Vec::new(),
     }
     .to_loader_actor_state()
     .into();
@@ -521,6 +547,7 @@ fn get_program_via_does_not_follow_a_link_to_a_header() {
         image_id: [60, 0, 0, 0, 0, 0, 0, 0],
         program_first_segment: AccountId::new([3; 32]),
         immutable: false,
+        env_var: Vec::new(),
     }
     .to_loader_actor_state()
     .into();
@@ -542,12 +569,13 @@ fn loader_entry_decoders_reject_the_other_variant() {
         image_id: [7; 8],
         program_first_segment: AccountId::new([2; 32]),
         immutable: false,
+        env_var: Vec::new(),
     };
     let segment = ProgramSegment {
         bytecode: vec![1, 2, 3],
         next_segment: None,
     };
-    let header_bytes = header.to_loader_actor_state();
+    let header_bytes = header.clone().to_loader_actor_state();
     let segment_bytes = segment.clone().to_loader_actor_state();
 
     assert_eq!(
@@ -572,10 +600,12 @@ fn system_upgrader_loader_message_encodings_are_pinned() {
     let mut update = vec![2];
     update.extend_from_slice(first_segment.value());
     update.push(0);
+    update.extend_from_slice(&0_u32.to_le_bytes());
     assert_eq!(
         borsh::to_vec(&Message::UpdateHeader {
             first_segment,
             immutable: false,
+            env_var: Vec::new(),
         })
         .unwrap(),
         update
@@ -587,15 +617,79 @@ fn system_upgrader_loader_message_encodings_are_pinned() {
         create_of.extend_from_slice(&word.to_le_bytes());
     }
     create_of.push(0);
+    create_of.extend_from_slice(&0_u32.to_le_bytes());
     assert_eq!(
         borsh::to_vec(&Message::CreateHeaderOf {
             first_segment,
             image_id: [1, 2, 3, 4, 5, 6, 7, 8],
             immutable: false,
+            env_var: Vec::new(),
         })
         .unwrap(),
         create_of
     );
 
     assert_eq!(borsh::to_vec(&Message::AssertMutable).unwrap(), vec![4]);
+}
+
+#[test]
+#[should_panic(expected = "env_var exceeds 1024 bytes")]
+fn create_header_rejects_an_env_var_over_the_cap() {
+    let message = Message::CreateHeader {
+        first_segment: AccountId::new([2; 32]),
+        immutable: false,
+        env_var: vec![0; MAX_ENV_VAR_LEN + 1],
+    };
+
+    let _transition = handle_message(
+        &input(AccountId::new([1; 32]), true, ActorState::empty(), &message),
+        ActorStates::default().read(),
+    );
+}
+
+#[test]
+#[should_panic(expected = "env_var exceeds 1024 bytes")]
+fn create_header_of_rejects_an_env_var_over_the_cap() {
+    let message = Message::CreateHeaderOf {
+        first_segment: AccountId::new([2; 32]),
+        image_id: [0; 8],
+        immutable: false,
+        env_var: vec![0; MAX_ENV_VAR_LEN + 1],
+    };
+
+    let _transition = handle_message(
+        &input(AccountId::new([1; 32]), true, ActorState::empty(), &message),
+        ActorStates::default().read(),
+    );
+}
+
+#[test]
+#[should_panic(expected = "env_var exceeds 1024 bytes")]
+fn update_header_rejects_an_env_var_over_the_cap() {
+    let target_id = AccountId::new([1; 32]);
+    let actor_states = ActorStates::default().header(target_id, &linked_header());
+    let pre_state = actor_states.read()(target_id).clone();
+    let message = Message::UpdateHeader {
+        first_segment: AccountId::new([2; 32]),
+        immutable: false,
+        env_var: vec![0; MAX_ENV_VAR_LEN + 1],
+    };
+
+    let _transition = handle_message(
+        &input(target_id, true, pre_state, &message),
+        actor_states.read(),
+    );
+}
+
+#[test]
+fn header_with_env_var_round_trips_through_the_loader_actor_state() {
+    let header = ProgramHeader {
+        env_var: vec![1, 2, 3],
+        ..linked_header()
+    };
+
+    assert_eq!(
+        ProgramHeader::from_loader_actor_state(&header.clone().to_loader_actor_state()),
+        Some(header)
+    );
 }

@@ -80,6 +80,7 @@ impl From<&FfiProgramHeader> for ProgramHeader {
             image_id: bytes_to_program_id(value.image_id.data),
             program_first_segment: value.program_first_segment.into(),
             immutable: value.immutable,
+            env_var: Vec::new(),
         }
     }
 }

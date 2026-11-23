@@ -429,3 +429,23 @@ fn a_transition_journal_frame_has_a_pinned_layout() {
 
     assert_eq!(crate::to_borsh_frame(&transition), expected);
 }
+
+#[test]
+fn immutable_mirror_commitment_covers_env_var() {
+    let header_account_id = AccountId::new([1; 32]);
+    let header = ProgramHeader {
+        image_id: [7; 8],
+        program_first_segment: AccountId::new([2; 32]),
+        immutable: true,
+        env_var: vec![1],
+    };
+    let other = ProgramHeader {
+        env_var: vec![2],
+        ..header
+    };
+
+    assert_ne!(
+        immutable_mirror_commitment(header_account_id, &header),
+        immutable_mirror_commitment(header_account_id, &other)
+    );
+}

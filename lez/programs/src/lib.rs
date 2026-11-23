@@ -710,6 +710,7 @@ mod inner {
                     LoaderMessage::UpdateHeader {
                         first_segment: ids[0],
                         immutable: false,
+                        env_var: Vec::new(),
                     },
                 )
                 .unwrap();

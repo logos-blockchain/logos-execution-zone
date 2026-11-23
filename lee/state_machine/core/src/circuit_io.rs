@@ -1023,6 +1023,7 @@ mod tests {
                     image_id: [14; 8],
                     program_first_segment: AccountId::new([15; 32]),
                     immutable: true,
+                    env_var: Vec::new(),
                 },
                 membership_proof: (position, path()),
             };

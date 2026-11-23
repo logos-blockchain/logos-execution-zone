@@ -85,6 +85,7 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
                             first_segment,
                             image_id,
                             immutable: false,
+                            env_var: Vec::new(),
                         },
                     )
                     .with_pda_seeds([staging_seed(&name, &upgrade)]),
@@ -109,6 +110,7 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
                     &LoaderMessage::UpdateHeader {
                         first_segment: upgrade.first_segment,
                         immutable: upgrade.immutable,
+                        env_var: Vec::new(),
                     },
                 ))
         }
@@ -145,6 +147,7 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
                     first_segment,
                     image_id,
                     immutable,
+                    env_var: Vec::new(),
                 },
             ))
         }
