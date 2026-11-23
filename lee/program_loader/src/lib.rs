@@ -249,6 +249,12 @@ pub fn handle_message<'state>(
             assert!(!header.immutable, "AssertMutable target is immutable");
             return (Response::keep_state().into_transition(input.clone()), None);
         }
+        Message::AssertEnvVar { env_var } => {
+            let header = ProgramHeader::from_loader_actor_state(&input.pre_state)
+                .expect("AssertEnvVar target must hold a valid header");
+            assert_eq!(header.env_var, env_var, "the header's env_var differs");
+            return (Response::keep_state().into_transition(input.clone()), None);
+        }
     };
 
     (

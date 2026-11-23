@@ -318,6 +318,117 @@ fn assert_mutable_rejects_a_target_with_no_header() {
     );
 }
 
+fn assert_env_var(target_id: AccountId, header: &ProgramHeader, env_var: Vec<u8>) {
+    let actor_states = ActorStates::default().header(target_id, header);
+    let pre_state = actor_states.read()(target_id).clone();
+
+    let (transition, new_commitment) = handle_message(
+        &input(
+            target_id,
+            false,
+            pre_state,
+            &Message::AssertEnvVar { env_var },
+        ),
+        actor_states.read(),
+    );
+
+    assert_eq!(transition.response.post_state, None);
+    assert!(
+        transition.response.sync_messages.is_empty()
+            && transition.response.async_messages.is_empty()
+    );
+    assert!(new_commitment.is_none());
+}
+
+#[test]
+fn assert_env_var_accepts_a_matching_header_and_changes_nothing() {
+    let target_id = AccountId::new([1; 32]);
+    let mutable = ProgramHeader {
+        env_var: vec![1, 2, 3],
+        ..linked_header()
+    };
+    let immutable = ProgramHeader {
+        immutable: true,
+        ..mutable.clone()
+    };
+
+    assert_env_var(target_id, &mutable, vec![1, 2, 3]);
+    assert_env_var(target_id, &immutable, vec![1, 2, 3]);
+    assert_env_var(target_id, &linked_header(), Vec::new());
+}
+
+#[test]
+#[should_panic(expected = "the header's env_var differs")]
+fn assert_env_var_rejects_a_different_env_var() {
+    let header = ProgramHeader {
+        env_var: vec![1, 2, 3],
+        ..linked_header()
+    };
+    assert_env_var(AccountId::new([1; 32]), &header, vec![1, 2, 4]);
+}
+
+#[test]
+#[should_panic(expected = "the header's env_var differs")]
+fn assert_env_var_rejects_a_prefix_of_the_env_var() {
+    let header = ProgramHeader {
+        env_var: vec![1, 2, 3],
+        ..linked_header()
+    };
+    assert_env_var(AccountId::new([1; 32]), &header, vec![1, 2]);
+}
+
+#[test]
+#[should_panic(expected = "AssertEnvVar target must hold a valid header")]
+fn assert_env_var_rejects_a_segment_target() {
+    let target_id = AccountId::new([1; 32]);
+    let actor_states = ActorStates::default().segment(target_id, vec![9], None);
+    let pre_state = actor_states.read()(target_id).clone();
+
+    let _transition = handle_message(
+        &input(
+            target_id,
+            false,
+            pre_state,
+            &Message::AssertEnvVar {
+                env_var: Vec::new(),
+            },
+        ),
+        actor_states.read(),
+    );
+}
+
+#[test]
+#[should_panic(expected = "AssertEnvVar target must hold a valid header")]
+fn assert_env_var_rejects_a_target_with_no_header() {
+    let _transition = handle_message(
+        &input(
+            AccountId::new([1; 32]),
+            false,
+            ActorState::empty(),
+            &Message::AssertEnvVar {
+                env_var: Vec::new(),
+            },
+        ),
+        ActorStates::default().read(),
+    );
+}
+
+#[test]
+fn assert_env_var_helper_targets_the_header_loader_actor() {
+    let header = AccountId::new([1; 32]);
+    let message = lee_core::program_loader::assert_env_var(header, vec![1, 2]);
+
+    assert_eq!(message.to, Actor::new(header, PROGRAM_LOADER_ACCOUNT_ID));
+    assert_eq!(
+        message.message,
+        borsh::to_vec(&Message::AssertEnvVar {
+            env_var: vec![1, 2],
+        })
+        .unwrap()
+    );
+    assert!(message.pda_seeds.is_empty());
+}
+
 #[test]
 #[should_panic(expected = "must be authorized by the signer")]
 fn update_header_rejects_an_unauthorized_caller() {
@@ -630,6 +741,14 @@ fn system_upgrader_loader_message_encodings_are_pinned() {
     );
 
     assert_eq!(borsh::to_vec(&Message::AssertMutable).unwrap(), vec![4]);
+
+    assert_eq!(
+        borsh::to_vec(&Message::AssertEnvVar {
+            env_var: vec![7, 8],
+        })
+        .unwrap(),
+        vec![5, 2, 0, 0, 0, 7, 8]
+    );
 }
 
 #[test]

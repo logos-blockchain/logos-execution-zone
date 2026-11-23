@@ -1,6 +1,9 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 
-use crate::{account::AccountId, program::ProgramId};
+use crate::{
+    account::{AccountId, Actor},
+    program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramId, SyncMessage},
+};
 
 pub const MAX_ENV_VAR_LEN: usize = 1024;
 
@@ -37,4 +40,14 @@ pub enum Message {
     },
     /// Fails unless the target holds a mutable header. Changes nothing.
     AssertMutable,
+    /// Fails unless the target holds a header whose `env_var` is `env_var`. Changes nothing.
+    AssertEnvVar { env_var: Vec<u8> },
+}
+
+#[must_use]
+pub fn assert_env_var(header: AccountId, env_var: Vec<u8>) -> SyncMessage {
+    SyncMessage::new(
+        Actor::new(header, PROGRAM_LOADER_ACCOUNT_ID),
+        &Message::AssertEnvVar { env_var },
+    )
 }
