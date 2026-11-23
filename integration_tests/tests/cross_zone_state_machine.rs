@@ -361,6 +361,7 @@ fn via_proxy(
         to: entry,
         message: forwarded,
         pda_seeds: delegated.into_iter().collect(),
+        grants: std::collections::BTreeSet::new(),
     });
     let message = Message {
         admission_evidence: vec![PublicAccountEvidence::Pda {
@@ -3196,6 +3197,7 @@ fn a_chained_post_is_refused_and_a_top_level_post_is_a_no_op() {
         to: entry,
         message: bytes_of!(&ChatMessage::post(emission.clone())),
         pda_seeds: std::collections::BTreeSet::new(),
+        grants: std::collections::BTreeSet::new(),
     });
     let message = Message {
         admission_evidence: vec![PublicAccountEvidence::Pda {

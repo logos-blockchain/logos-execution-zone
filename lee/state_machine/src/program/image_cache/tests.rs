@@ -44,6 +44,7 @@ fn env_for(program: &Program, message: &[u8], budget: Cycles) -> ExecutorEnv<'st
             receiver,
             from: None,
             is_authorized: true,
+            grants: std::collections::BTreeSet::new(),
             pre_state: ActorState::empty(),
             message: message.to_vec(),
         },

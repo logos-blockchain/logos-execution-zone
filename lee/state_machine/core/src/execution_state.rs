@@ -1343,10 +1343,19 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
                 environment.public_actor_state(actor)?,
             );
         }
+        let held = grants
+            .iter()
+            .filter_map(|target| match target {
+                Target::Actor(granted) => Some(*granted),
+                Target::Withheld(_) => None,
+            })
+            .chain(is_authorized.then_some(actor))
+            .collect();
         let input = ReceiveInput {
             receiver: actor,
             from: delivery.envelope.from.source(),
             is_authorized,
+            grants: held,
             pre_state: entry
                 .staged(actor.program_account_id)
                 .expect("a delivered actor's state is loaded")
@@ -1398,6 +1407,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
                      to,
                      message,
                      pda_seeds,
+                     grants: _,
                  }| {
                     Ok(Delivery::sent(
                         self.sender(actor, call_reply(to), environment)?,

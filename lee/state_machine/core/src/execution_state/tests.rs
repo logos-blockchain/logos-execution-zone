@@ -223,6 +223,11 @@ impl ExecutionEnvironment for Script {
         input: &ReceiveInput,
         _view: &TransitionView<'_>,
     ) -> Result<Transition, ExecutionError> {
+        assert_eq!(
+            input.is_authorized,
+            input.grants.contains(&input.receiver),
+            "a handler is authorized exactly when it holds its own grant"
+        );
         self.log.push(input.clone());
         let handler = self
             .handlers
@@ -296,6 +301,7 @@ fn send_to(receiver: Actor) -> SyncMessage {
         to: receiver,
         message: Vec::new(),
         pda_seeds: BTreeSet::new(),
+        grants: BTreeSet::new(),
     }
 }
 
@@ -305,6 +311,7 @@ fn enter(message: &[u8]) -> SyncMessage {
         to: holder(&Keys::new(1)),
         message: message.to_vec(),
         pda_seeds: BTreeSet::new(),
+        grants: BTreeSet::new(),
     }
 }
 
@@ -704,6 +711,34 @@ fn a_seed_grants_its_pda_actor_and_the_grant_is_inherited_downstream() {
 }
 
 #[test]
+fn a_handler_sees_the_grants_its_delivery_carries() {
+    let (owner, peer) = (actor(1, 9), actor(2, 7));
+    let seed = PdaSeed::new([5; 32]);
+    let vault = public_pda(owner.program_account_id, seed);
+    let mut script = Script::default()
+        .on(owner, sending(vec![seeded_to(vault, seed), send_to(peer)]))
+        .on(vault, sending(vec![send_to(peer)]))
+        .on(peer, sending(Vec::new()));
+
+    public_transaction(public_context(vec![owner, vault, peer]), owner, &mut script).unwrap();
+
+    let held: Vec<_> = script
+        .log
+        .iter()
+        .map(|input| (input.receiver, input.grants.clone()))
+        .collect();
+    assert_eq!(
+        held,
+        vec![
+            (owner, BTreeSet::new()),
+            (vault, BTreeSet::from([vault])),
+            (peer, BTreeSet::from([vault])),
+            (peer, BTreeSet::new()),
+        ]
+    );
+}
+
+#[test]
 fn a_seeded_program_cannot_debit_another_actor_of_the_pda() {
     let pool = actor(1, 9);
     let seed = PdaSeed::new([5; 32]);
@@ -936,6 +971,7 @@ fn a_private_root_records_its_public_call_and_the_predicted_reply() {
         to: vault,
         message: b"credit".to_vec(),
         pda_seeds: BTreeSet::new(),
+        grants: BTreeSet::new(),
     };
     let reply = delivery(vault, owner, b"credit");
     let event = ProgramEvent {
@@ -2074,6 +2110,7 @@ fn sync_message(to: Actor, message: &[u8]) -> SyncMessage {
         to,
         message: message.to_vec(),
         pda_seeds: BTreeSet::new(),
+        grants: BTreeSet::new(),
     }
 }
 
@@ -3488,6 +3525,7 @@ fn a_receipt_root_to_a_private_pda_grants_its_receiver_nothing() {
             receiver: custody,
             from: Some(actor(4, 5)),
             is_authorized: false,
+            grants: BTreeSet::new(),
             pre_state: ActorState::empty(),
             message: b"stored".to_vec(),
         }]

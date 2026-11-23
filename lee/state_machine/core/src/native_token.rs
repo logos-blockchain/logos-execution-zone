@@ -129,6 +129,7 @@ mod tests {
             receiver: native(self_account),
             from: None,
             is_authorized: authorized,
+            grants: BTreeSet::new(),
             pre_state: encode_balance(pre),
             message: borsh::to_vec(message).unwrap(),
         }
@@ -273,6 +274,7 @@ mod tests {
                 to: native(1),
                 message: borsh::to_vec(&transfer(7)).unwrap(),
                 pda_seeds: BTreeSet::from([seed]),
+                grants: BTreeSet::new(),
             }
         );
     }

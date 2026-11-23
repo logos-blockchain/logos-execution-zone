@@ -96,6 +96,7 @@ mod tests {
             receiver,
             from: origin.map(|sender| Actor::new(sender, sender)),
             is_authorized: false,
+            grants: std::collections::BTreeSet::new(),
             pre_state: ActorState::from(pre),
             message: borsh::to_vec(&emit()).unwrap(),
         };

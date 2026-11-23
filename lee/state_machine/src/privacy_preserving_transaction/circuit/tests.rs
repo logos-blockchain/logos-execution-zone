@@ -721,10 +721,12 @@ fn assert_circuit_rejects<T: std::fmt::Debug>(result: &Result<T, LeeError>, expe
 // The root transition `direct_input` schedules for `script` on a `scripted` actor.
 fn scripted_root_input(script: &Script, is_authorized: bool) -> ReceiveInput {
     let keys = test_private_account_keys_1();
+    let receiver = Actor::new(keys.account_id(), scripted_id());
     ReceiveInput {
-        receiver: Actor::new(keys.account_id(), scripted_id()),
+        receiver,
         from: None,
         is_authorized,
+        grants: is_authorized.then_some(receiver).into_iter().collect(),
         pre_state: ActorState::empty(),
         message: borsh::to_vec(script).unwrap(),
     }
@@ -967,6 +969,7 @@ fn preparation_meters_a_public_self_call_chain_as_settlement_does() {
                     receiver: revisited,
                     from: None,
                     is_authorized: false,
+                    grants: BTreeSet::new(),
                     pre_state: ActorState::empty(),
                     message: tx.message.execution.root.message.clone(),
                 },

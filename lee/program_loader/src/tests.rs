@@ -57,6 +57,7 @@ fn input(
         receiver,
         from: None,
         is_authorized,
+        grants: std::collections::BTreeSet::new(),
         pre_state,
         message: borsh::to_vec(message).expect("borsh serialization is infallible"),
     }

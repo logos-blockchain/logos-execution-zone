@@ -720,6 +720,7 @@ mod tests {
             receiver: Actor::new(account, program),
             from: origin.map(|sender| Actor::new(sender, sender)),
             is_authorized,
+            grants: std::collections::BTreeSet::new(),
             pre_state: ActorState::from(pre_state.to_vec()),
             message: borsh::to_vec(message).unwrap(),
         }

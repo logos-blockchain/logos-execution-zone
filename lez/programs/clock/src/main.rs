@@ -94,6 +94,7 @@ mod tests {
             receiver,
             from,
             is_authorized: false,
+            grants: std::collections::BTreeSet::new(),
             pre_state: ActorState::from(pre.to_bytes()),
             message: borsh::to_vec(&message).unwrap(),
         };

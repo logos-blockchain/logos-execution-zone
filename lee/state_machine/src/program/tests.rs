@@ -20,6 +20,7 @@ fn receive_input(program: &Program, message: Vec<u8>) -> ReceiveInput {
         receiver,
         from: None,
         is_authorized: true,
+        grants: std::collections::BTreeSet::new(),
         pre_state: ActorState::empty(),
         message,
     }

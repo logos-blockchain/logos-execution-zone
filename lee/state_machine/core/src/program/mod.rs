@@ -347,6 +347,8 @@ pub struct SyncMessage {
     pub to: Actor,
     pub message: MessageData,
     pub pda_seeds: BTreeSet<PdaSeed>,
+    /// Grants the sender attaches, each over an actor whose grant it holds.
+    pub grants: BTreeSet<Actor>,
 }
 
 impl SyncMessage {
@@ -355,12 +357,19 @@ impl SyncMessage {
             to,
             message: borsh::to_vec(message).expect("borsh serialization is infallible"),
             pda_seeds: BTreeSet::new(),
+            grants: BTreeSet::new(),
         }
     }
 
     #[must_use]
     pub fn with_pda_seeds(mut self, pda_seeds: impl IntoIterator<Item = PdaSeed>) -> Self {
         self.pda_seeds = pda_seeds.into_iter().collect();
+        self
+    }
+
+    #[must_use]
+    pub fn with_grants(mut self, grants: impl IntoIterator<Item = Actor>) -> Self {
+        self.grants.extend(grants);
         self
     }
 }
@@ -422,6 +431,8 @@ pub struct ReceiveInput {
     pub from: Option<Actor>,
     /// Input is authorized when signed by the receiver or authorized by owning program.
     pub is_authorized: bool,
+    /// The actors whose grants this handler holds and may attach to its sync messages.
+    pub grants: BTreeSet<Actor>,
     /// State the actor starts with at the beginning of the message handling.
     pub pre_state: ActorState,
     /// The message received.
