@@ -565,7 +565,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        Commitment, EncryptedNote, Nullifier, SealedMessage, Target,
+        Commitment, EncryptedNote, Nullifier, SealedMessage,
         account::{Account, AccountId, Actor},
         encryption::{Ciphertext, EphemeralPublicKey},
         execution_state::{Authority, BoundaryStep, Delivery},
@@ -636,6 +636,10 @@ mod tests {
                 actors: BTreeMap::from([(public, Authority::None)]),
                 authorized_accounts: BTreeSet::from([AccountId::new([4; 32])]),
                 promotions: BTreeSet::from([5]),
+                private_signers: BTreeSet::from([Actor::new(
+                    AccountId::new([11; 32]),
+                    AccountId::new([12; 32]),
+                )]),
             },
             execution: ProvenExecution {
                 boundary: vec![
@@ -645,10 +649,10 @@ mod tests {
                             to: public,
                             message: vec![6],
                         },
-                        grants: BTreeSet::from([Target::Actor(Actor::new(
+                        grants: BTreeSet::from([Actor::new(
                             AccountId::new([7; 32]),
                             AccountId::new([10; 32]),
-                        ))]),
+                        )]),
                         pda_seeds: BTreeSet::from([PdaSeed::new([8; 32])]),
                     }),
                     BoundaryStep::PublicToPrivate(Delivery {
@@ -713,7 +717,7 @@ mod tests {
         };
 
         let expected: Vec<u8> = [
-            &[20, 4, 0, 0][..], // frame length: the 1044 bytes below
+            &[87, 4, 0, 0][..], // frame length: the 1111 bytes below
             &[1, 0, 0, 0],      // public_context.actors: one actor
             &[0; 32],
             &[1; 32],
@@ -722,6 +726,9 @@ mod tests {
             &[4; 32],
             &[1, 0, 0, 0], // public_context.promotions: one selected async message
             &[5, 0, 0, 0, 0, 0, 0, 0],
+            &[1, 0, 0, 0], // public_context.private_signers: one actor
+            &[11; 32],
+            &[12; 32],
             &[4, 0, 0, 0], // boundary: four steps
             &[0],          // BoundaryStep::PrivateToPublic
             &[2; 32],      // from
@@ -731,7 +738,6 @@ mod tests {
             &[1, 0, 0, 0], // message
             &[6],
             &[1, 0, 0, 0], // grants: one
-            &[0],          // Target::Actor
             &[7; 32],
             &[10; 32],
             &[1, 0, 0, 0], // pda_seeds: one seed

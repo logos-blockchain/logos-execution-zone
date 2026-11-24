@@ -138,6 +138,7 @@ pub fn PrivacyPreservingTxDetails(
         actors: public_actors,
         authorized_accounts,
         promotions: _,
+        private_signers: _,
     } = public_context;
     let private_action_count = private_actions.len();
     let public_actor_count = public_actors.len();

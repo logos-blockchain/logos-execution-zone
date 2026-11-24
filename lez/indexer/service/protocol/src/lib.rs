@@ -337,14 +337,8 @@ pub enum PublicAccountEvidence {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct Delivery<S> {
     pub envelope: MessageEnvelope<S>,
-    pub grants: Vec<Target>,
+    pub grants: Vec<Actor>,
     pub pda_seeds: Vec<PdaSeed>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub enum Target {
-    Actor(Actor),
-    Withheld(u32),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -374,6 +368,7 @@ pub struct PublicExecutionContext {
     pub actors: Vec<DeclaredActor>,
     pub authorized_accounts: Vec<AccountId>,
     pub promotions: Vec<u64>,
+    pub private_signers: Vec<Actor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

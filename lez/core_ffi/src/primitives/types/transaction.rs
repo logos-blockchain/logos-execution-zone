@@ -761,7 +761,7 @@ mod tests {
         MessageEnvelope, PublicExecutionContext, RootCall,
     };
     use lee_core::{
-        Commitment, EncryptedNote, SealedMessage, Target, account::Nonce, encryption::Ciphertext,
+        Commitment, EncryptedNote, SealedMessage, account::Nonce, encryption::Ciphertext,
         program::PdaSeed,
     };
 
@@ -879,14 +879,14 @@ mod tests {
                     boundary: vec![
                         BoundaryStep::PrivateToPublic(repeated.clone()),
                         BoundaryStep::PrivateToPublic(Delivery {
-                            grants: BTreeSet::from([Target::Actor(actor(14, 61))]),
+                            grants: BTreeSet::from([actor(14, 61)]),
                             pda_seeds: BTreeSet::from([PdaSeed::new([15; 32])]),
                             ..delivery(actor(11, 61), actor(8, 9), 10)
                         }),
                         BoundaryStep::PrivateToPublic(delivery(actor(40, 90), actor(41, 42), 43)),
                         BoundaryStep::PrivateToPublic(repeated),
                         BoundaryStep::PublicToPrivate(Delivery {
-                            grants: BTreeSet::from([Target::Withheld(1)]),
+                            grants: BTreeSet::from([actor(1, 71)]),
                             ..delivery(actor(16, 17), actor(18, 19), 20)
                         }),
                         BoundaryStep::EndPrivateSubtree,
@@ -1046,7 +1046,7 @@ mod tests {
         edit(&mut body.message.boundary, |steps| {
             for slot in end_of_subtree_deliveries(steps) {
                 let filled = Delivery {
-                    grants: BTreeSet::from([Target::Actor(actor(30, 33)), Target::Withheld(0)]),
+                    grants: BTreeSet::from([actor(30, 33), actor(0, 71)]),
                     pda_seeds: BTreeSet::from([PdaSeed::new([31; 32])]),
                     ..delivery(actor(32, 33), actor(34, 35), 36)
                 };

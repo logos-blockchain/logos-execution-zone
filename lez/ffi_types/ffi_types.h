@@ -13,11 +13,6 @@ typedef enum FfiBoundaryStepKind {
   EndPublicSubtree,
 } FfiBoundaryStepKind;
 
-typedef enum FfiTargetKind {
-  Actor = 0,
-  Withheld,
-} FfiTargetKind;
-
 typedef enum FfiPublicAccountEvidenceKind {
   Key = 0,
   Pda,
@@ -69,23 +64,6 @@ typedef struct FfiVec_u8 {
 
 typedef struct FfiVec_u8 FfiMessageDataList;
 
-/**
- * A grant on a delivery: `actor` for `Actor`, `withheld` for `Withheld`.
- */
-typedef struct FfiTarget {
-  enum FfiTargetKind kind;
-  struct FfiActor actor;
-  uint32_t withheld;
-} FfiTarget;
-
-typedef struct FfiVec_FfiTarget {
-  struct FfiTarget *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiTarget;
-
-typedef struct FfiVec_FfiTarget FfiTargetList;
-
 typedef struct FfiVec_FfiBytes32 {
   struct FfiBytes32 *entries;
   uintptr_t len;
@@ -98,7 +76,7 @@ typedef struct FfiDelivery {
   struct FfiActor from;
   struct FfiActor to;
   FfiMessageDataList message;
-  FfiTargetList grants;
+  FfiActorList grants;
   FfiPdaSeedList pda_seeds;
 } FfiDelivery;
 
@@ -213,6 +191,7 @@ typedef struct FfiPublicExecutionContext {
   FfiDeclaredActorList actors;
   FfiAccountIdList authorized_accounts;
   FfiPromotionList promotions;
+  FfiActorList private_signers;
 } FfiPublicExecutionContext;
 
 typedef struct FfiBytes32 FfiPublicKey;

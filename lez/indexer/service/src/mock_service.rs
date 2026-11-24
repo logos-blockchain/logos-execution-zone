@@ -542,6 +542,7 @@ fn mock_public_tx(
                 ],
                 authorized_accounts: vec![to.account_id],
                 promotions: vec![],
+                private_signers: vec![],
             },
             root: RootCall {
                 to,
@@ -584,6 +585,7 @@ fn mock_privacy_preserving_tx(
                 }],
                 authorized_accounts: vec![],
                 promotions: vec![],
+                private_signers: vec![],
             },
             boundary: vec![],
             async_messages: vec![],

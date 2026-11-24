@@ -125,6 +125,7 @@ pub mod tests {
             &[0, 0, 0, 0][..], // public_context.actors: none
             &[0, 0, 0, 0],     // public_context.authorized_accounts: none
             &[0, 0, 0, 0],     // public_context.promotions: none
+            &[0, 0, 0, 0],     // public_context.private_signers: none
             &[0, 0, 0, 0],     // execution.boundary: no steps
             &[0, 0, 0, 0],     // execution.async_messages: none
             &[0, 0, 0, 0],     // execution.recovery_bindings: none

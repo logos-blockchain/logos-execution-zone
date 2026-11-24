@@ -123,6 +123,7 @@ mod tests {
             &[1, 0, 0, 0], // public_context.authorized_accounts: the account naming a nonce
             &[42; 32],
             &[0, 0, 0, 0], // public_context.promotions: none
+            &[0, 0, 0, 0], // public_context.private_signers: none
             &[42; 32],     // execution.root.to.account_id
             &[0; 32],      // execution.root.to.program_account_id: the native token program
             &[1, 0, 0, 0], // execution.root.message

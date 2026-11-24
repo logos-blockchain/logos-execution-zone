@@ -547,7 +547,7 @@ mod tests {
         AccountId, Actor, Authority, BoundaryStep, Ciphertext, Commitment, CommitmentSetDigest,
         DeclaredActor, Delivery, EncryptedNote, EphemeralPublicKey, FeeDeclaration, FeeFallback,
         MessageEnvelope, Nullifier, PrivateAction, ProvenFee, PublicExecutionContext, Publication,
-        RootCall, SealedMessage, Target,
+        RootCall, SealedMessage,
     };
 
     use super::*;
@@ -606,6 +606,7 @@ mod tests {
                         }],
                         authorized_accounts: vec![account_id(10)],
                         promotions: vec![],
+                        private_signers: vec![],
                     },
                     root: RootCall {
                         to: actor(5, 8),
@@ -642,19 +643,20 @@ mod tests {
             message: PrivacyPreservingMessage {
                 public_context: PublicExecutionContext {
                     promotions: vec![22, 28],
+                    private_signers: vec![actor(23, 24)],
                     ..PublicExecutionContext::default()
                 },
                 boundary: vec![
                     BoundaryStep::PrivateToPublic(repeated.clone()),
                     BoundaryStep::PrivateToPublic(Delivery {
-                        grants: vec![Target::Actor(actor(15, 90))],
+                        grants: vec![actor(15, 90)],
                         pda_seeds: vec![PdaSeed([16; 32])],
                         ..delivery(actor(12, 62), actor(9, 10), 11)
                     }),
                     BoundaryStep::PrivateToPublic(delivery(actor(40, 90), actor(41, 42), 43)),
                     BoundaryStep::PrivateToPublic(repeated.clone()),
                     BoundaryStep::PublicToPrivate(Delivery {
-                        grants: vec![Target::Withheld(2)],
+                        grants: vec![actor(2, 91)],
                         ..delivery(actor(17, 18), actor(19, 20), 21)
                     }),
                     BoundaryStep::EndPrivateSubtree,

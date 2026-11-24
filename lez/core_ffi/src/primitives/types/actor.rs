@@ -6,15 +6,14 @@ use lee::{
     Publication, RecoveryBinding, RootCall, SealedMessage, Signature, error::LeeError,
 };
 use lee_core::{
-    Commitment, Nullifier, PrivateAction, Target, account::Nonce, encryption::Ciphertext,
-    program::PdaSeed,
+    Commitment, Nullifier, PrivateAction, account::Nonce, encryption::Ciphertext, program::PdaSeed,
 };
 
 use crate::primitives::types::{
     FfiAccountId, FfiBytes32, FfiNonce, FfiPublicKey, FfiSignature,
     vectors::{
-        FfiAccountIdList, FfiDeclaredActorList, FfiMessageDataList, FfiPdaSeedList,
-        FfiPromotionList, FfiTargetList, FfiVecU8,
+        FfiAccountIdList, FfiActorList, FfiDeclaredActorList, FfiMessageDataList, FfiPdaSeedList,
+        FfiPromotionList, FfiVecU8,
     },
 };
 
@@ -138,53 +137,11 @@ impl TryFrom<FfiPublicAccountEvidence> for PublicAccountEvidence {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy)]
-pub enum FfiTargetKind {
-    Actor = 0x0,
-    Withheld,
-}
-
-/// A grant on a delivery: `actor` for `Actor`, `withheld` for `Withheld`.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct FfiTarget {
-    pub kind: FfiTargetKind,
-    pub actor: FfiActor,
-    pub withheld: u32,
-}
-
-impl From<Target> for FfiTarget {
-    fn from(value: Target) -> Self {
-        match value {
-            Target::Actor(actor) => Self {
-                kind: FfiTargetKind::Actor,
-                actor: actor.into(),
-                withheld: 0,
-            },
-            Target::Withheld(index) => Self {
-                kind: FfiTargetKind::Withheld,
-                actor: FfiActor::default(),
-                withheld: index,
-            },
-        }
-    }
-}
-
-impl From<FfiTarget> for Target {
-    fn from(value: FfiTarget) -> Self {
-        match value.kind {
-            FfiTargetKind::Actor => Self::Actor(value.actor.into()),
-            FfiTargetKind::Withheld => Self::Withheld(value.withheld),
-        }
-    }
-}
-
-#[repr(C)]
 pub struct FfiDelivery {
     pub from: FfiActor,
     pub to: FfiActor,
     pub message: FfiMessageDataList,
-    pub grants: FfiTargetList,
+    pub grants: FfiActorList,
     pub pda_seeds: FfiPdaSeedList,
 }
 
@@ -417,6 +374,7 @@ pub struct FfiPublicExecutionContext {
     pub actors: FfiDeclaredActorList,
     pub authorized_accounts: FfiAccountIdList,
     pub promotions: FfiPromotionList,
+    pub private_signers: FfiActorList,
 }
 
 impl From<PublicExecutionContext> for FfiPublicExecutionContext {
@@ -425,6 +383,7 @@ impl From<PublicExecutionContext> for FfiPublicExecutionContext {
             actors,
             authorized_accounts,
             promotions,
+            private_signers,
         } = value;
 
         Self {
@@ -439,6 +398,11 @@ impl From<PublicExecutionContext> for FfiPublicExecutionContext {
                 .collect::<Vec<_>>()
                 .into(),
             promotions: promotions.into_iter().collect::<Vec<_>>().into(),
+            private_signers: private_signers
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into(),
         }
     }
 }
@@ -448,11 +412,13 @@ impl From<FfiPublicExecutionContext> for PublicExecutionContext {
         let actors: Vec<FfiDeclaredActor> = value.actors.into();
         let authorized_accounts: Vec<FfiAccountId> = value.authorized_accounts.into();
         let promotions: Vec<u64> = value.promotions.into();
+        let private_signers: Vec<FfiActor> = value.private_signers.into();
 
         Self {
             actors: actors.into_iter().map(Into::into).collect(),
             authorized_accounts: authorized_accounts.into_iter().map(Into::into).collect(),
             promotions: promotions.into_iter().collect(),
+            private_signers: private_signers.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -594,7 +560,7 @@ fn empty_sealed_message() -> FfiSealedMessage {
     }
 }
 
-fn grants_to_ffi(grants: BTreeSet<Target>) -> FfiTargetList {
+fn grants_to_ffi(grants: BTreeSet<Actor>) -> FfiActorList {
     grants
         .into_iter()
         .map(Into::into)
@@ -602,8 +568,8 @@ fn grants_to_ffi(grants: BTreeSet<Target>) -> FfiTargetList {
         .into()
 }
 
-fn grants_from_ffi(grants: FfiTargetList) -> BTreeSet<Target> {
-    let std_vec: Vec<FfiTarget> = grants.into();
+fn grants_from_ffi(grants: FfiActorList) -> BTreeSet<Actor> {
+    let std_vec: Vec<FfiActor> = grants.into();
     std_vec.into_iter().map(Into::into).collect()
 }
 
@@ -665,7 +631,7 @@ mod tests {
                 to: actor(2, 3),
                 message: vec![4],
             },
-            grants: BTreeSet::from([Target::Actor(actor(5, 6))]),
+            grants: BTreeSet::from([actor(5, 6)]),
             pda_seeds: BTreeSet::from([PdaSeed::new([6; 32])]),
         };
         let cross_message = Delivery {
@@ -674,7 +640,7 @@ mod tests {
                 to: actor(9, 10),
                 message: vec![11],
             },
-            grants: BTreeSet::from([Target::Withheld(4)]),
+            grants: BTreeSet::from([actor(4, 70)]),
             pda_seeds: BTreeSet::from([PdaSeed::new([13; 32])]),
         };
 
@@ -717,6 +683,7 @@ mod tests {
             ]),
             authorized_accounts: BTreeSet::from([account_id(5), account_id(6)]),
             promotions: BTreeSet::from([7, 8]),
+            private_signers: BTreeSet::from([actor(21, 22)]),
         };
         let sealed = SealedMessage {
             commitment: Commitment::from_byte_array([9; 32]),

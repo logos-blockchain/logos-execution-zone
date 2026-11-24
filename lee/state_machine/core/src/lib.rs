@@ -19,7 +19,6 @@ pub use encryption::{
     ML_KEM_768_CIPHERTEXT_LEN, SharedSecretKey,
 };
 pub use frame::{from_frame, to_borsh_frame, to_frame};
-pub use grant::{Target, WithheldIndex};
 pub use nullifier::{AuthorizationSecretKey, Nullifier, NullifierPublicKey, NullifierSecretKey};
 pub use program::PrivateAccountKind;
 pub use recovery::{Recipient, RecipientEncryption, RecoveryBinding};
@@ -33,7 +32,6 @@ pub mod encryption;
 pub mod error;
 pub mod execution_state;
 mod frame;
-mod grant;
 pub mod native_token;
 mod nullifier;
 pub mod program;

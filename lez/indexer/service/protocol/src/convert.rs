@@ -13,7 +13,7 @@ use crate::{
     PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, Proof, ProvenFee,
     PublicAccountEvidence, PublicExecutionContext, PublicKey, PublicMessage, PublicTransaction,
     Publication, RecoveryBinding, RootCall, SealedMessage, Selector, Signature, StallReason,
-    Target, Transaction, TransactionReceipt, ValidityWindow, WitnessSet,
+    Transaction, TransactionReceipt, ValidityWindow, WitnessSet,
 };
 
 // ============================================================================
@@ -447,24 +447,6 @@ impl<S: Into<T>, T> From<Delivery<S>> for lee_core::execution_state::Delivery<T>
     }
 }
 
-impl From<lee_core::Target> for Target {
-    fn from(value: lee_core::Target) -> Self {
-        match value {
-            lee_core::Target::Actor(actor) => Self::Actor(actor.into()),
-            lee_core::Target::Withheld(index) => Self::Withheld(index),
-        }
-    }
-}
-
-impl From<Target> for lee_core::Target {
-    fn from(value: Target) -> Self {
-        match value {
-            Target::Actor(actor) => Self::Actor(actor.into()),
-            Target::Withheld(index) => Self::Withheld(index),
-        }
-    }
-}
-
 impl From<lee_core::execution_state::BoundaryStep> for BoundaryStep {
     fn from(value: lee_core::execution_state::BoundaryStep) -> Self {
         match value {
@@ -517,6 +499,7 @@ impl From<lee_core::execution_state::PublicExecutionContext> for PublicExecution
             actors,
             authorized_accounts,
             promotions,
+            private_signers,
         } = value;
         Self {
             actors: actors
@@ -528,6 +511,7 @@ impl From<lee_core::execution_state::PublicExecutionContext> for PublicExecution
                 .collect(),
             authorized_accounts: authorized_accounts.into_iter().map(Into::into).collect(),
             promotions: promotions.into_iter().collect(),
+            private_signers: private_signers.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -538,6 +522,7 @@ impl From<PublicExecutionContext> for lee_core::execution_state::PublicExecution
             actors,
             authorized_accounts,
             promotions,
+            private_signers,
         } = value;
         Self {
             actors: actors
@@ -546,6 +531,7 @@ impl From<PublicExecutionContext> for lee_core::execution_state::PublicExecution
                 .collect(),
             authorized_accounts: authorized_accounts.into_iter().map(Into::into).collect(),
             promotions: promotions.into_iter().collect(),
+            private_signers: private_signers.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -1570,6 +1556,7 @@ mod tests {
         let message = lee::privacy_preserving_transaction::message::Message {
             public_context: lee_core::execution_state::PublicExecutionContext {
                 promotions: BTreeSet::from([27, 28]),
+                private_signers: BTreeSet::from([actor(29, 92)]),
                 ..lee_core::execution_state::PublicExecutionContext::default()
             },
             execution: lee_core::ProvenExecution {
@@ -1596,10 +1583,7 @@ mod tests {
                                 to: actor(8, 9),
                                 message: vec![10],
                             },
-                            grants: BTreeSet::from([
-                                lee_core::Target::Actor(actor(14, 90)),
-                                lee_core::Target::Withheld(3),
-                            ]),
+                            grants: BTreeSet::from([actor(14, 90), actor(3, 91)]),
                             pda_seeds: BTreeSet::from([lee_core::program::PdaSeed::new([15; 32])]),
                         },
                     ),
