@@ -2123,9 +2123,12 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             );
         }
         let opening = account_manager::random_bytes();
-        input
-            .recoveries
-            .push(acc_manager.fee_recovery(payer, opening)?);
+        // A refund to a public target is never published to the payer's alias.
+        if refund_to.is_none() {
+            input
+                .recoveries
+                .push(acc_manager.fee_recovery(payer, opening)?);
+        }
         let priced = |amount| {
             let mut priced = input.clone();
             priced.fee = Some(FeeTransfer {
