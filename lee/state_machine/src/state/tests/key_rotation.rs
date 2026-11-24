@@ -931,12 +931,14 @@ fn none_pending(_: AccountId, _: Nonce) -> Option<SigningKeyState> {
     None
 }
 
-// The definitive refusal inside a head authentication result.
-fn definitive(result: Result<(), HeadAuthError>) -> Result<(), LeeError> {
+// The refusal against the head inside a head authentication result.
+fn at_head(result: Result<(), HeadAuthError>) -> Result<(), LeeError> {
     match result {
         Ok(()) => Ok(()),
-        Err(HeadAuthError::Definitive(err)) => Err(err),
-        Err(HeadAuthError::Pending(err)) => panic!("expected a definitive refusal, got {err}"),
+        Err(HeadAuthError::AtHead(err)) => Err(err),
+        Err(HeadAuthError::Definitive(err) | HeadAuthError::Pending(err)) => {
+            panic!("expected a refusal against the head, got {err}")
+        }
     }
 }
 
@@ -954,7 +956,7 @@ fn public_at_head_a_signer_at_its_accounts_nonce_is_authenticated() {
     let in_signature = tampered.witness_set.entries[0].auth_data.len() - 33;
     tampered.witness_set.entries[0].auth_data[in_signature] ^= 1;
     assert_refused(
-        definitive(authenticate_transaction_at_head(
+        at_head(authenticate_transaction_at_head(
             &tampered,
             &state,
             none_pending,
@@ -963,13 +965,28 @@ fn public_at_head_a_signer_at_its_accounts_nonce_is_authenticated() {
         "invalid signature",
     );
 
-    // Once nonce 0 is used, a transaction at it can never be valid.
+    // Once nonce 0 is used, a transaction at it is refused.
     state
         .transition_from_public_transaction(&first, 1, 0)
         .unwrap();
     assert!(matches!(
-        definitive(authenticate_transaction_at_head(&first, &state, none_pending)),
+        at_head(authenticate_transaction_at_head(&first, &state, none_pending)),
         Err(LeeError::InvalidInput(message)) if message.contains("is below its account's nonce 1")
+    ));
+}
+
+#[test]
+fn public_at_head_a_malformed_transaction_is_refused_definitively() {
+    let sender = TestSigner::new(51);
+    let recipient = AccountId::new([52; 32]);
+    let state = V03State::new().with_public_account_balances([(sender.account_id(), 100)]);
+    // No witness entry for its one signer: invalid whatever the head.
+    let mut unsigned = native_transfer(&sender, recipient, Nonce(0), 10);
+    unsigned.witness_set.entries.clear();
+
+    assert!(matches!(
+        authenticate_transaction_at_head(&unsigned, &state, none_pending),
+        Err(HeadAuthError::Definitive(_))
     ));
 }
 
@@ -1025,7 +1042,7 @@ fn privacy_at_head_a_signer_at_its_accounts_nonce_is_authenticated() {
     let in_signature = tampered.witness_set.entries[0].auth_data.len() - 33;
     tampered.witness_set.entries[0].auth_data[in_signature] ^= 1;
     assert_refused(
-        definitive(authenticate_transaction_at_head(
+        at_head(authenticate_transaction_at_head(
             &tampered,
             &state,
             none_pending,

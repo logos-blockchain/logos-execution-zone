@@ -93,10 +93,14 @@ pub enum Error {
     #[error("Incorrect fee")]
     IncorrectFee(#[source] anyhow::Error),
 
-    /// The transaction can never be valid: a signer fails authentication at its account's nonce,
-    /// or its nonce is below its account's.
+    /// The transaction is malformed, so it is invalid whatever the head.
     #[error("Invalid transaction")]
     InvalidTransaction(#[source] lee::error::LeeError),
+
+    /// Against this node's head, a signer's nonce is below its account's, or a signer at its
+    /// account's nonce fails authentication.
+    #[error("Refused against the head state")]
+    RefusedAtHead(#[source] lee::error::LeeError),
 
     /// A signer ahead of its account's nonce has no pending transaction before it in this node's
     /// mempool, or fails against the key that transaction commits it to.

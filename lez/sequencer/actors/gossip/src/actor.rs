@@ -132,8 +132,8 @@ pub type IngestSubmit =
 #[derive(Debug)]
 pub enum IngestVerdict {
     Admitted,
-    /// Refused off the local head state (fee, mempool room), which drifts, so peers
-    /// legitimately disagree: the transaction is still forwarded.
+    /// Refused off the local head state (fee, authentication, mempool room), which drifts, so
+    /// peers legitimately disagree: the transaction is still forwarded.
     Refused(String),
     /// Can never be valid, whatever the head: not forwarded, and its sender is penalized.
     Invalid(String),

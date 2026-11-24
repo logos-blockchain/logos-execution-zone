@@ -38,11 +38,14 @@ type Signer = (AccountId, SigningKeyState);
 /// Why a transaction's signers were refused at admission.
 #[derive(Debug, thiserror::Error)]
 pub enum HeadAuthError {
-    /// The transaction can never be valid: a signer's nonce is below its account's, or a signer
-    /// at its account's nonce fails authentication (an account's key changes only when its nonce
-    /// advances).
+    /// The transaction is malformed, so it is invalid whatever the head.
     #[error(transparent)]
     Definitive(LeeError),
+    /// A signer's nonce is below its account's, or a signer at its account's nonce fails
+    /// authentication, against the admitting node's head. Another node's head may differ (it lags,
+    /// or follows another fork), so the refusal is not definitive.
+    #[error(transparent)]
+    AtHead(LeeError),
     /// A signer ahead of its account's nonce has no pending transaction before it, or fails
     /// against the key that transaction commits it to. The pending transactions are the admitting
     /// node's own view, so the refusal is not definitive.
@@ -732,8 +735,8 @@ fn authenticate_signer(
 /// The admission check of a transaction's signers against the head state: a signer whose nonce is
 /// below its account's is refused, one at its account's nonce is authenticated against its current
 /// key, and one above it is authenticated against `pending(account, nonce)`, the key a pending
-/// transaction commits it to at that nonce, or refused when there is none. Definitive refusals are
-/// checked first, so they take precedence.
+/// transaction commits it to at that nonce, or refused when there is none. Refusals at the head
+/// are checked first, so they take precedence.
 fn authenticate_signers_at_head(
     state: &V03State,
     nonces: &BTreeMap<AccountId, Nonce>,
@@ -755,14 +758,14 @@ fn authenticate_signers_at_head(
         .collect();
     for &(signer, nonce, head, entry) in &signers {
         if nonce.0 < head.0 {
-            return Err(HeadAuthError::Definitive(LeeError::InvalidInput(format!(
+            return Err(HeadAuthError::AtHead(LeeError::InvalidInput(format!(
                 "Signer {signer}'s nonce {} is below its account's nonce {}",
                 nonce.0, head.0
             ))));
         }
         if nonce == head {
             authenticate_signer(state, signer, entry, &message_with_keys)
-                .map_err(HeadAuthError::Definitive)?;
+                .map_err(HeadAuthError::AtHead)?;
         }
     }
     for &(signer, nonce, head, entry) in &signers {

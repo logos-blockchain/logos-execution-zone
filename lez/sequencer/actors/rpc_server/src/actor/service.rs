@@ -467,6 +467,7 @@ fn map_executor_error<M>(
             invalid @ (sequencer_executor_actor::error::Error::IncorrectFee(_)
             | sequencer_executor_actor::error::Error::TransactionTooLarge { .. }
             | sequencer_executor_actor::error::Error::InvalidTransaction(_)
+            | sequencer_executor_actor::error::Error::RefusedAtHead(_)
             | sequencer_executor_actor::error::Error::PendingAuthentication(_)
             | sequencer_executor_actor::error::Error::PendingSlot(_)) => {
                 // With its cause, which the sender is shown.

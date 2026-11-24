@@ -1104,13 +1104,34 @@ async fn handle_transaction_rejects_a_transaction_too_large_for_any_block() -> R
 }
 
 #[test]
-async fn handle_transaction_refuses_a_bad_signature_definitively() -> Result<()> {
+async fn handle_transaction_refuses_a_bad_signature_at_the_head_non_definitively() -> Result<()> {
     let _res = logging::try_init();
     let (executor, _home) = spawn_executor_on_empty_genesis().await?;
 
+    // Judged against this node's head: a peer on another head may hold it valid.
     let res = submit(&executor, with_a_bad_signature(test_transaction())).await;
     let Err(Some(err)) = res else {
         panic!("a bad signature was admitted: {res:?}");
+    };
+    assert!(matches!(err, crate::error::Error::RefusedAtHead(_)));
+    assert!(!err.is_definitive());
+
+    Ok(())
+}
+
+#[test]
+async fn handle_transaction_refuses_a_malformed_transaction_definitively() -> Result<()> {
+    let _res = logging::try_init();
+    let (executor, _home) = spawn_executor_on_empty_genesis().await?;
+
+    // No witness entry for its signer: invalid whatever the head.
+    let LeeTransaction::Public(tx) = transfer_from_payer_at(0, u128::MAX) else {
+        unreachable!("the test transactions are public");
+    };
+    let unsigned = PublicTransaction::new(tx.message().clone(), WitnessSet::from_raw_parts(vec![]));
+    let res = submit(&executor, unsigned.into()).await;
+    let Err(Some(err)) = res else {
+        panic!("a malformed transaction was admitted: {res:?}");
     };
     assert!(matches!(err, crate::error::Error::InvalidTransaction(_)));
     assert!(err.is_definitive());

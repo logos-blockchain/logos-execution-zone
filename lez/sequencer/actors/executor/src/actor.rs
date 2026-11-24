@@ -369,9 +369,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
         // Admission against the head state and the pending slots, before the
         // mempool sees it: the fee screen first, so an unfundable transaction
         // costs no signature verification, then authentication, then the slots
-        // (first seen wins). Only an authentication refusal at or below the head
-        // is definitive (see `Error::is_definitive`); the rest depend on this
-        // node's head and mempool. An identical re-send is already pending.
+        // (first seen wins). Only a malformed transaction is refused definitively
+        // (see `Error::is_definitive`); the rest depend on this node's head and
+        // mempool. An identical re-send is already pending.
         let admission = online
             .sequencer_mut()
             .admit(&transaction)
@@ -964,6 +964,9 @@ fn admission_error(err: sequencer_core::AdmissionError) -> Error {
         sequencer_core::AdmissionError::Fee(err) => Error::IncorrectFee(err.into()),
         sequencer_core::AdmissionError::Authentication(lee::HeadAuthError::Definitive(err)) => {
             Error::InvalidTransaction(err)
+        }
+        sequencer_core::AdmissionError::Authentication(lee::HeadAuthError::AtHead(err)) => {
+            Error::RefusedAtHead(err)
         }
         sequencer_core::AdmissionError::Authentication(lee::HeadAuthError::Pending(err)) => {
             Error::PendingAuthentication(err)
