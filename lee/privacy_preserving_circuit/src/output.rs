@@ -236,15 +236,10 @@ fn fee_fallback(
         ciphertext_padding,
     );
     Some(FeeFallback {
-        action: PrivateAction {
-            nullifier: main.nullifier,
-            root: main.root,
-            commitment: Commitment::new(&witness.account_id(), &post_state),
-            encrypted_post_state: EncryptedNote {
-                ciphertext,
-                epk: main.encrypted_post_state.epk.clone(),
-            },
-        },
+        nullifier: main.nullifier,
+        root: main.root,
+        commitment: Commitment::new(&witness.account_id(), &post_state),
+        ciphertext,
         boundary: vec![
             BoundaryStep::PrivateToPublic(crossing),
             BoundaryStep::EndPublicSubtree,
@@ -560,26 +555,25 @@ mod tests {
             data: Account::funded(70).data,
         };
         assert_eq!(
-            fallback.action.commitment,
+            fallback.commitment,
             Commitment::new(&owner.account_id(), &expected)
         );
+        // The fallback carries no ephemeral key: its note opens under the main action's.
+        let action = fallback
+            .action(std::slice::from_ref(&main))
+            .expect("the fallback spends the main action's nullifier");
         assert_eq!(
-            owner.decrypt_fallback(&fallback.action),
+            owner.decrypt_fallback(&action),
             (PrivateAccountKind::Regular, expected)
         );
         assert_eq!(
             fallback.boundary,
             vec![crossing(30), BoundaryStep::EndPublicSubtree]
         );
-        // One encapsulation serves both notes, under keys apart: the same state encrypts
-        // differently.
-        assert_eq!(
-            main.encrypted_post_state.epk,
-            fallback.action.encrypted_post_state.epk
-        );
+        // Under keys apart: the same state encrypts differently.
         assert_ne!(
             main.encrypted_post_state.ciphertext.as_bytes(),
-            fallback.action.encrypted_post_state.ciphertext.as_bytes()
+            fallback.ciphertext.as_bytes()
         );
 
         // A fee the pre-state does not cover, or whose credit does not cross, has no fallback.

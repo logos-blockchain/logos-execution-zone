@@ -566,7 +566,13 @@ typedef struct FfiProvenFee {
   FfiAccountId refund_to;
   uint64_t tip;
   bool has_fallback;
-  struct FfiPrivateAction fallback_action;
+  struct FfiBytes32 fallback_nullifier;
+  struct FfiBytes32 fallback_root;
+  struct FfiBytes32 fallback_commitment;
+  /**
+   * Under the ephemeral key of the private action spending `fallback_nullifier`.
+   */
+  FfiVecU8 fallback_ciphertext;
   FfiBoundaryStepList fallback_boundary;
 } FfiProvenFee;
 

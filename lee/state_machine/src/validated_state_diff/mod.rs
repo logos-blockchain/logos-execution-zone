@@ -454,7 +454,7 @@ impl ValidatedStateDiff {
         let (diff, revert) = match (result, fallback) {
             (Ok(diff), _) => (diff, None),
             (Err(err), Some(fallback)) if err.is_chargeable() => {
-                state.check_commitments_are_new(&[fallback.action.commitment])?;
+                state.check_commitments_are_new(&[fallback.commitment])?;
                 let fallback_request = PublicPart::new(
                     message.public_context.clone(),
                     None,
@@ -483,8 +483,8 @@ impl ValidatedStateDiff {
                     timestamp,
                     StateDiff {
                         signers,
-                        new_commitments: vec![fallback.action.commitment],
-                        new_nullifiers: vec![(fallback.action.nullifier, fallback.action.root)],
+                        new_commitments: vec![fallback.commitment],
+                        new_nullifiers: vec![(fallback.nullifier, fallback.root)],
                         recovery_bindings: execution
                             .recovery_bindings
                             .iter()

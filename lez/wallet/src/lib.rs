@@ -3273,7 +3273,7 @@ fn spent_in(block: &Block) -> Vec<Nullifier> {
                 .as_ref()
                 .and_then(|fee| fee.fallback.as_ref());
             match (block.body.is_reverted(position), fallback) {
-                (true, Some(fallback)) => vec![fallback.action.nullifier],
+                (true, Some(fallback)) => vec![fallback.nullifier],
                 (true, None) => Vec::new(),
                 (false, _) => execution
                     .private_actions

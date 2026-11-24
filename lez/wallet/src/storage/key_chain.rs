@@ -519,10 +519,11 @@ impl UserKeyChain {
             .proven_fee
             .as_ref()
             .and_then(|fee| fee.fallback.as_ref())
-            .map(|fallback| &fallback.action)
+            .and_then(|fallback| fallback.action(&message.execution.private_actions))
         else {
             return;
         };
+        let action = &action;
         let Some(account_id) = index.account_for(&action.nullifier) else {
             return;
         };

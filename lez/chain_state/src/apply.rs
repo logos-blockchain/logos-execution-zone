@@ -2393,11 +2393,11 @@ mod tests {
         // fallback's own.)
         assert!(
             settled
-                .get_proof_for_commitment(&fallback.action.commitment)
+                .get_proof_for_commitment(&fallback.commitment)
                 .is_some()
         );
         for commitment in private_tx.message.execution.commitments() {
-            if commitment != fallback.action.commitment {
+            if commitment != fallback.commitment {
                 assert!(settled.get_proof_for_commitment(&commitment).is_none());
             }
         }
@@ -2687,7 +2687,7 @@ mod tests {
         // The payment's proven post-state is not the fallback's own.
         let paid = private_tx.message.execution.commitments();
         assert!(!paid.is_empty());
-        assert!(!paid.contains(&fallback.action.commitment));
+        assert!(!paid.contains(&fallback.commitment));
 
         let mut settled = state;
         let mut summary = BlockFeeSummary::default();
@@ -2719,7 +2719,7 @@ mod tests {
         assert_eq!(published_credit(&settled, unbound), None);
         assert!(
             settled
-                .get_proof_for_commitment(&fallback.action.commitment)
+                .get_proof_for_commitment(&fallback.commitment)
                 .is_some()
         );
         for commitment in paid {

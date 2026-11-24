@@ -8,7 +8,7 @@ use crate::{
     MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey,
     account::{Account, AccountId, Actor, Balance, Fee, Nonce},
     compute_digest_for_path,
-    encryption::{EncryptedNote, ViewingPublicKey},
+    encryption::{Ciphertext, EncryptedNote, ViewingPublicKey},
     execution_state::{Boundary, PredictedCrossMessages, PublicExecutionContext, TransactionEntry},
     program::{
         MessageBody, MessageData, PdaSeed, PrivateAccountKind, ProgramHeader, ProgramId,
@@ -169,13 +169,42 @@ pub struct ProvenFee {
 /// The payer's transition after the fee transfer alone: its post-state is its pre-state less the
 /// amount, and the boundary carries only the transfer's crossing.
 ///
-/// Its action spends the payer's nullifier, so it tells the payer's action from the others of
-/// the same transaction; it links nothing across transactions.
+/// It spends the payer's nullifier, so it tells the payer's action from the others of the same
+/// transaction; it links nothing across transactions.
 #[derive(BorshSerialize, BorshDeserialize)]
-#[cfg_attr(any(feature = "host", test), derive(Debug, Clone, PartialEq, Eq))]
+#[cfg_attr(
+    any(feature = "host", test),
+    derive(Debug, Clone, Default, PartialEq, Eq)
+)]
 pub struct FeeFallback {
-    pub action: PrivateAction,
+    /// The nullifier and root of the payer's private action.
+    pub nullifier: Nullifier,
+    pub root: CommitmentSetDigest,
+    pub commitment: Commitment,
+    /// The post-state's note, under the ephemeral key of the payer's private action.
+    pub ciphertext: Ciphertext,
     pub boundary: Boundary,
+}
+
+#[cfg(feature = "host")]
+impl FeeFallback {
+    /// The fallback as the private action settlement applies: its note carries the ephemeral key
+    /// of the action in `actions` that spends the same nullifier. `None` if none does.
+    #[must_use]
+    pub fn action(&self, actions: &[PrivateAction]) -> Option<PrivateAction> {
+        let main = actions
+            .iter()
+            .find(|action| action.nullifier == self.nullifier)?;
+        Some(PrivateAction {
+            nullifier: self.nullifier,
+            root: self.root,
+            commitment: self.commitment,
+            encrypted_post_state: EncryptedNote {
+                ciphertext: self.ciphertext.clone(),
+                epk: main.encrypted_post_state.epk.clone(),
+            },
+        })
+    }
 }
 
 /// Inputs for proving a transaction's private part.

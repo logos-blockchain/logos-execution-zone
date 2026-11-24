@@ -385,7 +385,12 @@ pub struct ProvenFee {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct FeeFallback {
-    pub action: PrivateAction,
+    /// The nullifier and root of the payer's private action.
+    pub nullifier: Nullifier,
+    pub root: CommitmentSetDigest,
+    pub commitment: Commitment,
+    /// The post-state's note, under the ephemeral key of the payer's private action.
+    pub ciphertext: Ciphertext,
     pub boundary: Boundary,
 }
 

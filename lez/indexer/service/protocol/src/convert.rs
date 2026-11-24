@@ -633,9 +633,12 @@ impl From<lee_core::ProvenFee> for ProvenFee {
         Self {
             refund_to: refund_to.map(Into::into),
             tip,
-            fallback: fallback.map(|lee_core::FeeFallback { action, boundary }| FeeFallback {
-                action: action.into(),
-                boundary: boundary.into_iter().map(Into::into).collect(),
+            fallback: fallback.map(|fallback| FeeFallback {
+                nullifier: fallback.nullifier.into(),
+                root: fallback.root.into(),
+                commitment: fallback.commitment.into(),
+                ciphertext: fallback.ciphertext.into(),
+                boundary: fallback.boundary.into_iter().map(Into::into).collect(),
             }),
         }
     }
@@ -651,9 +654,12 @@ impl From<ProvenFee> for lee_core::ProvenFee {
         Self {
             refund_to: refund_to.map(Into::into),
             tip,
-            fallback: fallback.map(|FeeFallback { action, boundary }| lee_core::FeeFallback {
-                action: action.into(),
-                boundary: boundary.into_iter().map(Into::into).collect(),
+            fallback: fallback.map(|fallback| lee_core::FeeFallback {
+                nullifier: fallback.nullifier.into(),
+                root: fallback.root.into(),
+                commitment: fallback.commitment.into(),
+                ciphertext: fallback.ciphertext.into(),
+                boundary: fallback.boundary.into_iter().map(Into::into).collect(),
             }),
         }
     }
@@ -1527,7 +1533,10 @@ mod tests {
                     refund_to: Some(account_id(70)),
                     tip: 9,
                     fallback: Some(lee_core::FeeFallback {
-                        action: lee_core::PrivateAction::default(),
+                        nullifier: lee_core::Nullifier::default(),
+                        root: [0; 32],
+                        commitment: lee_core::Commitment::default(),
+                        ciphertext: lee_core::encryption::Ciphertext::from_inner(vec![24; 3]),
                         boundary: vec![
                             lee_core::execution_state::BoundaryStep::PrivateToPublic(
                                 repeated.clone(),

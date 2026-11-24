@@ -5,8 +5,10 @@ use lee::{
     privacy_preserving_transaction::circuit::Proof, public_transaction::WitnessEntry,
 };
 use lee_core::{
-    FeeFallback, PrivateAction, ProgramImageClaim, ProvenExecution, ProvenFee, RecoveryBinding,
+    Commitment, FeeFallback, Nullifier, PrivateAction, ProgramImageClaim, ProvenExecution,
+    ProvenFee, RecoveryBinding,
     account::AccountId,
+    encryption::Ciphertext,
     program::{Publication, ValidityWindow, ValidityWindows},
 };
 use sequencer_executor_actor::protocol::Transaction;
@@ -16,12 +18,12 @@ use crate::primitives::{
     types::{
         FfiAccountId, FfiBytes32, FfiFeeDeclaration, FfiHashType, FfiOption, FfiVec,
         actor::{
-            FfiNonceEntry, FfiPrivateAction, FfiPublicAccountEvidence, FfiPublicExecutionContext,
-            FfiRootCall, empty_root_call, nonces_from_ffi,
+            FfiNonceEntry, FfiPublicAccountEvidence, FfiPublicExecutionContext, FfiRootCall,
+            empty_root_call, nonces_from_ffi,
         },
         vectors::{
             FfiBoundaryStepList, FfiNonceList, FfiPrivateActionList, FfiProof,
-            FfiPublicAccountEvidenceList, FfiPublicationList, FfiRecoveryBindingList,
+            FfiPublicAccountEvidenceList, FfiPublicationList, FfiRecoveryBindingList, FfiVecU8,
             FfiWitnessEntryList,
         },
     },
@@ -383,7 +385,11 @@ pub struct FfiProvenFee {
     pub refund_to: FfiAccountId,
     pub tip: u64,
     pub has_fallback: bool,
-    pub fallback_action: FfiPrivateAction,
+    pub fallback_nullifier: FfiBytes32,
+    pub fallback_root: FfiBytes32,
+    pub fallback_commitment: FfiBytes32,
+    /// Under the ephemeral key of the private action spending `fallback_nullifier`.
+    pub fallback_ciphertext: FfiVecU8,
     pub fallback_boundary: FfiBoundaryStepList,
 }
 
@@ -393,16 +399,26 @@ impl From<Option<ProvenFee>> for FfiProvenFee {
             (fee.refund_to, fee.tip, fee.fallback)
         });
         let has_fallback = fallback.is_some();
-        let FeeFallback { action, boundary } = fallback.unwrap_or_else(|| FeeFallback {
-            action: PrivateAction::default(),
-            boundary: Vec::new(),
-        });
+        let FeeFallback {
+            nullifier,
+            root,
+            commitment,
+            ciphertext,
+            boundary,
+        } = fallback.unwrap_or_default();
         Self {
             has_refund_to: refund_to.is_some(),
             refund_to: refund_to.unwrap_or_default().into(),
             tip,
             has_fallback,
-            fallback_action: action.into(),
+            fallback_nullifier: FfiBytes32 {
+                data: nullifier.to_byte_array(),
+            },
+            fallback_root: FfiBytes32 { data: root },
+            fallback_commitment: FfiBytes32 {
+                data: commitment.to_byte_array(),
+            },
+            fallback_ciphertext: ciphertext.into_inner().into(),
             fallback_boundary: boundary
                 .into_iter()
                 .map(Into::into)
@@ -702,11 +718,17 @@ fn proven_fee_from_ffi(has_fee: bool, fee: FfiProvenFee) -> Option<ProvenFee> {
         refund_to,
         tip,
         has_fallback,
-        fallback_action,
+        fallback_nullifier,
+        fallback_root,
+        fallback_commitment,
+        fallback_ciphertext,
         fallback_boundary,
     } = fee;
     let fallback = FeeFallback {
-        action: fallback_action.into(),
+        nullifier: Nullifier::from_byte_array(fallback_nullifier.data),
+        root: fallback_root.data,
+        commitment: Commitment::from_byte_array(fallback_commitment.data),
+        ciphertext: Ciphertext::from_inner(fallback_ciphertext.into()),
         boundary: owned(fallback_boundary),
     };
     has_fee.then(|| ProvenFee {
@@ -1140,8 +1162,8 @@ mod tests {
     fn a_private_transactions_fee_roundtrips_over_the_ffi() {
         // The proof commits to its fee, so a transaction rebuilt without it fails verification.
         let fallback = FeeFallback {
-            action: PrivateAction::default(),
             boundary: vec![BoundaryStep::EndPublicSubtree],
+            ..FeeFallback::default()
         };
         for fee in [
             None,
