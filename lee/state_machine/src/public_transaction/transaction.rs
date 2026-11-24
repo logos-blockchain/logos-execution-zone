@@ -84,7 +84,7 @@ pub mod tests {
     use lee_core::{
         account::{Account, Actor, Nonce},
         native_token::Message as NativeMessage,
-        signing_key::SIGNATURE_PROGRAM_ID,
+        signing_key::signature_program_id,
     };
     use sha2::{Digest as _, digest::FixedOutput as _};
 
@@ -260,7 +260,7 @@ pub mod tests {
                     nonce: Nonce(1),
                     ..Account::funded(20000)
                 }
-                .with_actor_state(SIGNATURE_PROGRAM_ID, key2.key_state(Nonce(1)).into()),
+                .with_actor_state(signature_program_id(), key2.key_state(Nonce(1)).into()),
             ),
         ]);
         let mut message = transaction_for_tests().message;

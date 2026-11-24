@@ -6,7 +6,7 @@ use lee_core::{
     execution_state::{ExecutionEnvironment, ExecutionError, Placement, TransitionView},
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{MessageBody, PROGRAM_LOADER_ACCOUNT_ID, ReceiveInput, Transition},
-    signing_key::SIGNATURE_PROGRAM_ID,
+    signing_key::signature_program_id,
 };
 use tracing::debug;
 
@@ -67,7 +67,7 @@ impl ExecutionEnvironment for PublicBackend<'_> {
         let state = self.state;
         let program_account_id = input.receiver.program_account_id;
         debug!(program = ?program_account_id, ?input, "Program input");
-        if program_account_id == SIGNATURE_PROGRAM_ID {
+        if program_account_id == signature_program_id() {
             return Err(LeeError::UnknownProgram {
                 at_root: view.at_root(),
             });

@@ -1,4 +1,4 @@
-use lee_core::signing_key::SIGNATURE_PROGRAM_ID;
+use lee_core::signing_key::signature_program_id;
 
 use super::*;
 
@@ -181,7 +181,7 @@ fn a_credit_leaves_a_stranger_actor_state_at_the_recipient_untouched() {
             nonce: Nonce(1),
             ..Account::funded(amount)
                 .with_actor_state(stranger, stranger_data)
-                .with_actor_state(SIGNATURE_PROGRAM_ID, to_key.key_state(Nonce(1)).into())
+                .with_actor_state(signature_program_id(), to_key.key_state(Nonce(1)).into())
         }
     );
 }

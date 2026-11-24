@@ -12,7 +12,7 @@ use integration_tests::{
 };
 use key_protocol::key_management::KeyChain;
 use lee::{Account, test_utils::TestSigner};
-use lee_core::{account::Nonce, signing_key::SIGNATURE_PROGRAM_ID};
+use lee_core::{account::Nonce, signing_key::signature_program_id};
 use tokio::test;
 use wallet::{
     account::{AccountIdWithPrivacy, HumanReadableAccount, Label},
@@ -43,7 +43,7 @@ async fn get_existing_account() -> Result<()> {
     assert_eq!(
         account.data,
         Account::funded(INITIAL_PUBLIC_BALANCES_FOR_WALLET[0])
-            .with_actor_state(SIGNATURE_PROGRAM_ID, signer.key_state(Nonce(2)).into())
+            .with_actor_state(signature_program_id(), signer.key_state(Nonce(2)).into())
             .data
     );
 

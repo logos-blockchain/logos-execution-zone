@@ -3,11 +3,12 @@ use std::{fmt, str::FromStr};
 use borsh::{BorshDeserialize, BorshSerialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 
-use crate::account::{AccountId, ActorState};
+use crate::{
+    account::{AccountId, ActorState},
+    program::SystemProgramName,
+};
 
-/// The fixed address of `signature_program`: a native pseudo-program with no bytecode, whose
-/// actor state holds each account's signing key. Never dispatched, deployed or upgraded.
-pub const SIGNATURE_PROGRAM_ID: AccountId = AccountId::new([0xFC; 32]);
+pub const SIGNATURE_PROGRAM_NAME: SystemProgramName = SystemProgramName::new(b"signature");
 
 /// Append only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -84,6 +85,13 @@ impl TryFrom<&ActorState> for SigningKeyState {
     fn try_from(state: &ActorState) -> Result<Self, Self::Error> {
         borsh::from_slice(state)
     }
+}
+
+/// The address of `signature_program`, the `system_upgrader` PDA for its name. Its actor state
+/// holds each account's signing key.
+#[must_use]
+pub fn signature_program_id() -> AccountId {
+    AccountId::from_system_program_name(&SIGNATURE_PROGRAM_NAME)
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-use lee_core::signing_key::SIGNATURE_PROGRAM_ID;
+use lee_core::signing_key::signature_program_id;
 
 use super::*;
 use crate::ValidatedStateDiff;
@@ -272,7 +272,11 @@ fn a_declared_account_no_transition_changes_stays_out_of_the_diff_and_the_state(
 fn planted_signature_program() -> V03State {
     V03State::new()
         .with_programs([crate::test_methods::scripted()])
-        .with_programs_at([(SIGNATURE_PROGRAM_ID, crate::test_methods::scripted(), true)])
+        .with_programs_at([(
+            signature_program_id(),
+            crate::test_methods::scripted(),
+            true,
+        )])
 }
 
 fn assert_charged_as_an_unknown_callee(tx: &PublicTransaction, signer: &TestSigner) {
@@ -302,14 +306,14 @@ fn assert_charged_as_an_unknown_callee(tx: &PublicTransaction, signer: &TestSign
             nonce: Nonce(1),
             ..Account::default()
         }
-        .with_actor_state(SIGNATURE_PROGRAM_ID, signer.key_state(Nonce(1)).into())
+        .with_actor_state(signature_program_id(), signer.key_state(Nonce(1)).into())
     );
 }
 
 #[test]
 fn a_root_call_to_the_signature_program_is_unknown_and_not_charged() {
     let key = TestSigner::new(1);
-    let signature = Actor::new(key.account_id(), SIGNATURE_PROGRAM_ID);
+    let signature = Actor::new(key.account_id(), signature_program_id());
     let tx = public_tx(
         signature,
         vec![signature],
@@ -339,7 +343,7 @@ fn a_root_call_to_the_signature_program_is_unknown_and_not_charged() {
 fn a_chained_call_to_the_signature_program_is_charged_and_reverted() {
     let key = TestSigner::new(1);
     let sender = Actor::new(key.account_id(), scripted_id());
-    let signature = Actor::new(key.account_id(), SIGNATURE_PROGRAM_ID);
+    let signature = Actor::new(key.account_id(), signature_program_id());
     let tx = public_tx(
         sender,
         vec![sender, signature],
@@ -355,7 +359,7 @@ fn a_chained_call_to_the_signature_program_is_charged_and_reverted() {
 fn an_async_message_to_the_signature_program_is_charged_and_reverted() {
     let key = TestSigner::new(1);
     let sender = Actor::new(key.account_id(), scripted_id());
-    let signature = Actor::new(key.account_id(), SIGNATURE_PROGRAM_ID);
+    let signature = Actor::new(key.account_id(), signature_program_id());
     let tx = public_tx(
         sender,
         vec![sender, signature],
