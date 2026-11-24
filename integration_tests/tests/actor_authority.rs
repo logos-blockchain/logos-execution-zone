@@ -8,7 +8,7 @@ use integration_tests::{TestContext, account_balance, new_account, wait_for_incl
 use lee::{
     AccountId, Actor, privacy_preserving_transaction::circuit::ProgramCatalog, program::Program,
 };
-use lee_core::native_token::Message as NativeMessage;
+use lee_core::{native_token::Message as NativeMessage, program::SyncMessage};
 use test_guest_core::Script;
 use tokio::test;
 use wallet::{
@@ -41,12 +41,16 @@ async fn call_draining_program(
     recipient: AccountId,
     balance: AccountMention,
 ) -> Result<common::HashType, ExecutionFailureKind> {
-    let drain = Script::default().send_sync(
-        Actor::native_balance(user),
-        &NativeMessage::Transfer {
-            to: recipient,
-            amount: AMOUNT,
-        },
+    let balance_actor = Actor::native_balance(user);
+    let drain = Script::default().send(
+        SyncMessage::new(
+            balance_actor,
+            &NativeMessage::Transfer {
+                to: recipient,
+                amount: AMOUNT,
+            },
+        )
+        .with_grants([balance_actor]),
     );
     ctx.wallet()
         .send_tx(
@@ -91,7 +95,7 @@ async fn a_signed_call_cannot_spend_a_native_balance_declared_without_authority(
         matches!(
             &refused,
             Err(ExecutionFailureKind::SimulatedRevert(reason))
-                if reason.contains(&format!("native transfer sender {user} is not authorized"))
+                if reason.contains("that its sender does not hold")
         ),
         "the drain should revert for want of authority: {:?}",
         refused.as_ref().map(ToString::to_string)
