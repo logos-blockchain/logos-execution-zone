@@ -29,7 +29,7 @@ impl From<SignatureError> for AuthError {
     }
 }
 
-/// A signature scheme: keys, signing and verification. No LEE concepts.
+/// A signature scheme: keys, signing and verification.
 pub trait SignatureScheme {
     type PublicKey;
     type SecretKey;
@@ -39,8 +39,6 @@ pub trait SignatureScheme {
     /// (wallet, tests), so keys are re-derived rather than stored.
     fn keygen(seed: &[u8; 32]) -> (Self::SecretKey, Self::PublicKey);
 
-    /// One-time schemes must sign deterministically: the same key and message give the same
-    /// signature.
     fn sign(sk: &Self::SecretKey, message: &[u8; 32]) -> Self::Signature;
 
     fn verify(
