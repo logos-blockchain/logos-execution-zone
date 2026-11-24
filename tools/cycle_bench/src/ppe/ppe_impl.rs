@@ -12,7 +12,7 @@ use borsh::to_vec;
 use lee::{
     ProvingInput, PublicExecutionContext, SenderPresentation, Simulation,
     error::LeeError,
-    execute_and_prove,
+    execute_and_prove_with_stats,
     privacy_preserving_transaction::circuit::{ProgramCatalog, Proof},
 };
 use lee_core::{
@@ -28,6 +28,7 @@ use lee_core::{
     program::{MessageBody, SyncMessage},
 };
 use rand::{RngCore as _, rngs::OsRng};
+use risc0_zkvm::SessionStats;
 use test_guest_core::Script;
 
 use super::PpeBenchResult;
@@ -42,16 +43,22 @@ const SENDER_BALANCE: u128 = 100_000;
 /// Mirrors `wallet::CIPHERTEXT_PAD_SIZE`, so the padding cost here matches what a wallet pays.
 const CIPHERTEXT_PAD: u32 = 512;
 
+/// The circuit's output, its proof and the cycle statistics of its run.
+type Proven = (PrivacyPreservingCircuitOutput, Proof, SessionStats);
+
 fn timed(
     label: String,
     chain_depth: usize,
-    proof: impl Fn() -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)>,
+    proof: impl Fn() -> anyhow::Result<Proven>,
 ) -> PpeBenchResult {
     let started = Instant::now();
     match proof() {
-        Ok((_out, proof)) => PpeBenchResult {
+        Ok((_out, proof, stats)) => PpeBenchResult {
             label,
             chain_depth,
+            user_cycles: Some(stats.user_cycles),
+            total_cycles: Some(stats.total_cycles),
+            segments: Some(stats.segments),
             prove_wall_ms: Some(started.elapsed().as_secs_f64() * 1_000.0),
             proof_bytes: Some(proof.into_inner().len()),
             error: None,
@@ -59,6 +66,9 @@ fn timed(
         Err(err) => PpeBenchResult {
             label,
             chain_depth,
+            user_cycles: None,
+            total_cycles: None,
+            segments: None,
             prove_wall_ms: None,
             proof_bytes: None,
             error: Some(err.to_string()),
@@ -125,7 +135,7 @@ fn no_seal(bodies: &[MessageBody]) -> Result<Vec<PublicationMode>, LeeError> {
 }
 
 pub fn prove_native_transfer_in_ppe() -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)> {
-    prove_native_transfer_with_dummies(0)
+    prove_native_transfer_with_dummies(0).map(|(output, proof, _)| (output, proof))
 }
 
 fn random_bytes() -> [u8; 32] {
@@ -168,13 +178,11 @@ pub fn run_native_transfer_with_dummies(count: usize) -> PpeBenchResult {
 }
 
 // From the sender's public native actor into a private recipient, so the circuit runs the credit.
-fn prove_native_transfer_with_dummies(
-    count: usize,
-) -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)> {
+fn prove_native_transfer_with_dummies(count: usize) -> anyhow::Result<Proven> {
     let sender = Actor::native_balance(AccountId::new([1; 32]));
     let (recipient_id, recipient_witness) = private_account(2, None);
 
-    Ok(execute_and_prove(
+    Ok(execute_and_prove_with_stats(
         ProvingInput {
             dummy_inputs: dummy_inputs(count),
             ciphertext_padding: Some(CIPHERTEXT_PAD),
@@ -240,7 +248,7 @@ pub fn run_fee_transfer(case: FeeCase) -> PpeBenchResult {
 
 // From a private sender to a public recipient, the sender paying the fee inside the proof: the
 // only private account is the payer, so every encapsulation is its note's or the fee's.
-fn prove_fee_transfer(case: FeeCase) -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)> {
+fn prove_fee_transfer(case: FeeCase) -> anyhow::Result<Proven> {
     const TAG: u8 = 3;
     let funded = Account::funded(SENDER_BALANCE);
     let (sender_id, sender_witness) = private_account(TAG, Some(funded.clone()));
@@ -280,7 +288,7 @@ fn prove_fee_transfer(case: FeeCase) -> anyhow::Result<(PrivacyPreservingCircuit
         Actor::native_balance(FEE_INBOX_ID),
     ];
 
-    Ok(execute_and_prove(
+    Ok(execute_and_prove_with_stats(
         ProvingInput {
             fee,
             recoveries,
@@ -314,9 +322,7 @@ pub fn run_scripted_transfers(depth: u32) -> PpeBenchResult {
     )
 }
 
-fn prove_scripted_transfers(
-    num_transfers: u32,
-) -> anyhow::Result<(PrivacyPreservingCircuitOutput, Proof)> {
+fn prove_scripted_transfers(num_transfers: u32) -> anyhow::Result<Proven> {
     let scripted = test_programs::scripted();
     let scripted_id = AccountId::from_builtin_program(scripted.id());
     let catalog = ProgramCatalog::from([(scripted_id, scripted)]);
@@ -339,7 +345,7 @@ fn prove_scripted_transfers(
     let script =
         (0..num_transfers).fold(Script::default(), |script, _| script.send(transfer.clone()));
 
-    Ok(execute_and_prove(
+    Ok(execute_and_prove_with_stats(
         proving_input(
             TransactionEntry::Sync(RootCall {
                 to: Actor::new(sender_id, scripted_id),

@@ -19,7 +19,7 @@ use lee_core::{
 };
 use risc0_zkvm::{
     AssumptionReceipt, ExecutorEnv, ExecutorEnvBuilder, InnerReceipt, MaybePruned, ProverOpts,
-    Receipt, default_executor, default_prover, sha::Digestible as _,
+    Receipt, SessionStats, default_executor, default_prover, sha::Digestible as _,
 };
 
 use crate::{
@@ -397,10 +397,30 @@ pub fn execute_and_prove(
     input: ProvingInput,
     simulation: &Simulation,
     programs: &ProgramCatalog,
+    present_sender: impl FnMut(Actor) -> SenderPresentation,
+    select_promotion: impl FnMut(Placement, &MessageBody) -> bool,
+    choose_publications: impl FnMut(&[MessageBody]) -> Result<Vec<PublicationMode>, LeeError>,
+) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
+    execute_and_prove_with_stats(
+        input,
+        simulation,
+        programs,
+        present_sender,
+        select_promotion,
+        choose_publications,
+    )
+    .map(|(output, proof, _)| (output, proof))
+}
+
+/// Like [`execute_and_prove`], and also returns the cycle statistics of the circuit's run.
+pub fn execute_and_prove_with_stats(
+    input: ProvingInput,
+    simulation: &Simulation,
+    programs: &ProgramCatalog,
     mut present_sender: impl FnMut(Actor) -> SenderPresentation,
     mut select_promotion: impl FnMut(Placement, &MessageBody) -> bool,
     mut choose_publications: impl FnMut(&[MessageBody]) -> Result<Vec<PublicationMode>, LeeError>,
-) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
+) -> Result<(PrivacyPreservingCircuitOutput, Proof, SessionStats), LeeError> {
     simulate_and_run(
         input,
         simulation,
@@ -410,7 +430,10 @@ pub fn execute_and_prove(
         &mut choose_publications,
         true,
     )
-    .map(|(output, proof)| (output, proof.expect("a proving run returns its proof")))
+    .map(|(output, proven)| {
+        let (proof, stats) = proven.expect("a proving run returns its proof");
+        (output, proof, stats)
+    })
 }
 
 /// Runs [`execute_and_prove`] without proving: the circuit's output, for measuring the
@@ -443,7 +466,13 @@ fn simulate_and_run(
     select_promotion: &mut dyn FnMut(Placement, &MessageBody) -> bool,
     choose_publications: &mut PublicationChooser<'_>,
     proving: bool,
-) -> Result<(PrivacyPreservingCircuitOutput, Option<Proof>), LeeError> {
+) -> Result<
+    (
+        PrivacyPreservingCircuitOutput,
+        Option<(Proof, SessionStats)>,
+    ),
+    LeeError,
+> {
     let Simulated {
         predicted_cross_messages,
         public_promotions,
@@ -620,7 +649,7 @@ pub fn execute_and_prove_with_cross_messages(
         &mut choose_publications,
         true,
     )
-    .map(|(output, proof)| (output, proof.expect("a proving run returns its proof")))
+    .map(|(output, proven)| (output, proven.expect("a proving run returns its proof").0))
 }
 
 /// Runs [`execute_and_prove_with_cross_messages`] without proving: the circuit's output, for
@@ -653,7 +682,13 @@ fn run_with_cross_messages(
     select_promotion: &mut dyn FnMut(Placement, &MessageBody) -> bool,
     choose_publications: &mut PublicationChooser<'_>,
     proving: bool,
-) -> Result<(PrivacyPreservingCircuitOutput, Option<Proof>), LeeError> {
+) -> Result<
+    (
+        PrivacyPreservingCircuitOutput,
+        Option<(Proof, SessionStats)>,
+    ),
+    LeeError,
+> {
     // The fee's credit reaches a native actor, which calls nothing back.
     if input.fee.is_some() {
         predicted_cross_messages.push(Vec::new());
@@ -678,7 +713,13 @@ fn prove(
     select: &mut dyn FnMut(u64, &MessageBody) -> bool,
     choose_publications: &mut PublicationChooser<'_>,
     proving: bool,
-) -> Result<(PrivacyPreservingCircuitOutput, Option<Proof>), LeeError> {
+) -> Result<
+    (
+        PrivacyPreservingCircuitOutput,
+        Option<(Proof, SessionStats)>,
+    ),
+    LeeError,
+> {
     let ProgramCatalog { programs } = programs;
 
     let mut backend = Prover {
@@ -768,7 +809,10 @@ fn prove(
             .prove_with_opts(env, PRIVACY_PRESERVING_CIRCUIT_ELF, &ProverOpts::succinct())
             .map_err(|e| LeeError::CircuitProvingError(e.to_string()))?;
         let proof = Proof(borsh::to_vec(&pruned(prove_info.receipt.inner))?);
-        (prove_info.receipt.journal.bytes, Some(proof))
+        (
+            prove_info.receipt.journal.bytes,
+            Some((proof, prove_info.stats)),
+        )
     } else {
         let session = default_executor()
             .execute(env, PRIVACY_PRESERVING_CIRCUIT_ELF)
