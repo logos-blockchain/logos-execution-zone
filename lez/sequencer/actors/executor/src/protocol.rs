@@ -166,10 +166,10 @@ pub struct GetStatus;
 pub enum ExecutorStatus {
     /// Replaying the channel's finalized history up to the last slot the node has finalized.
     Bootstrapping {
-        /// The slot bootstrapping completes at: the last one the node had finalized, as of the
-        /// latest batch. [`None`] before the first batch.
+        /// The slot bootstrapping completes at: the last one the node had finalized when
+        /// following the channel started. [`None`] if it could not be read.
         target: Option<Slot>,
-        /// The slot the finalized history is replayed up to, [`None`] before the first batch.
+        /// The slot the finalized history is replayed up to, [`None`] before the first update.
         replayed_up_to: Option<Slot>,
         /// Height of the chain replayed so far, [`None`] while it is empty.
         height: Option<BlockId>,

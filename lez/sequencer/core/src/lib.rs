@@ -26,9 +26,8 @@ use lee::{AccountId, Actor, PublicTransaction, public_transaction::Message};
 use lee_core::GENESIS_BLOCK_ID;
 use logos_blockchain_zone_sdk::{
     Slot,
-    binary_codec::bincode::{DeserializeOp as _, SerializeOp as _},
     key_management_system_service::keys::{ED25519_SECRET_KEY_SIZE, ZkPublicKey},
-    sequencer::{DepositInfo, SequencerCheckpoint, WithdrawArg, WithdrawInfo},
+    sequencer::{DepositInfo, WithdrawArg, WithdrawInfo},
 };
 pub use logos_blockchain_zone_sdk::{
     core::mantle::{NoteId, ops::channel::MsgId},
@@ -56,9 +55,8 @@ use sequencer_storage_actor::{
         DispatchOrigin, DropSettledCrossZoneDispatches, GetAllBlocks, GetDeadLetterDispatchCount,
         GetDeadLetterDispatchRetainedCount, GetDeadLetterDispatches, GetLeeState,
         GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetSystemApprovalsBytes,
-        GetZoneCheckpoint, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
-        RecordDispatchFailure, RequeueDeadLetterDispatch, StoreUpdateOutcome,
-        WithdrawalReconciliationKey, ZoneCheckpointRecord,
+        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, RecordDispatchFailure,
+        RequeueDeadLetterDispatch, StoreUpdateOutcome, WithdrawalReconciliationKey,
     },
 };
 use sharding_pool_actor::ShardingPoolActor;
@@ -201,8 +199,6 @@ pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
     /// signatures are in.
     config_draft: Option<ConfigDraft>,
     finalized_config: MsgId,
-    /// Channel sequence of the last thing `BedrockActor` handed us.
-    applied_seq: Option<sequencer_bedrock_actor::protocol::ChannelSeq>,
     /// Committee approvals of `system_upgrader` changes, until a threshold builds one.
     system_approvals: system_approvals::SystemApprovals,
     /// Deposits seen on L1 but not yet final, minted in a block pinned on
@@ -245,7 +241,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         config: SequencerConfig,
         mempool: MemPool<(TransactionOrigin, LeeTransaction)>,
         chain: ChainState,
-        applied_seq: Option<sequencer_bedrock_actor::protocol::ChannelSeq>,
+        finalized_config: MsgId,
         channel_signing_key: Ed25519Key,
         storage_ref: ActorRef<S>,
         bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
@@ -283,10 +279,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .await
             .context("Failed to hand the slasher its committee")?;
 
-        let finalized_config = zone_checkpoint(&storage_ref)
-            .await?
-            .map_or_else(MsgId::root, |checkpoint| checkpoint.finalized_config);
-
         let system_approvals = storage_ref
             .ask(GetSystemApprovalsBytes)
             .await
@@ -313,7 +305,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             channel_signer,
             config_draft: None,
             finalized_config,
-            applied_seq,
             channel_signing_key,
             sequencer_config: config,
             system_approvals,
@@ -341,15 +332,19 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         update: &sequencer_bedrock_actor::protocol::ChannelUpdate,
     ) {
         let sequencer_bedrock_actor::protocol::ChannelUpdate {
-            checkpoint,
-            seq,
+            lib_slot: _,
+            finalized_config,
             view,
             finalized,
             deposits,
+            pending_deposits,
             withdrawals,
             undecodable,
             finalized_signers,
         } = &update;
+        if !pending_deposits.is_empty() {
+            self.on_observed_deposits(pending_deposits).await;
+        }
 
         let moved_head = !finalized.is_empty()
             || match view {
@@ -370,17 +365,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             view,
         )
         .await;
-
-        let checkpoint_record = ZoneCheckpointRecord {
-            bytes: checkpoint_bytes(checkpoint).unwrap_or_else(|err| {
-                panic!(
-                    "Failed to serialize zone-sdk checkpoint: {:#}",
-                    anyhow!(err)
-                )
-            }),
-            seq: seq.into_inner(),
-        };
-        self.applied_seq = Some(*seq);
 
         // NOTE: Theoretically Zone SDK may re-deliver an already seen deposit or
         // finalization. Both are idempotent here: a deposit already on record is
@@ -459,7 +443,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     next: judgeable && chain.final_msg() == entry.msg,
                 });
             }
-            // Before the persist, so the checkpoint never moves past an unreported offence.
+            // Before the persist, as Bedrock stores the checkpoint past this update once it is.
             self.report_offences(faults::judge(undecodable, &judged, finalized_signers))
                 .await;
             let newly_final = chain.take_newly_final();
@@ -540,7 +524,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             let outcome = self
                 .storage_ref
                 .ask(AtomicUpdate {
-                    checkpoint: Some(checkpoint_record),
                     blocks: to_persist,
                     final_snapshot: final_meta.map(|meta| (chain.share_final_state(), meta)),
                     finalized_up_to: last_finalized,
@@ -573,7 +556,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
         self.resubmit_orphaned(resubmit_txs);
 
-        self.finalized_config = checkpoint.finalized_config;
+        self.finalized_config = *finalized_config;
 
         if moved_head {
             self.refresh_committee()
@@ -762,7 +745,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                         channel_id: self.channel_id,
                         prepared,
                         signatures,
-                        expected_seq: self.applied_seq,
                     })
                     .await
                     .map(Some)
@@ -774,7 +756,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 Ok(Some(outcome)) => Ok(outcome),
                 Err(
                     err @ kameo::error::SendError::HandlerError(
-                        sequencer_bedrock_actor::error::Error::ChannelMoved { .. },
+                        sequencer_bedrock_actor::error::Error::ChannelMoved,
                     ),
                 ) => Err(err),
                 // Any other failed pin goes out unpinned, its deposits left to finality.
@@ -806,21 +788,17 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         let outcome = match publish_res {
             Ok(outcome) => outcome,
             Err(kameo::error::SendError::HandlerError(
-                sequencer_bedrock_actor::error::Error::ChannelMoved {
-                    provided: expected,
-                    current,
-                },
-            )) => return Err(ChannelMovedWhileBuilding { expected, current }.into()),
+                sequencer_bedrock_actor::error::Error::ChannelMoved,
+            )) => return Err(ChannelMovedWhileBuilding.into()),
             Err(err) => return Err(err).context("Failed to publish block to Bedrock"),
         };
+
+        let block_id = block.header.block_id;
+        self.record_produced_block(outcome, block).await?;
 
         // Independent Mantle tx, not bundled with the block above — join/exit
         // config updates don't need to be.
         self.advance_channel_config().await;
-
-        let block_id = block.header.block_id;
-        self.applied_seq = Some(outcome.seq);
-        self.record_produced_block(outcome, block).await?;
 
         Ok(block_id)
     }
@@ -841,7 +819,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 block: built.block.clone(),
                 withdrawals: built.withdrawals.clone(),
                 parent: built.withdrawals.is_empty().then_some(built.parent),
-                expected_seq: self.applied_seq,
             })
             .await
             .map_err(|err| err.flatten().map_msg(|_| ()))
@@ -876,7 +853,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 block: built.block.clone(),
                 parent: built.parent,
                 notes: built.pinned_deposit_notes.clone(),
-                expected_seq: self.applied_seq,
             })
             .await
             .map_err(|err| err.flatten().map_msg(|_| ()))?;
@@ -1133,76 +1109,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         self.submit_config(submission).await;
     }
 
-    /// Records a block we published in the view and persists it with the
-    /// publish checkpoint.
+    /// Records a block we published in the view and persists it.
     async fn record_produced_block(
         &self,
         outcome: sequencer_bedrock_actor::protocol::PublishOutcome,
         block: Block,
     ) -> Result<()> {
-        let sequencer_bedrock_actor::protocol::PublishOutcome {
-            this_msg,
-            parent,
-            checkpoint,
-            seq,
-            released_notes,
-        } = outcome;
-        let checkpoint_record = ZoneCheckpointRecord {
-            bytes: checkpoint_bytes(&checkpoint)?,
-            seq: seq.into_inner(),
-        };
-        let block_id = block.header.block_id;
-
         let mut chain = self.chain.lock().await;
-        let record = chain.record_publish(ChannelEntry {
-            msg: this_msg,
-            parent,
-            block: Some(block.clone()),
-            finally_absent_keys: full_stake_releases::finalize_unstake_keys(&block),
-            final_slot: None,
-        });
-        match record {
-            PublishRecord::Extended | PublishRecord::Skipped => {
-                if record == PublishRecord::Skipped {
-                    warn!(
-                        block_id,
-                        "Produced block does not apply on the head it was built on"
-                    );
-                }
-                self.storage_ref
-                    .ask(AtomicUpdate {
-                        checkpoint: Some(checkpoint_record),
-                        blocks: if record == PublishRecord::Extended {
-                            vec![block.clone()]
-                        } else {
-                            Vec::new()
-                        },
-                        new_withdraw_intents: released_notes
-                            .iter()
-                            .map(withdrawal_reconciliation_key)
-                            .collect(),
-                        ..chain_update(&chain)
-                    })
-                    .await?;
-
-                if record == PublishRecord::Extended {
-                    sequencer_core_metrics::record_chain_height(block_id);
-                }
-            }
-            // A conflict already put it in the view, and the follow path stored it.
-            PublishRecord::AlreadyInView => {}
-            // Nothing is persisted, checkpoint included: the inscription it
-            // holds as pending chains on an entry the view moved past.
-            PublishRecord::Stale => {
-                warn!(
-                    block_id,
-                    %parent,
-                    "Produced block's parent is no longer the channel tip, dropping it"
-                );
-            }
-        }
-
-        Ok(())
+        record_published_block(&mut chain, &self.storage_ref, outcome, block).await
     }
 
     /// Validates and applies a single mempool transaction to the current state.
@@ -2279,38 +2193,8 @@ type PublishError = kameo::error::SendError<(), sequencer_bedrock_actor::error::
 /// A turn given up because the channel moved under the block while it was
 /// being built.
 #[derive(Debug, thiserror::Error)]
-#[error("Channel moved to sequence {current} while a block on sequence {expected} was being built")]
-pub struct ChannelMovedWhileBuilding {
-    pub expected: sequencer_bedrock_actor::protocol::ChannelSeq,
-    pub current: sequencer_bedrock_actor::protocol::ChannelSeq,
-}
-
-/// The persisted zone-sdk checkpoint, decoded from the encoding
-/// [`checkpoint_bytes`] writes.
-async fn zone_checkpoint<S: StorageActorTrait>(
-    storage_ref: &ActorRef<S>,
-) -> Result<Option<SequencerCheckpoint>> {
-    storage_ref
-        .ask(GetZoneCheckpoint)
-        .await?
-        .map(|stored| decode_checkpoint(&stored.bytes))
-        .transpose()
-}
-
-/// Decodes what [`checkpoint_bytes`] wrote.
-fn decode_checkpoint(bytes: &[u8]) -> Result<SequencerCheckpoint> {
-    SequencerCheckpoint::from_bytes(bytes)
-        .context("Failed to deserialize stored zone-sdk checkpoint")
-}
-
-/// The checkpoint's on-disk encoding, paired with [`zone_checkpoint`]'s decode
-/// and with the decode in `BedrockActor`.
-fn checkpoint_bytes(checkpoint: &SequencerCheckpoint) -> Result<Vec<u8>> {
-    checkpoint
-        .to_bytes()
-        .map(Vec::from)
-        .context("Failed to serialize zone-sdk checkpoint")
-}
+#[error("Channel moved by an update not applied yet while a block was being built")]
+pub struct ChannelMovedWhileBuilding;
 
 /// Whether `deposit_op_id`'s mint is already reflected in `state` — the bridge
 /// owns its receipt PDA. The receipt is the exactly-once ledger the bridge
@@ -2457,11 +2341,73 @@ pub fn new_head_blocks(chain: &ChainState, held_before: &HashSet<HashType>) -> V
         .collect()
 }
 
+/// Records a block we published in the view of `chain` and persists it.
+pub async fn record_published_block<S: StorageActorTrait>(
+    chain: &mut ChainState,
+    storage_ref: &ActorRef<S>,
+    outcome: sequencer_bedrock_actor::protocol::PublishOutcome,
+    block: Block,
+) -> Result<()> {
+    let sequencer_bedrock_actor::protocol::PublishOutcome {
+        this_msg,
+        parent,
+        released_notes,
+    } = outcome;
+    let block_id = block.header.block_id;
+
+    let record = chain.record_publish(ChannelEntry {
+        msg: this_msg,
+        parent,
+        block: Some(block.clone()),
+        finally_absent_keys: full_stake_releases::finalize_unstake_keys(&block),
+        final_slot: None,
+    });
+    match record {
+        PublishRecord::Extended | PublishRecord::Skipped => {
+            if record == PublishRecord::Skipped {
+                warn!(
+                    block_id,
+                    "Produced block does not apply on the head it was built on"
+                );
+            }
+            storage_ref
+                .ask(AtomicUpdate {
+                    blocks: if record == PublishRecord::Extended {
+                        vec![block.clone()]
+                    } else {
+                        Vec::new()
+                    },
+                    new_withdraw_intents: released_notes
+                        .iter()
+                        .map(withdrawal_reconciliation_key)
+                        .collect(),
+                    ..chain_update(chain)
+                })
+                .await?;
+
+            if record == PublishRecord::Extended {
+                sequencer_core_metrics::record_chain_height(block_id);
+            }
+        }
+        // A conflict already put it in the view, and the follow path stored it.
+        PublishRecord::AlreadyInView => {}
+        // Nothing is persisted: the inscription chains on an entry the view moved past.
+        PublishRecord::Stale => {
+            warn!(
+                block_id,
+                %parent,
+                "Produced block's parent is no longer the channel tip, dropping it"
+            );
+        }
+    }
+
+    Ok(())
+}
+
 /// An update carrying the head and the view `chain` holds, and nothing else.
 #[must_use]
 pub fn chain_update(chain: &ChainState) -> AtomicUpdate {
     AtomicUpdate {
-        checkpoint: None,
         blocks: Vec::new(),
         channel_view: Some(chain.encode_view()),
         head_tip: chain.head_tip().map(|tip| BlockMeta::from(&tip)),

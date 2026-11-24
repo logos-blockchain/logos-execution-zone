@@ -9,7 +9,6 @@ use kameo::{
 };
 use kameo_actors::{
     DeliveryStrategy,
-    broker::Broker,
     pubsub::PubSub,
     scheduler::{Scheduler, SetInterval},
 };
@@ -83,7 +82,6 @@ pub struct SequencerHandle {
     supervisor: ActorHandle<SequencerSupervisor>,
     // NOTE: Order of fields matters as it affects drop order.
     scheduler: ActorHandle<Scheduler>,
-    bedrock_broker: ActorHandle<Broker<sequencer_bedrock_actor::protocol::ChannelEvent>>,
     #[cfg(feature = "rpc")]
     rpc_server: RpcServer,
     /// `None` when gossip is unconfigured.
@@ -108,7 +106,6 @@ impl SequencerHandle {
     pub async fn shutdown(self) {
         let Self {
             scheduler,
-            bedrock_broker,
             #[cfg(feature = "rpc")]
             rpc_server,
             gossip,
@@ -121,7 +118,6 @@ impl SequencerHandle {
 
         // NOTE: Order of shutdown matters. Make sure it follows the order of fields in the struct.
         scheduler.shutdown().await;
-        bedrock_broker.shutdown().await;
         #[cfg(feature = "rpc")]
         rpc_server.shutdown().await;
         if let Some(gossip) = gossip {
@@ -146,7 +142,6 @@ impl SequencerHandle {
         let Self {
             scheduler,
             slasher,
-            bedrock_broker,
             #[cfg(feature = "rpc")]
             rpc_server,
             supervisor,
@@ -165,9 +160,6 @@ impl SequencerHandle {
 
         select! {
             Err(err) = scheduler.failed() => {
-                Err(err)
-            }
-            Err(err) = bedrock_broker.failed() => {
                 Err(err)
             }
             Err(err) = rpc_failed => {
@@ -200,7 +192,6 @@ impl SequencerHandle {
         let Self {
             scheduler,
             slasher,
-            bedrock_broker,
             #[cfg(feature = "rpc")]
             rpc_server,
             supervisor,
@@ -216,7 +207,6 @@ impl SequencerHandle {
         let rpc_healthy = true;
 
         scheduler.is_healthy()
-            && bedrock_broker.is_healthy()
             && rpc_healthy
             && slasher.is_healthy()
             && supervisor.is_healthy()
@@ -281,13 +271,8 @@ pub fn run(
         let storage_ref = StorageActor::spawn(storage);
         info!("Storage Actor spawned");
 
-        let bedrock_broker = Broker::new(DeliveryStrategy::Guaranteed);
-        let bedrock_broker_ref = Broker::spawn(bedrock_broker);
-        info!("Bedrock Broker Actor spawned");
-
         let config_clone = config.clone();
         let storage_ref_clone = storage_ref.clone();
-        let bedrock_broker_ref_clone = bedrock_broker_ref.clone();
         let bedrock_instances =
             sequencer_service_metrics::instances::expect(<BedrockActor as kameo::Actor>::name());
         let bedrock_pool = ShardingPoolActor::<BedrockActor, ChannelId>::new(
@@ -302,7 +287,6 @@ pub fn run(
                     config_clone.bedrock_config.auth.clone().map(Into::into),
                     channel_id,
                     storage_ref_clone.clone(),
-                    bedrock_broker_ref_clone.clone(),
                     config_clone.bedrock_config.backfill_batch_slots,
                 )
             },
@@ -382,7 +366,6 @@ pub fn run(
                 stake_config_pubsub_ref,
                 slasher_ref: slasher_ref.clone(),
                 channel_signer_ref: channel_signer_ref.clone(),
-                bedrock_broker_ref: bedrock_broker_ref.clone(),
             },
         )
         .await
@@ -440,7 +423,6 @@ pub fn run(
 
         Ok(SequencerHandle {
             scheduler: ActorHandle::new(scheduler_ref),
-            bedrock_broker: ActorHandle::new(bedrock_broker_ref),
             #[cfg(feature = "rpc")]
             rpc_server,
             supervisor,
@@ -652,7 +634,6 @@ const fn bedrock_actor_args(
     basic_auth: Option<BasicAuthCredentials>,
     channel_id: ChannelId,
     storage_ref: ActorRef<StorageActor>,
-    broker_ref: ActorRef<Broker<sequencer_bedrock_actor::protocol::ChannelEvent>>,
     backfill_batch_slots: NonZero<u64>,
 ) -> sequencer_bedrock_actor::actor::Args<StorageActor> {
     sequencer_bedrock_actor::actor::Args {
@@ -660,7 +641,6 @@ const fn bedrock_actor_args(
         basic_auth,
         channel_id,
         storage_ref,
-        broker_ref,
         backfill_batch_slots,
     }
 }
@@ -671,25 +651,28 @@ fn bedrock_actor_args(
     _basic_auth: Option<BasicAuthCredentials>,
     _channel_id: ChannelId,
     storage_ref: ActorRef<StorageActor>,
-    _broker_ref: ActorRef<Broker<sequencer_bedrock_actor::protocol::ChannelEvent>>,
     _backfill_batch_slots: NonZero<u64>,
 ) -> BedrockActor {
     use std::sync::{Arc, Mutex};
 
     use sequencer_bedrock_actor::protocol::{
-        AccreditedKeys, ChannelSeq, Checkpoint, HeaderId, MsgId, PublishOutcome, Slot,
+        AccreditedKeys, FollowStart, MsgId, PublishOutcome, Slot,
     };
 
     let mut mock = BedrockActor::default();
 
     mock.expect_handle_initialize_channel_publisher()
-        .returning(|_msg, _ctx| Ok(Some(ChannelSeq::mocked(0))));
+        .returning(|_msg, _ctx| Ok(Vec::new()));
 
     mock.expect_handle_check_channel_exists()
         .returning(|_msg, _ctx| Ok(false));
 
-    mock.expect_handle_follow_channel()
-        .returning(|_msg, _ctx| Ok(()));
+    mock.expect_handle_follow_channel().returning(|_msg, _ctx| {
+        Ok(FollowStart {
+            finalized_config: MsgId::root(),
+            lib_slot: None,
+        })
+    });
 
     // The mock doesn't keep a chain of its own, so the channel will exist once the store holds
     // blocks.
@@ -728,7 +711,7 @@ fn bedrock_actor_args(
         .returning(|_msg, _ctx| Ok(()));
 
     let tip = Arc::new(Mutex::new(MsgId::root()));
-    let outcome = move |hash: [u8; 32], block_id: u64, parent: Option<MsgId>| {
+    let outcome = move |hash: [u8; 32], parent: Option<MsgId>| {
         let msg_id = MsgId::from(hash);
         let mut tip = tip.lock().expect("mock channel tip lock");
         let parent = parent.unwrap_or(*tip);
@@ -736,18 +719,6 @@ fn bedrock_actor_args(
         PublishOutcome {
             this_msg: msg_id,
             parent,
-            checkpoint: Checkpoint {
-                last_msg_id: msg_id,
-                pending_txs: Vec::new(),
-                lib: HeaderId::from([0; 32]),
-                lib_slot: Slot::from(0),
-                channel_notes: Vec::new(),
-                finalized_config: MsgId::root(),
-                funding: Vec::new(),
-            },
-            // Block ids only grow, so a sequence derived from them continues the
-            // stored one across restarts and the store keeps each new checkpoint.
-            seq: ChannelSeq::mocked(block_id.saturating_add(1)),
             released_notes: Vec::new(),
         }
     };
@@ -756,18 +727,11 @@ fn bedrock_actor_args(
         .returning(move |msg, _ctx| {
             Ok(create_outcome(
                 msg.genesis.header.hash.0,
-                msg.genesis.header.block_id,
                 Some(MsgId::root()),
             ))
         });
     mock.expect_handle_publish_block()
-        .returning(move |msg, _ctx| {
-            Ok(outcome(
-                msg.block.header.hash.0,
-                msg.block.header.block_id,
-                msg.parent,
-            ))
-        });
+        .returning(move |msg, _ctx| Ok(outcome(msg.block.header.hash.0, msg.parent)));
 
     mock
 }
