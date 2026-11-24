@@ -1,11 +1,14 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::account::AccountId;
+use lee_core::{
+    account::{AccountId, Nonce},
+    signing_key::SigningKeyState,
+};
 use sha2::{Digest as _, digest::FixedOutput as _};
 
 use super::{message::Message, witness_set::WitnessSet};
-use crate::InvalidTransaction;
+use crate::{InvalidTransaction, SignedTransaction, public_transaction::WitnessEntry};
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PrivacyPreservingTransaction {
@@ -40,15 +43,6 @@ impl PrivacyPreservingTransaction {
         hasher.finalize_fixed().into()
     }
 
-    pub fn check_stateless(&self) -> Result<Vec<AccountId>, InvalidTransaction> {
-        let signers = self.signer_account_ids();
-        if self.witness_set.entries().len() != signers.len() {
-            return Err(InvalidTransaction::Nonces);
-        }
-        self.message.check_signers()?;
-        Ok(signers)
-    }
-
     pub(crate) fn signer_account_ids(&self) -> Vec<AccountId> {
         self.message.nonces.keys().copied().collect()
     }
@@ -62,6 +56,29 @@ impl PrivacyPreservingTransaction {
         acc_set.extend(self.message.public_account_ids());
 
         acc_set.into_iter().collect()
+    }
+}
+
+impl SignedTransaction for PrivacyPreservingTransaction {
+    fn check_stateless(&self) -> Result<Vec<AccountId>, InvalidTransaction> {
+        let signers = self.signer_account_ids();
+        if self.witness_set.entries().len() != signers.len() {
+            return Err(InvalidTransaction::Nonces);
+        }
+        self.message.check_signers()?;
+        Ok(signers)
+    }
+
+    fn nonces(&self) -> &BTreeMap<AccountId, Nonce> {
+        &self.message.nonces
+    }
+
+    fn witness_entries(&self) -> &[WitnessEntry] {
+        self.witness_set.entries()
+    }
+
+    fn message_with_keys(&self, next: &[SigningKeyState]) -> [u8; 32] {
+        self.message.message_with_keys(next)
     }
 }
 

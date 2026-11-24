@@ -1,11 +1,9 @@
 use std::collections::{BTreeMap, HashSet};
 
 pub use lee_core::EncryptedNote;
-use lee_core::{
-    PrivacyPreservingCircuitOutput, ProvenExecution, account::Nonce, signing_key::SigningKeyState,
-};
+use lee_core::{PrivacyPreservingCircuitOutput, ProvenExecution, account::Nonce};
 
-use crate::{AccountId, TransactionMessage, transaction_message::hash_with_keys};
+use crate::{AccountId, TransactionMessage, transaction_message::MessageDomain};
 
 const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
 const KEYED_PREFIX: &[u8; 32] = b"/LEE/v0.3/KeyedMessage/Privacy/\x00";
@@ -41,17 +39,11 @@ impl Message {
             .filter(|account_id| seen.insert(*account_id))
             .collect()
     }
+}
 
-    #[must_use]
-    pub(crate) fn hash(&self) -> [u8; 32] {
-        self.hash_under(PREFIX)
-    }
-
-    /// The 32-byte value each signer signs.
-    #[must_use]
-    pub fn message_with_keys(&self, next: &[SigningKeyState]) -> [u8; 32] {
-        hash_with_keys(KEYED_PREFIX, &self.hash(), next)
-    }
+impl MessageDomain for ProvenExecution {
+    const KEYED_PREFIX: &'static [u8; 32] = KEYED_PREFIX;
+    const PREFIX: &'static [u8; 32] = PREFIX;
 }
 
 #[cfg(test)]

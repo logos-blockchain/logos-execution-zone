@@ -19,7 +19,7 @@ use lee_core::{
 use public_backend::PublicBackend;
 
 use crate::{
-    PublicAccountEvidence, V03State, ensure,
+    PublicAccountEvidence, SignedTransaction, V03State, ensure,
     error::LeeError,
     privacy_preserving_transaction::{PrivacyPreservingTransaction, circuit::Proof},
     public_transaction::{PublicTransaction, WitnessEntry},
@@ -782,38 +782,19 @@ fn authenticate_signers_at_head(
     Ok(())
 }
 
-/// [`authenticate_signers_at_head`] for a public transaction.
-pub fn authenticate_public_transaction_at_head(
-    tx: &PublicTransaction,
+/// [`authenticate_signers_at_head`] for a transaction's public signers.
+pub fn authenticate_transaction_at_head(
+    tx: &impl SignedTransaction,
     state: &V03State,
     pending: impl Fn(AccountId, Nonce) -> Option<SigningKeyState>,
 ) -> Result<(), HeadAuthError> {
     tx.check_stateless()
         .map_err(|err| HeadAuthError::Definitive(err.into()))?;
-    let message = tx.message();
     authenticate_signers_at_head(
         state,
-        &message.nonces,
-        tx.witness_set().entries(),
-        |next| message.message_with_keys(next),
-        pending,
-    )
-}
-
-/// [`authenticate_signers_at_head`] for a privacy transaction's public signers.
-pub fn authenticate_privacy_transaction_at_head(
-    tx: &PrivacyPreservingTransaction,
-    state: &V03State,
-    pending: impl Fn(AccountId, Nonce) -> Option<SigningKeyState>,
-) -> Result<(), HeadAuthError> {
-    tx.check_stateless()
-        .map_err(|err| HeadAuthError::Definitive(err.into()))?;
-    let message = tx.message();
-    authenticate_signers_at_head(
-        state,
-        &message.nonces,
-        tx.witness_set().entries(),
-        |next| message.message_with_keys(next),
+        tx.nonces(),
+        tx.witness_entries(),
+        |next| tx.message_with_keys(next),
         pending,
     )
 }

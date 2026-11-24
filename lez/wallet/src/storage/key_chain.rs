@@ -1139,7 +1139,7 @@ pub(crate) mod tests {
 
     use futures::executor::block_on;
     use lee::{
-        RecipientEncryption, RecoveryBinding,
+        RecipientEncryption, RecoveryBinding, SignedTransaction as _,
         privacy_preserving_transaction::{PrivacyPreservingTransaction, circuit::Proof},
         test_utils::{TestSigner, privacy_witness_for, witness_for},
     };

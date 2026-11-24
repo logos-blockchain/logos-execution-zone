@@ -10,7 +10,7 @@ use lee_core::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-use crate::{error::LeeError, fees::FeeDeclaration};
+use crate::{error::LeeError, fees::FeeDeclaration, public_transaction::WitnessEntry};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[serde(rename_all = "snake_case")]
@@ -73,6 +73,37 @@ impl<P: BorshSerialize> TransactionMessage<P> {
             .finalize()
             .into()
     }
+}
+
+/// The domains a transaction kind's message is hashed under.
+pub trait MessageDomain {
+    const PREFIX: &'static [u8; 32];
+    const KEYED_PREFIX: &'static [u8; 32];
+}
+
+impl<P: BorshSerialize + MessageDomain> TransactionMessage<P> {
+    #[must_use]
+    pub(crate) fn hash(&self) -> [u8; 32] {
+        self.hash_under(P::PREFIX)
+    }
+
+    /// The 32-byte value each signer signs.
+    #[must_use]
+    pub fn message_with_keys(&self, next: &[SigningKeyState]) -> [u8; 32] {
+        hash_with_keys(P::KEYED_PREFIX, &self.hash(), next)
+    }
+}
+
+/// A transaction whose public signers each have a witness entry, in `nonces` order.
+pub trait SignedTransaction {
+    fn check_stateless(&self) -> Result<Vec<AccountId>, InvalidTransaction>;
+
+    fn nonces(&self) -> &BTreeMap<AccountId, Nonce>;
+
+    fn witness_entries(&self) -> &[WitnessEntry];
+
+    /// The 32-byte value each signer signs.
+    fn message_with_keys(&self, next: &[SigningKeyState]) -> [u8; 32];
 }
 
 impl<P> TransactionMessage<P> {

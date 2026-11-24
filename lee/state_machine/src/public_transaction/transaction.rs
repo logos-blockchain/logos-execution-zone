@@ -1,12 +1,15 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::account::AccountId;
+use lee_core::{
+    account::{AccountId, Nonce},
+    signing_key::SigningKeyState,
+};
 use sha2::{Digest as _, digest::FixedOutput as _};
 
 use crate::{
-    InvalidTransaction,
-    public_transaction::{Message, WitnessSet},
+    InvalidTransaction, SignedTransaction,
+    public_transaction::{Message, WitnessEntry, WitnessSet},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -56,7 +59,17 @@ impl PublicTransaction {
         acc_set.into_iter().collect()
     }
 
-    pub fn check_stateless(&self) -> Result<Vec<AccountId>, InvalidTransaction> {
+    #[must_use]
+    pub fn hash(&self) -> [u8; 32] {
+        let bytes = self.to_bytes();
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(&bytes);
+        hasher.finalize_fixed().into()
+    }
+}
+
+impl SignedTransaction for PublicTransaction {
+    fn check_stateless(&self) -> Result<Vec<AccountId>, InvalidTransaction> {
         if !self.message.public_context.promotions.is_empty() {
             return Err(InvalidTransaction::PublicPromotions);
         }
@@ -68,12 +81,16 @@ impl PublicTransaction {
         Ok(signers)
     }
 
-    #[must_use]
-    pub fn hash(&self) -> [u8; 32] {
-        let bytes = self.to_bytes();
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(&bytes);
-        hasher.finalize_fixed().into()
+    fn nonces(&self) -> &BTreeMap<AccountId, Nonce> {
+        &self.message.nonces
+    }
+
+    fn witness_entries(&self) -> &[WitnessEntry] {
+        self.witness_set.entries()
+    }
+
+    fn message_with_keys(&self, next: &[SigningKeyState]) -> [u8; 32] {
+        self.message.message_with_keys(next)
     }
 }
 
@@ -89,7 +106,7 @@ pub mod tests {
     use sha2::{Digest as _, digest::FixedOutput as _};
 
     use crate::{
-        AccountId, InvalidTransaction, PublicTransaction, V03State,
+        AccountId, InvalidTransaction, PublicTransaction, SignedTransaction as _, V03State,
         error::LeeError,
         public_transaction::{Message, WitnessSet},
         test_utils::{TestSigner, witness_for},

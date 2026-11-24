@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee::{AccountId, Actor, V03State, ValidatedStateDiff};
+use lee::{AccountId, Actor, SignedTransaction as _, V03State, ValidatedStateDiff};
 use lee_core::{
     BlockId, Timestamp, account::Balance, native_token::NATIVE_TOKEN_PROGRAM_ID,
     program::TransactionEvent,
@@ -108,7 +108,7 @@ impl LeeTransaction {
     }
 
     /// Authenticates the signers against `state` and, ahead of it, against `pending` keys (see
-    /// [`lee::authenticate_public_transaction_at_head`]).
+    /// [`lee::authenticate_transaction_at_head`]).
     pub fn authenticate_at_head(
         &self,
         state: &V03State,
@@ -118,9 +118,9 @@ impl LeeTransaction {
         ) -> Option<lee_core::signing_key::SigningKeyState>,
     ) -> Result<(), lee::HeadAuthError> {
         match self {
-            Self::Public(tx) => lee::authenticate_public_transaction_at_head(tx, state, pending),
+            Self::Public(tx) => lee::authenticate_transaction_at_head(tx, state, pending),
             Self::PrivacyPreserving(tx) => {
-                lee::authenticate_privacy_transaction_at_head(tx, state, pending)
+                lee::authenticate_transaction_at_head(tx, state, pending)
             }
         }
     }
