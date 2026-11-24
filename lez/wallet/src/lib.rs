@@ -1801,6 +1801,9 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             private_promotions: private,
             fee: None,
         };
+        if input.public_root().is_some() {
+            input.public_context.private_signers = acc_manager.private_signers();
+        }
         let witnessed: HashSet<AccountId> = input
             .private_witnesses
             .iter()

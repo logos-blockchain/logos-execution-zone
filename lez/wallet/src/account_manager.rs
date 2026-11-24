@@ -365,6 +365,10 @@ pub struct AccountManager {
     message_path: Option<MembershipProof>,
     /// The membership path of each received message the transaction claims before its root.
     claim_paths: Vec<MembershipProof>,
+    /// Each authorizing private mention under every alias its openings give it.
+    private_signers: BTreeSet<Actor>,
+    /// Each private mention with openings under the alias its first opening gives it.
+    mention_openings: HashMap<Actor, [u8; 32]>,
 }
 
 impl AccountManager {
@@ -391,6 +395,8 @@ impl AccountManager {
         let mut states: Vec<State> = Vec::new();
         let mut rows = Vec::with_capacity(mentions.len());
         let mut prepared: HashMap<AccountId, (usize, AccountIdentity, bool)> = HashMap::new();
+        let mut private_signers = BTreeSet::new();
+        let mut mention_openings = HashMap::new();
         let mut pin = None;
         // Whether the transaction itself authorizes the fee payer; if not, the payer's key
         // authorizes only the fee entry.
@@ -468,10 +474,18 @@ impl AccountManager {
             };
 
             if let State::Private(pre) = &mut states[index] {
-                pre.address_openings.extend(address_openings);
+                if let Some(&opening) = address_openings.first() {
+                    mention_openings
+                        .entry(actor_state_selector)
+                        .or_insert(opening);
+                }
                 if marks_signer {
                     pre.signer_programs.insert(program_account_id);
+                    private_signers.extend(address_openings.iter().map(|opening| {
+                        Actor::new(account_id.blinded(opening), program_account_id)
+                    }));
                 }
+                pre.address_openings.extend(address_openings);
             }
             rows.push(Row {
                 account: index,
@@ -524,6 +538,8 @@ impl AccountManager {
             dummy_commitment_root,
             message_path,
             claim_paths,
+            private_signers,
+            mention_openings,
         })
     }
 
@@ -577,6 +593,12 @@ impl AccountManager {
             }
         }
         actors
+    }
+
+    /// The authorizing private mentions a public root holds grants over, as their openings present
+    /// them.
+    pub fn private_signers(&self) -> BTreeSet<Actor> {
+        self.private_signers.clone()
     }
 
     pub fn signer_actors(&self) -> Vec<Actor> {
@@ -758,8 +780,9 @@ impl AccountManager {
             .collect()
     }
 
-    // A private account presents a fresh random alias for each message, except the fee payer's
-    // native actor, which presents under the alias its refund is bound to.
+    // A private account presents a fresh random alias for each message or grant, except the fee
+    // payer's native actor, which presents under the alias its refund is bound to, and a mentioned
+    // actor with openings, which presents under the alias its mention names.
     pub fn presenter(
         &self,
         fee_alias: Option<(AccountId, [u8; 32])>,
@@ -768,9 +791,13 @@ impl AccountManager {
             .private_states()
             .map(|pre| pre.pre_state.account_id)
             .collect();
+        let mention_openings = self.mention_openings.clone();
         move |sender| match fee_alias {
             Some((payer, opening)) if sender == Actor::native_balance(payer) => {
                 SenderPresentation::Blinded(opening)
+            }
+            _ if mention_openings.contains_key(&sender) => {
+                SenderPresentation::Blinded(mention_openings[&sender])
             }
             _ if private.contains(&sender.account_id) => {
                 SenderPresentation::Blinded(random_bytes())
@@ -1485,6 +1512,8 @@ mod tests {
             dummy_commitment_root: [0; 32],
             message_path: None,
             claim_paths: Vec::new(),
+            private_signers: BTreeSet::new(),
+            mention_openings: HashMap::new(),
         }
     }
 
@@ -2096,5 +2125,32 @@ mod tests {
             present(Actor::native_balance(public)),
             SenderPresentation::Canonical
         );
+    }
+
+    #[test]
+    fn the_presenter_presents_a_mentioned_actor_under_its_mention_opening() {
+        let private = AccountId::new([1; 32]);
+        let mentioned = Actor::native_balance(private);
+        let other = Actor::new(private, AccountId::new([3; 32]));
+        let mut present = AccountManager {
+            mention_openings: HashMap::from([(mentioned, [9; 32])]),
+            ..manager(vec![State::Private(Box::new(AccountPreparedData {
+                kind: WitnessKind::Regular(RegularKey::Nullifying([4; 32])),
+                vpk: ViewingPublicKey::from_seed(&[0; 32], &[0; 32]),
+                pre_state: PreparedAccount {
+                    account_id: private,
+                    account: Account::default(),
+                },
+                proof: None,
+                random_seed: [0; 32],
+                address_openings: BTreeSet::from([[9; 32]]),
+                signer_programs: BTreeSet::new(),
+            }))])
+        }
+        .presenter(None);
+
+        assert_eq!(present(mentioned), SenderPresentation::Blinded([9; 32]));
+        assert_eq!(present(mentioned), SenderPresentation::Blinded([9; 32]));
+        assert_ne!(present(other), SenderPresentation::Blinded([9; 32]));
     }
 }
