@@ -18,6 +18,7 @@ pub struct MessageSpend {
 
 /// The key a private account's note is encrypted under, and the nonce of the state it carries.
 struct NoteKey {
+    esk: EphemeralSecretKey,
     shared_secret: SharedSecretKey,
     nonce: Nonce,
 }
@@ -51,10 +52,7 @@ pub fn compute_circuit_output(
     let mut output = ProvenExecution {
         boundary,
         async_messages,
-        recovery_bindings: recoveries
-            .iter()
-            .map(RecipientEncryption::bind_recovery)
-            .collect(),
+        recovery_bindings: Vec::new(),
         public_root,
         private_actions: Vec::new(),
         validity,
@@ -64,6 +62,7 @@ pub fn compute_circuit_output(
 
     // Emit one action per private account, covering all its actor states.
     let mut fallback = None;
+    let mut note_keys = Vec::with_capacity(private_witnesses.len());
     for witness in private_witnesses {
         let post_data = private_accounts.remove(&witness.account_id()).expect(
             "every witness is declared as a private account and the private part emits each one",
@@ -80,12 +79,35 @@ pub fn compute_circuit_output(
             );
         }
         output.private_actions.push(action);
+        note_keys.push(key);
     }
     output.proven_fee = fee.map(|fee| ProvenFee {
         refund_to: fee.refund_to,
         tip: fee.tip,
         fallback,
     });
+    // A recovery under a note's own ephemeral key shares that note's encapsulation.
+    output.recovery_bindings = recoveries
+        .iter()
+        .map(|recovery| {
+            private_witnesses
+                .iter()
+                .zip(&note_keys)
+                .zip(&output.private_actions)
+                .find(|((witness, key), _)| {
+                    key.esk.0 == recovery.esk.0 && witness.vpk == recovery.recipient.vpk
+                })
+                .map_or_else(
+                    || recovery.bind_recovery(),
+                    |((_, key), action)| {
+                        recovery.bind_recovery_under(
+                            &key.shared_secret,
+                            action.encrypted_post_state.epk.clone(),
+                        )
+                    },
+                )
+        })
+        .collect();
 
     // Pad the output with dummy commitment/nullifier pairs.
     let padding = dummy_inputs.into_iter().map(|dummy| MessageSpend {
@@ -275,6 +297,7 @@ fn private_action(
         },
     };
     let key = NoteKey {
+        esk,
         shared_secret,
         nonce: post_state.nonce,
     };
@@ -563,6 +586,50 @@ mod tests {
         let unaffordable = FeeTransfer { amount: 101, ..fee };
         assert!(fee_fallback(&unaffordable, &boundary, &witness, &main, &key, None).is_none());
         assert!(fee_fallback(&fee, &Vec::new(), &witness, &main, &key, None).is_none());
+    }
+
+    #[test]
+    fn a_recovery_under_a_notes_ephemeral_key_shares_its_encapsulation() {
+        let owner = Owner::new(3);
+        let witness = owner.update_witness(Account::funded(100));
+        let (action, key) = private_action(&witness, Account::funded(100).data, None);
+        let recovery = |esk| RecipientEncryption {
+            recipient: lee_core::Recipient {
+                npk: NullifierPublicKey::from(&owner.nsk()),
+                vpk: owner.vpk(),
+                kind: PrivateAccountKind::Regular,
+                opening: Some([4; 32]),
+            },
+            esk,
+        };
+        let shared = recovery(key.esk);
+        let apart = recovery(EphemeralSecretKey([5; 32]));
+
+        let output = compute_circuit_output(
+            PrivatePartOutcome {
+                validity: ValidityWindows::new_unbounded(),
+                private_accounts: [(owner.account_id(), Account::funded(100).data)].into(),
+                boundary: Boundary::default(),
+                async_messages: Vec::new(),
+            },
+            PublicExecutionContext::default(),
+            None,
+            std::slice::from_ref(&witness),
+            Vec::new(),
+            Vec::new(),
+            None,
+            Vec::new(),
+            &[shared.clone(), apart.clone()],
+            Vec::new(),
+            None,
+        );
+
+        let bindings = output.execution.recovery_bindings;
+        assert_eq!(bindings[0].note.epk, action.encrypted_post_state.epk);
+        assert_ne!(bindings[1].note.epk, action.encrypted_post_state.epk);
+        // Sharing changes no binding: each is what its own encapsulation makes.
+        assert_eq!(bindings[0], shared.bind_recovery());
+        assert_eq!(bindings[1], apart.bind_recovery());
     }
 
     #[test]

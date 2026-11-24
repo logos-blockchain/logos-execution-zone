@@ -640,19 +640,7 @@ impl AccountManager {
 
     pub fn shared_secrets(&self) -> Vec<SharedSecretKey> {
         self.private_states()
-            .map(|pre| {
-                let nonce = pre
-                    .pre_state
-                    .account
-                    .nonce
-                    .private_account_nonce_increment(&pre.kind.nsk());
-                let esk = lee_core::EphemeralSecretKey::new(
-                    &pre.pre_state.account_id,
-                    &pre.random_seed,
-                    &nonce,
-                );
-                SharedSecretKey::encapsulate_deterministic(&pre.vpk, &esk).0
-            })
+            .map(|pre| SharedSecretKey::encapsulate_deterministic(&pre.vpk, &note_esk(pre)).0)
             .collect()
     }
 
@@ -841,7 +829,8 @@ impl AccountManager {
                 kind,
                 opening: Some(opening),
             },
-            esk: EphemeralSecretKey(random_bytes()),
+            // The payer's own note key: the circuit then makes one encapsulation for both.
+            esk: note_esk(pre),
         })
     }
 
@@ -972,6 +961,16 @@ struct AccountPreparedData {
 
 /// Builds a witness kind from the account kind and the key holding the account.
 /// PDAs use their authority and seed instead of an authorization key, and hold only its `nsk`.
+/// The ephemeral key the circuit encrypts `pre`'s successor note under.
+fn note_esk(pre: &AccountPreparedData) -> EphemeralSecretKey {
+    let nonce = pre
+        .pre_state
+        .account
+        .nonce
+        .private_account_nonce_increment(&pre.kind.nsk());
+    EphemeralSecretKey::new(&pre.pre_state.account_id, &pre.random_seed, &nonce)
+}
+
 fn witness_kind(kind: &PrivateAccountKind, key: RegularKey) -> WitnessKind {
     match kind {
         PrivateAccountKind::Regular => WitnessKind::Regular(key),

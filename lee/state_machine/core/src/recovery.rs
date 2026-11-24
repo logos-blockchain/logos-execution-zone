@@ -4,8 +4,8 @@ use crate::{
     NullifierPublicKey,
     account::AccountId,
     encryption::{
-        Ciphertext, EncryptedNote, EphemeralSecretKey, SharedSecretKey, ViewingPublicKey,
-        apply_keystream,
+        Ciphertext, EncryptedNote, EphemeralPublicKey, EphemeralSecretKey, SharedSecretKey,
+        ViewingPublicKey, apply_keystream,
     },
     program::PrivateAccountKind,
 };
@@ -78,18 +78,30 @@ impl Recipient {
 impl RecipientEncryption {
     #[must_use]
     pub fn bind_recovery(&self) -> RecoveryBinding {
+        let (shared_secret, epk) =
+            SharedSecretKey::encapsulate_deterministic(&self.recipient.vpk, &self.esk);
+        self.bind_recovery_under(&shared_secret, epk)
+    }
+
+    /// [`Self::bind_recovery`] under an encapsulation already made toward this recipient's
+    /// viewing key with this `esk`.
+    #[must_use]
+    pub fn bind_recovery_under(
+        &self,
+        shared_secret: &SharedSecretKey,
+        epk: EphemeralPublicKey,
+    ) -> RecoveryBinding {
         let Recipient {
             npk,
-            vpk,
+            vpk: _,
             kind,
             opening,
         } = &self.recipient;
         let address = self.recipient.address();
-        let (shared_secret, epk) = SharedSecretKey::encapsulate_deterministic(vpk, &self.esk);
         let mut plaintext =
             borsh::to_vec(&(npk, kind, opening)).expect("borsh serialization is infallible");
         plaintext.resize(PLAINTEXT_LEN, 0);
-        apply_keystream(&mut plaintext, KEY_DOMAIN, &shared_secret, address.value());
+        apply_keystream(&mut plaintext, KEY_DOMAIN, shared_secret, address.value());
         RecoveryBinding {
             address,
             note: EncryptedNote {
