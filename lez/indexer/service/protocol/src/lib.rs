@@ -52,6 +52,9 @@ mod base64 {
 // that serves the query (RPC service, FFI) enforces the identical bound.
 pub const MAX_EVENT_QUERY_BLOCK_SPAN: u64 = 1000;
 
+// Largest page a single `getBlocks` request may ask for.
+pub const MAX_GET_BLOCKS_LIMIT: u64 = 100;
+
 pub type Nonce = u128;
 
 #[derive(
