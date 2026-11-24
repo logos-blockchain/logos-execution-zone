@@ -458,58 +458,6 @@ async fn assert_only_sender_signs(
     Ok(())
 }
 
-#[then(expr = "the sender and new account sign transfer {string}")]
-#[expect(
-    clippy::needless_pass_by_ref_mut,
-    reason = "Cucumber step functions require `&mut World` as the first parameter"
-)]
-async fn assert_sender_and_new_account_sign(
-    world: &mut CucumberWorld,
-    step: &Step,
-    transfer_name: String,
-) -> StepResult {
-    log_step(step);
-    let artifact = transfer_artifact(world, &transfer_name)?;
-    let sender = artifact.sender;
-    let receiver = world
-        .environment
-        .accounts
-        .new_public_account
-        .ok_or(StepError::MissingSelectedAccount)?;
-    let context = world.lez()?;
-    let (transaction, _) =
-        get_transfer_transaction(context.sequencer_client(), artifact.hash).await?;
-    let LeeTransaction::Public(transaction) = transaction else {
-        return Err(StepError::AssertionFailed {
-            message: "expected the transfer to be public".to_owned(),
-        });
-    };
-    let expected_sender =
-        expected_public_signing_key(sender).ok_or_else(|| StepError::QueryFailed {
-            message: format!("sender {sender:?} is not in the configured public accounts"),
-        })?;
-    let expected_receiver = context
-        .public_account_signing_key(receiver)
-        .await?
-        .ok_or_else(|| StepError::QueryFailed {
-            message: format!("new account {receiver:?} has no wallet signing key"),
-        })?;
-    let signers: Vec<_> = transaction
-        .witness_set()
-        .signatures_and_public_keys()
-        .iter()
-        .map(|(_, public_key)| public_key)
-        .collect();
-    if signers != vec![&expected_sender, &expected_receiver] {
-        return Err(StepError::AssertionFailed {
-            message: format!(
-                "expected sender {expected_sender:?} and new account {expected_receiver:?} to sign, got {signers:?}"
-            ),
-        });
-    }
-    Ok(())
-}
-
 #[then(expr = "the sender nonce advances across transfers {string} and {string}")]
 #[expect(
     clippy::needless_pass_by_ref_mut,
