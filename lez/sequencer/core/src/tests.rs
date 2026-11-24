@@ -6424,6 +6424,66 @@ async fn a_full_exit_is_left_out_until_its_removal_is_final() {
 }
 
 #[tokio::test]
+async fn a_left_out_stake_release_frees_its_signers_pending_slots() {
+    let channel = CannedChannel {
+        pending_removals: [test_sequencer_key(0x46)].into(),
+        ..CannedChannel::empty()
+    };
+    let (mut sequencer, mempool_handle) = sequencer_with_a_full_exit(channel, 0x46).await;
+    let payer = &initial_pub_accounts_private_keys()[0];
+    let payer_signer = TestSigner::from(&payer.secret);
+    let (ownership_id, _) = committee_ownership(0x46);
+    // A user's FinalizeUnstake before the removal is final, paid by a signer: it holds the payer's
+    // slot at nonce 0 and is left out at build.
+    let config = Actor::new(
+        system_accounts::sequencer_stake_config_account_id(),
+        programs::sequencer_stake_account_id(),
+    );
+    let message = lee::public_transaction::Message::try_new_with_fees(
+        config,
+        vec![
+            config,
+            Actor::native_balance(system_accounts::stake_funds_account_id(&ownership_id)),
+            Actor::native_balance(ownership_id),
+            Actor::native_balance(payer.account_id),
+        ],
+        signer_nonces(&[&payer_signer], vec![Nonce(0)]),
+        sequencer_stake_core::Message::FinalizeUnstake {
+            sequencer_key: test_sequencer_key(0x46),
+        },
+        common::test_utils::test_fee_declaration(payer.account_id),
+    )
+    .unwrap();
+    let witness_set = witness_for(&message, &[&payer_signer]);
+    let early = LeeTransaction::Public(PublicTransaction::new(message, witness_set));
+    assert_eq!(
+        sequencer.admit(&early).await.unwrap(),
+        crate::pending::Admission::New
+    );
+    mempool_handle
+        .push((TransactionOrigin::User, early.clone()))
+        .await
+        .unwrap();
+    sequencer.record_pending(&early);
+
+    let built = sequencer.build_block_from_mempool().await.unwrap();
+
+    assert!(!built.block.body.transactions.contains(&early));
+    let retry = common::test_utils::create_transaction_native_token_transfer(
+        payer.account_id,
+        0,
+        initial_pub_accounts_private_keys()[1].account_id,
+        1,
+        &payer_signer,
+    );
+    assert_eq!(
+        sequencer.admit(&retry).await.unwrap(),
+        crate::pending::Admission::New,
+        "the left-out transaction's slot is free again"
+    );
+}
+
+#[tokio::test]
 async fn a_full_exit_lands_once_its_removal_is_final() {
     let (mut sequencer, _mempool_handle) =
         sequencer_with_a_full_exit(CannedChannel::empty(), 0x46).await;

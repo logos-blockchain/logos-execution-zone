@@ -1597,6 +1597,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // record behind it and so needs no requeue, where the origin only says
         // it was not submitted by a user.
         let mut mempool_transactions = Vec::new();
+        // Every transaction taken from the mempool, and those of them put back: the rest, once
+        // left out of the block, free their pending slots below.
+        let mut popped_from_mempool = Vec::new();
+        let mut requeued = HashSet::new();
         // `system_upgrader` changes in the mempool, returned by a reorg, wait for the one slot
         // before the fee.
         let mut upgrade_candidates = Vec::new();
@@ -1610,6 +1614,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .or_else(|| self.mempool.pop().map(|(origin, tx)| (origin, tx, false)))
         {
             let tx_hash = tx.hash();
+            if !from_store {
+                popped_from_mempool.push(tx.clone());
+            }
 
             if common::system_upgrades::is_system_upgrader_tx(&tx) {
                 upgrade_candidates.push((origin, tx));
@@ -1683,8 +1690,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     );
                     if from_store {
                         self.count_dispatch_failure(&tx).await;
-                    } else {
-                        self.pending.remove(&tx);
                     }
                     continue;
                 }
@@ -1698,6 +1703,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 // Anything drained from the store needs no requeue: its record
                 // stays there and is drained again on the next turn.
                 if !from_store {
+                    requeued.insert(tx_hash);
                     self.mempool.push_front((origin, tx));
                 }
                 break;
@@ -1732,7 +1738,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                          stalling production"
                     );
                     self.count_dispatch_failure(&tx).await;
-                    self.pending.remove(&tx);
                     continue;
                 }
                 warn!(
@@ -1745,6 +1750,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 // Anything drained from the store needs no requeue: its record
                 // stays there and is drained again on the next turn.
                 if !from_store {
+                    requeued.insert(tx_hash);
                     self.mempool.push_front((origin, tx));
                 }
                 break;
@@ -1824,7 +1830,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 // dispatch: that one is re-fed from the store every turn, so one
                 // that can never execute would fail on every block for ever.
                 self.count_dispatch_failure(&tx).await;
-                self.pending.remove(&tx);
             }
 
             if valid_transactions.len() >= self.sequencer_config.max_num_tx_in_block {
@@ -1832,6 +1837,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             }
         }
         for (origin, tx) in deferred_withdrawals.into_iter().rev() {
+            requeued.insert(tx.hash());
             self.mempool.push_front((origin, tx));
         }
 
@@ -1880,6 +1886,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     "system_upgrader transaction deferred: block is full"
                 );
                 if !matches!(origin, TransactionOrigin::Sequencer) {
+                    requeued.insert(tx.hash());
                     self.mempool.push_front((origin, tx));
                 }
                 continue;
@@ -1912,7 +1919,18 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         }
         for (origin, tx, _) in candidates {
             if !matches!(origin, TransactionOrigin::Sequencer) {
+                requeued.insert(tx.hash());
                 self.mempool.push_front((origin, tx));
+            }
+        }
+        let included: HashSet<_> = valid_transactions
+            .iter()
+            .map(LeeTransaction::hash)
+            .collect();
+        for tx in popped_from_mempool {
+            let tx_hash = tx.hash();
+            if !included.contains(&tx_hash) && !requeued.contains(&tx_hash) {
+                self.pending.remove(&tx);
             }
         }
         if let Err(err) = self.persist_system_approvals().await {
