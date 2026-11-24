@@ -109,7 +109,7 @@ pub enum Error {
 
     /// A slot the transaction claims is already pending, or a signer's account is at its limit.
     #[error("Refused by the mempool")]
-    PendingSlot(#[source] sequencer_core::pending::PendingRefusal),
+    PendingSlot(#[source] anyhow::Error),
 
     /// A privacy-preserving transaction's reserve the head fee outgrew: priced again off a fresh
     /// quote, it may pass.

@@ -44,7 +44,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         let tx_hash = tx.hash();
 
         let res = async move {
-            let authenticated_tx = tx.transaction_stateless_check().map_err(|err| {
+            let checked_tx = tx.transaction_stateless_check().map_err(|err| {
                 ErrorObjectOwned::owned(
                     ErrorCode::InvalidParams.code(),
                     err.to_string(),
@@ -56,7 +56,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
             // watcher; a user must not invoke them top-level, or anyone could forge
             // an inbound cross-zone delivery. Chained user calls are already rejected
             // by the inbox guest's caller-is-none assertion.
-            if let Some((to, _)) = authenticated_tx.public_call()
+            if let Some((to, _)) = checked_tx.public_call()
                 && sequencer_core::is_sequencer_only_program(to.program_account_id)
             {
                 return Err(ErrorObjectOwned::owned(
@@ -67,10 +67,10 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
                 ));
             }
 
-            Ok(authenticated_tx)
+            Ok(checked_tx)
         };
 
-        let authenticated_tx = res.await.inspect_err(|err| {
+        let checked_tx = res.await.inspect_err(|err| {
             sequencer_rpc_server_actor_metrics::increment_before_mempool_failed_transactions_total(
             );
             debug!(error = ?err, "Transaction failed before reaching mempool");
@@ -79,7 +79,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         self
             .executor_ref
             .ask(sequencer_executor_actor::protocol::Transaction {
-                transaction: authenticated_tx.clone(),
+                transaction: checked_tx.clone(),
                 origin: sequencer_executor_actor::protocol::TransactionOrigin::User,
             })
             .await
@@ -95,7 +95,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         // stalling the RPC response.
         if let Some(gossip) = &self.gossip
             && let Err(err) = gossip
-                .tell(Publish::Transaction(Box::new(authenticated_tx)))
+                .tell(Publish::Transaction(Box::new(checked_tx)))
                 .try_send()
         {
             tracing::warn!(error = %err, "Dropping local tx publish: gossip mailbox full or closed");

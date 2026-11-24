@@ -16,7 +16,7 @@ use system_upgrader_core::SignedApproval;
 // is short-lived per gossiped message, so boxing it would only add a heap
 // allocation on the hot validation path.
 pub enum TxEvaluation {
-    /// Structurally valid and authenticated; forward and admit.
+    /// Structurally valid; forward and admit, where its signatures are verified.
     Accept(Box<LeeTransaction>),
     /// Malformed / forbidden; do not forward. `GossipSub` peer scoring is not
     /// configured, so this does not currently penalize the propagating peer.
@@ -67,18 +67,18 @@ pub fn evaluate_transaction(data: &[u8], max_block_size: u64) -> TxEvaluation {
         Err(err) => return TxEvaluation::Reject(format!("undecodable transaction: {err}")),
     };
 
-    let authenticated = match tx.transaction_stateless_check() {
+    let checked = match tx.transaction_stateless_check() {
         Ok(tx) => tx,
         Err(err) => return TxEvaluation::Reject(format!("stateless check failed: {err:?}")),
     };
 
-    if let Some((to, _)) = authenticated.public_call()
+    if let Some((to, _)) = checked.public_call()
         && sequencer_core::is_sequencer_only_program(to.program_account_id)
     {
         return TxEvaluation::Reject("sequencer-only program".to_owned());
     }
 
-    TxEvaluation::Accept(Box::new(authenticated))
+    TxEvaluation::Accept(Box::new(checked))
 }
 
 /// Decodes a gossiped slash approval, drops it if the committee does not

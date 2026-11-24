@@ -1269,11 +1269,12 @@ async fn handle_transaction_keeps_the_first_transaction_seen_at_a_nonce() -> Res
     let Err(Some(err)) = res else {
         panic!("a second transaction at a pending nonce was admitted: {res:?}");
     };
+    let crate::error::Error::PendingSlot(refusal) = &err else {
+        panic!("expected a pending-slot refusal, got {err:?}");
+    };
     assert!(matches!(
-        err,
-        crate::error::Error::PendingSlot(
-            sequencer_core::pending::PendingRefusal::NoncePending { .. }
-        )
+        refusal.downcast_ref(),
+        Some(sequencer_core::pending::PendingRefusal::NoncePending { .. })
     ));
     assert!(!err.is_definitive());
 
@@ -1295,11 +1296,12 @@ async fn handle_transaction_limits_the_pending_transactions_of_one_account() -> 
             .map_err(|err| anyhow::anyhow!("nonce {nonce} refused: {err:?}"))?;
     }
     let res = submit(&executor, transfer_from_payer_at(2, u128::MAX)).await;
+    let Err(Some(crate::error::Error::PendingSlot(refusal))) = &res else {
+        panic!("expected a pending-slot refusal, got {res:?}");
+    };
     assert!(matches!(
-        res,
-        Err(Some(crate::error::Error::PendingSlot(
-            sequencer_core::pending::PendingRefusal::AccountLimit { limit: 2, .. }
-        )))
+        refusal.downcast_ref(),
+        Some(sequencer_core::pending::PendingRefusal::AccountLimit { limit: 2, .. })
     ));
 
     Ok(())

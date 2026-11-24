@@ -971,6 +971,6 @@ fn admission_error(err: sequencer_core::AdmissionError) -> Error {
         sequencer_core::AdmissionError::Authentication(lee::HeadAuthError::Pending(err)) => {
             Error::PendingAuthentication(err)
         }
-        sequencer_core::AdmissionError::Pending(refusal) => Error::PendingSlot(refusal),
+        sequencer_core::AdmissionError::Pending(refusal) => Error::PendingSlot(refusal.into()),
     }
 }

@@ -98,7 +98,7 @@ impl LeeTransaction {
         }
     }
 
-    // TODO: Introduce type-safe wrapper around checked transaction, e.g. AuthenticatedTransaction
+    // TODO: Introduce type-safe wrapper around checked transaction, e.g. CheckedTransaction
     pub fn transaction_stateless_check(self) -> Result<Self, TransactionMalformationError> {
         match &self {
             Self::Public(tx) => tx.check_stateless()?,
