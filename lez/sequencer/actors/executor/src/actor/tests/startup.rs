@@ -17,7 +17,7 @@ use sequencer_bedrock_actor::{
     mock::{CannedChannel, MockBedrockActor, SharedChannel, mock_msg_of},
     protocol::{
         ChannelEntry, ChannelEvent, ChannelEventKind, ChannelUpdate, DepositInfo, FollowStart,
-        MsgId, Slot, ViewChange,
+        MsgId, PendingBlock, PublishOutcome, Slot, ViewChange,
     },
 };
 use sequencer_core::config::SequencerConfig;
@@ -485,6 +485,102 @@ async fn a_block_produced_after_a_restart_chains_on_the_stored_tip() -> Result<(
         "the new block must chain on the stored tip"
     );
     assert_carries(&new_block, &[tx]);
+    Ok(())
+}
+
+/// A stop after a publish but before its block is stored leaves zone-sdk holding the block as
+/// pending, refusing any other block on its parent. A restart must recover the block so production
+/// chains on it.
+#[test]
+async fn a_restart_recovers_a_published_block_the_store_lost() -> Result<()> {
+    let (config, _home) = sequencer_config();
+    let store = SharedStore::default();
+    let channel = CannedChannel::absent().share();
+    let recipient = initial_public_user_accounts()[1].clone();
+    let balance_to_move = 10;
+
+    let store_before_publish = {
+        let executor = start(&config, &store, &channel).await?;
+        let store_before_publish = store.lock().clone();
+        executor
+            .ask(Transaction {
+                transaction: transfer(0, balance_to_move),
+                origin: TransactionOrigin::User,
+            })
+            .await?;
+        executor.ask(ProduceBlock).await?;
+        executor.stop_gracefully().await?;
+        executor.wait_for_shutdown().await;
+        store_before_publish
+    };
+    let [genesis, block2] =
+        <[Block; 2]>::try_from(store.blocks()).expect("genesis and block 2 are stored");
+    *store.lock() = store_before_publish;
+    channel.lock().pending_blocks = vec![PendingBlock {
+        block: block2.clone(),
+        outcome: PublishOutcome {
+            this_msg: mock_msg_of(&block2),
+            parent: mock_msg_of(&genesis),
+            released_notes: Vec::new(),
+        },
+    }];
+
+    let executor = start(&config, &store, &channel).await?;
+    replay(&config, &executor, std::slice::from_ref(&genesis)).await?;
+    assert_eq!(stored_ids(&store), [1, 2], "block 2 must be recovered");
+    assert_eq!(
+        executor
+            .ask(GetAccountBalance {
+                account_id: recipient.account_id
+            })
+            .await?,
+        recipient.balance + balance_to_move,
+        "the recovered block's transfer must apply"
+    );
+
+    executor.ask(ProduceBlock).await?;
+    let block3 = store.blocks().pop().expect("block 3 is stored");
+    assert_eq!(block3.header.block_id, 3);
+    assert_eq!(
+        block3.header.prev_block_hash, block2.header.hash,
+        "block 3 must chain on the recovered block"
+    );
+    Ok(())
+}
+
+#[test]
+async fn a_restart_keeps_a_pending_block_the_store_holds() -> Result<()> {
+    let (config, _home) = sequencer_config();
+    let store = SharedStore::default();
+    let channel = CannedChannel::absent().share();
+
+    {
+        let executor = start(&config, &store, &channel).await?;
+        executor.ask(ProduceBlock).await?;
+        executor.stop_gracefully().await?;
+        executor.wait_for_shutdown().await;
+    }
+    let [genesis, block2] =
+        <[Block; 2]>::try_from(store.blocks()).expect("genesis and block 2 are stored");
+    channel.lock().pending_blocks = vec![PendingBlock {
+        block: block2.clone(),
+        outcome: PublishOutcome {
+            this_msg: mock_msg_of(&block2),
+            parent: mock_msg_of(&genesis),
+            released_notes: Vec::new(),
+        },
+    }];
+
+    let executor = start(&config, &store, &channel).await?;
+    replay(&config, &executor, std::slice::from_ref(&genesis)).await?;
+    executor.ask(ProduceBlock).await?;
+
+    assert_eq!(stored_ids(&store), [1, 2, 3]);
+    assert_eq!(
+        store.lock().blocks[&3].header.prev_block_hash,
+        block2.header.hash,
+        "block 3 must chain on the pending block"
+    );
     Ok(())
 }
 

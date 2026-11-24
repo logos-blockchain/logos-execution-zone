@@ -8,7 +8,9 @@ use mempool::{MemPool, MemPoolHandle};
 use sequencer_actors_common::SendErrorExt;
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
-    protocol::{ChannelId, Ed25519Key, Ed25519PublicKey, MsgId, PublishOutcome, Slot},
+    protocol::{
+        ChannelId, Ed25519Key, Ed25519PublicKey, MsgId, PendingBlock, PublishOutcome, Slot,
+    },
 };
 use sequencer_core::{SequencerCore, TransactionOrigin, config::SequencerConfig};
 use sequencer_storage_actor::{StorageActorTrait, protocol::AtomicUpdate};
@@ -137,7 +139,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             sequencer_stake_core::SequencerKey::new(channel_signing_key.public_key().to_bytes())
                 .ok_or(Error::InvalidSequencerKey)?;
 
-        bedrock_pool_ref
+        let pending_blocks = bedrock_pool_ref
             .ask(
                 sequencer_bedrock_actor::protocol::InitializeChannelPublisher {
                     channel_id: config.bedrock_config.channel_id,
@@ -153,7 +155,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             .await
             .map_err(SendErrorExt::flatten)?;
 
-        if !channel_exists {
+        if channel_exists {
+            Self::recover_pending_blocks(&mut chain, &storage_ref, pending_blocks).await?;
+        } else {
             let holds_blocks = storage_ref
                 .ask(sequencer_storage_actor::protocol::GetLatestBlockMeta)
                 .await?
@@ -245,6 +249,20 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             turn: Turn::new(is_our_turn),
             sequencer,
         })
+    }
+
+    /// Records the `pending_blocks` the store does not hold yet, so production chains on them.
+    async fn recover_pending_blocks(
+        chain: &mut ChainState,
+        storage_ref: &ActorRef<S>,
+        pending_blocks: Vec<PendingBlock>,
+    ) -> Result<()> {
+        for PendingBlock { block, outcome } in pending_blocks {
+            sequencer_core::record_published_block(chain, storage_ref, outcome, block)
+                .await
+                .map_err(Error::SequencerStartFailed)?;
+        }
+        Ok(())
     }
 
     async fn create_channel_with_genesis(

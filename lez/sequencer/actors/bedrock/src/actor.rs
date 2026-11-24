@@ -41,9 +41,9 @@ use crate::{
         CheckIsOurTurn, CreateChannel, DeserializeOp as _, Ed25519PublicKey, FilterFinallyAbsent,
         FollowChannel, FollowStart, GetAccreditedKeys, GetChannelNotes, GetChannelTipMessageId,
         GetChannelTipSlot, HeaderId, InitializeChannelPublisher, LiveChannelConfig, MsgId,
-        PrepareConfig, PreparePin, PreparedConfig, PreparedPin, PublishBlock, PublishOutcome,
-        PublishPin, ReadChannel, SequencerCheckpoint, SequencerKey, SerializeOp as _, Slot,
-        UnverifiedEd25519PublicKey,
+        PendingBlock, PrepareConfig, PreparePin, PreparedConfig, PreparedPin, PublishBlock,
+        PublishOutcome, PublishPin, ReadChannel, SequencerCheckpoint, SequencerKey,
+        SerializeOp as _, Slot, UnverifiedEd25519PublicKey,
     },
 };
 
@@ -312,7 +312,7 @@ impl<S: StorageActorTrait> Message<FollowChannel> for BedrockActor<S> {
 }
 
 impl<S: StorageActorTrait> Message<InitializeChannelPublisher> for BedrockActor<S> {
-    type Reply = Result<()>;
+    type Reply = Result<Vec<PendingBlock>>;
 
     async fn handle(
         &mut self,
@@ -328,8 +328,8 @@ impl<S: StorageActorTrait> Message<InitializeChannelPublisher> for BedrockActor<
     ) -> Self::Reply {
         self.assert_channel_id(channel_id);
 
-        if matches!(self.channel, Some(channel::Channel::Publishing(_))) {
-            return Ok(());
+        if let Some(channel::Channel::Publishing(publishing)) = &self.channel {
+            return Ok(publishing.pending_blocks());
         }
         let followed = match self.channel.take() {
             None => self.follow().await?.0,
@@ -347,9 +347,10 @@ impl<S: StorageActorTrait> Message<InitializeChannelPublisher> for BedrockActor<
         let ready = publishing
             .wait_until_ready(&mut self.config_index, &mut self.deliveries)
             .await;
+        let pending_blocks = publishing.pending_blocks();
         self.channel = Some(channel::Channel::Publishing(publishing));
         self.store_config_index().await;
-        ready
+        ready.map(|()| pending_blocks)
     }
 }
 

@@ -157,6 +157,9 @@ pub struct FollowStart {
 /// Restarts following under `channel_signing_key` from the checkpoint of the last update
 /// reported. When the channel is not followed yet, starts from the stored checkpoint instead.
 /// Does nothing when the publisher is initialized already.
+///
+/// Replies with the [`PendingBlock`]s zone-sdk holds, which a node that stopped before recording
+/// them can recover, as zone-sdk refuses any other block on their parents.
 #[derive(Debug, Clone)]
 pub struct InitializeChannelPublisher {
     pub channel_id: ChannelId,
@@ -317,6 +320,13 @@ impl ShardingKey for PublishPin {
     fn sharding_key(&self) -> Self::Key {
         self.channel_id
     }
+}
+
+/// A block of ours that zone-sdk holds as published, its inscription not finalized yet.
+#[derive(Debug, Clone)]
+pub struct PendingBlock {
+    pub block: Block,
+    pub outcome: PublishOutcome,
 }
 
 /// Outcome of a publish operation.

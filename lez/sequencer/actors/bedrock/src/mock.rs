@@ -21,8 +21,9 @@ use crate::{
         AccreditedKeys, ChangeChannelConfig, ChannelId, ChannelReadStream, CheckChannelExists,
         CheckIsOurTurn, CreateChannel, FilterFinallyAbsent, FollowChannel, FollowStart,
         GetAccreditedKeys, GetChannelNotes, GetChannelTipMessageId, GetChannelTipSlot,
-        InitializeChannelPublisher, MsgId, NoteId, PrepareConfig, PreparePin, PreparedConfig,
-        PreparedPin, PublishBlock, PublishOutcome, PublishPin, ReadChannel, SequencerKey, Slot,
+        InitializeChannelPublisher, MsgId, NoteId, PendingBlock, PrepareConfig, PreparePin,
+        PreparedConfig, PreparedPin, PublishBlock, PublishOutcome, PublishPin, ReadChannel,
+        SequencerKey, Slot,
     },
 };
 
@@ -71,8 +72,8 @@ mockall::mock! {
         pub fn handle_initialize_channel_publisher(
             &mut self,
             msg: InitializeChannelPublisher,
-            ctx: &mut Context<Self, Result<()>>
-        ) -> Result<()>;
+            ctx: &mut Context<Self, Result<Vec<PendingBlock>>>
+        ) -> Result<Vec<PendingBlock>>;
 
         pub fn handle_create_channel(
             &mut self,
@@ -212,7 +213,7 @@ impl Message<FollowChannel> for MockBedrockActor {
 }
 
 impl Message<InitializeChannelPublisher> for MockBedrockActor {
-    type Reply = Result<()>;
+    type Reply = Result<Vec<PendingBlock>>;
 
     async fn handle(
         &mut self,

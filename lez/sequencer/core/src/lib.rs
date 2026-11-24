@@ -793,12 +793,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             Err(err) => return Err(err).context("Failed to publish block to Bedrock"),
         };
 
+        let block_id = block.header.block_id;
+        self.record_produced_block(outcome, block).await?;
+
         // Independent Mantle tx, not bundled with the block above — join/exit
         // config updates don't need to be.
         self.advance_channel_config().await;
-
-        let block_id = block.header.block_id;
-        self.record_produced_block(outcome, block).await?;
 
         Ok(block_id)
     }
@@ -1115,61 +1115,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         outcome: sequencer_bedrock_actor::protocol::PublishOutcome,
         block: Block,
     ) -> Result<()> {
-        let sequencer_bedrock_actor::protocol::PublishOutcome {
-            this_msg,
-            parent,
-            released_notes,
-        } = outcome;
-        let block_id = block.header.block_id;
-
         let mut chain = self.chain.lock().await;
-        let record = chain.record_publish(ChannelEntry {
-            msg: this_msg,
-            parent,
-            block: Some(block.clone()),
-            finally_absent_keys: full_stake_releases::finalize_unstake_keys(&block),
-            final_slot: None,
-        });
-        match record {
-            PublishRecord::Extended | PublishRecord::Skipped => {
-                if record == PublishRecord::Skipped {
-                    warn!(
-                        block_id,
-                        "Produced block does not apply on the head it was built on"
-                    );
-                }
-                self.storage_ref
-                    .ask(AtomicUpdate {
-                        blocks: if record == PublishRecord::Extended {
-                            vec![block.clone()]
-                        } else {
-                            Vec::new()
-                        },
-                        new_withdraw_intents: released_notes
-                            .iter()
-                            .map(withdrawal_reconciliation_key)
-                            .collect(),
-                        ..chain_update(&chain)
-                    })
-                    .await?;
-
-                if record == PublishRecord::Extended {
-                    sequencer_core_metrics::record_chain_height(block_id);
-                }
-            }
-            // A conflict already put it in the view, and the follow path stored it.
-            PublishRecord::AlreadyInView => {}
-            // Nothing is persisted: the inscription chains on an entry the view moved past.
-            PublishRecord::Stale => {
-                warn!(
-                    block_id,
-                    %parent,
-                    "Produced block's parent is no longer the channel tip, dropping it"
-                );
-            }
-        }
-
-        Ok(())
+        record_published_block(&mut chain, &self.storage_ref, outcome, block).await
     }
 
     /// Validates and applies a single mempool transaction to the current state.
@@ -2392,6 +2339,69 @@ pub fn new_head_blocks(chain: &ChainState, held_before: &HashSet<HashType>) -> V
         .filter(|block| !held_before.contains(&block.header.hash))
         .cloned()
         .collect()
+}
+
+/// Records a block we published in the view of `chain` and persists it.
+pub async fn record_published_block<S: StorageActorTrait>(
+    chain: &mut ChainState,
+    storage_ref: &ActorRef<S>,
+    outcome: sequencer_bedrock_actor::protocol::PublishOutcome,
+    block: Block,
+) -> Result<()> {
+    let sequencer_bedrock_actor::protocol::PublishOutcome {
+        this_msg,
+        parent,
+        released_notes,
+    } = outcome;
+    let block_id = block.header.block_id;
+
+    let record = chain.record_publish(ChannelEntry {
+        msg: this_msg,
+        parent,
+        block: Some(block.clone()),
+        finally_absent_keys: full_stake_releases::finalize_unstake_keys(&block),
+        final_slot: None,
+    });
+    match record {
+        PublishRecord::Extended | PublishRecord::Skipped => {
+            if record == PublishRecord::Skipped {
+                warn!(
+                    block_id,
+                    "Produced block does not apply on the head it was built on"
+                );
+            }
+            storage_ref
+                .ask(AtomicUpdate {
+                    blocks: if record == PublishRecord::Extended {
+                        vec![block.clone()]
+                    } else {
+                        Vec::new()
+                    },
+                    new_withdraw_intents: released_notes
+                        .iter()
+                        .map(withdrawal_reconciliation_key)
+                        .collect(),
+                    ..chain_update(chain)
+                })
+                .await?;
+
+            if record == PublishRecord::Extended {
+                sequencer_core_metrics::record_chain_height(block_id);
+            }
+        }
+        // A conflict already put it in the view, and the follow path stored it.
+        PublishRecord::AlreadyInView => {}
+        // Nothing is persisted: the inscription chains on an entry the view moved past.
+        PublishRecord::Stale => {
+            warn!(
+                block_id,
+                %parent,
+                "Produced block's parent is no longer the channel tip, dropping it"
+            );
+        }
+    }
+
+    Ok(())
 }
 
 /// An update carrying the head and the view `chain` holds, and nothing else.

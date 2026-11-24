@@ -11,10 +11,10 @@ use logos_blockchain_zone_sdk::{
     adapter::{Node as _, NodeHttpClient},
     core::{
         mantle::{
-            Note, Op, OpProof, SignedOps,
+            Note, Op, OpProof, OpRef, SignedOps,
             channel::{SlotTimeframe, SlotTimeout},
             gas::GasCost,
-            ledger::{Inputs, Outputs},
+            ledger::{Inputs, Outputs, verification_mode::StandardMode},
             ops::channel::{
                 VerifiedChannelKeys, channel_transfer::ChannelTransferOp, config::ChannelConfigOp,
                 inscribe::InscriptionOp,
@@ -24,10 +24,11 @@ use logos_blockchain_zone_sdk::{
         },
         proofs::channel_multi_sig_proof::ChannelMultiSigProof,
     },
-    node_types::{Inscription, WalletFundRequestBody, WalletFundResponseBody},
+    node_types::{Inscription, Unverified, WalletFundRequestBody, WalletFundResponseBody},
     sequencer::{
         ChannelUpdate as SdkChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FinalizedTx,
         FundingConfig, InscriptionInfo, SequencerConfig, WithdrawInputs, ZoneSequencer,
+        channel_inscriptions,
     },
 };
 use tracing::info;
@@ -44,8 +45,8 @@ use crate::{
     protocol::{
         ChannelEntry, ChannelEventKind, ChannelId, ChannelParams, ChannelUpdate, DepositInfo,
         Ed25519Key, Ed25519PublicKey, IndexedSignature, IndexedSignatures, LiveChannelConfig,
-        MsgId, NoteId, Ops, PreparedConfig, PreparedPin, PublishOutcome, SequencerCheckpoint, Slot,
-        ViewChange, WithdrawArg, ZkPublicKey,
+        MsgId, NoteId, Ops, PendingBlock, PreparedConfig, PreparedPin, PublishOutcome,
+        SequencerCheckpoint, Slot, ViewChange, WithdrawArg, ZkPublicKey,
     },
 };
 
@@ -595,6 +596,32 @@ impl PublishingChannel {
         Ok(())
     }
 
+    /// Our blocks zone-sdk holds as published but not finalized yet, parents first.
+    pub fn pending_blocks(&self) -> Vec<PendingBlock> {
+        let Some(checkpoint) = self.followed.sequencer.checkpoint() else {
+            return Vec::new();
+        };
+        checkpoint
+            .pending_txs
+            .iter()
+            .flat_map(|(_, tx)| {
+                let released_notes = withdrawn_notes(tx);
+                channel_inscriptions(tx, self.followed.channel_id)
+                    .into_iter()
+                    .filter_map(move |inscription| {
+                        Some(PendingBlock {
+                            block: block_from_inscription(&inscription)?,
+                            outcome: PublishOutcome {
+                                this_msg: inscription.this_msg,
+                                parent: inscription.parent_msg,
+                                released_notes: released_notes.clone(),
+                            },
+                        })
+                    })
+            })
+            .collect()
+    }
+
     pub fn check_is_our_turn(&self) -> bool {
         self.followed
             .sequencer
@@ -800,6 +827,20 @@ async fn checked_inscription(
         return Err(Error::InscriptionTooLarge);
     }
     Ok(Inscription::new_unchecked(data))
+}
+
+/// Channel notes the withdraws in `tx` release.
+fn withdrawn_notes(tx: &SignedOps<Unverified, StandardMode>) -> Vec<NoteId> {
+    tx.op_refs_iter()
+        .filter_map(|op| {
+            if let OpRef::ChannelWithdraw(withdraw) = op {
+                Some(withdraw.inputs.iter().copied())
+            } else {
+                None
+            }
+        })
+        .flatten()
+        .collect()
 }
 
 /// `block` as the bytes of an inscription.

@@ -9,15 +9,15 @@ use crate::{
         AccreditedKeys, ChangeChannelConfig, ChannelReadStream, CheckChannelExists, CheckIsOurTurn,
         CreateChannel, FilterFinallyAbsent, FollowChannel, FollowStart, GetAccreditedKeys,
         GetChannelNotes, GetChannelTipMessageId, GetChannelTipSlot, InitializeChannelPublisher,
-        MsgId, NoteId, PrepareConfig, PreparePin, PreparedConfig, PreparedPin, PublishBlock,
-        PublishOutcome, PublishPin, ReadChannel, SequencerKey, Slot,
+        MsgId, NoteId, PendingBlock, PrepareConfig, PreparePin, PreparedConfig, PreparedPin,
+        PublishBlock, PublishOutcome, PublishPin, ReadChannel, SequencerKey, Slot,
     },
 };
 
 pub trait BedrockActorTrait:
     Actor<Error = Error>
     + Message<FollowChannel, Reply = Result<FollowStart>>
-    + Message<InitializeChannelPublisher, Reply = Result<()>>
+    + Message<InitializeChannelPublisher, Reply = Result<Vec<PendingBlock>>>
     + Message<CreateChannel, Reply = Result<PublishOutcome>>
     + Message<PublishBlock, Reply = Result<PublishOutcome>>
     + Message<PreparePin, Reply = Result<PreparedPin>>

@@ -166,7 +166,7 @@ fn prepare_mock_bedrock_on_genesis(_channel_id: &ChannelId) -> MockBedrockActor 
         .returning(|_msg, _ctx| Ok(Some(mock_msg_of(&empty_genesis()))));
     mock_bedrock
         .expect_handle_initialize_channel_publisher()
-        .returning(|_msg, _ctx| Ok(()));
+        .returning(|_msg, _ctx| Ok(Vec::new()));
     mock_bedrock
         .expect_handle_check_is_our_turn()
         .returning(|_msg, _ctx| Ok(true));
@@ -706,7 +706,7 @@ async fn spawn_supervised_on_genesis(
             .expect_handle_initialize_channel_publisher()
             .returning(move |_msg, _ctx| {
                 publisher_init_tx.send(()).expect("the test is listening");
-                Ok(())
+                Ok(Vec::new())
             });
         mock_bedrock
             .expect_handle_check_is_our_turn()

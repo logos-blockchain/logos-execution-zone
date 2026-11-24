@@ -15,8 +15,8 @@ use crate::{
     error::Error,
     protocol::{
         AccreditedKeys, ChannelReadStream, CreateChannel, FilterFinallyAbsent, FollowStart, MsgId,
-        PreparePin, PreparedPin, PublishBlock, PublishOutcome, PublishPin, ReadChannel,
-        SequencerKey, Slot, WithdrawArg, ZoneMessage,
+        PendingBlock, PreparePin, PreparedPin, PublishBlock, PublishOutcome, PublishPin,
+        ReadChannel, SequencerKey, Slot, WithdrawArg, ZoneMessage,
     },
 };
 
@@ -51,6 +51,8 @@ pub struct CannedChannel {
     pub lib_slot: Option<Slot>,
     /// Publishers initialized so far.
     pub publisher_inits: u32,
+    /// What an initialized publisher reports zone-sdk holds as pending.
+    pub pending_blocks: Vec<PendingBlock>,
 }
 
 impl CannedChannel {
@@ -96,7 +98,7 @@ impl SharedChannel {
                 move |_msg, _ctx| {
                     let mut channel = channel.lock();
                     channel.publisher_inits = channel.publisher_inits.saturating_add(1);
-                    Ok(())
+                    Ok(channel.pending_blocks.clone())
                 }
             });
         mock.expect_handle_follow_channel().returning({
