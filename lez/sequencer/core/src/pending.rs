@@ -3,7 +3,7 @@
 //!
 //! The index is this node's own view, so nothing it refuses is definitively invalid.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use common::{HashType, transaction::LeeTransaction};
 use lee::{AccountId, public_transaction::WitnessEntry};
@@ -33,8 +33,9 @@ struct Slot {
 
 #[derive(Debug)]
 pub struct PendingIndex {
-    slots: HashMap<(AccountId, u128), Slot>,
-    per_account: HashMap<AccountId, usize>,
+    /// Each account's pending slots, by nonce.
+    slots: HashMap<AccountId, BTreeMap<u128, Slot>>,
+    len: usize,
     max_per_account: usize,
 }
 
@@ -43,7 +44,7 @@ impl PendingIndex {
     pub fn new(max_per_account: usize) -> Self {
         Self {
             slots: HashMap::new(),
-            per_account: HashMap::new(),
+            len: 0,
             max_per_account,
         }
     }
@@ -53,7 +54,7 @@ impl PendingIndex {
     #[must_use]
     pub fn key_at(&self, account: AccountId, nonce: Nonce) -> Option<SigningKeyState> {
         let previous = nonce.0.checked_sub(1)?;
-        self.slots.get(&(account, previous)).map(|slot| slot.next)
+        self.slot(account, previous).map(|slot| slot.next)
     }
 
     /// Whether `tx` may enter: each slot it claims is free or already its own, and no signer's
@@ -63,7 +64,7 @@ impl PendingIndex {
         let claimed = signer_slots(tx);
         let mut own = 0_usize;
         for (account, nonce, _) in &claimed {
-            match self.slots.get(&(*account, nonce.0)) {
+            match self.slot(*account, nonce.0) {
                 Some(slot) if slot.tx_hash == tx_hash => own = own.saturating_add(1),
                 Some(_) => {
                     return Err(PendingRefusal::NoncePending {
@@ -78,7 +79,7 @@ impl PendingIndex {
             return Ok(Admission::Duplicate);
         }
         for (account, _, _) in &claimed {
-            if self.per_account.get(account).copied().unwrap_or(0) >= self.max_per_account {
+            if self.slots.get(account).map_or(0, BTreeMap::len) >= self.max_per_account {
                 return Err(PendingRefusal::AccountLimit {
                     account: *account,
                     limit: self.max_per_account,
@@ -94,11 +95,12 @@ impl PendingIndex {
         for (account, nonce, next) in signer_slots(tx) {
             if self
                 .slots
-                .insert((account, nonce.0), Slot { tx_hash, next })
+                .entry(account)
+                .or_default()
+                .insert(nonce.0, Slot { tx_hash, next })
                 .is_none()
             {
-                let count = self.per_account.entry(account).or_insert(0);
-                *count = count.saturating_add(1);
+                self.len = self.len.saturating_add(1);
             }
         }
     }
@@ -107,12 +109,18 @@ impl PendingIndex {
     pub fn remove(&mut self, tx: &LeeTransaction) {
         let tx_hash = tx.hash();
         for (account, nonce, _) in signer_slots(tx) {
-            if self
-                .slots
-                .get(&(account, nonce.0))
+            let Some(account_slots) = self.slots.get_mut(&account) else {
+                continue;
+            };
+            if account_slots
+                .get(&nonce.0)
                 .is_some_and(|slot| slot.tx_hash == tx_hash)
             {
-                self.free((account, nonce.0));
+                account_slots.remove(&nonce.0);
+                self.len = self.len.saturating_sub(1);
+                if account_slots.is_empty() {
+                    self.slots.remove(&account);
+                }
             }
         }
     }
@@ -120,53 +128,48 @@ impl PendingIndex {
     /// Frees every slot below its account's nonce in `state`: its transaction, or another at the
     /// same nonce, has been included.
     pub fn prune(&mut self, state: &lee::V03State) {
-        let stale: Vec<_> = self
-            .slots
-            .keys()
-            .filter(|(account, nonce)| *nonce < account_nonce(state, *account).0)
-            .copied()
-            .collect();
-        for slot in stale {
-            self.free(slot);
-        }
+        let len = &mut self.len;
+        self.slots.retain(|account, account_slots| {
+            *len = len.saturating_sub(free_below(account_slots, account_nonce(state, *account)));
+            !account_slots.is_empty()
+        });
     }
 
     /// [`Self::prune`] for the accounts `tx` signs for only.
     pub fn prune_signers(&mut self, tx: &LeeTransaction, state: &lee::V03State) {
         for (account, _, _) in signer_slots(tx) {
-            let head = account_nonce(state, account);
-            let stale: Vec<_> = self
-                .slots
-                .keys()
-                .filter(|(slot_account, nonce)| *slot_account == account && *nonce < head.0)
-                .copied()
-                .collect();
-            for slot in stale {
-                self.free(slot);
+            let Some(account_slots) = self.slots.get_mut(&account) else {
+                continue;
+            };
+            let freed = free_below(account_slots, account_nonce(state, account));
+            self.len = self.len.saturating_sub(freed);
+            if account_slots.is_empty() {
+                self.slots.remove(&account);
             }
         }
     }
 
     #[must_use]
-    pub fn len(&self) -> usize {
-        self.slots.len()
+    pub const fn len(&self) -> usize {
+        self.len
     }
 
     #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.slots.is_empty()
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
     }
 
-    fn free(&mut self, slot: (AccountId, u128)) {
-        if self.slots.remove(&slot).is_some()
-            && let Some(count) = self.per_account.get_mut(&slot.0)
-        {
-            *count = count.saturating_sub(1);
-            if *count == 0 {
-                self.per_account.remove(&slot.0);
-            }
-        }
+    fn slot(&self, account: AccountId, nonce: u128) -> Option<&Slot> {
+        self.slots.get(&account)?.get(&nonce)
     }
+}
+
+/// Drops `account_slots` below `head`, returning how many it dropped.
+fn free_below(account_slots: &mut BTreeMap<u128, Slot>, head: Nonce) -> usize {
+    let kept = account_slots.split_off(&head.0);
+    let freed = account_slots.len();
+    *account_slots = kept;
+    freed
 }
 
 fn account_nonce(state: &lee::V03State, account: AccountId) -> Nonce {
@@ -283,6 +286,53 @@ mod tests {
         index.remove(&held);
         assert!(index.is_empty());
         assert_eq!(index.check(&transfer(&signer, 0, 2)), Ok(Admission::New));
+    }
+
+    #[test]
+    fn pruning_a_transactions_signers_leaves_other_accounts_alone() {
+        let signer = TestSigner::new(1);
+        let other = TestSigner::new(2);
+        let mut index = PendingIndex::new(16);
+        let first = transfer(&signer, 0, 1);
+        index.insert(&first);
+        index.insert(&transfer(&signer, 1, 1));
+        index.insert(&transfer(&other, 0, 1));
+
+        let mut state = V03State::new()
+            .with_public_account_balances([
+                (signer.account_id(), 100),
+                (AccountId::new([9; 32]), 0),
+            ])
+            .with_public_accounts([(
+                other.account_id(),
+                lee::Account {
+                    nonce: Nonce(1),
+                    ..lee::Account::funded(100)
+                },
+            )]);
+        let LeeTransaction::Public(first) = first else {
+            unreachable!("a transfer is public");
+        };
+        state
+            .transition_from_public_transaction(&first, 1, 0)
+            .unwrap();
+
+        // `other`'s slot is stale too, but only the signers of the admitted transaction are pruned.
+        index.prune_signers(&transfer(&signer, 2, 1), &state);
+        assert_eq!(index.len(), 2);
+        assert_eq!(index.key_at(signer.account_id(), Nonce(1)), None);
+        assert_eq!(
+            index.key_at(signer.account_id(), Nonce(2)),
+            Some(signer.key_state(Nonce(2)))
+        );
+        assert_eq!(
+            index.key_at(other.account_id(), Nonce(1)),
+            Some(other.key_state(Nonce(1)))
+        );
+
+        index.prune(&state);
+        assert_eq!(index.len(), 1);
+        assert_eq!(index.key_at(other.account_id(), Nonce(1)), None);
     }
 
     #[test]
