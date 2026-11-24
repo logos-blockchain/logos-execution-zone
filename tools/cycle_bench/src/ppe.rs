@@ -34,14 +34,28 @@ pub struct PpeBenchResult {
 
 #[cfg(not(feature = "ppe"))]
 #[must_use]
-pub const fn run_all() -> Vec<PpeBenchResult> {
+pub const fn run_all(_fee_case: Option<usize>) -> Vec<PpeBenchResult> {
     Vec::new()
 }
 
+/// Runs every case, or only the fee case at `fee_case` in [`ppe_impl::FeeCase::ALL`]: with
+/// `RISC0_PPROF_OUT` set, the profile left behind is then that case's circuit run.
 #[cfg(feature = "ppe")]
 #[must_use]
-pub fn run_all() -> Vec<PpeBenchResult> {
+pub fn run_all(fee_case: Option<usize>) -> Vec<PpeBenchResult> {
+    if let Some(index) = fee_case {
+        return ppe_impl::FeeCase::ALL
+            .get(index)
+            .map(|case| ppe_impl::run_fee_transfer(*case))
+            .into_iter()
+            .collect();
+    }
     let mut results = Vec::new();
+
+    for case in ppe_impl::FeeCase::ALL {
+        eprintln!("PPE: running a deshielding transfer fee case");
+        results.push(ppe_impl::run_fee_transfer(case));
+    }
 
     // What `AccountManager::PADDED_PRIVATE_ACTIONS` padding actually costs: the transfer's private
     // recipient takes 1 of the 7 actions, so a real wallet tx carries 6 dummies.
