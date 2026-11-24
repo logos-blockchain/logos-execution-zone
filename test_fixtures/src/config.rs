@@ -4,7 +4,9 @@ use anyhow::{Context as _, Result};
 use indexer_service::{ChannelId, ClientConfig, EventFilterConfig, IndexerConfig};
 use key_protocol::key_management::{KeyChain, secret_holders::SeedHolder};
 use lee::{AccountId, PrivateKey, PublicAccountEvidence, PublicKey};
-use logos_blockchain_key_management_system_service::keys::{UnsecuredEd25519Key, ZkPublicKey};
+use logos_blockchain_zone_sdk::key_management_system_service::keys::{
+    UnsecuredEd25519Key, ZkPublicKey,
+};
 use num_bigint::BigUint;
 use sequencer_core::config::{
     BedrockConfig, ChannelParams, CrossZoneConfig, DepositRecipient, GenesisAction, GenesisConfig,
@@ -39,9 +41,9 @@ pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000_000_000, 20_0
 /// The charged bytes of the shield that funds a private account at setup, which genesis must
 /// price before any transaction exists; setup checks it against what the wallet measures.
 ///
-/// It is the fixed `PROOF_BYTES` (223,047) plus the rest of the serialized transaction (13,993),
+/// It is the fixed `PROOF_BYTES` (223,047) plus the rest of the serialized transaction (14,001),
 /// mostly its padded private slots.
-pub const SHIELD_BYTES: u64 = 237_040;
+pub const SHIELD_BYTES: u64 = 237_048;
 
 /// The public account for funding the private accounts' balances at genesis.
 pub(crate) const PRIVATE_FUNDER_INDEX: usize = 0;

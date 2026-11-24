@@ -10,23 +10,23 @@ use chain_state::timeout_node::TimeoutNode;
 use common::block::Block;
 use kameo::actor::ActorRef;
 use kameo_actors::broker::Broker;
-use logos_blockchain_core::{
-    mantle::{
-        Note, Op, OpProof, SignedOps,
-        channel::{SlotTimeframe, SlotTimeout},
-        gas::GasCost,
-        ledger::{Inputs, Outputs},
-        ops::channel::{
-            VerifiedChannelKeys, channel_transfer::ChannelTransferOp, config::ChannelConfigOp,
-            inscribe::InscriptionOp,
-        },
-        traits::Hashable as _,
-        transactions::{MantleTxBuilder, OpProofs},
-    },
-    proofs::channel_multi_sig_proof::ChannelMultiSigProof,
-};
 use logos_blockchain_zone_sdk::{
     adapter::{Node as _, NodeHttpClient},
+    core::{
+        mantle::{
+            Note, Op, OpProof, SignedOps,
+            channel::{SlotTimeframe, SlotTimeout},
+            gas::GasCost,
+            ledger::{Inputs, Outputs},
+            ops::channel::{
+                VerifiedChannelKeys, channel_transfer::ChannelTransferOp, config::ChannelConfigOp,
+                inscribe::InscriptionOp,
+            },
+            traits::Hashable as _,
+            transactions::{MantleTxBuilder, OpProofs},
+        },
+        proofs::channel_multi_sig_proof::ChannelMultiSigProof,
+    },
     node_types::{Inscription, WalletFundRequestBody, WalletFundResponseBody},
     sequencer::{
         ChannelUpdate as SdkChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FinalizedTx,
@@ -126,7 +126,7 @@ impl Publisher {
                 funding_pk,
                 // Withdraw change goes back to the funding key.
                 change_pk: None,
-                max_tx_fee: GasCost::new(logos_blockchain_core::mantle::Value::MAX),
+                max_tx_fee: GasCost::new(logos_blockchain_zone_sdk::core::mantle::Value::MAX),
                 priority_fee_percent,
             })
         };
@@ -611,7 +611,7 @@ impl Publisher {
         &mut self,
         tx: SignedOps<
             logos_blockchain_zone_sdk::node_types::Unverified,
-            logos_blockchain_core::mantle::ledger::verification_mode::StandardMode,
+            logos_blockchain_zone_sdk::core::mantle::ledger::verification_mode::StandardMode,
         >,
         msg_id: MsgId,
         parent: MsgId,
@@ -736,7 +736,7 @@ impl Publisher {
                 tx_builder,
                 change_public_key: self.funding_pk,
                 funding_public_keys: vec![self.funding_pk],
-                max_tx_fee: GasCost::new(logos_blockchain_core::mantle::Value::MAX),
+                max_tx_fee: GasCost::new(logos_blockchain_zone_sdk::core::mantle::Value::MAX),
                 priority_fee_percent: self.priority_fee_percent,
             })
             .await

@@ -8,11 +8,13 @@ use std::{
 use anyhow::Context as _;
 use async_trait::async_trait;
 use lee::PrivateKey;
+use logos_blockchain_zone_sdk::{
+    testing_framework_app::{AppDeployment, AppHostEnv, DeployContext},
+    testing_framework_core::scenario::DynError,
+};
 use sequencer_service::SequencerHandle;
 use sequencer_service_rpc::{SequencerClient, SequencerClientBuilder};
 use tempfile::TempDir;
-use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext};
-use testing_framework_core::scenario::DynError;
 
 use crate::{
     config::{self, InitialPrivateAccountForWallet, SequencerPartialConfig, UrlProtocol},

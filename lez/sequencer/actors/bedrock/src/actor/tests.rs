@@ -4,29 +4,32 @@ use common::{
     HashType,
     block::{Block, HashableBlockData},
 };
-use logos_blockchain_core::{
-    era::ForkDigest,
-    mantle::{
-        SignedOps,
-        channel::Channels,
-        ledger::{VerifiableOperation as _, verification_mode::StandardMode},
-        ops::{
-            Op, OpProof, SignedOperation,
-            channel::{
-                ChannelId, MsgId, VerifiedChannelKeys,
-                config::ChannelConfigValidationContext,
-                inscribe::{Inscription, InscriptionOp},
+use logos_blockchain_zone_sdk::{
+    core::{
+        era::ForkDigest,
+        mantle::{
+            SignedOps,
+            channel::Channels,
+            ledger::{VerifiableOperation as _, verification_mode::StandardMode},
+            ops::{
+                Op, OpProof, SignedOperation,
+                channel::{
+                    ChannelId, MsgId, VerifiedChannelKeys,
+                    config::ChannelConfigValidationContext,
+                    inscribe::{Inscription, InscriptionOp},
+                },
+            },
+            transactions::{
+                MantleTxBuilder, OpProofs,
+                hash::{TxHash, TxHashView},
+                states::Unverified,
             },
         },
-        transactions::{
-            MantleTxBuilder, OpProofs,
-            hash::{TxHash, TxHashView},
-            states::Unverified,
-        },
     },
+    key_management_system_service::keys::Ed25519Key,
+    node_types::HeaderId,
+    sequencer::ChannelUpdateTx,
 };
-use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-use logos_blockchain_zone_sdk::{node_types::HeaderId, sequencer::ChannelUpdateTx};
 
 use super::{
     BlockSummary, NodeReader, keep_newest_block_summaries,

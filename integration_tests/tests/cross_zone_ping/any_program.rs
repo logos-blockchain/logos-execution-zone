@@ -25,7 +25,7 @@ use lee::{
     AccountId, Actor, PrivateKey, PublicKey, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
-use logos_blockchain_core::mantle::ops::channel::ChannelId;
+use logos_blockchain_zone_sdk::core::mantle::ops::channel::ChannelId;
 use ping_core::{ReceiverMessage, ping_record_pda, receiver_config_account_id};
 use program_loader_core::MAX_SEGMENT_DATA_LEN;
 use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};

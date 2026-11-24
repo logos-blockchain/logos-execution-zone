@@ -5,9 +5,9 @@ use std::{future::Future, time::Duration};
 
 use async_trait::async_trait;
 use futures::StreamExt as _;
-use logos_blockchain_core::mantle::ledger::verification_mode::StandardMode;
 use logos_blockchain_zone_sdk::{
     adapter::{BoxStream, Node},
+    core::mantle::ledger::verification_mode::StandardMode,
     http_api_common::bodies::mantle::LimitsResponseBody,
     node_types::{
         ApiBlock, BlockInfo, ChainServiceInfo, ChannelId, ChannelState, Error, Events, HeaderId,

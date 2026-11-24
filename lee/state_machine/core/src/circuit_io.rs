@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     AuthorizationSecretKey, Commitment, CommitmentSetDigest, InvalidMembershipProof,
     MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey,
-    account::{Account, AccountId, Actor, Balance, Nonce},
+    account::{Account, AccountId, Actor, Balance, Fee, Nonce},
     compute_digest_for_path,
     encryption::{EncryptedNote, ViewingPublicKey},
     execution_state::{Boundary, PredictedCrossMessages, PublicExecutionContext, TransactionEntry},
@@ -151,6 +151,8 @@ pub struct FeeTransfer {
     /// A public account the zone returns any unspent part of the transfer to; `None` returns it
     /// to `payer` as presented.
     pub refund_to: Option<AccountId>,
+    /// The part of `amount` the zone pays its producer as a tip.
+    pub tip: Fee,
 }
 
 /// What a proof commits about its fee transfer, see [`FeeTransfer`].
@@ -158,6 +160,7 @@ pub struct FeeTransfer {
 #[cfg_attr(any(feature = "host", test), derive(Debug, Clone, PartialEq, Eq))]
 pub struct ProvenFee {
     pub refund_to: Option<AccountId>,
+    pub tip: Fee,
     /// What settlement applies instead of the private actions when the public part fails, if the
     /// payer's pre-state covers the transfer on its own.
     pub fallback: Option<FeeFallback>,

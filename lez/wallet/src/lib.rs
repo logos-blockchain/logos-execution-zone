@@ -79,9 +79,10 @@ pub const HOME_DIR_ENV_VAR: &str = "LEE_WALLET_HOME_DIR";
 /// Env var holding the storage password, read instead of prompting for it.
 pub const PASSWORD_ENV_VAR: &str = "LEE_WALLET_PASSWORD";
 
-/// Default execution gas limit for wallet-built public transactions: roughly
-/// three times the widest measured program call, one fifth of the per-block cap.
-pub const DEFAULT_GAS_LIMIT: u64 = 2_000_000;
+/// Default execution gas limit for wallet-built public transactions,
+/// equal to the max cap since dry-runs will determine the correct fee anyways,
+/// or the excess will be refunded in the end.
+pub const DEFAULT_GAS_LIMIT: u64 = fee_core::market::MAX_GAS_EXEC;
 
 /// Base fee the default `max_fee` is sized against: 8x the genesis minimum,
 /// so defaults survive early congestion without re-signing.
@@ -2088,6 +2089,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 recipient: fee_inbox,
                 amount: fee_floor,
                 refund_to: None,
+                tip: self.fee_params.tip,
             });
             if run_unproven(probe, acc_manager.presenter(Some((payer, opening))))
                 .await?
@@ -2096,7 +2098,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 return send_publicly_paid(signer, input).await;
             }
         }
-        let refund_to = self.fee_params.refund_to;
+        let FeeParams { refund_to, tip, .. } = self.fee_params;
         if let Some(target) = refund_to
             && !acc_manager
                 .public_actors()
@@ -2119,6 +2121,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 recipient: fee_inbox,
                 amount,
                 refund_to,
+                tip,
             });
             priced
         };
@@ -2206,6 +2209,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             let fee = PrivateFee {
                 payer,
                 reserve,
+                tip,
                 refund_to,
             };
             if self.dry_run {
@@ -2290,13 +2294,15 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         wire_bytes: u64,
     ) -> ReservePricing {
         let (exec_ceiling, stor_ceiling) = self.base_fee_ceilings(quote);
+        let tip = u128::from(self.fee_params.tip);
         ReservePricing {
             fee_at_head: fee_core::assess::private_fee_required(
                 cycles,
                 wire_bytes,
                 quote.base_fee_exec,
                 quote.base_fee_stor,
-            ),
+            )
+            .saturating_add(tip),
             exec_ceiling,
             stor_ceiling,
             headroom_reserve: fee_core::assess::private_fee_required(
@@ -2304,7 +2310,8 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 wire_bytes,
                 exec_ceiling,
                 stor_ceiling,
-            ),
+            )
+            .saturating_add(tip),
         }
     }
 

@@ -1,4 +1,4 @@
-use testing_framework_core::scenario::DynError;
+use logos_blockchain_zone_sdk::testing_framework_core::scenario::DynError;
 use thiserror::Error;
 
 /// Errors reported by Cucumber step implementations.

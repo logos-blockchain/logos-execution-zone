@@ -1123,6 +1123,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
             recipient,
             amount,
             refund_to: _,
+            tip: _,
         }) = fee
         else {
             return;

@@ -670,7 +670,7 @@ fn bedrock_actor_args(
     _node_url: Url,
     _basic_auth: Option<BasicAuthCredentials>,
     _channel_id: ChannelId,
-    _storage_ref: ActorRef<StorageActor>,
+    storage_ref: ActorRef<StorageActor>,
     _broker_ref: ActorRef<Broker<sequencer_bedrock_actor::protocol::ChannelEvent>>,
     _backfill_batch_slots: NonZero<u64>,
 ) -> BedrockActor {
@@ -691,8 +691,19 @@ fn bedrock_actor_args(
     mock.expect_handle_follow_channel()
         .returning(|_msg, _ctx| Ok(()));
 
+    // The mock doesn't keep a chain of its own, so the channel will exist once the store holds
+    // blocks.
     mock.expect_handle_get_channel_tip_slot()
-        .returning(|_msg, _ctx| Ok(Some(Slot::from(0))));
+        .returning(move |_msg, _ctx| {
+            let stored_tip = tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    storage_ref
+                        .ask(sequencer_storage_actor::protocol::GetLatestBlockMeta)
+                        .await
+                })
+            })?;
+            Ok(stored_tip.map(|_| Slot::from(0)))
+        });
 
     mock.expect_handle_read_channel()
         .returning(|_msg, _ctx| Ok(Box::pin(futures::stream::empty())));

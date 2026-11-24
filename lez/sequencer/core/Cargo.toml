@@ -33,9 +33,6 @@ cross_zone.workspace = true
 cross_zone_inbox_core.workspace = true
 sequencer_stake_core.workspace = true
 
-logos-blockchain-key-management-system-service.workspace = true
-logos-blockchain-core.workspace = true
-logos-blockchain-binary-codec.workspace = true
 kameo.workspace = true
 kameo_actors.workspace = true
 anyhow.workspace = true
@@ -71,4 +68,3 @@ program_loader_core.workspace = true
 lee = { workspace = true, features = ["test-utils"] }
 key_protocol.workspace = true
 ping_core.workspace = true
-logos-blockchain-node.workspace = true
