@@ -18,12 +18,11 @@ use crate::{
     BedrockActorTrait, Result,
     error::Error,
     protocol::{
-        AccreditedKeys, ChangeChannelConfig, ChannelId, ChannelReadStream, CheckChannelExists,
-        CheckIsOurTurn, CreateChannel, FilterFinallyAbsent, FollowChannel, FollowStart,
-        GetAccreditedKeys, GetChannelNotes, GetChannelTipMessageId, GetChannelTipSlot,
-        InitializeChannelPublisher, MsgId, NoteId, PendingBlock, PrepareConfig, PreparePin,
-        PreparedConfig, PreparedPin, PublishBlock, PublishOutcome, PublishPin, ReadChannel,
-        SequencerKey, Slot,
+        AccreditedKeys, ChangeChannelConfig, ChannelId, CheckChannelExists, CheckIsOurTurn,
+        CreateChannel, FilterFinallyAbsent, FollowChannel, FollowStart, GetAccreditedKeys,
+        GetChannelNotes, GetChannelTipMessageId, GetChannelTipSlot, InitializeChannelPublisher,
+        MsgId, NoteId, PendingBlock, PrepareConfig, PreparePin, PreparedConfig, PreparedPin,
+        PublishBlock, PublishOutcome, PublishPin, SequencerKey, Slot,
     },
 };
 
@@ -146,12 +145,6 @@ mockall::mock! {
             msg: GetChannelTipMessageId,
             ctx: &mut Context<Self, Result<Option<MsgId>>>
         ) -> Result<Option<MsgId>>;
-
-        pub fn handle_read_channel(
-            &mut self,
-            msg: ReadChannel,
-            ctx: &mut Context<Self, Result<ChannelReadStream>>
-        ) -> Result<ChannelReadStream>;
 
         pub fn handle_filter_finally_absent(
             &mut self,
@@ -365,18 +358,6 @@ impl Message<GetChannelTipMessageId> for MockBedrockActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_get_channel_tip_message_id(msg, ctx)
-    }
-}
-
-impl Message<ReadChannel> for MockBedrockActor {
-    type Reply = Result<ChannelReadStream>;
-
-    async fn handle(
-        &mut self,
-        msg: ReadChannel,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_read_channel(msg, ctx)
     }
 }
 

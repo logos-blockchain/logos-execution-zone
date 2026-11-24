@@ -43,7 +43,6 @@ pub struct SequencerSetup {
     bedrock_addr: SocketAddr,
     channel_id: ChannelId,
     genesis_transactions: Option<Vec<GenesisAction>>,
-    cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
     channel_signing_key: Option<UnsecuredEd25519Key>,
     gossip: Option<sequencer_core::config::GossipConfig>,
     joining: bool,
@@ -57,7 +56,6 @@ impl SequencerSetup {
             bedrock_addr,
             channel_id: config::bedrock_channel_id(),
             genesis_transactions: None,
-            cross_zone: None,
             channel_signing_key: None,
             gossip: None,
             joining: false,
@@ -69,14 +67,6 @@ impl SequencerSetup {
     #[must_use]
     pub const fn with_channel_id(mut self, channel_id: ChannelId) -> Self {
         self.channel_id = channel_id;
-        self
-    }
-
-    /// Set the cross-zone configuration to use for the sequencer.
-    /// If not set, the sequencer will be configured to run in single-zone mode.
-    #[must_use]
-    pub fn with_cross_zone(mut self, cross_zone: sequencer_core::config::CrossZoneConfig) -> Self {
-        self.cross_zone = Some(cross_zone);
         self
     }
 
@@ -159,7 +149,6 @@ impl SequencerSetup {
             bedrock_addr,
             channel_id,
             genesis_transactions,
-            cross_zone,
             channel_signing_key,
             gossip,
             joining,
@@ -215,7 +204,6 @@ impl SequencerSetup {
             bedrock_addr,
             channel_id,
             genesis_transactions,
-            cross_zone,
             gossip,
         )
         .context("Failed to create Sequencer config")?;
@@ -520,18 +508,11 @@ pub async fn setup_bedrock_node_with_settings(
 pub async fn setup_indexer(
     bedrock_addr: SocketAddr,
     channel_id: ChannelId,
-    cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
 ) -> Result<(IndexerHandle, TempDir)> {
     let temp_indexer_dir =
         tempfile::tempdir().context("Failed to create temp dir for indexer home")?;
 
-    let handle = setup_indexer_at(
-        bedrock_addr,
-        channel_id,
-        cross_zone,
-        temp_indexer_dir.path(),
-    )
-    .await?;
+    let handle = setup_indexer_at(bedrock_addr, channel_id, temp_indexer_dir.path()).await?;
 
     Ok((handle, temp_indexer_dir))
 }
@@ -540,14 +521,13 @@ pub async fn setup_indexer(
 pub async fn setup_indexer_at(
     bedrock_addr: SocketAddr,
     channel_id: ChannelId,
-    cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
     home: &Path,
 ) -> Result<IndexerHandle> {
     std::fs::create_dir_all(home).context("Failed to create indexer home")?;
 
     debug!(home = %home.display(), "Using indexer home");
 
-    let indexer_config = config::indexer_config(bedrock_addr, channel_id, cross_zone)
+    let indexer_config = config::indexer_config(bedrock_addr, channel_id)
         .context("Failed to create Indexer config")?;
 
     indexer_service::run_server(

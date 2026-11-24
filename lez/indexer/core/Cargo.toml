@@ -18,8 +18,6 @@ common.workspace = true
 logos-blockchain-zone-sdk.workspace = true
 lee.workspace = true
 lee_core = { workspace = true, features = ["host"] }
-cross_zone.workspace = true
-cross_zone_inbox_core.workspace = true
 programs.workspace = true
 storage.workspace = true
 testnet_initial_state.workspace = true
@@ -37,12 +35,9 @@ serde_json.workspace = true
 async-stream.workspace = true
 tokio.workspace = true
 hex.workspace = true
-thiserror.workspace = true
 
 [dev-dependencies]
-cross_zone = { workspace = true, features = ["test-utils"] }
 tempfile.workspace = true
-ping_core.workspace = true
 test_guest_core.workspace = true
 test_programs.workspace = true
 bridge_core.workspace = true

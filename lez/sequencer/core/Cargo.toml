@@ -29,8 +29,6 @@ programs.workspace = true
 clock_core.workspace = true
 system_accounts.workspace = true
 system_upgrader_core.workspace = true
-cross_zone.workspace = true
-cross_zone_inbox_core.workspace = true
 sequencer_stake_core.workspace = true
 
 kameo.workspace = true
@@ -59,7 +57,6 @@ prove = ["lee/prove", "chain_state/prove"]
 
 [dev-dependencies]
 chain_state = { workspace = true, features = ["test-utils"] }
-cross_zone = { workspace = true, features = ["test-utils"] }
 sequencer_storage_actor = { workspace = true, features = ["actor", "mock"] }
 sequencer_bedrock_actor = { workspace = true, features = ["mock"] }
 futures.workspace = true
@@ -67,4 +64,3 @@ test_programs.workspace = true
 program_loader_core.workspace = true
 lee = { workspace = true, features = ["test-utils"] }
 key_protocol.workspace = true
-ping_core.workspace = true

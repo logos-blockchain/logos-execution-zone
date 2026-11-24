@@ -1,11 +1,7 @@
 use std::collections::{BTreeSet, HashSet};
 
 use chain_state::{AcceptOutcome, AnchorConsistencyCheck, ChainConsistency, ChainState};
-use common::{
-    HashType,
-    block::{Block, BlockMeta},
-};
-use kameo::actor::ActorRef;
+use common::{HashType, block::BlockMeta};
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
     protocol::{
@@ -187,7 +183,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
     }
 
     /// Applies one finalized channel entry, signed as `signed` says, adding what it changes to
-    /// `store_update`. A block the store already holds only settles its deliveries, a block that
+    /// `store_update`. A block the store already holds only settles its deposits, a block that
     /// does not apply is skipped, like the online state does. Advances the persisted anchor to a
     /// block the store holds after this, and reports the offence the entry proves before that.
     async fn apply_finalized_entry(
@@ -277,18 +273,13 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
             // A reconstructed block is finalized, so any deposit it mints is
             // permanently reflected in state (its receipt PDA); drop the
             // pending record backfill may have re-delivered, so the drain
-            // stops re-minting. The same for the deliveries it carries.
+            // stops re-minting.
             store_update.finalized_deposit_records.extend(
                 newly_final
                     .iter()
                     .flat_map(|block| block.body.transactions.iter())
                     .filter_map(sequencer_core::extract_bridge_deposit_id),
             );
-            for block in &newly_final {
-                store_update
-                    .finalized_dispatch_records
-                    .extend(sequencer_core::settled_dispatch_keys(storage_ref, block).await);
-            }
             store_update.blocks.extend(newly_final.iter().cloned());
             store_update.final_snapshot = self
                 .chain
@@ -323,12 +314,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
                 }
                 // A block we already hold verbatim needs no replay, but the
                 // channel serving it is what makes it irreversible, so its
-                // deposits and deliveries are settled and their records are
-                // owed nothing.
+                // deposits are settled and their records are owed nothing.
                 Some(AcceptOutcome::AlreadyApplied | AcceptOutcome::Parked(_))
                     if let Some(stored) = held_final =>
                 {
-                    Self::settle_reconstructed_deliveries(storage_ref, &stored).await?;
                     store_update.finalized_deposit_records.extend(
                         stored
                             .body
@@ -349,26 +338,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
                 }
             }
         }
-
-        Ok(())
-    }
-
-    /// Drops the records of deliveries carried by a reconstructed block.
-    async fn settle_reconstructed_deliveries(
-        storage_ref: &ActorRef<S>,
-        block: &Block,
-    ) -> Result<()> {
-        let keys = sequencer_core::settled_dispatch_keys(storage_ref, block).await;
-        if keys.is_empty() {
-            return Ok(());
-        }
-        storage_ref
-            .ask(
-                sequencer_storage_actor::protocol::DropSettledCrossZoneDispatches {
-                    message_keys: keys,
-                },
-            )
-            .await?;
 
         Ok(())
     }

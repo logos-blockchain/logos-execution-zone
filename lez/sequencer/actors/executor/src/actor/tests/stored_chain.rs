@@ -14,16 +14,12 @@ use sequencer_bedrock_actor::{
     mock::mock_msg_of,
     protocol::{Checkpoint, HeaderId, MsgId, SerializeOp as _, Slot},
 };
-use sequencer_core::config::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use sequencer_storage_actor::mock::CannedStore;
-
-/// The peer zone a delivery comes from.
-pub(in crate::actor) const PEER_ZONE: [u8; 32] = [0xbe_u8; 32];
 
 /// Genesis stored but not finalized, as a fresh store seeds it.
 pub(in crate::actor) fn fresh_store() -> CannedStore {
     let genesis = genesis();
-    let head_state = applied(&testnet_initial_state::initial_state(false), &genesis);
+    let head_state = applied(&testnet_initial_state::initial_state(), &genesis);
     CannedStore {
         blocks: BTreeMap::from([(genesis.header.block_id, genesis)]),
         head_state: Some(head_state),
@@ -34,45 +30,10 @@ pub(in crate::actor) fn fresh_store() -> CannedStore {
 /// Genesis finalized, over a state where the test producer collects fees.
 pub(in crate::actor) fn finalized_genesis_store() -> CannedStore {
     let state = applied(
-        &testnet_initial_state::initial_state(false).with_public_accounts([producer_seed()]),
+        &testnet_initial_state::initial_state().with_public_accounts([producer_seed()]),
         &genesis(),
     );
     finalized_genesis_over(state)
-}
-
-/// Genesis finalized over a state whose cross-zone inbox accepts pings from
-/// [`PEER_ZONE`], configured the way genesis configures it.
-pub(in crate::actor) fn cross_zone_genesis_store() -> CannedStore {
-    let cross_zone = CrossZoneConfig {
-        peers: vec![CrossZonePeer {
-            channel_id: PEER_ZONE,
-            allowed_routes: vec![CrossZoneRoute {
-                src_account_id: programs::ping_sender_account_id(),
-                target_account_id: programs::ping_receiver_account_id(),
-                mint_cap: None,
-            }],
-            min_committee_size: 0,
-            genesis_hash: None,
-            emitters: vec![],
-        }],
-        lock_target_zones: Vec::new(),
-        source_authority: None,
-        source_governance: None,
-    };
-    let mut state =
-        testnet_initial_state::initial_state(true).with_public_accounts([producer_seed()]);
-    for tx in [
-        cross_zone::build_wrapped_token_init_config_tx(&cross_zone),
-        cross_zone::build_ping_sender_init_config_tx(),
-        cross_zone::build_ping_receiver_init_config_tx(&cross_zone),
-        cross_zone::build_bridge_lock_init_config_tx(&cross_zone),
-        cross_zone::build_inbox_init_config_tx([0; 32]),
-    ] {
-        state
-            .transition_from_public_transaction(&tx, 1, 0)
-            .expect("cross-zone config initializes");
-    }
-    finalized_genesis_over(applied(&state, &genesis()))
 }
 
 /// Extends the head tier of `store` with `block`.
@@ -96,7 +57,7 @@ pub(in crate::actor) fn with_finalized(mut store: CannedStore, block: Block) -> 
 /// one before, as publishing them leaves it.
 pub(in crate::actor) fn with_view(mut store: CannedStore) -> CannedStore {
     let (final_state, final_tip) = store.final_snapshot.clone().map_or_else(
-        || (testnet_initial_state::initial_state(false), None),
+        || (testnet_initial_state::initial_state(), None),
         |(state, meta)| (state, Some(Tip::from(meta))),
     );
     let boundary = final_tip.as_ref().map_or(0, |tip| tip.block_id);

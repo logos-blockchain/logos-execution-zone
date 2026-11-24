@@ -12,9 +12,7 @@
 //! Omitting it is rejected outright ([`ClassifyError::MissingFeeDeclaration`],
 //! [`ClassifyError::MissingPrivateFee`]).
 
-use common::transaction::{
-    LeeTransaction, is_cross_zone_lock, is_sequencer_stake_operation, validate_reward_target,
-};
+use common::transaction::{LeeTransaction, is_sequencer_stake_operation, validate_reward_target};
 use fee_core::{assess::FeeTxView, market};
 use lee::{FeeDeclaration, privacy_preserving_transaction::Message as PrivateMessage};
 use lee_core::{
@@ -38,7 +36,7 @@ pub enum ClassifyError {
     #[error("unserializable transaction: {0}")]
     Unserializable(#[from] borsh::io::Error),
     /// A user public transaction omitted its required fee declaration. Only the
-    /// system-shaped exemptions (bridge deposit, cross-zone dispatch, genesis)
+    /// system-shaped exemptions (bridge deposit, system upgrade, genesis)
     /// may omit it; exempting an arbitrary one would execute it for free.
     #[error("user public transaction omits its required fee declaration")]
     MissingFeeDeclaration,
@@ -213,14 +211,8 @@ pub fn classify(tx: &LeeTransaction, is_genesis: bool) -> Result<FeeClass, Class
     };
 
     // System injections carry an empty witness set and are enumerated by
-    // shape: bridge deposits and cross-zone dispatches.
+    // shape: bridge deposits and system upgrades.
     if common::transaction::is_system_injection(tx) {
-        return Ok(FeeClass::Exempt);
-    }
-
-    // A cross-zone outbound lock is signed by the holder but has no spendable
-    // account to charge: its funds move from the holding PDA into escrow.
-    if is_cross_zone_lock(tx) {
         return Ok(FeeClass::Exempt);
     }
 

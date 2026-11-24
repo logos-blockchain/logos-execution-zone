@@ -284,12 +284,10 @@ pub fn clock_invocation(block_id: BlockId, timestamp: Timestamp) -> lee::PublicT
 
 /// Whether `tx` is a sequencer-injected system transaction.
 ///
-/// Identified by shape: an empty witness set invoking the bridge deposit, the
-/// cross-zone inbox dispatch or `system_upgrader`, the transactions only the
-/// sequencer builds. Fee- and cap-exempt: none has a payer to charge. Shared by
-/// the sequencer (build) and the transition (replay) so the two can never
-/// disagree. An outbound send (`ping_sender::Send`) is deliberately not here:
-/// it pays like any user transaction (#799).
+/// Identified by shape: an empty witness set invoking the bridge deposit or
+/// `system_upgrader`, the transactions only the sequencer builds. Fee- and
+/// cap-exempt: none has a payer to charge. Shared by the sequencer (build) and
+/// the transition (replay) so the two can never disagree.
 #[must_use]
 pub fn is_system_injection(tx: &LeeTransaction) -> bool {
     let LeeTransaction::Public(public_tx) = tx else {
@@ -310,32 +308,7 @@ pub fn is_system_injection(tx: &LeeTransaction) -> bool {
             Ok(bridge_core::Message::Deposit { .. })
         );
     }
-    if program_account_id == programs::cross_zone_inbox_account_id() {
-        return matches!(
-            borsh::from_slice::<cross_zone_inbox_core::Message>(message),
-            Ok(cross_zone_inbox_core::Message::Dispatch(_))
-        );
-    }
     crate::system_upgrades::is_system_upgrader_tx(tx)
-}
-
-/// Whether `tx` is a cross-zone outbound lock (`bridge_lock::Lock`).
-///
-/// Fee-exempt though signed: the lock debits a holding PDA into escrow, so
-/// nothing spendable is left to charge. The empty-witness shape in
-/// [`is_system_injection`] misses it.
-#[must_use]
-pub fn is_cross_zone_lock(tx: &LeeTransaction) -> bool {
-    let Some((to, message)) = tx.public_call() else {
-        return false;
-    };
-    if to.program_account_id != programs::bridge_lock_account_id() {
-        return false;
-    }
-    matches!(
-        borsh::from_slice::<bridge_lock_core::Message>(message),
-        Ok(bridge_lock_core::Message::Lock { .. })
-    )
 }
 
 /// Whether `tx` invokes the sequencer-stake program.
@@ -608,8 +581,7 @@ fn validate_bridge_account_modification(
 }
 
 /// Rejects a diff that writes system state a user transaction may not: the
-/// clock and fee accounts never, the bridge only by a deposit's debit, and any
-/// account's inbox actor state only by a dispatch.
+/// clock and fee accounts never, the bridge only by a deposit's debit.
 pub fn validate_user_state_modification(
     tx: &LeeTransaction,
     state: &V03State,
@@ -622,9 +594,6 @@ pub fn validate_user_state_modification(
         .map(|(to, _)| to.program_account_id);
     if injected_program != Some(programs::bridge_account_id()) {
         validate_bridge_account_modification(state, diff, matches!(tx, LeeTransaction::Public(_)))?;
-    }
-    if injected_program != Some(programs::cross_zone_inbox_account_id()) {
-        validate_no_inbox_state_modification(state, diff)?;
     }
     if injected_program != Some(system_upgrader_core::SYSTEM_UPGRADER_ACCOUNT_ID) {
         validate_no_system_registry_modification(state, diff)?;
@@ -653,29 +622,6 @@ fn validate_no_system_registry_modification(
     if modified {
         Err(lee::error::LeeError::InvalidInput(
             "Transaction modifies system_upgrader's registry".to_owned(),
-        ))
-    } else {
-        Ok(())
-    }
-}
-
-/// Rejects a diff that changes any account's cross-zone inbox actor state.
-fn validate_no_inbox_state_modification(
-    state: &V03State,
-    diff: &ValidatedStateDiff,
-) -> Result<(), lee::error::LeeError> {
-    let inbox = programs::cross_zone_inbox_account_id();
-    let modified = diff.public_diff().iter().any(|(account_id, post)| {
-        state
-            .get_account_by_id(*account_id)
-            .data
-            .actor_states
-            .get(&inbox)
-            != post.data.actor_states.get(&inbox)
-    });
-    if modified {
-        Err(lee::error::LeeError::InvalidInput(
-            "Transaction modifies cross-zone inbox state".to_owned(),
         ))
     } else {
         Ok(())
@@ -965,17 +911,6 @@ mod tests {
         state_and_diff(system_accounts::bridge_account_id(), pre, post)
     }
 
-    /// An account gaining a cross-zone inbox actor state.
-    fn inbox_state_write() -> (V03State, lee::ValidatedStateDiff) {
-        let pre = Account::funded(0);
-        let mut post = pre.clone();
-        post.data.set_actor_state(
-            programs::cross_zone_inbox_account_id(),
-            lee::ActorState::from(vec![1]),
-        );
-        state_and_diff(AccountId::new([5; 32]), pre, post)
-    }
-
     #[test]
     fn a_private_transaction_credits_the_inbox_its_reserve_and_nothing_more() {
         let credit = |amount: u128| {
@@ -1079,44 +1014,5 @@ mod tests {
                 .is_err()
         );
         assert!(validate_user_state_modification(&signed_transfer(), &state, &diff).is_err());
-    }
-
-    #[test]
-    fn no_user_transaction_may_write_inbox_state() {
-        let (state, diff) = inbox_state_write();
-        assert!(validate_user_state_modification(&injected_deposit(), &state, &diff).is_err());
-        assert!(validate_user_state_modification(&signed_transfer(), &state, &diff).is_err());
-    }
-
-    #[test]
-    fn an_unsigned_ping_send_is_not_a_system_injection() {
-        let sender_id = programs::ping_sender_account_id();
-        let config = lee::Actor::new(AccountId::new([7; 32]), sender_id);
-        let outbox = lee::Actor::new(
-            AccountId::new([8; 32]),
-            programs::cross_zone_outbox_account_id(),
-        );
-        let send = ping_core::SenderMessage::Send {
-            outbox,
-            emission: ping_core::CrossZoneEmission {
-                target_zone: [2; 32],
-                target_account_id: AccountId::new([9; 32]),
-                target_accounts: vec![],
-                payload: vec![1],
-                ordinal: 0,
-            },
-        };
-        let message = lee::public_transaction::Message::try_new(
-            config,
-            vec![config, outbox],
-            BTreeMap::new(),
-            send,
-        )
-        .expect("build send message");
-        let tx = crate::transaction::LeeTransaction::Public(lee::PublicTransaction::new(
-            message,
-            lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
-        ));
-        assert!(!super::is_system_injection(&tx));
     }
 }

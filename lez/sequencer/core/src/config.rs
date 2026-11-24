@@ -8,7 +8,6 @@ use std::{
 use anyhow::{Context as _, Result, ensure};
 pub use bridge_core::DepositRecipient;
 use common::config::BasicAuth;
-pub use cross_zone::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use humantime_serde;
 use logos_blockchain_zone_sdk::{
     core::mantle::ops::channel::ChannelId, key_management_system_service::keys::ZkPublicKey,
@@ -82,11 +81,6 @@ pub struct SequencerConfig {
     /// What creating the channel writes into genesis; only read when the channel does not exist.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub genesis: Option<GenesisConfig>,
-    /// Presence selects the genesis program set, must match the indexer's, and
-    /// cannot change on an existing chain. A source-only zone declares
-    /// `"cross_zone": {"lock_target_zones": []}`.
-    #[serde(default)]
-    pub cross_zone: Option<CrossZoneConfig>,
     /// Address the Prometheus metrics exporter binds to.
     #[serde(default = "default_metrics_listen_address")]
     pub metrics_listen_address: Option<SocketAddr>,
@@ -170,7 +164,6 @@ impl SequencerConfig {
         let mut spec = GenesisSpec {
             channel_id: *self.bedrock_config.channel_id.as_ref(),
             channel_params: default_channel_params(),
-            cross_zone: self.cross_zone.clone(),
             actions: Vec::new(),
         };
         let Some(genesis) = &self.genesis else {

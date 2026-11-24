@@ -381,8 +381,8 @@ async fn indexer_diagnosis(ctx: &TestContext) -> String {
 
     match tokio::time::timeout(INDEXER_STATUS_TIMEOUT, ctx.indexer_client().get_status()).await {
         Ok(Ok(status)) => format!(
-            "Indexer state {:?}, last error {:?}, stall reason {:?}, cross-zone halt {:?}",
-            status.state, status.last_error, status.stall_reason, status.cross_zone_halt
+            "Indexer state {:?}, last error {:?}, stall reason {:?}",
+            status.state, status.last_error, status.stall_reason
         ),
         Ok(Err(err)) => format!("Indexer status unavailable: {err}"),
         Err(_elapsed) => format!("Indexer status did not answer within {INDEXER_STATUS_TIMEOUT:?}"),

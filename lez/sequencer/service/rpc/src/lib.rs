@@ -6,9 +6,9 @@ pub use jsonrpsee::types::ErrorObjectOwned;
 pub use jsonrpsee::{core::ClientError, http_client::HttpClientBuilder as SequencerClientBuilder};
 use sequencer_service_protocol::{
     Account, AccountId, Actor, Block, BlockId, ChannelId, Commitment, CommitmentPosition,
-    CommitmentSetDigest, CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, EncryptedNote,
-    HashType, LeeTransaction, MembershipProof, Nonce, PageLimit, ProgramId, PublicationsPage,
-    SequencerStatus, SystemProposalReport, TransactionReceipt,
+    CommitmentSetDigest, EncryptedNote, HashType, LeeTransaction, MembershipProof, Nonce,
+    PageLimit, ProgramId, PublicationsPage, SequencerStatus, SystemProposalReport,
+    TransactionReceipt,
 };
 pub use sequencer_service_protocol::{FeeStateQuote, HexBytes};
 
@@ -157,31 +157,6 @@ pub trait Rpc {
     /// What the sequencer is doing: bootstrapping from the channel, or online.
     #[method(name = "getSequencerStatus")]
     async fn get_sequencer_status(&self) -> Result<SequencerStatus, ErrorObjectOwned>;
-
-    /// The cross-zone deliveries this sequencer has given up on.
-    ///
-    /// Its own method rather than folded into `checkHealth`: one undeliverable
-    /// peer message must not read as an unhealthy node.
-    #[method(name = "getCrossZoneDeadLetters")]
-    async fn get_cross_zone_dead_letters(
-        &self,
-    ) -> Result<CrossZoneDeadLetterReport, ErrorObjectOwned>;
-
-    /// Restores a dead-lettered cross-zone delivery to the pending list, with a
-    /// clean attempt count.
-    ///
-    /// The operator move once the cause of the failures has cleared: a raised
-    /// mint cap, a fixed target program. A delivery that fails again is
-    /// dead-lettered again.
-    ///
-    /// Like the rest of this surface it carries no authentication, so anyone
-    /// who can reach the RPC can requeue; the blast radius is bounded to
-    /// re-attempting deliveries this node already accepted from a peer.
-    #[method(name = "requeueCrossZoneDeadLetter")]
-    async fn requeue_cross_zone_dead_letter(
-        &self,
-        message_key: HashType,
-    ) -> Result<CrossZoneDeadLetterRequeue, ErrorObjectOwned>;
 
     /// Hands the node a committee member's approval of a `system_upgrader` change: a borsh
     /// `SignedApproval`, as `approve_system_change` prints it.
