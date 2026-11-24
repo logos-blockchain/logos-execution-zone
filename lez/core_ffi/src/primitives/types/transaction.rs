@@ -1161,9 +1161,13 @@ mod tests {
     #[test]
     fn a_private_transactions_fee_roundtrips_over_the_ffi() {
         // The proof commits to its fee, so a transaction rebuilt without it fails verification.
+        // Fields apart from each other, so one landing in another's place is caught.
         let fallback = FeeFallback {
+            nullifier: Nullifier::from_byte_array([71; 32]),
+            root: [72; 32],
+            commitment: Commitment::from_byte_array([73; 32]),
+            ciphertext: Ciphertext::from_inner(vec![74; 3]),
             boundary: vec![BoundaryStep::EndPublicSubtree],
-            ..FeeFallback::default()
         };
         for fee in [
             None,

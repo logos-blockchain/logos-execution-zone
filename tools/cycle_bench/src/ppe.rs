@@ -52,11 +52,6 @@ pub fn run_all(fee_case: Option<usize>) -> Vec<PpeBenchResult> {
     }
     let mut results = Vec::new();
 
-    for case in ppe_impl::FeeCase::ALL {
-        eprintln!("PPE: running a deshielding transfer fee case");
-        results.push(ppe_impl::run_fee_transfer(case));
-    }
-
     // What `AccountManager::PADDED_PRIVATE_ACTIONS` padding actually costs: the transfer's private
     // recipient takes 1 of the 7 actions, so a real wallet tx carries 6 dummies.
     for count in [0_usize, 2, 3, 6] {
@@ -67,6 +62,11 @@ pub fn run_all(fee_case: Option<usize>) -> Vec<PpeBenchResult> {
     for depth in [1_u32, 3, 5, 9] {
         eprintln!("PPE: running scripted to native Transfer depth={depth}");
         results.push(ppe_impl::run_scripted_transfers(depth));
+    }
+
+    for case in ppe_impl::FeeCase::ALL {
+        eprintln!("PPE: running a deshielding transfer fee case");
+        results.push(ppe_impl::run_fee_transfer(case));
     }
 
     results

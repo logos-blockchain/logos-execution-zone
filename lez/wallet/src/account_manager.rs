@@ -959,8 +959,6 @@ struct AccountPreparedData {
     address_openings: BTreeSet<[u8; 32]>,
 }
 
-/// Builds a witness kind from the account kind and the key holding the account.
-/// PDAs use their authority and seed instead of an authorization key, and hold only its `nsk`.
 /// The ephemeral key the circuit encrypts `pre`'s successor note under.
 fn note_esk(pre: &AccountPreparedData) -> EphemeralSecretKey {
     let nonce = pre
@@ -971,6 +969,8 @@ fn note_esk(pre: &AccountPreparedData) -> EphemeralSecretKey {
     EphemeralSecretKey::new(&pre.pre_state.account_id, &pre.random_seed, &nonce)
 }
 
+/// Builds a witness kind from the account kind and the key holding the account.
+/// PDAs use their authority and seed instead of an authorization key, and hold only its `nsk`.
 fn witness_kind(kind: &PrivateAccountKind, key: RegularKey) -> WitnessKind {
     match kind {
         PrivateAccountKind::Regular => WitnessKind::Regular(key),
@@ -1522,6 +1522,15 @@ mod tests {
         let recovery = manager.fee_recovery(payer_id, [7; 32]).unwrap();
         assert_eq!(recovery.recipient.account_id(), payer_id);
         assert_eq!(recovery.recipient.address(), payer_id.blinded(&[7; 32]));
+        // Under the key the circuit derives for the payer's note, so it encapsulates once for both.
+        let nsk = NullifierSecretKey::from(&AuthorizationSecretKey([3; 32]));
+        let nonce = Account::funded(1)
+            .nonce
+            .private_account_nonce_increment(&nsk);
+        assert_eq!(
+            recovery.esk.0,
+            EphemeralSecretKey::new(&payer_id, &[0; 32], &nonce).0
+        );
     }
 
     #[test]

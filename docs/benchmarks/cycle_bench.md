@@ -107,6 +107,21 @@ The chain-sweep callee here is the native token program, which has no guest to p
 
 `proof_bytes` is constant across every case: a succinct receipt proves RISC Zero's fixed recursion circuit, and the pruned claim drops the copy of the journal the message already carries.
 
+The wall times above predate the release profile's fat LTO and single codegen unit, which cut the circuit's cycles by about a fifth.
+
+### Fee cases (`--ppe-fee-case N`)
+
+A deshielding transfer from one private account, which also pays the fee inside the proof. These rows close a plain `--ppe` run; `--ppe-fee-case N` runs one alone, so that with `RISC0_PPROF_OUT` set the profile left behind is that case's circuit run. `user_cycles` is the profile's total, measured under `RISC0_DEV_MODE=1` with the fat-LTO profile.
+
+| N | Case | user_cycles |
+|---:|---|---:|
+| 0 | deshield, no fee | 935,661 |
+| 1 | deshield, fee, recovery under its own key | 1,798,282 |
+| 2 | deshield, fee, recovery under the note key | 1,067,424 |
+| 3 | deshield, fee, public refund target | 1,010,643 |
+
+One ML-KEM encapsulation costs about 740k cycles, and a private payer's fee needs none beyond its note's: the fee fallback shares the note's encapsulation, and so does the refund's recovery binding when it is bound under the note's ephemeral key, as the wallet does (case 2). A binding under a key of its own pays for a second encapsulation (case 1). A refund to a public target needs no binding (case 3).
+
 ## Verifier (criterion bench)
 
 One PPE receipt generated once (native Transfer in PPE), then `Receipt::verify(PRIVACY_PRESERVING_CIRCUIT_ID)` measured under criterion's statistical sampler. Bench file: `tools/cycle_bench/benches/verify.rs`. Setup (one full PPE prove) is outside the timed `iter` loop.
@@ -131,6 +146,8 @@ Criterion sample_size = 100, measurement_time = 15 s, warm_up_time = 2 s. Slope-
 cargo run --release -p cycle_bench -- --exec-iters 50
 cargo run --release -p cycle_bench --features prove -- --prove
 cargo run --release -p cycle_bench --features ppe -- --prove --ppe
+# One fee case alone, leaving its cycle profile behind:
+RISC0_DEV_MODE=1 RISC0_PPROF_OUT=fee.pb cargo run --release -p cycle_bench --features ppe -- --ppe --ppe-fee-case 2
 
 # Verifier microbench via criterion:
 cargo bench -p cycle_bench --features ppe --bench verify

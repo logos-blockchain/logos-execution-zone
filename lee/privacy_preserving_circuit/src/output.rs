@@ -415,6 +415,20 @@ mod tests {
         bytes.to_vec().into()
     }
 
+    /// The fee's credit crossing into `inbox`.
+    fn fee_crossing(inbox: AccountId, amount: u128) -> BoundaryStep {
+        BoundaryStep::PrivateToPublic(lee_core::execution_state::Delivery {
+            envelope: lee_core::program::MessageEnvelope {
+                from: Actor::native_balance(AccountId::new([9; 32])),
+                to: Actor::native_balance(inbox),
+                message: borsh::to_vec(&native_token::Message::Credit(amount)).unwrap(),
+            },
+            inherited_authorizations: BTreeSet::new(),
+            inherits_entry_authorizations: true,
+            pda_seeds: BTreeSet::new(),
+        })
+    }
+
     #[test]
     fn one_note_per_private_account_carries_its_touched_actor_states() {
         let owner = Owner::new(3);
@@ -533,19 +547,7 @@ mod tests {
             refund_to: None,
             tip: 0,
         };
-        let crossing = |amount| {
-            BoundaryStep::PrivateToPublic(lee_core::execution_state::Delivery {
-                envelope: lee_core::program::MessageEnvelope {
-                    from: Actor::native_balance(AccountId::new([9; 32])),
-                    to: Actor::native_balance(inbox),
-                    message: borsh::to_vec(&native_token::Message::Credit(amount)).unwrap(),
-                },
-                inherited_authorizations: BTreeSet::new(),
-                inherits_entry_authorizations: true,
-                pda_seeds: BTreeSet::new(),
-            })
-        };
-        let boundary = vec![crossing(30), BoundaryStep::EndPublicSubtree];
+        let boundary = vec![fee_crossing(inbox, 30), BoundaryStep::EndPublicSubtree];
 
         let (main, key) = private_action(&witness, Account::funded(70).data, None);
         let fallback = fee_fallback(&fee, &boundary, &witness, &main, &key, None)
@@ -568,7 +570,7 @@ mod tests {
         );
         assert_eq!(
             fallback.boundary,
-            vec![crossing(30), BoundaryStep::EndPublicSubtree]
+            vec![fee_crossing(inbox, 30), BoundaryStep::EndPublicSubtree]
         );
         // Under keys apart: the same state encrypts differently.
         assert_ne!(
@@ -583,21 +585,108 @@ mod tests {
     }
 
     #[test]
+    fn the_fee_fallback_and_recovery_follow_the_payers_action_through_the_output() {
+        // The payer is not the first witness, and padding reorders the actions.
+        let (other, payer) = (Owner::new(4), Owner::new(3));
+        let account = Account::funded(100);
+        let witnesses = [
+            other.update_witness(Account::funded(50)),
+            payer.update_witness(account.clone()),
+        ];
+        let inbox = AccountId::new([8; 32]);
+        let (_, key) = private_action(&witnesses[1], Account::funded(40).data, None);
+        let recovery = RecipientEncryption {
+            recipient: lee_core::Recipient {
+                npk: NullifierPublicKey::from(&payer.nsk()),
+                vpk: payer.vpk(),
+                kind: PrivateAccountKind::Regular,
+                opening: Some([4; 32]),
+            },
+            esk: key.esk,
+        };
+
+        let output = compute_circuit_output(
+            PrivatePartOutcome {
+                validity: ValidityWindows::new_unbounded(),
+                private_accounts: [
+                    (other.account_id(), Account::funded(50).data),
+                    (payer.account_id(), Account::funded(40).data),
+                ]
+                .into(),
+                boundary: vec![fee_crossing(inbox, 30), BoundaryStep::EndPublicSubtree],
+                async_messages: Vec::new(),
+            },
+            PublicExecutionContext::default(),
+            None,
+            &witnesses,
+            Vec::new(),
+            (0..3)
+                .map(|tag| DummyInput {
+                    nullifier_seed: [tag; 32],
+                    commitment_root: [4; 32],
+                    output: DummyOutput {
+                        commitment_seed: [tag; 32],
+                        note: note(tag).encrypted_post_state,
+                    },
+                })
+                .collect(),
+            None,
+            Vec::new(),
+            std::slice::from_ref(&recovery),
+            Vec::new(),
+            Some(FeeTransfer {
+                payer: payer.account_id(),
+                recipient: inbox,
+                amount: 30,
+                refund_to: None,
+                tip: 0,
+            }),
+        )
+        .execution;
+
+        let nonce = account.nonce.private_account_nonce_increment(&payer.nsk());
+        let state = |balance| {
+            let data = Account::funded(balance).data;
+            (PrivateAccountKind::Regular, Account { nonce, data })
+        };
+        let fallback = output
+            .proven_fee
+            .and_then(|fee| fee.fallback)
+            .expect("the payer's pre-state covers the fee");
+        let main = output
+            .private_actions
+            .iter()
+            .find(|action| action.nullifier == fallback.nullifier)
+            .expect("the fallback spends the payer's nullifier");
+        assert_eq!(payer.decrypt(main), state(40));
+        let action = fallback
+            .action(&output.private_actions)
+            .expect("the fallback finds the payer's action");
+        assert_eq!(payer.decrypt_fallback(&action), state(70));
+        assert_eq!(
+            output.recovery_bindings[0].note.epk,
+            main.encrypted_post_state.epk
+        );
+    }
+
+    #[test]
     fn a_recovery_under_a_notes_ephemeral_key_shares_its_encapsulation() {
         let owner = Owner::new(3);
         let witness = owner.update_witness(Account::funded(100));
         let (action, key) = private_action(&witness, Account::funded(100).data, None);
-        let recovery = |esk| RecipientEncryption {
+        let recovery = |vpk, esk| RecipientEncryption {
             recipient: lee_core::Recipient {
                 npk: NullifierPublicKey::from(&owner.nsk()),
-                vpk: owner.vpk(),
+                vpk,
                 kind: PrivateAccountKind::Regular,
                 opening: Some([4; 32]),
             },
             esk,
         };
-        let shared = recovery(key.esk);
-        let apart = recovery(EphemeralSecretKey([5; 32]));
+        let shared = recovery(owner.vpk(), key.esk);
+        let apart = recovery(owner.vpk(), EphemeralSecretKey([5; 32]));
+        // The note's ephemeral key, but another recipient: the note's secret is not theirs.
+        let foreign = recovery(Owner::new(9).vpk(), key.esk);
 
         let output = compute_circuit_output(
             PrivatePartOutcome {
@@ -613,7 +702,7 @@ mod tests {
             Vec::new(),
             None,
             Vec::new(),
-            &[shared.clone(), apart.clone()],
+            &[shared.clone(), apart.clone(), foreign.clone()],
             Vec::new(),
             None,
         );
@@ -624,6 +713,8 @@ mod tests {
         // Sharing changes no binding: each is what its own encapsulation makes.
         assert_eq!(bindings[0], shared.bind_recovery());
         assert_eq!(bindings[1], apart.bind_recovery());
+        assert_ne!(bindings[2].note.epk, action.encrypted_post_state.epk);
+        assert_eq!(bindings[2], foreign.bind_recovery());
     }
 
     #[test]

@@ -607,8 +607,10 @@ fn main() -> Result<()> {
     let prove = cli.prove;
     let exec_iters = cli.exec_iters.max(1);
     #[cfg(feature = "ppe")]
-    if cli.ppe_fee_case.is_some() {
-        ppe::print_table(&ppe::run_all(cli.ppe_fee_case));
+    if let Some(case) = cli.ppe_fee_case {
+        let results = ppe::run_all(Some(case));
+        anyhow::ensure!(!results.is_empty(), "no fee case {case}");
+        ppe::print_table(&results);
         return Ok(());
     }
     if prove {
