@@ -73,16 +73,15 @@ impl FromStr for SigningKeyState {
     }
 }
 
-impl From<SigningKeyState> for ActorState {
-    fn from(key: SigningKeyState) -> Self {
-        Self::from(borsh::to_vec(&key).expect("a signing key state encodes to 33 bytes"))
+impl SigningKeyState {
+    /// This key as the signature program's actor state.
+    #[must_use]
+    pub fn encode(self) -> ActorState {
+        ActorState::from(borsh::to_vec(&self).expect("a signing key state encodes to 33 bytes"))
     }
-}
 
-impl TryFrom<&ActorState> for SigningKeyState {
-    type Error = borsh::io::Error;
-
-    fn try_from(state: &ActorState) -> Result<Self, Self::Error> {
+    /// The key a signature program's actor state holds.
+    pub fn decode(state: &ActorState) -> Result<Self, borsh::io::Error> {
         borsh::from_slice(state)
     }
 }
@@ -155,9 +154,9 @@ mod tests {
             key_type: KeyType::Schnorr,
             key_commitment: [7; 32],
         };
-        let actor_state = ActorState::from(state);
+        let actor_state = state.encode();
         assert_eq!(actor_state.as_ref(), [&[0][..], &[7; 32][..]].concat());
-        assert_eq!(SigningKeyState::try_from(&actor_state).unwrap(), state);
+        assert_eq!(SigningKeyState::decode(&actor_state).unwrap(), state);
     }
 
     #[test]
@@ -172,7 +171,7 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                SigningKeyState::try_from(&ActorState::from(bytes))
+                SigningKeyState::decode(&ActorState::from(bytes))
                     .unwrap_err()
                     .to_string(),
                 error

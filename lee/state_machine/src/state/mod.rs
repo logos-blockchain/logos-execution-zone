@@ -297,7 +297,7 @@ impl V03State {
             account.nonce.public_account_nonce_increment();
             account
                 .data
-                .set_actor_state(signature_program_id(), next.into());
+                .set_actor_state(signature_program_id(), next.encode());
         }
         let messages: Vec<Commitment> = published.iter().map(Publication::commitment).collect();
         let positions = self.private_state.0.append(&new_commitments, &messages);

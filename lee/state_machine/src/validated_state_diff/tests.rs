@@ -361,9 +361,10 @@ fn metered_revert_reports_cycles_and_yields_a_nonce_only_diff() {
         .expect("the validated diff applies");
     assert_eq!(
         state.get_account_by_id(from).data,
-        from_before
-            .data
-            .with_actor_state(signature_program_id(), from_key.key_state(Nonce(1)).into()),
+        from_before.data.with_actor_state(
+            signature_program_id(),
+            from_key.key_state(Nonce(1)).encode()
+        ),
         "the write was reverted"
     );
     assert_eq!(state.get_account_by_id(from).nonce.0, 1);

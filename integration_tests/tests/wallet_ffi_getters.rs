@@ -121,7 +121,7 @@ fn test_wallet_ffi_get_account_public() -> Result<()> {
     assert_eq!(
         account.data,
         Account::funded(INITIAL_PUBLIC_BALANCES_FOR_WALLET[0])
-            .with_actor_state(signature_program_id(), signer.key_state(Nonce(2)).into())
+            .with_actor_state(signature_program_id(), signer.key_state(Nonce(2)).encode())
             .data
     );
     assert_eq!(account.nonce.0, 2);

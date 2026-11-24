@@ -277,7 +277,7 @@ pub mod tests {
                     nonce: Nonce(1),
                     ..Account::funded(20000)
                 }
-                .with_actor_state(signature_program_id(), key2.key_state(Nonce(1)).into()),
+                .with_actor_state(signature_program_id(), key2.key_state(Nonce(1)).encode()),
             ),
         ]);
         let mut message = transaction_for_tests().message;

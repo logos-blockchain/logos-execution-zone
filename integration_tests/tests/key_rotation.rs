@@ -87,7 +87,7 @@ async fn each_transfer_rotates_the_senders_key() -> Result<()> {
 
         let (nonce, key) = stored_key(&ctx, sender).await?;
         assert_eq!(nonce.0, before.0 + 1);
-        assert_eq!(key, signer.key_state(nonce).into());
+        assert_eq!(key, signer.key_state(nonce).encode());
     }
 
     Ok(())
@@ -145,7 +145,7 @@ async fn a_shield_rotates_its_public_signers_key() -> Result<()> {
 
     let (nonce, key) = stored_key(&ctx, sender).await?;
     assert_eq!(nonce.0, before.0 + 1);
-    assert_eq!(key, signer.key_state(nonce).into());
+    assert_eq!(key, signer.key_state(nonce).encode());
 
     Ok(())
 }
@@ -179,12 +179,12 @@ async fn a_transfer_paid_by_a_co_signer_rotates_both_keys() -> Result<()> {
 
     let (nonce, key) = stored_key(&ctx, sender).await?;
     assert_eq!(nonce.0, sender_before.0 + 1);
-    assert_eq!(key, test_signer(&ctx, sender)?.key_state(nonce).into());
+    assert_eq!(key, test_signer(&ctx, sender)?.key_state(nonce).encode());
     let (payer_nonce, payer_key) = stored_key(&ctx, payer).await?;
     assert_eq!(payer_nonce, Nonce(1));
     assert_eq!(
         payer_key,
-        test_signer(&ctx, payer)?.key_state(payer_nonce).into()
+        test_signer(&ctx, payer)?.key_state(payer_nonce).encode()
     );
 
     Ok(())
@@ -211,7 +211,7 @@ async fn a_charged_revert_rotates_the_key_and_the_next_transfer_follows() -> Res
     assert!(account_balance(&ctx, sender).await? < sender_balance);
     let (nonce, key) = stored_key(&ctx, sender).await?;
     assert_eq!(nonce.0, before.0 + 1);
-    assert_eq!(key, signer.key_state(nonce).into());
+    assert_eq!(key, signer.key_state(nonce).encode());
 
     send(
         &mut ctx,
@@ -227,7 +227,7 @@ async fn a_charged_revert_rotates_the_key_and_the_next_transfer_follows() -> Res
     );
     let (next, next_key) = stored_key(&ctx, sender).await?;
     assert_eq!(next.0, before.0 + 2);
-    assert_eq!(next_key, signer.key_state(next).into());
+    assert_eq!(next_key, signer.key_state(next).encode());
 
     Ok(())
 }

@@ -1287,7 +1287,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         if stored.is_empty() {
             return Ok(INITIAL_KEY_TYPE);
         }
-        Ok(SigningKeyState::try_from(stored)
+        Ok(SigningKeyState::decode(stored)
             .context("The account's stored key does not decode")?
             .key_type)
     }

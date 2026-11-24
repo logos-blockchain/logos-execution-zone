@@ -719,7 +719,7 @@ fn authenticate_signer(
     let stored = account
         .map(|account| account.data.actor_state(signature_program_id()))
         .filter(|key| !key.is_empty())
-        .map(SigningKeyState::try_from)
+        .map(SigningKeyState::decode)
         .transpose()?;
     let nonce = account.map_or_else(Nonce::default, |account| account.nonce);
     ensure!(

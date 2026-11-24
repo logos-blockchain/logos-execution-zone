@@ -127,7 +127,7 @@ fn transition_from_privacy_preserving_transaction_shielded() {
             .set_actor_state(NATIVE_TOKEN_PROGRAM_ID, encode_balance(post_balance));
         this.data.set_actor_state(
             signature_program_id(),
-            sender_keys.key_state(Nonce(1)).into(),
+            sender_keys.key_state(Nonce(1)).encode(),
         );
         this.nonce.public_account_nonce_increment();
         this

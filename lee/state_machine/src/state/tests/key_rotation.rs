@@ -22,7 +22,7 @@ fn stored_key(state: &V03State, account_id: AccountId) -> ActorState {
 }
 
 fn key_at(signer: &TestSigner, nonce: u128) -> ActorState {
-    signer.key_state(Nonce(nonce)).into()
+    signer.key_state(Nonce(nonce)).encode()
 }
 
 fn assert_refused<T>(result: Result<T, LeeError>, signer: AccountId, reason: &str) {

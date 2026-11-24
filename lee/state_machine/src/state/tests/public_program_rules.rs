@@ -306,7 +306,7 @@ fn assert_charged_as_an_unknown_callee(tx: &PublicTransaction, signer: &TestSign
             nonce: Nonce(1),
             ..Account::default()
         }
-        .with_actor_state(signature_program_id(), signer.key_state(Nonce(1)).into())
+        .with_actor_state(signature_program_id(), signer.key_state(Nonce(1)).encode())
     );
 }
 
