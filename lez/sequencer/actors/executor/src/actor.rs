@@ -12,7 +12,6 @@ use futures::{
 use kameo::{
     actor::{ActorId, ActorRef, WeakActorRef},
     error::ActorStopReason,
-    mailbox::{MailboxReceiver, Signal},
     message::{Context, Message},
     reply::DelegatedReply,
 };
@@ -44,12 +43,10 @@ use crate::{
     protocol::{
         ChannelId, ExecutorStatus, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces,
         GetAccountTransactions, GetAccountView, GetBlock, GetBlockByHash, GetBlockRange,
-        GetChannelId, GetCrossZoneDeadLetters, GetCrossZoneDeadLettersReply, GetFeeQuote,
-        GetLastBlockId, GetMessagePath, GetProofsAndRoot, GetProofsAndRootReply, GetPublications,
-        GetPublicationsReply, GetRecoveryBinding, GetStatus, GetSystemProposals,
-        GetSystemProposalsReply, GetTransaction, GetTransactionReceipt, ProduceBlock,
-        RequeueCrossZoneDeadLetter, RequeueCrossZoneDeadLetterReply, SubmitSystemApproval,
-        Transaction,
+        GetChannelId, GetFeeQuote, GetLastBlockId, GetMessagePath, GetProofsAndRoot,
+        GetProofsAndRootReply, GetPublications, GetPublicationsReply, GetRecoveryBinding,
+        GetStatus, GetSystemProposals, GetSystemProposalsReply, GetTransaction,
+        GetTransactionReceipt, ProduceBlock, SubmitSystemApproval, Transaction,
     },
 };
 
@@ -166,21 +163,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> kameo::Actor for ExecutorActor<
         })
     }
 
-    async fn next(
-        &mut self,
-        _actor_ref: WeakActorRef<Self>,
-        mailbox_rx: &mut MailboxReceiver<Self>,
-    ) -> Result<Option<Signal<Self>>> {
-        // TODO: Remove this please
-        if let State::Online(online) = &self.state
-            && online.background_tasks().any_finished()
-        {
-            return Err(Error::BackgroundTaskFinishedUnexpectedly);
-        }
-
-        Ok(mailbox_rx.recv().await)
-    }
-
     async fn on_link_died(
         &mut self,
         _actor_ref: WeakActorRef<Self>,
@@ -197,18 +179,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> kameo::Actor for ExecutorActor<
             id,
             reason: Box::new(reason),
         }))
-    }
-
-    async fn on_stop(
-        &mut self,
-        _actor_ref: WeakActorRef<Self>,
-        _reason: ActorStopReason,
-    ) -> Result<()> {
-        if let State::Online(online) = &self.state {
-            online.background_tasks().shutdown().await;
-        }
-
-        Ok(())
     }
 }
 
@@ -701,51 +671,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetStatus> for Executor
                 is_our_turn: online.is_our_turn(),
             },
         }
-    }
-}
-
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetCrossZoneDeadLetters>
-    for ExecutorActor<S, B>
-{
-    type Reply = Result<GetCrossZoneDeadLettersReply>;
-
-    async fn handle(
-        &mut self,
-        GetCrossZoneDeadLetters: GetCrossZoneDeadLetters,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        let (total_retired, retained) = self
-            .state
-            .online()?
-            .sequencer()
-            .cross_zone_dead_letters()
-            .await
-            .map_err(Error::CrossZoneDeadLettersUnavailable)?;
-        Ok(GetCrossZoneDeadLettersReply {
-            total_retired,
-            retained: retained.into_iter().collect(),
-        })
-    }
-}
-
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<RequeueCrossZoneDeadLetter>
-    for ExecutorActor<S, B>
-{
-    type Reply = Result<RequeueCrossZoneDeadLetterReply>;
-
-    async fn handle(
-        &mut self,
-        RequeueCrossZoneDeadLetter { message_key }: RequeueCrossZoneDeadLetter,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        let outcome = self
-            .state
-            .online()?
-            .sequencer()
-            .requeue_cross_zone_dead_letter(message_key)
-            .await
-            .map_err(Error::CrossZoneDeadLetterRequeueFailed)?;
-        Ok(RequeueCrossZoneDeadLetterReply { outcome })
     }
 }
 

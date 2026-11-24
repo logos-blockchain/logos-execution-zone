@@ -8,8 +8,8 @@
 //! linked to the span the message was sent in. Its attributes name who sent
 //! it and the trace it was sent from, so the messages an actor sent, or the
 //! ones a trace set off, can be searched for. Spans lasting as long as an
-//! actor, a connection or a watcher are left out, so what runs in them starts
-//! a trace of its own rather than joining one that never ends.
+//! actor or a connection are left out, so what runs in them starts a trace of
+//! its own rather than joining one that never ends.
 
 use std::{
     sync::{
@@ -50,16 +50,12 @@ const ENDPOINT_VARS: [&str; 2] = [
     "OTEL_EXPORTER_OTLP_ENDPOINT",
 ];
 
-/// Spans as long-lived as an actor, an RPC connection or a cross-zone watcher,
-/// by target prefix and name. Exported, each would be one trace taking in all
-/// that runs in it until it ends.
-const LONG_LIVED_SPANS: [(&str, &str); 3] = [
+/// Spans as long-lived as an actor or an RPC connection, by target prefix and
+/// name. Exported, each would be one trace taking in all that runs in it until
+/// it ends.
+const LONG_LIVED_SPANS: [(&str, &str); 2] = [
     ("kameo", LIFECYCLE_SPAN),
     ("jsonrpsee_server", "connection"),
-    (
-        "sequencer_core",
-        sequencer_core::cross_zone_watcher::WATCHER_SPAN,
-    ),
 ];
 
 /// The trace exporter. Dropping it sends the spans still queued.

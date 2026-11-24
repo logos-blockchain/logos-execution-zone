@@ -117,8 +117,7 @@ pub fn setup(
                 .filter_map(|action| match action {
                     GenesisAction::StakeSequencer { sequencer_key, .. } => Some(*sequencer_key),
                     GenesisAction::SupplyAccount { .. }
-                    | GenesisAction::SupplyPrivateAccount { .. }
-                    | GenesisAction::SupplyBridgeLockHolding { .. } => None,
+                    | GenesisAction::SupplyPrivateAccount { .. } => None,
                 })
                 .collect();
             founding.is_empty() || own_key.is_some_and(|key| founding.contains(&key))

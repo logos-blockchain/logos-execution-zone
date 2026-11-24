@@ -21,7 +21,7 @@ fn bench_schedule(c: &mut Criterion) {
         .sample_size(20)
         .measurement_time(Duration::from_secs(10));
     for committee_size in COMMITTEE_SIZES {
-        let upgrade = staged(committee_size, &programs::ping_receiver());
+        let upgrade = staged(committee_size, &programs::bridge());
         let tx = schedule_tx(&upgrade, committee_size);
         group.bench_with_input(
             BenchmarkId::from_parameter(committee_size),
@@ -51,7 +51,7 @@ fn bench_apply(c: &mut Criterion) {
     for (name, new_code) in [
         ("clock", programs::clock()),
         ("fee", programs::fee()),
-        ("wrapped_token", programs::wrapped_token()),
+        ("bridge", programs::bridge()),
         ("sequencer_stake", programs::sequencer_stake()),
     ] {
         let upgrade = scheduled(2, &new_code);

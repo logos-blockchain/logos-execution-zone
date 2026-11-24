@@ -6,11 +6,11 @@ use crate::{
     Result,
     error::Error,
     protocol::{
-        AccreditedKeys, ChangeChannelConfig, ChannelReadStream, CheckChannelExists, CheckIsOurTurn,
-        CreateChannel, FilterFinallyAbsent, FollowChannel, FollowStart, GetAccreditedKeys,
-        GetChannelNotes, GetChannelTipMessageId, GetChannelTipSlot, InitializeChannelPublisher,
-        MsgId, NoteId, PendingBlock, PrepareConfig, PreparePin, PreparedConfig, PreparedPin,
-        PublishBlock, PublishOutcome, PublishPin, ReadChannel, SequencerKey, Slot,
+        AccreditedKeys, ChangeChannelConfig, CheckChannelExists, CheckIsOurTurn, CreateChannel,
+        FilterFinallyAbsent, FollowChannel, FollowStart, GetAccreditedKeys, GetChannelNotes,
+        GetChannelTipMessageId, GetChannelTipSlot, InitializeChannelPublisher, MsgId, NoteId,
+        PendingBlock, PrepareConfig, PreparePin, PreparedConfig, PreparedPin, PublishBlock,
+        PublishOutcome, PublishPin, SequencerKey, Slot,
     },
 };
 
@@ -30,7 +30,6 @@ pub trait BedrockActorTrait:
     + Message<GetChannelNotes, Reply = Result<HashSet<NoteId>>>
     + Message<GetChannelTipSlot, Reply = Result<Option<Slot>>>
     + Message<GetChannelTipMessageId, Reply = Result<Option<MsgId>>>
-    + Message<ReadChannel, Reply = Result<ChannelReadStream>>
     + Message<FilterFinallyAbsent, Reply = Result<BTreeSet<SequencerKey>>>
 {
 }

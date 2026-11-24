@@ -102,7 +102,6 @@ pub(super) fn sequencer_config() -> (SequencerConfig, TempDir) {
             channel_params: sequencer_core::config::default_channel_params(),
             actions: Vec::new(),
         }),
-        cross_zone: None,
         metrics_listen_address: None,
         gossip: None,
         channel_signing_key_file: None,
@@ -239,7 +238,7 @@ fn prepare_mock_storage_with_stake(
     let genesis_block_meta = BlockMeta::from(&genesis_block);
     // The real genesis state, so programs are loaded and a transaction can
     // actually settle; only the stake config is layered on, to name this node.
-    let mut state = testnet_initial_state::initial_state(false).with_public_accounts([(
+    let mut state = testnet_initial_state::initial_state().with_public_accounts([(
         system_accounts::sequencer_stake_config_account_id(),
         Account::default().with_actor_state(
             programs::sequencer_stake_account_id(),
@@ -327,22 +326,6 @@ fn prepare_mock_storage_with_stake(
     mock_storage
         .expect_handle_apply_store_update()
         .returning(|_, _| Ok(StoreUpdateOutcome::default()));
-
-    mock_storage
-        .expect_handle_get_dead_letter_dispatches()
-        .returning(|_, _| Ok(vec![]));
-
-    mock_storage
-        .expect_handle_get_dead_letter_dispatch_retained_count()
-        .returning(|_, _| Ok(0));
-
-    mock_storage
-        .expect_handle_get_pending_cross_zone_dispatch_count()
-        .returning(|_, _| Ok(0));
-
-    mock_storage
-        .expect_handle_get_pending_cross_zone_dispatches()
-        .returning(|_, _| Ok(vec![]));
 
     mock_storage
 }

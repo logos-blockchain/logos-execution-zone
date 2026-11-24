@@ -132,7 +132,6 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
             finalized_up_to: None,
             new_deposit_events: vec![],
             finalized_deposit_records: HashSet::new(),
-            finalized_dispatch_records: HashSet::new(),
             consumed_withdrawals: HashSet::new(),
             new_withdraw_intents: HashSet::new(),
             zone_anchor: None,

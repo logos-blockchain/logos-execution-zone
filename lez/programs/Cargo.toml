@@ -25,36 +25,6 @@ path = "fee/src/main.rs"
 required-features = ["programs"]
 
 [[bin]]
-name = "cross_zone_outbox"
-path = "cross_zone_outbox/src/main.rs"
-required-features = ["programs"]
-
-[[bin]]
-name = "cross_zone_inbox"
-path = "cross_zone_inbox/src/main.rs"
-required-features = ["programs"]
-
-[[bin]]
-name = "ping_sender"
-path = "ping_sender/src/main.rs"
-required-features = ["programs"]
-
-[[bin]]
-name = "ping_receiver"
-path = "ping_receiver/src/main.rs"
-required-features = ["programs"]
-
-[[bin]]
-name = "bridge_lock"
-path = "bridge_lock/src/main.rs"
-required-features = ["programs"]
-
-[[bin]]
-name = "wrapped_token"
-path = "wrapped_token/src/main.rs"
-required-features = ["programs"]
-
-[[bin]]
 name = "sequencer_stake"
 path = "sequencer_stake/src/main.rs"
 required-features = ["programs"]
@@ -72,11 +42,6 @@ artifacts = [
   "dep:system_upgrader_core",
   "dep:bridge_core",
   "dep:fee_core",
-  "dep:cross_zone_inbox_core",
-  "dep:cross_zone_outbox_core",
-  "dep:bridge_lock_core",
-  "dep:wrapped_token_core",
-  "dep:ping_core",
   "dep:sequencer_stake_core",
 ]
 
@@ -89,12 +54,6 @@ programs = [
   "dep:clock_core",
   "dep:system_upgrader_core",
   "dep:fee_core",
-  "dep:cross_zone_inbox_core",
-  "dep:cross_zone_marker_core",
-  "dep:cross_zone_outbox_core",
-  "dep:bridge_lock_core",
-  "dep:wrapped_token_core",
-  "dep:ping_core",
   "dep:sequencer_stake_core",
 ]
 
@@ -107,12 +66,6 @@ bridge_core = { workspace = true, optional = true }
 clock_core = { workspace = true, optional = true }
 system_upgrader_core = { workspace = true, optional = true }
 fee_core = { workspace = true, optional = true }
-cross_zone_inbox_core = { workspace = true, optional = true }
-cross_zone_marker_core = { workspace = true, optional = true }
-cross_zone_outbox_core = { workspace = true, optional = true }
-bridge_lock_core = { workspace = true, optional = true }
-wrapped_token_core = { workspace = true, optional = true }
-ping_core = { workspace = true, optional = true }
 sequencer_stake_core = { workspace = true, optional = true }
 
 [build-dependencies]

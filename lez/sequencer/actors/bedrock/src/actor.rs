@@ -7,7 +7,6 @@ use std::{
 use anyhow::anyhow;
 use chain_state::timeout_node::TimeoutNode;
 use common::block::Block;
-use futures::{StreamExt as _, future::Either};
 use kameo::{
     Actor,
     actor::{ActorRef, WeakActorRef},
@@ -37,13 +36,13 @@ use crate::{
     actor::finality::{BlockSummary, ConfigIndex, L1Reader},
     error::Error,
     protocol::{
-        AccreditedKeys, ChangeChannelConfig, ChannelId, ChannelReadStream, CheckChannelExists,
-        CheckIsOurTurn, CreateChannel, DeserializeOp as _, Ed25519PublicKey, FilterFinallyAbsent,
-        FollowChannel, FollowStart, GetAccreditedKeys, GetChannelNotes, GetChannelTipMessageId,
-        GetChannelTipSlot, HeaderId, InitializeChannelPublisher, LiveChannelConfig, MsgId,
-        PendingBlock, PrepareConfig, PreparePin, PreparedConfig, PreparedPin, PublishBlock,
-        PublishOutcome, PublishPin, ReadChannel, SequencerCheckpoint, SequencerKey,
-        SerializeOp as _, Slot, UnverifiedEd25519PublicKey,
+        AccreditedKeys, ChangeChannelConfig, ChannelId, CheckChannelExists, CheckIsOurTurn,
+        CreateChannel, DeserializeOp as _, Ed25519PublicKey, FilterFinallyAbsent, FollowChannel,
+        FollowStart, GetAccreditedKeys, GetChannelNotes, GetChannelTipMessageId, GetChannelTipSlot,
+        HeaderId, InitializeChannelPublisher, LiveChannelConfig, MsgId, PendingBlock,
+        PrepareConfig, PreparePin, PreparedConfig, PreparedPin, PublishBlock, PublishOutcome,
+        PublishPin, SequencerCheckpoint, SequencerKey, SerializeOp as _, Slot,
+        UnverifiedEd25519PublicKey,
     },
 };
 
@@ -721,72 +720,6 @@ impl L1Reader for NodeReader<'_> {
             .into_iter()
             .map(|block| self.summarize(&block))
             .collect())
-    }
-}
-
-// TODO: Remove when cross zones become actor(-s)
-impl<S: StorageActorTrait> Message<ReadChannel> for BedrockActor<S> {
-    type Reply = Result<ChannelReadStream>;
-
-    async fn handle(
-        &mut self,
-        ReadChannel { channel_id, after }: ReadChannel,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.assert_channel_id(channel_id);
-
-        let lib_slot = self
-            .node
-            .consensus_info()
-            .await
-            .map_err(|err| Error::NodeRequestFailed(err.into()))?
-            .cryptarchia_info
-            .lib_slot;
-        let start_slot = after.map_or_else(Slot::genesis, |s| s.strict_add(1.into()));
-
-        let node = self.node.clone();
-        let batch_slots = self.backfill_batch_slots.get();
-        let stream = futures::stream::unfold(Some(start_slot), move |next| {
-            let node = node.clone();
-            async move {
-                let current_slot = next?;
-                if current_slot > lib_slot {
-                    return None;
-                }
-
-                let end_slot = (Slot::from(
-                    current_slot
-                        .into_inner()
-                        .saturating_add(batch_slots)
-                        .checked_sub(1)
-                        .expect("slot shouldn't overflow"),
-                ))
-                .min(lib_slot);
-
-                match node
-                    .zone_messages_in_blocks(current_slot, end_slot, channel_id)
-                    .await
-                {
-                    Ok(messages) => Some((
-                        Either::Left(messages.map(Ok)),
-                        Some(end_slot.strict_add(1.into())),
-                    )),
-                    Err(cause) => Some((
-                        Either::Right(futures::stream::once(std::future::ready(Err(
-                            Error::ChannelReadFailed {
-                                from: current_slot,
-                                to: end_slot,
-                                cause: cause.into(),
-                            },
-                        )))),
-                        None,
-                    )),
-                }
-            }
-        })
-        .flatten();
-
-        Ok(Box::pin(stream))
     }
 }
 
