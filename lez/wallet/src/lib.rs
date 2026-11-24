@@ -3294,6 +3294,17 @@ fn decrypt_note(
     )
 }
 
+fn decrypt_fee_fallback_note(
+    action: &lee_core::PrivateAction,
+    secret: &SharedSecretKey,
+) -> Option<(lee_core::PrivateAccountKind, Account)> {
+    lee_core::EncryptionScheme::decrypt_fee_fallback(
+        &action.encrypted_post_state.ciphertext,
+        secret,
+        &action.nullifier,
+    )
+}
+
 // `presenter` recording each sender as presented, as the interpreter derives it, and the
 // publication choice that maps the presented senders back to their actors.
 #[expect(
