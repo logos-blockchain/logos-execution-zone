@@ -7607,17 +7607,24 @@ async fn a_transaction_dropped_at_build_time_frees_its_nonce() {
     let (mut sequencer, mempool_handle) = common_setup().await;
     let accounts = initial_pub_accounts_private_keys();
     let signer = TestSigner::from(&accounts[0].secret);
-    // Far ahead of the account's nonce: admitted unchecked, never applicable, so dropped at build.
-    let transfer = |amount| {
+    let transfer_at = |nonce, amount| {
         common::test_utils::create_transaction_native_token_transfer(
             accounts[0].account_id,
-            1000,
+            nonce,
             accounts[1].account_id,
             amount,
             &signer,
         )
     };
-    let first = transfer(1);
+    // Nonce 0 is pending but never reaches the mempool, so nonce 1, authenticated against it, is
+    // never applicable and is dropped at build.
+    let pending = transfer_at(0, 1);
+    assert_eq!(
+        sequencer.admit(&pending).await.unwrap(),
+        crate::pending::Admission::New
+    );
+    sequencer.record_pending(&pending);
+    let first = transfer_at(1, 1);
     assert_eq!(
         sequencer.admit(&first).await.unwrap(),
         crate::pending::Admission::New
@@ -7629,7 +7636,7 @@ async fn a_transaction_dropped_at_build_time_frees_its_nonce() {
     sequencer.record_pending(&first);
 
     assert!(matches!(
-        sequencer.admit(&transfer(2)).await,
+        sequencer.admit(&transfer_at(1, 2)).await,
         Err(crate::AdmissionError::Pending(
             crate::pending::PendingRefusal::NoncePending { .. }
         ))
@@ -7637,7 +7644,7 @@ async fn a_transaction_dropped_at_build_time_frees_its_nonce() {
 
     sequencer.build_block_from_mempool().await.unwrap();
     assert_eq!(
-        sequencer.admit(&transfer(2)).await.unwrap(),
+        sequencer.admit(&transfer_at(1, 2)).await.unwrap(),
         crate::pending::Admission::New
     );
 }

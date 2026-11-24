@@ -43,8 +43,9 @@ pub enum HeadAuthError {
     /// advances).
     #[error(transparent)]
     Definitive(LeeError),
-    /// A signer ahead of its account's nonce fails against the key a pending transaction commits
-    /// it to. That key is the admitting node's own view, so the refusal is not definitive.
+    /// A signer ahead of its account's nonce has no pending transaction before it, or fails
+    /// against the key that transaction commits it to. The pending transactions are the admitting
+    /// node's own view, so the refusal is not definitive.
     #[error(transparent)]
     Pending(LeeError),
 }
@@ -731,8 +732,8 @@ fn authenticate_signer(
 /// The admission check of a transaction's signers against the head state: a signer whose nonce is
 /// below its account's is refused, one at its account's nonce is authenticated against its current
 /// key, and one above it is authenticated against `pending(account, nonce)`, the key a pending
-/// transaction commits it to at that nonce, or admitted unchecked when there is none. Definitive
-/// refusals are checked first, so they take precedence.
+/// transaction commits it to at that nonce, or refused when there is none. Definitive refusals are
+/// checked first, so they take precedence.
 fn authenticate_signers_at_head(
     state: &V03State,
     nonces: &BTreeMap<AccountId, Nonce>,
@@ -765,9 +766,14 @@ fn authenticate_signers_at_head(
         }
     }
     for &(signer, nonce, head, entry) in &signers {
-        if nonce.0 > head.0
-            && let Some(key) = pending(signer, nonce)
-        {
+        if nonce.0 > head.0 {
+            let key = pending(signer, nonce).ok_or_else(|| {
+                HeadAuthError::Pending(LeeError::InvalidInput(format!(
+                    "Signer {signer}'s nonce {} is ahead of its account's nonce {} with no pending \
+                     transaction before it",
+                    nonce.0, head.0
+                )))
+            })?;
             let (current, auth_data) =
                 current_key(Some(key), signer, &entry.auth_data).expect("a known key is current");
             authenticate(&current, &message_with_keys, auth_data, &entry.next).map_err(

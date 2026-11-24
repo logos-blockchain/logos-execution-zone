@@ -974,15 +974,19 @@ fn public_at_head_a_signer_at_its_accounts_nonce_is_authenticated() {
 }
 
 #[test]
-fn public_at_head_a_signer_ahead_with_no_pending_key_is_not_checked() {
+fn public_at_head_a_signer_ahead_with_no_pending_transaction_is_refused() {
     let sender = TestSigner::new(51);
     let recipient = AccountId::new([52; 32]);
     let state = V03State::new().with_public_account_balances([(sender.account_id(), 100)]);
 
-    // Its key at nonce 1 depends on the transaction at nonce 0, not yet applied.
-    let mut ahead = native_transfer(&sender, recipient, Nonce(1), 10);
-    ahead.witness_set.entries[0].auth_data = vec![0; 3];
-    authenticate_transaction_at_head(&ahead, &state, none_pending).unwrap();
+    // Its key at nonce 1 depends on the transaction at nonce 0, which is not pending: even a
+    // correctly signed transaction cannot be authenticated.
+    let ahead = native_transfer(&sender, recipient, Nonce(1), 10);
+    assert!(matches!(
+        authenticate_transaction_at_head(&ahead, &state, none_pending),
+        Err(HeadAuthError::Pending(LeeError::InvalidInput(message)))
+            if message.contains("with no pending transaction before it")
+    ));
 }
 
 #[test]
@@ -1029,4 +1033,32 @@ fn privacy_at_head_a_signer_at_its_accounts_nonce_is_authenticated() {
         sender.account_id(),
         "invalid signature",
     );
+}
+
+#[test]
+fn privacy_at_head_a_signer_ahead_is_authenticated_only_on_top_of_a_pending_transaction() {
+    let sender = TestSigner::new(51);
+    let state = V03State::new().with_public_account_balances([(sender.account_id(), 100)]);
+    // Signed at nonce 1, one ahead of the account's nonce 0.
+    let at_nonce_1 = V03State::new().with_public_accounts([(
+        sender.account_id(),
+        Account {
+            nonce: Nonce(1),
+            ..Account::funded(100)
+        },
+    )]);
+    let ahead = privacy_shield(&at_nonce_1, &[&sender], &test_private_account_keys_1(), 30);
+
+    assert!(matches!(
+        authenticate_transaction_at_head(&ahead, &state, none_pending),
+        Err(HeadAuthError::Pending(LeeError::InvalidInput(message)))
+            if message.contains("with no pending transaction before it")
+    ));
+
+    // The key the pending transaction at nonce 0 commits the account to at nonce 1.
+    let pending_key = sender.key_state(Nonce(1));
+    let pending = |account: AccountId, nonce: Nonce| {
+        (account == sender.account_id() && nonce == Nonce(1)).then_some(pending_key)
+    };
+    authenticate_transaction_at_head(&ahead, &state, pending).unwrap();
 }

@@ -98,9 +98,9 @@ pub enum Error {
     #[error("Invalid transaction")]
     InvalidTransaction(#[source] lee::error::LeeError),
 
-    /// A signer ahead of its account's nonce fails against the key a pending transaction in
-    /// this node's mempool commits it to.
-    #[error("Fails authentication against a pending transaction")]
+    /// A signer ahead of its account's nonce has no pending transaction before it in this node's
+    /// mempool, or fails against the key that transaction commits it to.
+    #[error("Not authenticated against a pending transaction")]
     PendingAuthentication(#[source] lee::error::LeeError),
 
     /// A slot the transaction claims is already pending, or a signer's account is at its limit.

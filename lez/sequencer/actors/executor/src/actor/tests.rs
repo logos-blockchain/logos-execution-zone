@@ -1144,8 +1144,8 @@ async fn handle_transaction_admits_nonces_n_and_n_plus_one_back_to_back() -> Res
     let _res = logging::try_init();
     let (executor, _home) = spawn_executor_on_empty_genesis().await?;
 
-    // Nonce 1 is ahead of the head: its key depends on nonce 0's transaction, so it is admitted
-    // unchecked and authenticated when the block is built.
+    // Nonce 1 is ahead of the head: it is authenticated against the key nonce 0's pending
+    // transaction commits it to.
     submit(&executor, transfer_from_payer_at(0, u128::MAX))
         .await
         .map_err(|err| anyhow::anyhow!("nonce 0 refused: {err:?}"))?;
@@ -1181,17 +1181,49 @@ async fn handle_transaction_checks_a_future_nonce_against_its_pending_key() -> R
 }
 
 #[test]
-async fn handle_transaction_admits_a_future_nonce_unchecked_without_a_pending_key() -> Result<()> {
+async fn handle_transaction_refuses_a_future_nonce_without_a_pending_transaction() -> Result<()> {
     let _res = logging::try_init();
     let (executor, _home) = spawn_executor_on_empty_genesis().await?;
 
-    // Nothing is pending at nonce 0, so nothing commits the account's key at nonce 1.
-    submit(
-        &executor,
-        with_a_bad_signature(transfer_from_payer_at(1, u128::MAX)),
-    )
-    .await
-    .map_err(|err| anyhow::anyhow!("nonce 1 refused: {err:?}"))?;
+    // Nothing is pending at nonce 0, so nothing commits the account's key at nonce 1: even a
+    // correctly signed transaction there cannot be authenticated.
+    let res = submit(&executor, transfer_from_payer_at(1, u128::MAX)).await;
+    let Err(Some(err)) = res else {
+        panic!("a future nonce with nothing pending before it was admitted: {res:?}");
+    };
+    assert!(matches!(err, crate::error::Error::PendingAuthentication(_)));
+    assert!(!err.is_definitive());
+
+    Ok(())
+}
+
+#[test]
+async fn forged_future_nonces_cannot_block_an_account() -> Result<()> {
+    let _res = logging::try_init();
+    let (executor, _home) = spawn_executor_on_empty_genesis().await?;
+
+    // Anyone can name the account as signer and payer of a transaction at a future nonce, with a
+    // signature they made up. None may take a slot or count toward the account's limit.
+    let limit = sequencer_core::config::default_mempool_max_per_account();
+    for nonce in 1..=u128::try_from(limit)? {
+        let res = submit(
+            &executor,
+            with_a_bad_signature(transfer_from_payer_at(nonce, u128::MAX)),
+        )
+        .await;
+        let Err(Some(err)) = res else {
+            panic!("a forged transaction at nonce {nonce} was admitted: {res:?}");
+        };
+        assert!(matches!(err, crate::error::Error::PendingAuthentication(_)));
+    }
+
+    // The owner's own transactions still go through, at the head and on top of it.
+    submit(&executor, transfer_from_payer_at(0, u128::MAX))
+        .await
+        .map_err(|err| anyhow::anyhow!("nonce 0 refused: {err:?}"))?;
+    submit(&executor, transfer_from_payer_at(1, u128::MAX))
+        .await
+        .map_err(|err| anyhow::anyhow!("nonce 1 refused: {err:?}"))?;
 
     Ok(())
 }
