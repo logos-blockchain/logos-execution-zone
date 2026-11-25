@@ -66,6 +66,7 @@ impl SignedTransaction for PrivacyPreservingTransaction {
             return Err(InvalidTransaction::Nonces);
         }
         self.message.check_signers()?;
+        crate::transaction_message::check_auth_data(&signers, self.witness_set.entries())?;
         Ok(signers)
     }
 

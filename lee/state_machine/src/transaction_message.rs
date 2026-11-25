@@ -58,6 +58,8 @@ pub enum InvalidTransaction {
     AuthorizedAccounts,
     #[error("A public transaction cannot select promotions")]
     PublicPromotions,
+    #[error("A witness entry cannot authenticate its signer on any head")]
+    AuthData,
 }
 
 impl<P: BorshSerialize> TransactionMessage<P> {
@@ -139,6 +141,23 @@ pub fn hash_with_keys(
         hasher.update(borsh::to_vec(key).expect("a signing key state encodes to 33 bytes"));
     }
     hasher.finalize().into()
+}
+
+/// Refuses witness entries that cannot authenticate their signers whatever the head. `entries` pair
+/// with `signers` one to one.
+pub fn check_auth_data(
+    signers: &[AccountId],
+    entries: &[WitnessEntry],
+) -> Result<(), InvalidTransaction> {
+    if signers
+        .iter()
+        .zip(entries)
+        .all(|(&signer, entry)| crate::signature::is_well_formed(signer, &entry.auth_data))
+    {
+        Ok(())
+    } else {
+        Err(InvalidTransaction::AuthData)
+    }
 }
 
 pub fn nonce_map(

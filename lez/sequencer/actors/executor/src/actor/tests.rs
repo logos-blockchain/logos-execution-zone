@@ -130,17 +130,20 @@ fn transfer_to(recipient: AccountId) -> NativeMessage {
     }
 }
 
-/// `tx` with the last byte of its first witness entry changed: a signature that does not verify.
+/// `tx` with the last signature byte of its first witness entry changed: a signature that does not
+/// verify.
 fn with_a_bad_signature(tx: LeeTransaction) -> LeeTransaction {
     let LeeTransaction::Public(tx) = tx else {
         unreachable!("the test transactions are public");
     };
     let message = tx.message().clone();
     let mut entries = tx.witness_set().clone().into_raw_parts();
-    *entries[0]
-        .auth_data
-        .last_mut()
-        .expect("an entry carries authentication data") ^= 1;
+    let auth_data = &mut entries[0].auth_data;
+    let last_signature_byte = auth_data
+        .len()
+        .checked_sub(33)
+        .expect("an entry ends with a signature and a 32-byte key");
+    auth_data[last_signature_byte] ^= 1;
     PublicTransaction::new(message, WitnessSet::from_raw_parts(entries)).into()
 }
 

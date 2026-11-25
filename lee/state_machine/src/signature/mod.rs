@@ -7,6 +7,7 @@ pub use public_key::PublicKey;
 use rand::{RngCore as _, rngs::OsRng};
 pub use scheme::{
     AuthError, KeyScheme, SignatureError, SignatureScheme, authenticate, current_key,
+    is_well_formed,
 };
 pub use schnorr::{Schnorr, SchnorrAuthData};
 use serde_with::{DeserializeFromStr, SerializeDisplay};

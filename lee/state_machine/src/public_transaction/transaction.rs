@@ -78,6 +78,7 @@ impl SignedTransaction for PublicTransaction {
             return Err(InvalidTransaction::Nonces);
         }
         self.message.check_signers()?;
+        crate::transaction_message::check_auth_data(&signers, self.witness_set.entries())?;
         Ok(signers)
     }
 
@@ -376,23 +377,19 @@ pub mod tests {
     #[test]
     fn witness_entries_must_follow_the_nonces_order() {
         let tx = transaction_for_tests();
-        let first = tx.signer_account_ids()[0];
         let mut entries = tx.witness_set.into_raw_parts();
         entries.swap(0, 1);
 
         let tx = PublicTransaction::new(tx.message, WitnessSet::from_raw_parts(entries));
         assert!(matches!(
             ValidatedStateDiff::from_public_transaction(&tx, &state_for_tests(), 1, 0),
-            Err(LeeError::InvalidInput(msg)) if msg == format!(
-                "Signer {first} fails authentication: revealed key does not give the account id"
-            )
+            Err(LeeError::InvalidInput(msg)) if msg == InvalidTransaction::AuthData.to_string()
         ));
     }
 
     #[test]
     fn a_witness_entry_of_an_unlisted_account_is_rejected() {
         let mut tx = transaction_for_tests();
-        let first = tx.signer_account_ids()[0];
         let stranger = TestSigner::new(3);
         let message_with_keys = tx
             .message
@@ -400,9 +397,7 @@ pub mod tests {
         tx.witness_set.entries[0] = stranger.entry(Nonce(0), &message_with_keys);
         assert!(matches!(
             ValidatedStateDiff::from_public_transaction(&tx, &state_for_tests(), 1, 0),
-            Err(LeeError::InvalidInput(msg)) if msg == format!(
-                "Signer {first} fails authentication: revealed key does not give the account id"
-            )
+            Err(LeeError::InvalidInput(msg)) if msg == InvalidTransaction::AuthData.to_string()
         ));
     }
 }

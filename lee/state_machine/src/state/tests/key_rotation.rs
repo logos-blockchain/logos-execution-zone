@@ -25,8 +25,7 @@ fn key_at(signer: &TestSigner, nonce: u128) -> ActorState {
     signer.key_state(Nonce(nonce)).encode()
 }
 
-fn assert_refused<T>(result: Result<T, LeeError>, signer: AccountId, reason: &str) {
-    let expected = format!("Signer {signer} fails authentication: {reason}");
+fn assert_invalid<T>(result: Result<T, LeeError>, expected: &str) {
     match result {
         Err(LeeError::InvalidInput(message)) => assert_eq!(message, expected),
         Err(other) => panic!("expected `{expected}`, got {other:?}"),
@@ -34,31 +33,42 @@ fn assert_refused<T>(result: Result<T, LeeError>, signer: AccountId, reason: &st
     }
 }
 
-// What authenticating a signer at nonce 0 fails with once its authentication data is changed at
-// `position`: in the initial key, its account id no longer matches (or the key no longer
-// decodes); in the revealed public key, it may no longer decode, and otherwise the signature
-// fails.
-fn tampered_reason(auth_data: &[u8], position: usize) -> &'static str {
+fn assert_refused<T>(result: Result<T, LeeError>, signer: AccountId, reason: &str) {
+    assert_invalid(
+        result,
+        &format!("Signer {signer} fails authentication: {reason}"),
+    );
+}
+
+// An entry that cannot authenticate its signer on any head.
+fn assert_malformed<T>(result: Result<T, LeeError>) {
+    assert_invalid(result, &crate::InvalidTransaction::AuthData.to_string());
+}
+
+// What a signer at nonce 0 is refused with once its authentication data is changed at `position`:
+// a changed initial key no longer gives the account id (or no longer decodes), and a changed
+// public key may no longer decode, so the entry fits no head; otherwise the signature fails.
+fn assert_tampered_refused<T>(
+    result: Result<T, LeeError>,
+    signer: AccountId,
+    auth_data: &[u8],
+    position: usize,
+) {
     const INITIAL_KEY_LEN: usize = 33;
-    if position < INITIAL_KEY_LEN {
-        return if borsh::from_slice::<SigningKeyState>(&auth_data[..INITIAL_KEY_LEN]).is_ok() {
-            "revealed key does not give the account id"
-        } else {
-            "malformed authentication data"
-        };
-    }
     let public_key_start = INITIAL_KEY_LEN + 64;
-    if position >= public_key_start
-        && crate::PublicKey::try_new(
-            auth_data[public_key_start..]
-                .try_into()
-                .expect("a Schnorr entry ends with a 32-byte public key"),
-        )
-        .is_err()
-    {
-        return "malformed authentication data";
+    let fits_no_head = position < INITIAL_KEY_LEN
+        || (position >= public_key_start
+            && crate::PublicKey::try_new(
+                auth_data[public_key_start..]
+                    .try_into()
+                    .expect("a Schnorr entry ends with a 32-byte public key"),
+            )
+            .is_err());
+    if fits_no_head {
+        assert_malformed(result);
+    } else {
+        assert_refused(result, signer, "invalid signature");
     }
-    "invalid signature"
 }
 
 // `holder`'s entry at `nonce`, presented as a nonce-0 entry: a later key carries its own key
@@ -230,18 +240,16 @@ fn public_a_signer_at_nonce_zero_is_refused_a_key_not_giving_its_account_id() {
     let honest = native_transfer(&sender, recipient, Nonce(0), 30);
 
     // Another account's key, and the account's own key for a later nonce.
-    for (holder, nonce) in [(TestSigner::new(53), 0), (sender.clone(), 1)] {
+    for (holder, nonce) in [(TestSigner::new(53), 0), (sender, 1)] {
         let mut tx = honest.clone();
         let message_with_keys = tx
             .message
             .message_with_keys(&[holder.key_state(Nonce(nonce + 1))]);
         tx.witness_set.entries = vec![entry_as_initial(&holder, Nonce(nonce), &message_with_keys)];
 
-        assert_refused(
-            ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0),
-            sender.account_id(),
-            "revealed key does not give the account id",
-        );
+        assert_malformed(ValidatedStateDiff::from_public_transaction(
+            &tx, &state, 1, 0,
+        ));
     }
 }
 
@@ -256,12 +264,11 @@ fn public_a_tampered_byte_in_any_signers_authentication_data_is_refused() {
         for position in 0..honest.witness_set.entries[index].auth_data.len() {
             let mut tx = honest.clone();
             tx.witness_set.entries[index].auth_data[position] ^= 1;
-            let reason = tampered_reason(&tx.witness_set.entries[index].auth_data, position);
-
-            assert_refused(
+            assert_tampered_refused(
                 ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0),
                 signer,
-                reason,
+                &tx.witness_set.entries[index].auth_data,
+                position,
             );
         }
     }
@@ -275,7 +282,6 @@ fn public_metered_a_tampered_witness_entry_is_refused_free_of_charge() {
     let signer = tx.signer_account_ids()[0];
     let last = tx.witness_set.entries[0].auth_data.len() - 1;
     tx.witness_set.entries[0].auth_data[last] ^= 1;
-    let reason = tampered_reason(&tx.witness_set.entries[0].auth_data, last);
 
     let (charge, result) = ValidatedStateDiff::from_public_transaction_metered(
         &tx,
@@ -285,7 +291,7 @@ fn public_metered_a_tampered_witness_entry_is_refused_free_of_charge() {
         crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
     );
     assert_eq!(charge, crate::ExecutionCharge::FREE);
-    assert_refused(result, signer, reason);
+    assert_tampered_refused(result, signer, &tx.witness_set.entries[0].auth_data, last);
 }
 
 #[test]
@@ -587,18 +593,16 @@ fn privacy_a_signer_at_nonce_zero_is_refused_a_key_not_giving_its_account_id() {
     let honest = privacy_shield(&state, &[&sender], &test_private_account_keys_1(), 30);
 
     // Another account's key, and the account's own key for a later nonce.
-    for (holder, nonce) in [(TestSigner::new(53), 0), (sender.clone(), 1)] {
+    for (holder, nonce) in [(TestSigner::new(53), 0), (sender, 1)] {
         let mut tx = honest.clone();
         let message_with_keys = tx
             .message
             .message_with_keys(&[holder.key_state(Nonce(nonce + 1))]);
         tx.witness_set.entries = vec![entry_as_initial(&holder, Nonce(nonce), &message_with_keys)];
 
-        assert_refused(
-            ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0),
-            sender.account_id(),
-            "revealed key does not give the account id",
-        );
+        assert_malformed(ValidatedStateDiff::from_privacy_preserving_transaction(
+            &tx, &state, 1, 0,
+        ));
     }
 }
 
@@ -613,12 +617,11 @@ fn privacy_a_tampered_byte_in_any_signers_authentication_data_is_refused() {
         for position in 0..honest.witness_set.entries[index].auth_data.len() {
             let mut tx = honest.clone();
             tx.witness_set.entries[index].auth_data[position] ^= 1;
-            let reason = tampered_reason(&tx.witness_set.entries[index].auth_data, position);
-
-            assert_refused(
+            assert_tampered_refused(
                 ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0),
                 signer,
-                reason,
+                &tx.witness_set.entries[index].auth_data,
+                position,
             );
         }
     }
@@ -916,15 +919,12 @@ fn privacy_witness_entries_must_follow_the_nonces_order() {
     let honest = privacy_shield(&state, &[&a, &b], &test_private_account_keys_1(), 30);
     assert!(ValidatedStateDiff::from_privacy_preserving_transaction(&honest, &state, 1, 0).is_ok());
 
-    let first = honest.signer_account_ids()[0];
     let mut tx = honest;
     tx.witness_set.entries.swap(0, 1);
 
-    assert_refused(
-        ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0),
-        first,
-        "revealed key does not give the account id",
-    );
+    assert_malformed(ValidatedStateDiff::from_privacy_preserving_transaction(
+        &tx, &state, 1, 0,
+    ));
 }
 
 #[test]
@@ -933,18 +933,15 @@ fn privacy_a_witness_entry_of_an_unlisted_account_is_refused() {
     let state = V03State::new().with_public_account_balances([(a.account_id(), 100)]);
     let mut tx = privacy_shield(&state, &[&a, &b], &test_private_account_keys_1(), 30);
 
-    let first = tx.signer_account_ids()[0];
     let stranger = TestSigner::new(53);
     let message_with_keys = tx
         .message
         .message_with_keys(&[stranger.key_state(Nonce(1)), tx.witness_set.entries[1].next]);
     tx.witness_set.entries[0] = stranger.entry(Nonce(0), &message_with_keys);
 
-    assert_refused(
-        ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0),
-        first,
-        "revealed key does not give the account id",
-    );
+    assert_malformed(ValidatedStateDiff::from_privacy_preserving_transaction(
+        &tx, &state, 1, 0,
+    ));
 }
 
 #[test]
@@ -1024,6 +1021,44 @@ fn public_at_head_a_malformed_transaction_is_refused_definitively() {
     assert!(matches!(
         authenticate_transaction_at_head(&unsigned, &state, none_pending),
         Err(HeadAuthError::Definitive(_))
+    ));
+}
+
+#[test]
+fn public_at_head_an_entry_fitting_no_head_is_refused_definitively() {
+    let sender = TestSigner::new(51);
+    let recipient = AccountId::new([52; 32]);
+    let state = V03State::new().with_public_account_balances([(sender.account_id(), 100)]);
+    let honest = native_transfer(&sender, recipient, Nonce(0), 10);
+
+    // Another account's initial key, and a length no key type has.
+    let mut foreign_initial_key = honest.clone();
+    foreign_initial_key.witness_set.entries[0].auth_data[..33]
+        .copy_from_slice(&borsh::to_vec(&TestSigner::new(53).key_state(Nonce(0))).unwrap());
+    let mut wrong_length = honest;
+    wrong_length.witness_set.entries[0].auth_data.push(0);
+
+    for tx in [foreign_initial_key, wrong_length] {
+        assert!(matches!(
+            authenticate_transaction_at_head(&tx, &state, none_pending),
+            Err(HeadAuthError::Definitive(LeeError::InvalidInput(message)))
+                if message == crate::InvalidTransaction::AuthData.to_string()
+        ));
+    }
+}
+
+#[test]
+fn public_at_head_an_entry_fitting_another_head_is_refused_at_the_head() {
+    let sender = TestSigner::new(51);
+    let recipient = AccountId::new([52; 32]);
+    let state = V03State::new().with_public_account_balances([(sender.account_id(), 100)]);
+    // Without its initial key, the entry fits a head that stores the sender's key, not this one.
+    let mut tx = native_transfer(&sender, recipient, Nonce(0), 10);
+    tx.witness_set.entries[0].auth_data.drain(..33);
+
+    assert!(matches!(
+        authenticate_transaction_at_head(&tx, &state, none_pending),
+        Err(HeadAuthError::AtHead(_))
     ));
 }
 

@@ -168,15 +168,12 @@ mod tests {
             .public_context
             .authorized_accounts
             .insert(payer_key.account_id());
-        let first = *message.nonces.keys().next().expect("two signers");
         let mut entries = witness_for(&message, &[&signer_key, &payer_key]).into_raw_parts();
         entries.swap(0, 1);
         let tx = PublicTransaction::new(message, WitnessSet::from_raw_parts(entries));
         assert!(matches!(
             ValidatedStateDiff::from_public_transaction(&tx, &V03State::new(), 1, 0),
-            Err(LeeError::InvalidInput(msg)) if msg == format!(
-                "Signer {first} fails authentication: revealed key does not give the account id"
-            )
+            Err(LeeError::InvalidInput(msg)) if msg == crate::InvalidTransaction::AuthData.to_string()
         ));
     }
 }

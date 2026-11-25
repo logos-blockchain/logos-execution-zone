@@ -4,7 +4,7 @@ use lee_core::{
 };
 use thiserror::Error;
 
-use super::{Schnorr, SchnorrAuthData};
+use super::{PublicKey, Schnorr, SchnorrAuthData};
 
 /// Length of the initial key state that prefixes a nonce-0 entry's authentication data.
 const INITIAL_KEY_LEN: usize = 33;
@@ -105,6 +105,23 @@ pub fn current_key(
         return Err(AuthError::AccountIdMismatch);
     }
     Ok((initial, rest))
+}
+
+fn is_auth_data_of(key_type: KeyType, auth_data: &[u8]) -> bool {
+    match key_type {
+        KeyType::Schnorr => SchnorrAuthData::try_from(auth_data).is_ok_and(|auth| {
+            PublicKey::try_new(*auth.last_chunk().expect("auth data ends with the key")).is_ok()
+        }),
+    }
+}
+
+/// Whether `auth_data` could authenticate `account_id` on some head: as a key type's
+/// authentication data, or after an initial key giving the account id.
+#[must_use]
+pub fn is_well_formed(account_id: AccountId, auth_data: &[u8]) -> bool {
+    is_auth_data_of(KeyType::Schnorr, auth_data)
+        || current_key(None, account_id, auth_data)
+            .is_ok_and(|(initial, rest)| is_auth_data_of(initial.key_type, rest))
 }
 
 /// Authenticates one signer against its current key, dispatching on `current.key_type`
