@@ -1,5 +1,6 @@
 //! Fees a send declares, and what a dry run reports instead of sending.
 
+use itertools::Itertools as _;
 use lee::{AccountId, Actor, FeeDeclaration};
 use sequencer_service_rpc::FeeStateQuote;
 
@@ -203,7 +204,11 @@ fn actor_list(actors: &[Actor]) -> String {
     }
     actors
         .iter()
-        .map(|actor| format!("{} under {}", actor.account_id, actor.program_account_id))
-        .collect::<Vec<_>>()
-        .join(", ")
+        .format_with(", ", |actor, f| {
+            f(&format_args!(
+                "{} under {}",
+                actor.account_id, actor.program_account_id
+            ))
+        })
+        .to_string()
 }
