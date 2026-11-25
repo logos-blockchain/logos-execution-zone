@@ -4375,6 +4375,42 @@ mod tests {
         );
     }
 
+    // A private fee payer authorizing through its balance reports its other mention as mentioned:
+    // without authority, as the proof grants it none.
+    #[tokio::test]
+    async fn a_private_payers_rows_report_only_the_authority_they_are_mentioned_with() {
+        let (mut wallet, _home, _sequencer, _served) = wallet_with_a_received_message().await;
+        let (payer, _) = wallet.create_new_account_private(None);
+        let unmarked = AccountId::new([5; 32]);
+
+        let manager = crate::account_manager::AccountManager::new(
+            &wallet,
+            vec![
+                AccountIdentity::PrivateOwned(payer).balance(),
+                AccountIdentity::PrivateOwned(payer)
+                    .select_program_actor_state(unmarked)
+                    .without_authorization(),
+            ],
+            None,
+            Some(payer),
+            &[],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            manager
+                .selected_actor_states()
+                .iter()
+                .map(|state| (state.selector, state.is_authorized))
+                .collect::<Vec<_>>(),
+            vec![
+                (Actor::native_balance(payer), true),
+                (Actor::new(payer, unmarked), false),
+            ]
+        );
+    }
+
     async fn wallet_with_a_received_message() -> (
         WalletCore<SequencerClient>,
         tempfile::TempDir,
