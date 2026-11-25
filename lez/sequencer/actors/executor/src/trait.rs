@@ -15,12 +15,11 @@ use crate::{
     error::Error,
     protocol::{
         ChannelId, ExecutorStatus, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces,
-        GetAccountView, GetBlock, GetBlockRange, GetChannelId, GetCrossZoneDeadLetters,
-        GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetMessagePath,
-        GetProofsAndRoot, GetProofsAndRootReply, GetPublications, GetPublicationsReply,
-        GetRecoveryBinding, GetStatus, GetSystemProposals, GetSystemProposalsReply, GetTransaction,
-        GetTransactionReceipt, ProduceBlock, RequeueCrossZoneDeadLetter,
-        RequeueCrossZoneDeadLetterReply, SubmitSystemApproval, Transaction,
+        GetAccountView, GetBlock, GetBlockRange, GetChannelId, GetFeeQuote, GetLastBlockId,
+        GetMessagePath, GetProofsAndRoot, GetProofsAndRootReply, GetPublications,
+        GetPublicationsReply, GetRecoveryBinding, GetStatus, GetSystemProposals,
+        GetSystemProposalsReply, GetTransaction, GetTransactionReceipt, ProduceBlock,
+        SubmitSystemApproval, Transaction,
     },
 };
 
@@ -43,8 +42,6 @@ pub trait ExecutorActorTrait:
     + Message<GetRecoveryBinding, Reply = Result<Option<EncryptedNote>>>
     + Message<GetChannelId, Reply = Reply<ChannelId>>
     + Message<GetStatus, Reply = ExecutorStatus>
-    + Message<GetCrossZoneDeadLetters, Reply = Result<GetCrossZoneDeadLettersReply>>
-    + Message<RequeueCrossZoneDeadLetter, Reply = Result<RequeueCrossZoneDeadLetterReply>>
     + Message<GetFeeQuote, Reply = Result<FeeStateQuote>>
     + Message<GetSystemProposals, Reply = Result<GetSystemProposalsReply>>
     + Message<SubmitSystemApproval, Reply = Result<()>>

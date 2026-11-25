@@ -867,14 +867,14 @@ mod tests {
 
     #[test]
     fn genesis_applies_on_empty_tip() {
-        let mut state = initial_state(true);
+        let mut state = initial_state();
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
     }
 
     #[test]
     fn non_genesis_first_block_is_unexpected_id() {
-        let mut state = initial_state(true);
+        let mut state = initial_state();
         let block = produce_dummy_block(2, None, vec![]);
         let err = apply_block(None, &block, &mut state).expect_err("should reject");
         assert!(matches!(
@@ -888,7 +888,7 @@ mod tests {
 
     #[test]
     fn skip_ahead_block_is_unexpected_id() {
-        let mut state = initial_state(true);
+        let mut state = initial_state();
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
 
@@ -907,7 +907,7 @@ mod tests {
 
     #[test]
     fn broken_chain_link_detected() {
-        let mut state = initial_state(true);
+        let mut state = initial_state();
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
 
@@ -920,7 +920,7 @@ mod tests {
 
     #[test]
     fn hash_mismatch_detected() {
-        let mut state = initial_state(true);
+        let mut state = initial_state();
         let mut genesis = produce_dummy_block(1, None, vec![]);
         // Tampering with the header invalidates the stored hash.
         genesis.header.timestamp = 999;
@@ -930,7 +930,7 @@ mod tests {
 
     #[test]
     fn empty_block_rejected() {
-        let mut state = initial_state(true);
+        let mut state = initial_state();
         // A block with no transactions at all (not even the mandatory clock tx).
         let block = HashableBlockData {
             receipts: Vec::new(),
@@ -946,7 +946,7 @@ mod tests {
 
     #[test]
     fn fee_state_advances_with_the_chain() {
-        let mut state = initial_state(true);
+        let mut state = initial_state();
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
         let mut tip = tip_of(&genesis);
@@ -988,7 +988,7 @@ mod tests {
 
     #[test]
     fn missing_fee_tx_is_invalid_fee() {
-        let mut state = initial_state(true);
+        let mut state = initial_state();
         // Correct clock tail but no fee tx before it.
         let block = HashableBlockData {
             receipts: Vec::new(),
@@ -1007,7 +1007,7 @@ mod tests {
 
     #[test]
     fn nonzero_fee_summary_is_invalid_fee() {
-        let mut state = initial_state(true);
+        let mut state = initial_state();
         let bad_summary = fee_core::BlockFeeSummary {
             gas_used_exec: 1,
             ..fee_core::BlockFeeSummary::default()
@@ -1067,7 +1067,7 @@ mod tests {
 
     #[test]
     fn a_system_upgrader_tx_before_other_transactions_is_misplaced() {
-        let mut state = initial_state(true);
+        let mut state = initial_state();
         let block = block_with(vec![
             system_upgrader_tx(),
             produce_dummy_empty_transaction(),
@@ -1082,7 +1082,7 @@ mod tests {
 
     #[test]
     fn a_second_system_upgrader_tx_is_misplaced() {
-        let mut state = initial_state(true);
+        let mut state = initial_state();
         let block = block_with(vec![system_upgrader_tx(), system_upgrader_tx()]);
 
         let err = apply_block(None, &block, &mut state).expect_err("should reject");
@@ -1098,7 +1098,7 @@ mod tests {
             Registry, ScheduledUpgrade, SystemProgramName, registry_account_id,
         };
 
-        let mut registry = common::system_upgrades::registry(&initial_state(true)).unwrap();
+        let mut registry = common::system_upgrades::registry(&initial_state()).unwrap();
         registry.programs.insert(
             SystemProgramName::new(b"clock"),
             Some(ScheduledUpgrade {
@@ -1108,7 +1108,7 @@ mod tests {
                 activation_height: 1,
             }),
         );
-        let mut state = initial_state(true).with_public_accounts([(
+        let mut state = initial_state().with_public_accounts([(
             registry_account_id(),
             lee::Account::default().with_actor_state(
                 SYSTEM_UPGRADER_ACCOUNT_ID,
@@ -1130,14 +1130,14 @@ mod tests {
             Message, Registry, ScheduledUpgrade, loader_actor, registry_account_id, registry_actor,
         };
 
-        // `ping_receiver` can't handle the clock's tick, so the first tick it runs fails.
-        let new_code = programs::ping_receiver();
+        // `bridge` can't handle the clock's tick, so the first tick it runs fails.
+        let new_code = programs::bridge();
         let user_elf = new_code.user_elf().unwrap();
         let ids: Vec<AccountId> = (0..program_loader_core::segment_count(&user_elf))
             .map(|i| AccountId::new([0x40_u8.wrapping_add(u8::try_from(i).unwrap()); 32]))
             .collect();
         let segments = program_loader_core::build_segments(&user_elf, &ids).unwrap();
-        let mut registry = common::system_upgrades::registry(&initial_state(true)).unwrap();
+        let mut registry = common::system_upgrades::registry(&initial_state()).unwrap();
         registry.programs.insert(
             clock_core::CLOCK_NAME,
             Some(ScheduledUpgrade {
@@ -1147,7 +1147,7 @@ mod tests {
                 activation_height: 1,
             }),
         );
-        let mut state = initial_state(true)
+        let mut state = initial_state()
             .with_public_accounts([(
                 registry_account_id(),
                 lee::Account::default().with_actor_state(
@@ -1188,7 +1188,7 @@ mod tests {
 
     #[test]
     fn a_block_over_an_undecodable_registry_parks_without_blaming_its_producer() {
-        let mut state = initial_state(true).with_public_accounts([(
+        let mut state = initial_state().with_public_accounts([(
             system_upgrader_core::registry_account_id(),
             lee::Account::default().with_actor_state(SYSTEM_UPGRADER_ACCOUNT_ID, vec![0xFF].into()),
         )]);
@@ -1201,7 +1201,7 @@ mod tests {
 
     #[test]
     fn missing_clock_tail_is_invalid_clock() {
-        let mut state = initial_state(true);
+        let mut state = initial_state();
         // Last tx is not the expected clock invocation for the timestamp.
         let block = HashableBlockData {
             receipts: Vec::new(),
@@ -1220,8 +1220,7 @@ mod tests {
         // The producer's reward account is claimed from genesis, simulating the
         // stake a real sequencer holds before producing, so the charged blocks
         // below can credit it (crediting an unclaimed account is rejected).
-        let mut state =
-            initial_state(true).with_public_accounts([common::test_utils::producer_seed()]);
+        let mut state = initial_state().with_public_accounts([common::test_utils::producer_seed()]);
         let accounts = initial_pub_accounts_private_keys();
         let from = accounts[0].account_id;
         let to = accounts[1].account_id;
@@ -1290,7 +1289,7 @@ mod tests {
         // invoke the fee program's Refund to sweep the inbox to an attacker
         // account, and honest followers would apply the block. The apply-path
         // guard must reject it.
-        let mut state = initial_state(true);
+        let mut state = initial_state();
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
 
@@ -1357,8 +1356,7 @@ mod tests {
 
     #[test]
     fn a_block_with_a_user_transaction_writing_the_clock_is_rejected() {
-        let mut state =
-            initial_state(true).with_public_accounts([common::test_utils::producer_seed()]);
+        let mut state = initial_state().with_public_accounts([common::test_utils::producer_seed()]);
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
         let tip = tip_of(&genesis);
@@ -1403,7 +1401,7 @@ mod tests {
         // transfer were classified exempt, any signer could opt out of fees by
         // dropping the declaration. A correctly-signed transfer that omits the
         // fee must be rejected outright, and must move nothing.
-        let mut state = initial_state(true);
+        let mut state = initial_state();
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
 
@@ -1464,7 +1462,7 @@ mod tests {
 
     #[test]
     fn a_charged_action_that_reverts_is_charged_not_block_rejected() {
-        let mut state = initial_state(true);
+        let mut state = initial_state();
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
 
@@ -1559,7 +1557,7 @@ mod tests {
 
     #[test]
     fn a_non_genesis_block_rewarding_a_system_account_is_rejected() {
-        let mut state = initial_state(true);
+        let mut state = initial_state();
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
         let tip = tip_of(&genesis);
@@ -1580,7 +1578,7 @@ mod tests {
 
     #[test]
     fn a_block_crediting_an_absent_producer_it_cannot_reach_is_rejected() {
-        let mut state = initial_state(true);
+        let mut state = initial_state();
         let accounts = initial_pub_accounts_private_keys();
         let signer = TestSigner::from(&accounts[0].secret);
         let genesis = produce_dummy_block(1, None, vec![]);
@@ -1620,7 +1618,7 @@ mod tests {
         // The producer's reward account is claimed from genesis, simulating the
         // stake a real sequencer holds before producing, so the charged blocks
         // below can credit it (crediting an unclaimed account is rejected).
-        let mut state = initial_state(true)
+        let mut state = initial_state()
             .with_public_accounts([common::test_utils::producer_seed()])
             .with_programs(vec![event_emitter()]);
 
@@ -1679,7 +1677,7 @@ mod tests {
             .collect();
         let state =
             // Block payouts credit the producer, which settlement admits only once it exists.
-            initial_state(true)
+            initial_state()
                 .with_public_accounts([common::test_utils::producer_seed()])
                 .with_private_accounts(senders.iter().map(|(keys, account)| {
                 (
@@ -2731,8 +2729,7 @@ mod tests {
 
     #[test]
     fn a_block_with_a_tampered_receipt_is_rejected() {
-        let mut state =
-            initial_state(true).with_public_accounts([common::test_utils::producer_seed()]);
+        let mut state = initial_state().with_public_accounts([common::test_utils::producer_seed()]);
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
         let tip = tip_of(&genesis);

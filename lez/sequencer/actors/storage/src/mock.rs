@@ -4,7 +4,7 @@
 )]
 
 use common::{
-    block::{Block, BlockMeta, PeerChainTip, TransactionReceipt},
+    block::{Block, BlockMeta, TransactionReceipt},
     transaction::LeeTransaction,
 };
 use kameo::{
@@ -21,20 +21,14 @@ use crate::{
     Result, StorageActorTrait,
     error::Error,
     protocol::{
-        AddPendingCrossZoneDispatches, AtomicUpdate, DbDump, DeadLetterDispatch, DeadLetterRequeue,
-        DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
-        DropSettledCrossZoneDispatches, DumpDb, EventFilter, GetAccountTransactions, GetAllBlocks,
-        GetBlock, GetBlockByHash, GetChannelViewBytes, GetCrossZonePeerFloorBytes,
-        GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatchRetainedCount,
-        GetDeadLetterDispatches, GetEventFilter, GetFinalConfigsBytes, GetFinalSnapshot,
-        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
-        GetPendingCrossZoneDispatchCount, GetPendingCrossZoneDispatches, GetPendingDepositEvents,
-        GetSlashRecordBytes, GetSystemApprovalsBytes, GetTransactionByHash,
-        GetTransactionReceiptByHash, GetZoneAnchor, GetZoneCheckpoint,
-        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutFinalConfigsBytes,
-        PutSlashRecordBytes, PutSystemApprovalsBytes, RecordDispatchFailure,
-        RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
-        StoreUpdateOutcome, UpdateZoneCheckpoint, ZoneAnchorRecord,
+        AtomicUpdate, DbDump, DeleteBlock, DeleteZoneCheckpoint, DumpDb, EventFilter,
+        GetAccountTransactions, GetAllBlocks, GetBlock, GetBlockByHash, GetChannelViewBytes,
+        GetEventFilter, GetFinalConfigsBytes, GetFinalSnapshot, GetFirstBlockId, GetLastBlockId,
+        GetLatestBlockMeta, GetLeeState, GetPendingDepositEvents, GetSlashRecordBytes,
+        GetSystemApprovalsBytes, GetTransactionByHash, GetTransactionReceiptByHash, GetZoneAnchor,
+        GetZoneCheckpoint, PendingDepositEventRecord, PutFinalConfigsBytes, PutSlashRecordBytes,
+        PutSystemApprovalsBytes, SetZoneAnchor, StoreUpdateOutcome, UpdateZoneCheckpoint,
+        ZoneAnchorRecord,
     },
 };
 
@@ -185,90 +179,6 @@ mockall::mock! {
             msg: GetFinalSnapshot,
             ctx: &mut Context<Self, Result<Option<(V03State, BlockMeta)>>>
         ) -> Result<Option<(V03State, BlockMeta)>>;
-
-        pub fn handle_get_pending_cross_zone_dispatches(
-            &mut self,
-            msg: GetPendingCrossZoneDispatches,
-            ctx: &mut Context<Self, Result<Vec<PendingCrossZoneDispatchRecord>>>
-        ) -> Result<Vec<PendingCrossZoneDispatchRecord>>;
-
-        pub fn handle_get_pending_cross_zone_dispatch_count(
-            &mut self,
-            msg: GetPendingCrossZoneDispatchCount,
-            ctx: &mut Context<Self, Result<usize>>
-        ) -> Result<usize>;
-
-        pub fn handle_add_pending_cross_zone_dispatches(
-            &mut self,
-            msg: AddPendingCrossZoneDispatches,
-            ctx: &mut Context<Self, Result<usize>>
-        ) -> Result<usize>;
-
-        pub fn handle_drop_settled_cross_zone_dispatches(
-            &mut self,
-            msg: DropSettledCrossZoneDispatches,
-            ctx: &mut Context<Self, Result<()>>
-        ) -> Result<()>;
-
-        pub fn handle_record_dispatch_failure(
-            &mut self,
-            msg: RecordDispatchFailure,
-            ctx: &mut Context<Self, Result<DispatchFailure>>
-        ) -> Result<DispatchFailure>;
-
-        pub fn handle_requeue_dead_letter_dispatch(
-            &mut self,
-            msg: RequeueDeadLetterDispatch,
-            ctx: &mut Context<Self, Result<DeadLetterRequeue>>
-        ) -> Result<DeadLetterRequeue>;
-
-        pub fn handle_get_dead_letter_dispatches(
-            &mut self,
-            msg: GetDeadLetterDispatches,
-            ctx: &mut Context<Self, Result<Vec<DeadLetterDispatch>>>
-        ) -> Result<Vec<DeadLetterDispatch>>;
-
-        pub fn handle_get_dead_letter_dispatch_count(
-            &mut self,
-            msg: GetDeadLetterDispatchCount,
-            ctx: &mut Context<Self, Result<u64>>
-        ) -> Result<u64>;
-
-        pub fn handle_get_dead_letter_dispatch_retained_count(
-            &mut self,
-            msg: GetDeadLetterDispatchRetainedCount,
-            ctx: &mut Context<Self, Result<usize>>
-        ) -> Result<usize>;
-
-        pub fn handle_get_cross_zone_peer_floor_bytes(
-            &mut self,
-            msg: GetCrossZonePeerFloorBytes,
-            ctx: &mut Context<Self, Result<Option<Vec<u8>>>>
-        ) -> Result<Option<Vec<u8>>>;
-
-        pub fn handle_set_cross_zone_peer_floor_bytes(
-            &mut self,
-            msg: SetCrossZonePeerFloorBytes,
-            ctx: &mut Context<Self, Result<()>>
-        ) -> Result<()>;
-
-        pub fn handle_delete_cross_zone_peer_floor(
-            &mut self,
-            msg: DeleteCrossZonePeerFloor,
-            ctx: &mut Context<Self, Result<()>>
-        ) -> Result<()>;
-
-        pub fn handle_get_cross_zone_peer_tip(
-            &mut self,
-            msg: GetCrossZonePeerTip,
-            ctx: &mut Context<Self, Result<Option<PeerChainTip>>>
-        ) -> Result<Option<common::block::PeerChainTip>>;
-
-        pub fn handle_set_cross_zone_peer_tip(
-            &mut self,
-            msg: SetCrossZonePeerTip,
-            ctx: &mut Context<Self, Result<()>>
-        ) -> Result<()>;
 
         pub fn handle_dump_db(
             &mut self,
@@ -615,174 +525,6 @@ impl Message<GetFinalSnapshot> for MockStorageActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_get_final_snapshot(msg, ctx)
-    }
-}
-
-impl Message<GetPendingCrossZoneDispatches> for MockStorageActor {
-    type Reply = Result<Vec<PendingCrossZoneDispatchRecord>>;
-
-    async fn handle(
-        &mut self,
-        msg: GetPendingCrossZoneDispatches,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_get_pending_cross_zone_dispatches(msg, ctx)
-    }
-}
-
-impl Message<GetPendingCrossZoneDispatchCount> for MockStorageActor {
-    type Reply = Result<usize>;
-
-    async fn handle(
-        &mut self,
-        msg: GetPendingCrossZoneDispatchCount,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_get_pending_cross_zone_dispatch_count(msg, ctx)
-    }
-}
-
-impl Message<AddPendingCrossZoneDispatches> for MockStorageActor {
-    type Reply = Result<usize>;
-
-    async fn handle(
-        &mut self,
-        msg: AddPendingCrossZoneDispatches,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_add_pending_cross_zone_dispatches(msg, ctx)
-    }
-}
-
-impl Message<DropSettledCrossZoneDispatches> for MockStorageActor {
-    type Reply = Result<()>;
-
-    async fn handle(
-        &mut self,
-        msg: DropSettledCrossZoneDispatches,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_drop_settled_cross_zone_dispatches(msg, ctx)
-    }
-}
-
-impl Message<RecordDispatchFailure> for MockStorageActor {
-    type Reply = Result<DispatchFailure>;
-
-    async fn handle(
-        &mut self,
-        msg: RecordDispatchFailure,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_record_dispatch_failure(msg, ctx)
-    }
-}
-
-impl Message<RequeueDeadLetterDispatch> for MockStorageActor {
-    type Reply = Result<DeadLetterRequeue>;
-
-    async fn handle(
-        &mut self,
-        msg: RequeueDeadLetterDispatch,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_requeue_dead_letter_dispatch(msg, ctx)
-    }
-}
-
-impl Message<GetDeadLetterDispatches> for MockStorageActor {
-    type Reply = Result<Vec<DeadLetterDispatch>>;
-
-    async fn handle(
-        &mut self,
-        msg: GetDeadLetterDispatches,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_get_dead_letter_dispatches(msg, ctx)
-    }
-}
-
-impl Message<GetDeadLetterDispatchCount> for MockStorageActor {
-    type Reply = Result<u64>;
-
-    async fn handle(
-        &mut self,
-        msg: GetDeadLetterDispatchCount,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_get_dead_letter_dispatch_count(msg, ctx)
-    }
-}
-
-impl Message<GetDeadLetterDispatchRetainedCount> for MockStorageActor {
-    type Reply = Result<usize>;
-
-    async fn handle(
-        &mut self,
-        msg: GetDeadLetterDispatchRetainedCount,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_get_dead_letter_dispatch_retained_count(msg, ctx)
-    }
-}
-
-impl Message<GetCrossZonePeerFloorBytes> for MockStorageActor {
-    type Reply = Result<Option<Vec<u8>>>;
-
-    async fn handle(
-        &mut self,
-        msg: GetCrossZonePeerFloorBytes,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_get_cross_zone_peer_floor_bytes(msg, ctx)
-    }
-}
-
-impl Message<SetCrossZonePeerFloorBytes> for MockStorageActor {
-    type Reply = Result<()>;
-
-    async fn handle(
-        &mut self,
-        msg: SetCrossZonePeerFloorBytes,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_set_cross_zone_peer_floor_bytes(msg, ctx)
-    }
-}
-
-impl Message<DeleteCrossZonePeerFloor> for MockStorageActor {
-    type Reply = Result<()>;
-
-    async fn handle(
-        &mut self,
-        msg: DeleteCrossZonePeerFloor,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_delete_cross_zone_peer_floor(msg, ctx)
-    }
-}
-
-impl Message<GetCrossZonePeerTip> for MockStorageActor {
-    type Reply = Result<Option<PeerChainTip>>;
-
-    async fn handle(
-        &mut self,
-        msg: GetCrossZonePeerTip,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_get_cross_zone_peer_tip(msg, ctx)
-    }
-}
-
-impl Message<SetCrossZonePeerTip> for MockStorageActor {
-    type Reply = Result<()>;
-
-    async fn handle(
-        &mut self,
-        msg: SetCrossZonePeerTip,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_set_cross_zone_peer_tip(msg, ctx)
     }
 }
 

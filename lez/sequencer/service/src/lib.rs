@@ -700,9 +700,6 @@ fn bedrock_actor_args(
             Ok(stored_tip.map(|_| Slot::from(0)))
         });
 
-    mock.expect_handle_read_channel()
-        .returning(|_msg, _ctx| Ok(Box::pin(futures::stream::empty())));
-
     mock.expect_handle_check_is_our_turn()
         .returning(|_msg, _ctx| Ok(true));
 

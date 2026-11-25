@@ -1,7 +1,7 @@
 #![expect(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashSet},
     pin::pin,
     sync::Arc,
     time::Duration,
@@ -45,7 +45,6 @@ use logos_blockchain_zone_sdk::{
     sequencer::DepositInfo,
 };
 use mempool::{MemPool, MemPoolHandle};
-use ping_core::{ReceiverMessage, ping_record_pda, receiver_config_account_id};
 use sequencer_bedrock_actor::{
     mock::{CannedChannel, MockBedrockActor, SharedChannel, mock_msg_of},
     protocol::{ChannelUpdate, LiveChannelConfig, PublishOutcome, ViewChange},
@@ -55,10 +54,8 @@ use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::{
     StorageActor,
     protocol::{
-        AddPendingCrossZoneDispatches, AtomicUpdate, CrossZoneMessageKey, DispatchOrigin, GetBlock,
-        GetChannelViewBytes, GetFinalSnapshot, GetFirstBlockId, GetLatestBlockMeta, GetLeeState,
-        GetPendingCrossZoneDispatches, GetPendingDepositEvents, PendingCrossZoneDispatchRecord,
-        PendingDepositEventRecord,
+        AtomicUpdate, GetBlock, GetChannelViewBytes, GetFinalSnapshot, GetFirstBlockId,
+        GetLatestBlockMeta, GetLeeState, GetPendingDepositEvents, PendingDepositEventRecord,
     },
 };
 use sharding_pool_actor::{RestartConfig, ShardingPoolActor};
@@ -67,18 +64,11 @@ use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_us
 use tokio::sync::Mutex;
 
 use crate::{
-    MAX_DISPATCHES_PER_BLOCK, RETIRE_DISPATCH_AFTER_FAILURES, SequencerCore, TransactionOrigin,
-    build_bridge_deposit_tx_from_event, build_finalize_unstake_tx, classify_settled_deliveries,
-    config::{
-        self, BedrockConfig, CrossZoneConfig, CrossZonePeer, CrossZoneRoute, SequencerConfig,
-    },
-    config_target, deposit_already_minted, dispatch_already_delivered, extract_cross_zone_dispatch,
-    extract_cross_zone_dispatch_key, is_sequencer_only_program, resubmittable_txs, round_robin,
+    SequencerCore, TransactionOrigin, build_bridge_deposit_tx_from_event,
+    build_finalize_unstake_tx,
+    config::{self, BedrockConfig, SequencerConfig},
+    config_target, deposit_already_minted, is_sequencer_only_program, resubmittable_txs,
 };
-
-/// The peer zone a cross-zone test receives from. Distinct from the test
-/// channel id (`[0; 32]`), which the inbox guest rejects as a source.
-const PEER_ZONE: [u8; 32] = [0xbe_u8; 32];
 
 /// The inscription a test slash names; only has to match the approvals.
 const TEST_INSCRIPTION: [u8; 32] = [0xA1; 32];
@@ -197,12 +187,7 @@ async fn start_sequencer_bare_on(
         .await
         .unwrap()
         .map_or_else(
-            || {
-                (
-                    sequencer_genesis::build_initial_state(config.cross_zone.is_some()),
-                    None,
-                )
-            },
+            || (sequencer_genesis::build_initial_state(), None),
             |(state, meta)| (state, Some(chain_state::Tip::from(meta))),
         );
     let mut chain = ChainState::from_final(final_state, final_tip);
@@ -358,7 +343,6 @@ fn setup_sequencer_config() -> SequencerConfig {
             channel_params: config::default_channel_params(),
             actions: vec![],
         }),
-        cross_zone: None,
         metrics_listen_address: None,
         gossip: None,
         channel_signing_key_file: None,
@@ -368,23 +352,12 @@ fn setup_sequencer_config() -> SequencerConfig {
 }
 
 #[test]
-fn only_the_cross_zone_inbox_fee_and_system_upgrader_are_sequencer_only() {
-    assert!(is_sequencer_only_program(
-        programs::cross_zone_inbox_account_id()
-    ));
+fn only_the_fee_and_system_upgrader_are_sequencer_only() {
     assert!(is_sequencer_only_program(programs::fee_account_id()));
     assert!(is_sequencer_only_program(
         programs::system_upgrader_account_id()
     ));
-    assert!(!is_sequencer_only_program(
-        programs::cross_zone_outbox_account_id()
-    ));
-    assert!(!is_sequencer_only_program(
-        programs::wrapped_token_account_id()
-    ));
-    assert!(!is_sequencer_only_program(
-        programs::ping_sender_account_id()
-    ));
+    assert!(!is_sequencer_only_program(programs::bridge_account_id()));
     assert!(!is_sequencer_only_program(programs::clock_account_id()));
 }
 
@@ -718,505 +691,6 @@ async fn an_exempt_public_bridge_deposit_is_dropped_by_the_builder_bridge_guard(
     );
 }
 
-/// A config that receives `ping_receiver` messages from [`PEER_ZONE`], so
-/// `build_genesis_state` seeds the inbox config PDA and a delivery has an
-/// allowlist to pass.
-fn cross_zone_test_config() -> SequencerConfig {
-    SequencerConfig {
-        cross_zone: Some(CrossZoneConfig {
-            peers: vec![CrossZonePeer {
-                channel_id: PEER_ZONE,
-                allowed_routes: vec![CrossZoneRoute {
-                    src_account_id: programs::ping_sender_account_id(),
-                    target_account_id: programs::ping_receiver_account_id(),
-                    mint_cap: None,
-                }],
-                min_committee_size: 0,
-                genesis_hash: None,
-                emitters: vec![],
-            }],
-            lock_target_zones: Vec::new(),
-            source_authority: None,
-            source_governance: None,
-        }),
-        ..setup_sequencer_config()
-    }
-}
-
-/// A `ping_receiver::Record` message: the wire form an emitter on the peer
-/// zone puts in the message payload.
-fn ping_payload(payload: &[u8]) -> Vec<u8> {
-    borsh::to_vec(&ReceiverMessage::Record {
-        payload: payload.to_vec(),
-    })
-    .expect("ping message serializes")
-}
-
-/// The dispatch transaction for a message at index 0 of [`PEER_ZONE`] block
-/// `src_block_id`. Built through the same builder the watcher uses, so a change
-/// to the encoding shows up here rather than passing silently.
-fn dispatch_tx(src_block_id: u64, payload: Vec<u8>) -> LeeTransaction {
-    let receiver_id = programs::ping_receiver_account_id();
-    LeeTransaction::Public(cross_zone::build_dispatch_from_emission(
-        &cross_zone::EmissionSource {
-            src_zone: PEER_ZONE,
-            src_block_id,
-            src_block_hash: peer_block_hash(src_block_id),
-            src_tx_index: 0,
-            src_account_id: programs::ping_sender_account_id(),
-        },
-        receiver_id,
-        &[
-            Actor::new(receiver_config_account_id(receiver_id), receiver_id),
-            Actor::new(ping_record_pda(receiver_id), receiver_id),
-        ],
-        payload,
-    ))
-}
-
-/// A stand-in for the peer block's recomputed hash, distinct per block id. These
-/// records are seeded into the store, so no real block exists to hash.
-fn peer_block_hash(src_block_id: u64) -> [u8; 32] {
-    let mut hash = [0_u8; 32];
-    hash[..8].copy_from_slice(&src_block_id.to_le_bytes());
-    hash
-}
-
-/// The pending record the watcher would leave behind for that dispatch.
-fn dispatch_record(src_block_id: u64, payload: Vec<u8>) -> PendingCrossZoneDispatchRecord {
-    let tx = dispatch_tx(src_block_id, payload);
-    PendingCrossZoneDispatchRecord::recorded(
-        cross_zone_inbox_core::message_key(&PEER_ZONE, src_block_id, 0),
-        borsh::to_vec(&tx).expect("dispatch encodes"),
-    )
-}
-
-fn delivered_source_blocks(block: &Block) -> Vec<u64> {
-    block
-        .body
-        .transactions
-        .iter()
-        .filter_map(extract_cross_zone_dispatch)
-        .map(|message| message.src_block_id)
-        .collect()
-}
-
-/// The message keys of the deliveries a block carries.
-fn dispatches_in(block: &Block) -> Vec<CrossZoneMessageKey> {
-    block
-        .body
-        .transactions
-        .iter()
-        .filter_map(extract_cross_zone_dispatch_key)
-        .collect()
-}
-
-/// The pending dispatch records a sequencer still holds.
-async fn pending_dispatches(
-    sequencer: &SequencerCore<StorageActor, MockBedrockActor>,
-) -> Vec<PendingCrossZoneDispatchRecord> {
-    sequencer
-        .storage_ref
-        .ask(GetPendingCrossZoneDispatches)
-        .await
-        .expect("pending dispatches readable")
-}
-
-#[tokio::test]
-async fn recorded_dispatches_are_drained_from_the_store_on_production() {
-    let payload = b"hello-cross-zone".to_vec();
-    let record = dispatch_record(7, ping_payload(&payload));
-    let key = record.message_key;
-
-    let (mut sequencer, _mempool_handle) = start_sequencer(cross_zone_test_config()).await;
-    assert_eq!(
-        sequencer
-            .storage_ref
-            .ask(AddPendingCrossZoneDispatches {
-                dispatches: vec![record],
-            })
-            .await
-            .unwrap(),
-        1
-    );
-
-    // The delivery never goes through the mempool: the record is the queue, and
-    // production drains it. That is what makes the window between the watcher's
-    // durable read cursor and a block carrying the dispatch survivable, and
-    // what lets a committee-floor suspension hold new reads without holding
-    // deliveries already recorded: the watcher spawned here reads nothing (its
-    // node URL is a dummy) and only ever records to the store, never the
-    // mempool.
-    assert!(
-        sequencer.mempool.pop().is_none(),
-        "deliveries are drained from the store, never queued in the mempool"
-    );
-
-    let block_id = sequencer.run_production_turn().await.unwrap();
-    let block = sequencer
-        .storage_ref
-        .ask(GetBlock { block_id })
-        .await
-        .unwrap()
-        .expect("produced block is stored");
-    assert_eq!(
-        dispatches_in(&block),
-        vec![key],
-        "the drained delivery should be included in the produced block"
-    );
-
-    let ping_receiver_program_id = programs::ping_receiver_account_id();
-    let record_id = ping_record_pda(ping_receiver_program_id);
-    assert_eq!(
-        sequencer
-            .with_state(|state| state
-                .get_account_by_id(record_id)
-                .data
-                .actor_state(ping_receiver_program_id)
-                .clone()
-                .into_inner())
-            .await,
-        payload,
-        "the dispatch must reach its target program, not just sit in the block"
-    );
-
-    // The record stays until the delivery finalizes; re-delivery is prevented by
-    // the inbox seen-set now in head state, not by any marker on the record.
-    assert_eq!(
-        pending_dispatches(&sequencer)
-            .await
-            .iter()
-            .map(|record| record.message_key)
-            .collect::<Vec<_>>(),
-        vec![key],
-        "the record remains until the delivery becomes irreversible"
-    );
-}
-
-/// Only the watcher's injected `Dispatch` may deliver: the same delivery signed
-/// and paid for by a user is rejected, so no block may carry it.
-#[tokio::test]
-async fn settlement_rejects_a_dispatch_a_user_signed() {
-    let (sequencer, _mempool_handle) = start_sequencer(cross_zone_test_config()).await;
-    let state = sequencer.with_state(Clone::clone).await;
-    let opening = chain_state::apply::opening_fee_state(&state);
-
-    let injected = dispatch_tx(7, ping_payload(b"forged"));
-    let LeeTransaction::Public(public) = &injected else {
-        unreachable!("a dispatch is a public transaction")
-    };
-    let lee::RootCall {
-        to,
-        message: dispatch,
-    } = &public.message().execution.root;
-    let payer = initial_public_user_accounts()[0].account_id;
-    let message = lee::public_transaction::Message {
-        admission_evidence: public.message().admission_evidence.clone(),
-        ..lee::public_transaction::Message::try_new_with_fees(
-            *to,
-            public.message().public_context.actors.clone(),
-            BTreeMap::from([(payer, state.get_account_by_id(payer).nonce)]),
-            borsh::from_slice::<cross_zone_inbox_core::Message>(dispatch)
-                .expect("a dispatch message decodes"),
-            common::test_utils::test_fee_declaration(payer),
-        )
-        .unwrap()
-    };
-    let witness_set = witness_for(&message, &[&create_signing_key_for_account1()]);
-    let signed = LeeTransaction::Public(PublicTransaction::new(message, witness_set));
-
-    let settle = |tx: &LeeTransaction| {
-        chain_state::apply::settle_transaction(
-            tx,
-            &mut state.clone(),
-            &opening,
-            2,
-            0,
-            0,
-            &mut fee_core::BlockFeeSummary::default(),
-        )
-    };
-    settle(&injected).expect("the injected dispatch delivers");
-    let err = settle(&signed).expect_err("a user-signed dispatch must be rejected");
-    assert!(
-        matches!(
-            err,
-            chain_state::BlockIngestError::RestrictedAccountModification { .. }
-        ),
-        "expected RestrictedAccountModification, got {err:?}"
-    );
-}
-
-#[tokio::test]
-async fn a_delivered_dispatch_is_skipped_on_the_next_turn() {
-    // The seen-set is what replaces the submitted mark: the drain asks the state
-    // it is building on whether the inbox has already taken this message, so a
-    // record that outlives its delivery costs one skipped drain, not a replay.
-    let record = dispatch_record(11, ping_payload(b"once"));
-    let key = record.message_key;
-
-    let (mut sequencer, _mempool_handle) = start_sequencer(cross_zone_test_config()).await;
-    sequencer
-        .storage_ref
-        .ask(AddPendingCrossZoneDispatches {
-            dispatches: vec![record],
-        })
-        .await
-        .unwrap();
-
-    let first = sequencer.run_production_turn().await.unwrap();
-    let second = sequencer.run_production_turn().await.unwrap();
-
-    let delivered_in = async |block_id: u64| {
-        dispatches_in(
-            &sequencer
-                .storage_ref
-                .ask(GetBlock { block_id })
-                .await
-                .unwrap()
-                .expect("produced block is stored"),
-        )
-    };
-    assert_eq!(delivered_in(first).await, vec![key]);
-    assert!(
-        delivered_in(second).await.is_empty(),
-        "the inbox seen-set must keep the drain from re-delivering"
-    );
-
-    let message = extract_cross_zone_dispatch(&dispatch_tx(11, ping_payload(b"once")))
-        .expect("the dispatch carries a cross-zone message");
-    assert!(
-        sequencer
-            .with_state(|state| dispatch_already_delivered(state, &message))
-            .await,
-        "the seen shard in head state is what the skip reads"
-    );
-}
-
-#[tokio::test]
-async fn a_dispatch_that_never_executes_is_given_up_on_after_repeated_failures() {
-    // A payload that is not `u32`-aligned: the inbox guest rejects it outright,
-    // so this is a delivery that can never execute however often it is retried.
-    // Its content is chosen on the peer zone and validated by nobody in between,
-    // so without a give-up policy it would fail on every block for ever.
-    let record = dispatch_record(13, b"odd".to_vec());
-
-    let (mut sequencer, _mempool_handle) = start_sequencer(cross_zone_test_config()).await;
-    sequencer
-        .storage_ref
-        .ask(AddPendingCrossZoneDispatches {
-            dispatches: vec![record],
-        })
-        .await
-        .unwrap();
-
-    for attempt in 1..RETIRE_DISPATCH_AFTER_FAILURES {
-        let block_id = sequencer.run_production_turn().await.unwrap();
-        let block = sequencer
-            .storage_ref
-            .ask(GetBlock { block_id })
-            .await
-            .unwrap()
-            .expect("produced block is stored");
-        assert!(
-            dispatches_in(&block).is_empty(),
-            "a dispatch that fails to execute must not reach the block"
-        );
-
-        let records = pending_dispatches(&sequencer).await;
-        assert_eq!(records.len(), 1);
-        assert_eq!(
-            records[0].failed_attempts, attempt,
-            "the counter advances once per block, not once per process start"
-        );
-    }
-
-    // The attempt at the limit gives up on it, which takes the record out of the
-    // pending list. Anything else leaves an entry no later block can ever
-    // remove, which is how a peer that can make deliveries fail would grow this
-    // list without bound.
-    sequencer.run_production_turn().await.unwrap();
-    assert!(
-        pending_dispatches(&sequencer).await.is_empty(),
-        "giving up on a delivery must take its record out of the pending list"
-    );
-
-    // The dead letter is the only record that this happened, and the origin is
-    // what identifies which message stopped being attempted.
-    let (dead_letter_count, dead_letters) = sequencer.cross_zone_dead_letters().await.unwrap();
-    assert_eq!(dead_letters.len(), 1);
-    assert_eq!(
-        dead_letters[0].origin,
-        DispatchOrigin {
-            src_zone: PEER_ZONE,
-            src_block_id: 13,
-            src_tx_index: 0,
-        }
-    );
-    assert_eq!(
-        dead_letters[0].message_key,
-        cross_zone_inbox_core::message_key(&PEER_ZONE, 13, 0)
-    );
-    assert!(!dead_letters[0].transaction.is_empty());
-    assert_eq!(
-        dead_letters[0].failed_attempts,
-        RETIRE_DISPATCH_AFTER_FAILURES
-    );
-    assert_eq!(dead_letter_count, 1);
-
-    // The same view the RPC serves, so an operator sees what the store holds.
-    let (total_retired, retained) = sequencer.cross_zone_dead_letters().await.unwrap();
-    assert_eq!(total_retired, 1);
-    assert_eq!(retained, dead_letters);
-
-    // And nothing re-feeds it, so it stops costing a guest execution per block.
-    let block_id = sequencer.run_production_turn().await.unwrap();
-    let block = sequencer
-        .storage_ref
-        .ask(GetBlock { block_id })
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(dispatches_in(&block).is_empty());
-    assert!(pending_dispatches(&sequencer).await.is_empty());
-}
-
-#[tokio::test]
-async fn a_redelivered_record_is_dropped_once_its_delivery_is_irreversible() {
-    // The watcher persists its floor only at slot boundaries, so a crash inside
-    // a slot makes the next run re-read it and re-record deliveries that have
-    // already settled. Their keys are in the inbox seen-set for good, so no
-    // future block will ever carry them and the settlement path cannot reach
-    // them. The drain dropping them is the only thing that does.
-    let record = dispatch_record(29, ping_payload(b"again"));
-    let key = record.message_key;
-
-    let (mut sequencer, _mempool_handle) = start_sequencer(cross_zone_test_config()).await;
-    sequencer
-        .storage_ref
-        .ask(AddPendingCrossZoneDispatches {
-            dispatches: vec![record.clone()],
-        })
-        .await
-        .unwrap();
-
-    let block_id = sequencer.run_production_turn().await.unwrap();
-    let delivery_block = sequencer
-        .storage_ref
-        .ask(GetBlock { block_id })
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(dispatches_in(&delivery_block), vec![key]);
-
-    sequencer
-        .on_channel_update(&ChannelUpdate {
-            finalized: vec![finalized_as_held(&sequencer.chain(), &delivery_block).await],
-            ..empty_channel_update()
-        })
-        .await;
-    assert!(pending_dispatches(&sequencer).await.is_empty());
-
-    // The watcher re-reads the slot and records it again.
-    sequencer
-        .storage_ref
-        .ask(AddPendingCrossZoneDispatches {
-            dispatches: vec![record],
-        })
-        .await
-        .unwrap();
-    assert_eq!(pending_dispatches(&sequencer).await.len(), 1);
-
-    let block_id = sequencer.run_production_turn().await.unwrap();
-    let block = sequencer
-        .storage_ref
-        .ask(GetBlock { block_id })
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(
-        dispatches_in(&block).is_empty(),
-        "the delivery is already on the chain, so it must not be delivered again"
-    );
-    assert!(
-        pending_dispatches(&sequencer).await.is_empty(),
-        "a record whose delivery is already irreversible must be dropped, not kept for ever"
-    );
-}
-
-#[tokio::test]
-async fn a_delivery_still_reversible_keeps_its_record() {
-    // The counterpart to the test above, and the reason the drain checks two
-    // states rather than one. In head but not yet final means the delivery can
-    // still orphan, so skipping it is right but dropping its record would lose
-    // the delivery when it does.
-    let record = dispatch_record(31, ping_payload(b"pending"));
-    let key = record.message_key;
-
-    let (mut sequencer, _mempool_handle) = start_sequencer(cross_zone_test_config()).await;
-    sequencer
-        .storage_ref
-        .ask(AddPendingCrossZoneDispatches {
-            dispatches: vec![record],
-        })
-        .await
-        .unwrap();
-
-    sequencer.run_production_turn().await.unwrap();
-    sequencer.run_production_turn().await.unwrap();
-
-    assert_eq!(
-        pending_dispatches(&sequencer)
-            .await
-            .iter()
-            .map(|record| record.message_key)
-            .collect::<Vec<_>>(),
-        vec![key],
-        "nothing has finalized, so the record must survive in case the block orphans"
-    );
-}
-
-#[test]
-fn a_settled_delivery_that_is_not_the_one_we_recorded_is_reported() {
-    // The message key covers (src_zone, src_block_id, src_tx_index) and nothing
-    // about the payload, and so does the inbox's own replay check. So a peer's
-    // sequencer can publish a delivery under a key we hold with a payload we
-    // never saw, and it settles our correct record along with it. The indexer
-    // catches the forgery and halts; this record is the last local copy of what
-    // we believed, so the mismatch has to be reported before it is dropped.
-    let honest = dispatch_record(53, ping_payload(b"honest"));
-    let key = honest.message_key;
-    let forged = dispatch_tx(53, ping_payload(b"forged"));
-    assert_eq!(
-        extract_cross_zone_dispatch_key(&forged),
-        Some(key),
-        "the forged delivery must share the key, or it proves nothing"
-    );
-
-    let block = common::test_utils::produce_dummy_block(2, None, vec![forged]);
-    let (keys, mismatched) = classify_settled_deliveries(std::slice::from_ref(&honest), &block);
-    assert_eq!(
-        keys,
-        HashSet::from([key]),
-        "the record is settled either way"
-    );
-    assert_eq!(
-        mismatched,
-        vec![key],
-        "a delivery that differs from the one recorded under that key must be reported"
-    );
-
-    // The honest case must stay quiet, or the report is noise.
-    let honest_block = common::test_utils::produce_dummy_block(
-        2,
-        None,
-        vec![dispatch_tx(53, ping_payload(b"honest"))],
-    );
-    let (keys, mismatched) = classify_settled_deliveries(&[honest], &honest_block);
-    assert_eq!(keys, HashSet::from([key]));
-    assert!(mismatched.is_empty());
-}
-
 #[tokio::test]
 async fn a_mempool_transaction_too_large_for_any_block_is_dropped() {
     // Pushed straight into the mempool, past the admission check that would refuse it.
@@ -1270,121 +744,6 @@ async fn a_mempool_transaction_too_large_for_any_block_is_dropped() {
         .unwrap();
     assert!(block.body.transactions.contains(&user_tx));
     assert!(!block.body.transactions.contains(&oversized));
-}
-
-#[tokio::test]
-async fn a_delivery_too_large_for_any_block_does_not_stall_production() {
-    // A store-drained transaction is at the head of the queue every turn, so one
-    // that cannot fit in any block would defer itself for ever and, because the
-    // deferral breaks the loop, stop production ever reaching the mempool behind
-    // it. The peer chooses the payload, so this is theirs to trigger.
-    let record = dispatch_record(41, ping_payload(&[7_u8; 8192]));
-
-    let mut config = cross_zone_test_config();
-    config
-        .genesis
-        .as_mut()
-        .unwrap()
-        .channel_params
-        .max_block_size = 4 * 1024;
-    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
-    sequencer
-        .storage_ref
-        .ask(AddPendingCrossZoneDispatches {
-            dispatches: vec![record],
-        })
-        .await
-        .unwrap();
-
-    let user_tx = common::test_utils::create_transaction_native_token_transfer(
-        initial_public_user_accounts()[0].account_id,
-        0,
-        initial_public_user_accounts()[1].account_id,
-        10,
-        &create_signing_key_for_account1(),
-    );
-    mempool_handle
-        .push((TransactionOrigin::User, user_tx.clone()))
-        .await
-        .unwrap();
-
-    // Production must get past it to the mempool in the very first block.
-    let block_id = sequencer.run_production_turn().await.unwrap();
-    let block = sequencer
-        .storage_ref
-        .ask(GetBlock { block_id })
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(
-        block.body.transactions.contains(&user_tx),
-        "an oversized drained delivery must not stop production reaching the mempool"
-    );
-    assert!(dispatches_in(&block).is_empty());
-
-    // And it is given up on rather than retried for ever.
-    for _ in 1..RETIRE_DISPATCH_AFTER_FAILURES {
-        sequencer.run_production_turn().await.unwrap();
-    }
-    assert!(
-        pending_dispatches(&sequencer).await.is_empty(),
-        "a delivery that fits in no block must be given up on"
-    );
-}
-
-#[tokio::test]
-async fn a_delivery_backlog_is_spread_across_blocks() {
-    // Each delivery costs a guest execution and peers decide how many queue up,
-    // so an unbounded drain would let a backlog decide how long a block takes to
-    // build and leave no room for user work, since store-drained transactions
-    // are taken before the mempool.
-    let backlog = MAX_DISPATCHES_PER_BLOCK + 3;
-    let records: Vec<_> = (0..backlog)
-        .map(|index| {
-            let src_block_id = 100 + u64::try_from(index).expect("test index fits");
-            dispatch_record(src_block_id, ping_payload(b"backlog"))
-        })
-        .collect();
-
-    let mut config = cross_zone_test_config();
-    config.max_num_tx_in_block = backlog + 10;
-    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
-    sequencer
-        .storage_ref
-        .ask(AddPendingCrossZoneDispatches {
-            dispatches: records,
-        })
-        .await
-        .unwrap();
-
-    let block_id = sequencer.run_production_turn().await.unwrap();
-    let block = sequencer
-        .storage_ref
-        .ask(GetBlock { block_id })
-        .await
-        .unwrap()
-        .unwrap();
-    let cap: u64 = MAX_DISPATCHES_PER_BLOCK
-        .try_into()
-        .expect("cap fits in u64");
-    assert_eq!(
-        delivered_source_blocks(&block),
-        (100..100 + cap).collect::<Vec<_>>(),
-        "one block carries at most the cap, oldest emission first"
-    );
-
-    // Deferred, not dropped: the rest go in the next block.
-    let block_id = sequencer.run_production_turn().await.unwrap();
-    let block = sequencer
-        .storage_ref
-        .ask(GetBlock { block_id })
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        delivered_source_blocks(&block),
-        (100 + cap..=118).collect::<Vec<_>>()
-    );
 }
 
 #[tokio::test]
@@ -3856,97 +3215,6 @@ async fn follow_finalized_own_block_moves_final_tier_and_marks_store() {
     assert_eq!(sequencer.chain_height().await, 2, "head is unchanged");
     let stored = block_at(&sequencer, 2).await.unwrap();
     assert!(matches!(stored.bedrock_status, BedrockStatus::Finalized));
-}
-
-#[tokio::test]
-async fn follow_finalized_delivery_drops_its_pending_record() {
-    // The record exists to bridge the gap between the watcher's durable read
-    // cursor and a block that carries the delivery. Once that block is
-    // irreversible the delivery cannot be lost any more, so the record is owed
-    // nothing and goes with the same update that made the block irreversible.
-    let record = dispatch_record(17, ping_payload(b"settled"));
-    let key = record.message_key;
-
-    let (mut sequencer, _mempool_handle) = start_sequencer(cross_zone_test_config()).await;
-    sequencer
-        .storage_ref
-        .ask(AddPendingCrossZoneDispatches {
-            dispatches: vec![record],
-        })
-        .await
-        .unwrap();
-
-    let block_id = sequencer.run_production_turn().await.unwrap();
-    let delivery_block = block_at(&sequencer, block_id).await.unwrap();
-    assert_eq!(dispatches_in(&delivery_block), vec![key]);
-    assert_eq!(
-        pending_dispatches(&sequencer).await.len(),
-        1,
-        "including the delivery is not enough to settle its record"
-    );
-
-    let finalized = finalized_as_held(&sequencer.chain(), &delivery_block).await;
-    sequencer
-        .on_channel_update(&ChannelUpdate {
-            finalized: vec![finalized],
-            ..empty_channel_update()
-        })
-        .await;
-
-    assert!(
-        pending_dispatches(&sequencer).await.is_empty(),
-        "a delivery in an irreversible block settles its record"
-    );
-}
-
-#[tokio::test]
-async fn a_parked_finalized_block_does_not_drop_a_dispatch_record() {
-    // Keyed by message key, not by height: a finalized block the final tier
-    // parks never became irreversible, so nothing it happens to sit above may
-    // settle a record. Dropping one here would lose the delivery for good, since
-    // the watcher's floor has already moved past the peer block it came from.
-    let record = dispatch_record(19, ping_payload(b"parked"));
-    let key = record.message_key;
-    let delivery = dispatch_tx(19, ping_payload(b"parked"));
-
-    let (mut sequencer, mempool_handle) = start_sequencer(cross_zone_test_config()).await;
-    sequencer
-        .storage_ref
-        .ask(AddPendingCrossZoneDispatches {
-            dispatches: vec![record],
-        })
-        .await
-        .unwrap();
-
-    let tx = common::test_utils::produce_dummy_empty_transaction();
-    mempool_handle
-        .push((TransactionOrigin::User, tx))
-        .await
-        .unwrap();
-    sequencer.run_production_turn().await.unwrap();
-
-    // A skip-ahead block carrying the same delivery: it links to nothing we
-    // hold, so the final tier parks it instead of applying it.
-    let parked =
-        common::test_utils::produce_dummy_block(9, Some(HashType([44; 32])), vec![delivery]);
-    let finalized = entry_of(&parked, MsgId::from([44; 32]));
-
-    sequencer
-        .on_channel_update(&ChannelUpdate {
-            finalized: vec![finalized],
-            ..empty_channel_update()
-        })
-        .await;
-
-    assert_eq!(
-        pending_dispatches(&sequencer)
-            .await
-            .iter()
-            .map(|record| record.message_key)
-            .collect::<Vec<_>>(),
-        vec![key],
-        "a parked finalized block must not drop its delivery's record"
-    );
 }
 
 #[tokio::test]
@@ -6880,85 +6148,6 @@ fn a_slash_without_enough_approvals_is_rejected() {
     );
 }
 
-/// The route struct refuses unknown keys, so a misspelled `mint_cap` in an
-/// operator config fails startup instead of silently seeding uncapped.
-#[test]
-fn a_misspelled_mint_cap_key_fails_route_parse() {
-    let route = serde_json::from_value::<CrossZoneRoute>(serde_json::json!({
-        "src_program_id": [0, 0, 0, 0, 0, 0, 0, 1],
-        "target_program_id": [0, 0, 0, 0, 0, 0, 0, 2],
-        "mintcap": 1_000,
-    }));
-    assert!(route.is_err(), "an unknown key must fail the parse");
-}
-
-/// Gating is atomic: no `cross_zone`, no cross-zone genesis transaction;
-/// empty-peers carries exactly the four `InitConfig`s, in order.
-#[test]
-fn genesis_cross_zone_transactions_follow_the_declaration() {
-    let cross_zone_ids: [AccountId; 6] = [
-        programs::cross_zone_inbox_account_id(),
-        programs::cross_zone_outbox_account_id(),
-        programs::ping_sender_account_id(),
-        programs::ping_receiver_account_id(),
-        programs::bridge_lock_account_id(),
-        programs::wrapped_token_account_id(),
-    ];
-    let tx_program = |tx: &LeeTransaction| match tx {
-        LeeTransaction::Public(public) => public.message().execution.root.to.program_account_id,
-        LeeTransaction::PrivacyPreserving(_) => {
-            unreachable!("genesis holds only public transactions")
-        }
-    };
-
-    let temp_dir = tempdir().unwrap();
-    let mut config = setup_sequencer_config();
-    config.home = temp_dir.path().to_path_buf();
-    let key = test_bootstrap_sequencer_key(&config);
-    let (state, txs, _) =
-        sequencer_genesis::build_genesis_state(&config.genesis_spec(Some(key)).unwrap());
-    assert!(
-        !txs.iter()
-            .any(|tx| cross_zone_ids.contains(&tx_program(tx))),
-        "a configless genesis must carry no cross-zone transaction"
-    );
-    for account_id in cross_zone_ids {
-        assert!(state.get_builtin_program(account_id).is_none());
-    }
-
-    let temp_dir = tempdir().unwrap();
-    let mut config = setup_sequencer_config();
-    config.home = temp_dir.path().to_path_buf();
-    config.cross_zone = Some(config::CrossZoneConfig {
-        peers: Vec::new(),
-        lock_target_zones: Vec::new(),
-        source_authority: None,
-        source_governance: None,
-    });
-    let key = test_bootstrap_sequencer_key(&config);
-    let (state, txs, _) =
-        sequencer_genesis::build_genesis_state(&config.genesis_spec(Some(key)).unwrap());
-    let cross_zone_txs: Vec<_> = txs
-        .iter()
-        .map(tx_program)
-        .filter(|id| cross_zone_ids.contains(id))
-        .collect();
-    assert_eq!(
-        cross_zone_txs,
-        vec![
-            programs::wrapped_token_account_id(),
-            programs::ping_sender_account_id(),
-            programs::ping_receiver_account_id(),
-            programs::bridge_lock_account_id(),
-            programs::cross_zone_inbox_account_id(),
-        ],
-        "the four InitConfigs then the inbox config, in the fixed order"
-    );
-    for account_id in cross_zone_ids {
-        assert!(state.get_builtin_program(account_id).is_some());
-    }
-}
-
 /// Whether the slasher has recorded any offence.
 async fn slash_recorded(sequencer: &SequencerCore<StorageActor, MockBedrockActor>) -> bool {
     sequencer
@@ -7328,7 +6517,7 @@ fn state_with_clock_upgrade_due_at(activation_height: lee_core::BlockId) -> lee:
     use lee_core::program::SYSTEM_UPGRADER_ACCOUNT_ID;
     use system_upgrader_core::{Registry, ScheduledUpgrade, registry_account_id};
 
-    let genesis = testnet_initial_state::initial_state(false);
+    let genesis = testnet_initial_state::initial_state();
     let mut registry = common::system_upgrades::registry(&genesis).unwrap();
     registry.programs.insert(
         programs::CLOCK_NAME,
@@ -7590,43 +6779,6 @@ async fn an_approved_change_has_room_in_a_full_block() {
             ))
             .await,
         Ok(None)
-    );
-}
-
-#[test]
-fn dispatch_slots_are_shared_round_robin_across_peers() {
-    let queues: BTreeMap<Option<[u8; 32]>, VecDeque<&str>> = BTreeMap::from([
-        (Some([1; 32]), VecDeque::from(["a0", "a1", "a2", "a3"])),
-        (Some([2; 32]), VecDeque::from(["b0", "b1"])),
-        (None, VecDeque::from(["n0"])),
-    ]);
-
-    let taken = round_robin(queues, 6);
-
-    assert_eq!(taken, VecDeque::from(["n0", "a0", "b0", "a1", "b1", "a2"]));
-
-    let one_queue: BTreeMap<u8, VecDeque<u8>> = BTreeMap::from([(1, VecDeque::from([7, 8, 9]))]);
-    assert_eq!(
-        round_robin(one_queue, 2),
-        VecDeque::from([7, 8]),
-        "the cap still binds a single queue"
-    );
-}
-
-#[test]
-fn a_peer_genesis_hash_round_trips_as_hex() {
-    let peer: CrossZonePeer = serde_json::from_str(
-        r#"{"channel_id":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],
-            "allowed_routes":[],
-            "genesis_hash":"0202020202020202020202020202020202020202020202020202020202020202"}"#,
-    )
-    .expect("hex genesis hash parses");
-
-    assert_eq!(peer.genesis_hash, Some(HashType([2; 32])));
-    assert!(
-        serde_json::to_string(&peer)
-            .expect("peer serializes")
-            .contains("\"0202020202020202020202020202020202020202020202020202020202020202\"")
     );
 }
 

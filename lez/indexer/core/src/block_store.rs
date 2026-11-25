@@ -15,7 +15,7 @@ use storage::indexer::RocksDBIO;
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
-use crate::{event_filter::EventFilter, status::CrossZoneHalt};
+use crate::event_filter::EventFilter;
 
 #[derive(Clone)]
 pub struct IndexerStore {
@@ -29,12 +29,11 @@ impl IndexerStore {
     /// Creates files if necessary.
     pub fn open_db(
         location: &Path,
-        cross_zone: bool,
         genesis_seed: Vec<(AccountId, Account)>,
         event_filter: EventFilter,
     ) -> Result<Self> {
         let initial_state =
-            testnet_initial_state::initial_state(cross_zone).with_public_accounts(genesis_seed);
+            testnet_initial_state::initial_state().with_public_accounts(genesis_seed);
 
         // In production `genesis_seed` is empty: configs and holdings are
         // reconstructed by replaying the genesis block, so this state matches the
@@ -46,16 +45,15 @@ impl IndexerStore {
             "Genesis fingerprint computed"
         );
         let dbio = RocksDBIO::open_or_create(location, &initial_state)?;
-        // Presence cannot change on a chain: an existing store keeps its seeded
-        // genesis, so a disagreement here is an operator error.
+        // An existing store keeps its seeded genesis, so a disagreement here
+        // means the store was built by a different build.
         if let Some(stored) = dbio.get_breakpoint_opt(0)?
             && stored.genesis_fingerprint() != initial_state.genesis_fingerprint()
         {
             error!(
                 stored_fingerprint = %hex::encode(stored.genesis_fingerprint()),
                 "Stored genesis fingerprint does not match the configured one; the store keeps \
-                 running on its own genesis. Did cross_zone presence change since this chain was \
-                 created?"
+                 running on its own genesis"
             );
         }
 
@@ -213,22 +211,6 @@ impl IndexerStore {
     /// the slot was recorded.
     pub fn get_tip_slot(&self) -> Result<Option<Slot>> {
         Ok(self.dbio.get_meta_tip_slot_in_db()?.map(Slot::from))
-    }
-
-    pub fn get_cross_zone_halt(&self) -> Result<Option<CrossZoneHalt>> {
-        let Some(bytes) = self.dbio.get_cross_zone_halt_bytes()? else {
-            return Ok(None);
-        };
-        let halt: Option<CrossZoneHalt> = serde_json::from_slice(&bytes)
-            .context("Failed to deserialize stored cross-zone halt record")?;
-        Ok(halt)
-    }
-
-    pub fn set_cross_zone_halt(&self, halt: &Option<CrossZoneHalt>) -> Result<()> {
-        let bytes =
-            serde_json::to_vec(halt).context("Failed to serialize cross-zone halt record")?;
-        self.dbio.put_cross_zone_halt_bytes(&bytes)?;
-        Ok(())
     }
 
     pub fn get_stall_reason(&self) -> Result<Option<StallReason>> {
@@ -433,13 +415,8 @@ fn open_default(home: &Path) -> IndexerStore {
 fn open_with(home: &Path, filter: EventFilter) -> IndexerStore {
     // Seed the producer's reward account as claimed, mirroring the stake a real
     // sequencer holds, so charged blocks can credit it on the accept path.
-    IndexerStore::open_db(
-        home,
-        true,
-        vec![common::test_utils::producer_seed()],
-        filter,
-    )
-    .expect("open store")
+    IndexerStore::open_db(home, vec![common::test_utils::producer_seed()], filter)
+        .expect("open store")
 }
 
 #[cfg(test)]
@@ -483,30 +460,6 @@ mod stall_reason_tests {
 
         store.set_stall_reason(&None).expect("clear");
         assert!(store.get_stall_reason().expect("get").is_none());
-    }
-
-    #[tokio::test]
-    async fn cross_zone_halt_roundtrips_and_clears() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let store = open_default(dir.path());
-
-        assert!(store.get_cross_zone_halt().expect("get").is_none());
-
-        let halt = crate::status::CrossZoneHalt {
-            block_id: 9,
-            block_hash: HashType([0xAB_u8; 32]),
-            src_zone: hex::encode([2_u8; 32]),
-            src_block_id: 5,
-            src_tx_index: 1,
-            verdict: "re-derivation mismatch".to_owned(),
-        };
-        store
-            .set_cross_zone_halt(&Some(halt.clone()))
-            .expect("set halt");
-        assert_eq!(store.get_cross_zone_halt().expect("get"), Some(halt));
-
-        store.set_cross_zone_halt(&None).expect("clear");
-        assert!(store.get_cross_zone_halt().expect("get").is_none());
     }
 }
 
@@ -553,7 +506,7 @@ fn settled_test_block(
 /// an unclaimed account is rejected.
 #[cfg(test)]
 fn claimed_build_state() -> lee::V03State {
-    testnet_initial_state::initial_state(true)
+    testnet_initial_state::initial_state()
         .with_public_accounts([common::test_utils::producer_seed()])
 }
 
@@ -749,13 +702,12 @@ mod tests {
     fn a_fresh_store_keeps_the_initial_states_pinned_recovery_bindings() {
         let home = tempdir().unwrap();
         let storage =
-            IndexerStore::open_db(home.as_ref(), false, Vec::new(), EventFilter::default())
-                .unwrap();
+            IndexerStore::open_db(home.as_ref(), Vec::new(), EventFilter::default()).unwrap();
         let genesis = storage.dbio.get_breakpoint_opt(0).unwrap().unwrap();
 
         assert_eq!(
             genesis.genesis_fingerprint(),
-            testnet_initial_state::initial_state(false).genesis_fingerprint()
+            testnet_initial_state::initial_state().genesis_fingerprint()
         );
         for binding in testnet_initial_state::initial_recovery_bindings() {
             assert_eq!(
@@ -1125,7 +1077,7 @@ mod tests {
 
         // What every upgrading deployment looks like: blocks already ingested, but no
         // segment history, because filtering did not exist when they were written.
-        let initial_state = testnet_initial_state::initial_state(true);
+        let initial_state = testnet_initial_state::initial_state();
         let dbio = RocksDBIO::open_or_create(home.as_ref(), &initial_state).unwrap();
         dbio.del::<EventFilterSegmentsCellOwned>(()).unwrap();
         drop(dbio);
@@ -1308,14 +1260,12 @@ mod tests {
         let home = tempdir().unwrap();
         drop(open_with(home.as_ref(), EventFilter::Archival));
 
-        let initial_state = testnet_initial_state::initial_state(true);
+        let initial_state = testnet_initial_state::initial_state();
         let dbio = RocksDBIO::open_or_create(home.as_ref(), &initial_state).unwrap();
         dbio.put_event_filter_segments_bytes(b"garbage").unwrap();
         drop(dbio);
 
-        assert!(
-            IndexerStore::open_db(home.as_ref(), true, Vec::new(), EventFilter::Archival).is_err()
-        );
+        assert!(IndexerStore::open_db(home.as_ref(), Vec::new(), EventFilter::Archival).is_err());
     }
 
     #[test]
@@ -1325,15 +1275,13 @@ mod tests {
 
         let bad: Vec<(EventFilter, BlockId)> =
             vec![(EventFilter::Archival, 5), (EventFilter::Archival, 0)];
-        let initial_state = testnet_initial_state::initial_state(true);
+        let initial_state = testnet_initial_state::initial_state();
         let dbio = RocksDBIO::open_or_create(home.as_ref(), &initial_state).unwrap();
         dbio.put_event_filter_segments_bytes(&borsh::to_vec(&bad).unwrap())
             .unwrap();
         drop(dbio);
 
-        assert!(
-            IndexerStore::open_db(home.as_ref(), true, Vec::new(), EventFilter::Archival).is_err()
-        );
+        assert!(IndexerStore::open_db(home.as_ref(), Vec::new(), EventFilter::Archival).is_err());
     }
 
     #[test]
@@ -1342,15 +1290,13 @@ mod tests {
         drop(open_with(home.as_ref(), EventFilter::Archival));
 
         let ahead: Vec<(EventFilter, BlockId)> = vec![(EventFilter::Archival, 1)];
-        let initial_state = testnet_initial_state::initial_state(true);
+        let initial_state = testnet_initial_state::initial_state();
         let dbio = RocksDBIO::open_or_create(home.as_ref(), &initial_state).unwrap();
         dbio.put_event_filter_segments_bytes(&borsh::to_vec(&ahead).unwrap())
             .unwrap();
         drop(dbio);
 
-        assert!(
-            IndexerStore::open_db(home.as_ref(), true, Vec::new(), EventFilter::Archival).is_err()
-        );
+        assert!(IndexerStore::open_db(home.as_ref(), Vec::new(), EventFilter::Archival).is_err());
     }
 
     #[tokio::test]

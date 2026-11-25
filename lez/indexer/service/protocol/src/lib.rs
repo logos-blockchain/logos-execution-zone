@@ -577,65 +577,11 @@ pub enum IndexerSyncState {
     /// Parked on a stall reason: the validated tip is frozen awaiting a valid
     /// continuation. See `last_error` and `stall_reason`.
     Stalled,
-    /// Ingestion ended on a cross-zone verdict. See `last_error` and
-    /// `cross_zone_halt`.
-    Halted,
     /// A state this client build does not know: a newer server added one.
     /// Treat it as "not known healthy" rather than failing to decode the
     /// snapshot.
     #[serde(other)]
     Unknown,
-}
-
-/// Durable record of a cross-zone verification halt: the local block whose
-/// dispatch failed re-derivation, the dispatch's source coordinates, and the
-/// verdict.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct CrossZoneHalt {
-    /// The local block whose dispatch failed.
-    pub block_id: BlockId,
-    pub block_hash: HashType,
-    /// Hex id of the dispatch's source zone.
-    pub src_zone: String,
-    pub src_block_id: u64,
-    pub src_tx_index: u32,
-    pub verdict: String,
-}
-
-/// Coarse health of one peer-zone reader.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub enum PeerHealth {
-    /// The last pass drained with no stall and the cursor at the channel tip.
-    Live,
-    /// No caught-up evidence yet.
-    Lagging,
-    /// Stuck on a slot it cannot read.
-    Holed,
-    /// The peer's live committee is below the configured floor; reading is
-    /// suspended until it recovers.
-    Suspended,
-    /// The configured genesis pin refused the only anchor the channel offered;
-    /// nothing from this peer verifies until the pin or the channel is fixed.
-    PinMismatch,
-    /// A verified-absence verdict was issued against this peer's chain.
-    Halted,
-    /// A health this client build does not know: a newer server added one.
-    /// Treat it as "not known healthy" rather than failing to decode the
-    /// snapshot.
-    #[serde(other)]
-    Unknown,
-}
-
-/// One peer reader's snapshot: how far the peer chain is verified, where the
-/// read cursor is, and a coarse health classification.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct PeerStatus {
-    /// Hex id of the peer zone.
-    pub zone: String,
-    pub verified_tip_block_id: Option<u64>,
-    pub cursor_slot: Option<u64>,
-    pub stuck_slot_attempts: u32,
-    pub health: PeerHealth,
 }
 
 /// Why the indexer could not apply an L2 block from the channel.
@@ -718,19 +664,13 @@ pub struct StallReason {
 }
 
 /// Status snapshot returned by `getStatus`: the ingestion state plus the
-/// indexed L2 tip and, when stalled or halted, the diagnostics.
+/// indexed L2 tip and, when stalled, the diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct IndexerStatus {
     pub state: IndexerSyncState,
     pub last_error: Option<String>,
     pub indexed_block_id: Option<BlockId>,
     pub stall_reason: Option<StallReason>,
-    /// Present while ingestion is halted on a cross-zone verdict.
-    #[serde(default)]
-    pub cross_zone_halt: Option<CrossZoneHalt>,
-    /// One snapshot per configured peer zone; empty with cross-zone disabled.
-    #[serde(default)]
-    pub cross_zone_peers: Vec<PeerStatus>,
 }
 
 #[derive(
@@ -862,53 +802,6 @@ pub fn resolve_event_block_range(
 mod tests {
     use super::*;
 
-    fn status() -> IndexerStatus {
-        IndexerStatus {
-            state: IndexerSyncState::Halted,
-            last_error: Some("cross-zone verification failed".to_owned()),
-            indexed_block_id: Some(8),
-            stall_reason: None,
-            cross_zone_halt: Some(CrossZoneHalt {
-                block_id: 9,
-                block_hash: HashType([0xAB; 32]),
-                src_zone: hex::encode([2_u8; 32]),
-                src_block_id: 5,
-                src_tx_index: 1,
-                verdict: "re-derivation mismatch".to_owned(),
-            }),
-            cross_zone_peers: vec![PeerStatus {
-                zone: hex::encode([2_u8; 32]),
-                verified_tip_block_id: Some(4),
-                cursor_slot: Some(70),
-                stuck_slot_attempts: 3,
-                health: PeerHealth::Holed,
-            }],
-        }
-    }
-
-    #[test]
-    fn indexer_status_round_trips_with_cross_zone_fields() {
-        let status = status();
-        let json = serde_json::to_string(&status).expect("serialize");
-        let back: IndexerStatus = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back, status);
-    }
-
-    #[test]
-    fn indexer_status_without_cross_zone_fields_still_deserializes() {
-        // A snapshot from before these fields existed.
-        let json = r#"{
-            "state": "CaughtUp",
-            "last_error": null,
-            "indexed_block_id": 7,
-            "stall_reason": null
-        }"#;
-        let status: IndexerStatus = serde_json::from_str(json).expect("deserialize");
-        assert_eq!(status.state, IndexerSyncState::CaughtUp);
-        assert_eq!(status.cross_zone_halt, None);
-        assert!(status.cross_zone_peers.is_empty());
-    }
-
     #[test]
     fn an_unknown_sync_state_deserializes_to_unknown() {
         let state: IndexerSyncState =
@@ -924,23 +817,6 @@ mod tests {
         }"#;
         let status: IndexerStatus = serde_json::from_str(json).expect("deserialize");
         assert_eq!(status.state, IndexerSyncState::Unknown);
-    }
-
-    #[test]
-    fn peer_health_variants_round_trip() {
-        for health in [
-            PeerHealth::Live,
-            PeerHealth::Lagging,
-            PeerHealth::Holed,
-            PeerHealth::Suspended,
-            PeerHealth::PinMismatch,
-            PeerHealth::Halted,
-            PeerHealth::Unknown,
-        ] {
-            let json = serde_json::to_string(&health).expect("serialize");
-            let back: PeerHealth = serde_json::from_str(&json).expect("deserialize");
-            assert_eq!(back, health);
-        }
     }
 
     #[test]
@@ -1062,23 +938,5 @@ mod tests {
             resolve_event_block_range(5, Some(3), 10),
             Err(EventRangeError::Inverted { from: 5, to: 3 })
         );
-    }
-
-    #[test]
-    fn an_unknown_peer_health_deserializes_to_unknown() {
-        let health: PeerHealth =
-            serde_json::from_str(r#""SomeFutureHealth""#).expect("deserialize");
-        assert_eq!(health, PeerHealth::Unknown);
-
-        // And a whole peer snapshot carrying it still decodes.
-        let json = r#"{
-            "zone": "0202",
-            "verified_tip_block_id": 4,
-            "cursor_slot": 70,
-            "stuck_slot_attempts": 0,
-            "health": "SomeFutureHealth"
-        }"#;
-        let status: PeerStatus = serde_json::from_str(json).expect("deserialize");
-        assert_eq!(status.health, PeerHealth::Unknown);
     }
 }

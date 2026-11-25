@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, num::NonZeroU32, path::PathBuf, time::Duration};
+use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use anyhow::{Context as _, Result};
 use indexer_service::{ChannelId, ClientConfig, EventFilterConfig, IndexerConfig};
@@ -12,8 +12,8 @@ use logos_blockchain_zone_sdk::key_management_system_service::keys::{
 };
 use num_bigint::BigUint;
 use sequencer_core::config::{
-    BedrockConfig, ChannelParams, CrossZoneConfig, DepositRecipient, GenesisAction, GenesisConfig,
-    GossipConfig, SequencerConfig,
+    BedrockConfig, ChannelParams, DepositRecipient, GenesisAction, GenesisConfig, GossipConfig,
+    SequencerConfig,
 };
 use sequencer_genesis::sign_genesis_stake;
 use sequencer_stake_core::SequencerKey;
@@ -154,7 +154,6 @@ pub fn sequencer_config(
     bedrock_addr: SocketAddr,
     channel_id: ChannelId,
     genesis_transactions: Vec<GenesisAction>,
-    cross_zone: Option<CrossZoneConfig>,
     gossip: Option<GossipConfig>,
 ) -> Result<SequencerConfig> {
     let SequencerPartialConfig {
@@ -185,7 +184,6 @@ pub fn sequencer_config(
             stale_refund_slots: 0,
             backfill_batch_slots: sequencer_core::config::default_backfill_batch_slots(),
         },
-        cross_zone,
         metrics_listen_address: Some(SequencerConfig::DEFAULT_METRICS_LISTEN_ADDRESS),
         gossip,
         channel_signing_key_file: None,
@@ -341,22 +339,15 @@ pub fn wallet_config(sequencer_addr: &SocketAddr) -> Result<WalletConfig> {
     })
 }
 
-pub fn indexer_config(
-    bedrock_addr: SocketAddr,
-    channel_id: ChannelId,
-    cross_zone: Option<CrossZoneConfig>,
-) -> Result<IndexerConfig> {
+pub fn indexer_config(bedrock_addr: SocketAddr, channel_id: ChannelId) -> Result<IndexerConfig> {
     Ok(IndexerConfig {
         consensus_info_polling_interval: Duration::from_secs(1),
-        cross_zone_accept_unverified: Vec::new(),
         bedrock_config: ClientConfig {
             addr: addr_to_url(UrlProtocol::Http, bedrock_addr)
                 .context("Failed to convert bedrock addr to URL")?,
             auth: None,
         },
         channel_id,
-        cross_zone,
-        peer_block_cache_window: NonZeroU32::new(1024).expect("1024 is nonzero"),
         backfill_batch_slots: indexer_service::default_backfill_batch_slots(),
         allow_chain_reset: false,
         event_filter: EventFilterConfig::Archival,
@@ -386,7 +377,7 @@ pub fn bedrock_channel_id() -> ChannelId {
 }
 
 /// A second zone's channel id, distinct from [`bedrock_channel_id`] so two zones
-/// settle independently on one shared Bedrock node in the cross-zone tests.
+/// settle independently on one shared Bedrock node in the multi-zone tests.
 #[must_use]
 pub fn bedrock_channel_id_b() -> ChannelId {
     let channel_id: [u8; 32] = [0_u8, 2]
@@ -478,26 +469,6 @@ pub const fn bedrock_funding_key_id() -> &'static str {
     BEDROCK_FUNDING_KEY_HEX
 }
 
-/// A source-only zone: programs registered, `InitConfig`s emitted, nobody
-/// watched and nowhere to lock to.
-#[must_use]
-pub const fn source_only_cross_zone() -> CrossZoneConfig {
-    CrossZoneConfig {
-        peers: Vec::new(),
-        lock_target_zones: Vec::new(),
-        source_authority: None,
-        source_governance: None,
-    }
-}
-
-#[must_use]
-pub fn source_only_cross_zone_locking_to(lock_target_zones: Vec<[u8; 32]>) -> CrossZoneConfig {
-    CrossZoneConfig {
-        lock_target_zones,
-        ..source_only_cross_zone()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -533,7 +504,6 @@ mod tests {
                 }
                 GenesisAction::SupplyAccount { .. }
                 | GenesisAction::SupplyPrivateAccount { .. }
-                | GenesisAction::SupplyBridgeLockHolding { .. }
                 | GenesisAction::StakeSequencer { .. } => None,
             })
         };
@@ -572,7 +542,6 @@ mod tests {
             SocketAddr::from(([127, 0, 0, 1], 1234)),
             bedrock_channel_id(),
             Vec::new(),
-            None,
             None,
         )
         .expect("custom priority fee should produce a valid sequencer config");

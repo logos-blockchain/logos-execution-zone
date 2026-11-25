@@ -48,9 +48,6 @@ pub enum Error {
     #[error("The sequencer is not online, wait until bootstrap completes")]
     NotOnline,
 
-    #[error("One of the sequencer's background tasks has finished unexpectedly")]
-    BackgroundTaskFinishedUnexpectedly,
-
     #[error("The mempool is full")]
     MempoolIsFull,
 
@@ -74,12 +71,6 @@ pub enum Error {
 
     #[error("Slasher request failed")]
     SlasherRequestFailed(#[source] SendError<ErasedMessage, sequencer_slasher_actor::error::Error>),
-
-    #[error("Failed to read the cross-zone dead letter")]
-    CrossZoneDeadLettersUnavailable(#[source] anyhow::Error),
-
-    #[error("Failed to requeue the cross-zone dead letter")]
-    CrossZoneDeadLetterRequeueFailed(#[source] anyhow::Error),
 
     #[error("Failed to read the system_upgrader proposals")]
     SystemProposalsUnavailable(#[source] anyhow::Error),

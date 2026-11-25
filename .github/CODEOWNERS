@@ -88,9 +88,6 @@
 /lez/sequencer/service/                       @arjentix @schouhy @erhant
 /lez/mempool/                                 @arjentix @erhant
 
-## Sequencer cross-zone watcher
-/lez/sequencer/core/src/cross_zone_watcher.rs @moudyellaz @schouhy
-
 ## Sequencer gossip
 /lez/sequencer/actors/gossip/                 @erhant @schouhy
 
@@ -129,14 +126,6 @@
 /lez/programs/sequencer_stake/                @agureev @schouhy
 /lee/program_loader/                          @agureev @jonesmarvin8
 /lez/programs/bridge/                         @agureev @moudyellaz @arjentix
-/lez/programs/bridge_lock/                    @agureev @moudyellaz
-/lez/programs/wrapped_token/                  @agureev @moudyellaz
-/lez/programs/ping_*/                         @agureev @moudyellaz
-
-## Cross-zone messaging
-/lez/cross_zone/                              @moudyellaz @agureev
-/lez/programs/cross_zone_*/                   @moudyellaz @agureev
-/tools/cross_zone_chat/                       @moudyellaz
 
 ## Examples
 /examples/                                    @agureev @schouhy
@@ -170,8 +159,7 @@
 /integration_tests/tests/gossip.rs            @erhant
 /integration_tests/tests/indexer_*            @schouhy @erhant
 
-## Integration tests: cross-zone
-/integration_tests/tests/cross_zone_*.rs      @moudyellaz @agureev
+## Integration tests: multi-zone and shared accounts
 /integration_tests/tests/two_zone.rs          @Pravdyvy @moudyellaz
 /integration_tests/tests/shared_accounts.rs   @moudyellaz @agureev
 /integration_tests/tests/wallet_setup.rs      @moudyellaz

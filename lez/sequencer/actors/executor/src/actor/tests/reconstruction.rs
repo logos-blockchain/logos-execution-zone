@@ -16,24 +16,20 @@ use lee::{
     AccountId, Actor, PublicTransaction, V03State,
     public_transaction::{Message, WitnessSet},
 };
-use ping_core::{ReceiverMessage, ping_record_pda, receiver_config_account_id};
 use sequencer_bedrock_actor::{
     mock::{CannedChannel, mock_msg_of},
     protocol::{Ed25519Key, Ed25519PublicKey, MsgId, Slot},
 };
 use sequencer_storage_actor::{
     mock::{CannedStore, MockStorageActor, SharedStore},
-    protocol::{PendingCrossZoneDispatchRecord, PendingDepositEventRecord, ZoneAnchorRecord},
+    protocol::{PendingDepositEventRecord, ZoneAnchorRecord},
 };
 use tokio::test;
 
 use super::{
     Finalized, finalized_at, finalized_updates, junk_at, ready, sequencer_config,
     spawn_bedrock_pool, spawn_executor,
-    stored_chain::{
-        PEER_ZONE, block_at, cross_zone_genesis_store, finalized_genesis_store, genesis,
-        with_finalized, with_head,
-    },
+    stored_chain::{block_at, finalized_genesis_store, genesis, with_finalized, with_head},
 };
 use crate::protocol::GetLastBlockId;
 
@@ -106,36 +102,6 @@ async fn start_observing(
     executor.ask(ready(channel_id)).await?;
     executor.ask(GetLastBlockId).await?;
     Ok(())
-}
-
-fn peer_block_hash(src_block_id: u64) -> [u8; 32] {
-    let mut hash = [0_u8; 32];
-    hash[..8].copy_from_slice(&src_block_id.to_le_bytes());
-    hash
-}
-
-/// A delivery of `payload` to the ping receiver, read off peer block `src_block_id`.
-fn dispatch_tx(src_block_id: u64, payload: &[u8]) -> LeeTransaction {
-    let receiver_id = programs::ping_receiver_account_id();
-    let message = borsh::to_vec(&ReceiverMessage::Record {
-        payload: payload.to_vec(),
-    })
-    .expect("ping message serializes");
-    LeeTransaction::Public(cross_zone::build_dispatch_from_emission(
-        &cross_zone::EmissionSource {
-            src_zone: PEER_ZONE,
-            src_block_id,
-            src_block_hash: peer_block_hash(src_block_id),
-            src_tx_index: 0,
-            src_account_id: programs::ping_sender_account_id(),
-        },
-        receiver_id,
-        &[
-            Actor::new(receiver_config_account_id(receiver_id), receiver_id),
-            Actor::new(ping_record_pda(receiver_id), receiver_id),
-        ],
-        message,
-    ))
 }
 
 /// The mint a finalized L1 deposit event injects, as the sequencer builds it.
@@ -548,84 +514,6 @@ async fn reconstruction_replaces_a_conflicting_head_block_with_finalized_history
     .await?;
 
     assert_reconstructed(&store, &block2, 20);
-    Ok(())
-}
-
-/// A cross-zone delivery whose record is still pending locally, but whose block
-/// arrives already finalized on the channel. Reconstruction must settle the
-/// record on the way through: the delivery is permanently reflected in the
-/// reconstructed state (the inbox seen shard), so the next production neither
-/// re-delivers it nor leaves a record nothing will ever drop.
-#[test]
-async fn reconstructed_delivery_settles_its_pending_record() -> Result<()> {
-    let payload = b"reconstructed";
-    let tx = dispatch_tx(23, payload);
-    let key = cross_zone_inbox_core::message_key(&PEER_ZONE, 23, 0);
-    let record =
-        PendingCrossZoneDispatchRecord::recorded(key, borsh::to_vec(&tx).expect("tx encodes"));
-
-    let genesis = genesis();
-    let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![tx]);
-    let receiver_id = programs::ping_receiver_account_id();
-    let record_id = ping_record_pda(receiver_id);
-    let store = CannedStore {
-        pending_dispatches: vec![record],
-        ..cross_zone_genesis_store()
-    }
-    .share();
-
-    start(
-        &store,
-        vec![finalized_at(&genesis, 10), finalized_at(&block2, 20)],
-    )
-    .await?;
-
-    // The delivery reaches its target program exactly once, and its record goes.
-    assert_reconstructed(&store, &block2, 20);
-    let stored = store.lock();
-    assert_eq!(
-        stored
-            .head_state
-            .as_ref()
-            .expect("the head state is stored")
-            .get_account_by_id(record_id)
-            .data
-            .actor_state(receiver_id)
-            .as_ref(),
-        payload.as_slice()
-    );
-    assert!(stored.pending_dispatches.is_empty());
-    Ok(())
-}
-
-/// A delivery this node published itself, served back by the channel at or below
-/// its own tip. That path verifies the block matches and returns early, so it is
-/// reached on every restart. It must still settle the delivery's record: the
-/// channel serving the block is what makes it irreversible, and nothing later
-/// will ever put that key in a block again.
-#[test]
-async fn a_verified_own_block_settles_its_delivery_records() -> Result<()> {
-    let tx = dispatch_tx(37, b"verified");
-    let key = cross_zone_inbox_core::message_key(&PEER_ZONE, 37, 0);
-    let record =
-        PendingCrossZoneDispatchRecord::recorded(key, borsh::to_vec(&tx).expect("tx encodes"));
-
-    let genesis = genesis();
-    let block2 = produce_dummy_block(2, Some(genesis.header.hash), vec![tx]);
-    let store = CannedStore {
-        pending_dispatches: vec![record],
-        ..with_finalized(finalized_genesis_store(), block2.clone())
-    }
-    .share();
-
-    start(
-        &store,
-        vec![finalized_at(&genesis, 10), finalized_at(&block2, 20)],
-    )
-    .await?;
-
-    assert_eq!(store.lock().anchor, Some(anchor_at(&block2, 20)));
-    assert!(store.lock().pending_dispatches.is_empty());
     Ok(())
 }
 

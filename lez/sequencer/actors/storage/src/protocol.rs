@@ -5,18 +5,11 @@ use std::{
 
 use common::{
     HashType,
-    block::{Block, BlockMeta, PeerChainTip},
+    block::{Block, BlockMeta},
     transaction::TxEvents,
 };
 use lee::{AccountId, V03State};
 use lee_core::BlockId;
-
-/// Content-addressed replay key of a cross-zone message, and the identity of the
-/// records tracking its delivery.
-pub type CrossZoneMessageKey = [u8; 32];
-
-/// Zone id of a cross-zone peer.
-pub type PeerZoneKey = [u8; 32];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GetBlock {
@@ -90,60 +83,6 @@ pub struct GetPendingDepositEvents;
 
 pub struct GetFinalSnapshot;
 
-pub struct GetPendingCrossZoneDispatches;
-
-pub struct AddPendingCrossZoneDispatches {
-    pub dispatches: Vec<PendingCrossZoneDispatchRecord>,
-}
-
-/// How many dispatches are pending, counted without decoding any of them.
-pub struct GetPendingCrossZoneDispatchCount;
-
-pub struct DropSettledCrossZoneDispatches {
-    pub message_keys: HashSet<CrossZoneMessageKey>,
-}
-
-pub struct RecordDispatchFailure {
-    pub message_key: CrossZoneMessageKey,
-    pub retire_at: u32,
-    pub origin: DispatchOrigin,
-}
-
-pub struct GetDeadLetterDispatches;
-
-/// Restores a retained dead-lettered delivery to the pending list, with a clean
-/// attempt count.
-pub struct RequeueDeadLetterDispatch {
-    pub message_key: CrossZoneMessageKey,
-}
-
-pub struct GetDeadLetterDispatchCount;
-
-/// Retained dead-letter count, without shipping bodies across the actor boundary.
-pub struct GetDeadLetterDispatchRetainedCount;
-
-pub struct GetCrossZonePeerFloorBytes {
-    pub peer_zone: PeerZoneKey,
-}
-
-pub struct SetCrossZonePeerFloorBytes {
-    pub peer_zone: PeerZoneKey,
-    pub bytes: Vec<u8>,
-}
-
-pub struct DeleteCrossZonePeerFloor {
-    pub peer_zone: PeerZoneKey,
-}
-
-pub struct GetCrossZonePeerTip {
-    pub peer_zone: PeerZoneKey,
-}
-
-pub struct SetCrossZonePeerTip {
-    pub peer_zone: PeerZoneKey,
-    pub tip: PeerChainTip,
-}
-
 pub struct GetBlockByHash {
     pub block_hash: HashType,
 }
@@ -215,9 +154,6 @@ pub struct AtomicUpdate {
     /// L2 withdraw intents this update raises, awaiting their L1 event.
     pub new_withdraw_intents: HashSet<WithdrawalReconciliationKey>,
 
-    /// Message keys whose delivery finalized: their pending records are dropped.
-    pub finalized_dispatch_records: HashSet<CrossZoneMessageKey>,
-
     /// Advance the channel-read anchor.
     pub zone_anchor: Option<ZoneAnchorRecord>,
 
@@ -244,7 +180,6 @@ impl AtomicUpdate {
             finalized_up_to: None,
             new_deposit_events: Vec::new(),
             finalized_deposit_records: HashSet::new(),
-            finalized_dispatch_records: HashSet::new(),
             consumed_withdrawals: HashSet::new(),
             new_withdraw_intents: HashSet::new(),
             zone_anchor: None,
@@ -284,93 +219,6 @@ pub struct PendingDepositEventRecord {
     pub source_tx_hash: HashType,
     pub amount: u64,
     pub metadata: Vec<u8>,
-}
-
-/// A cross-zone delivery read off a peer block but not yet known to be
-/// irreversibly delivered.
-///
-/// The watcher's delivery floor is durable, so once it advances past a peer
-/// block that block is never re-read; this record stands in its place. It
-/// carries no "submitted" mark: it is dropped when the delivery finalizes, and
-/// re-including one meanwhile is harmless because the inbox refuses a replay on
-/// chain.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PendingCrossZoneDispatchRecord {
-    /// Content-addressed replay key of the delivered message, and this record's
-    /// identity.
-    pub message_key: CrossZoneMessageKey,
-    /// The borsh-encoded dispatch transaction, so production can re-feed it
-    /// without re-reading the peer channel.
-    pub transaction: Vec<u8>,
-    /// Production attempts that ended in an execution failure. Past a threshold
-    /// the record leaves this list for a [`DeadLetterDispatchRecord`].
-    pub failed_attempts: u32,
-}
-
-impl PendingCrossZoneDispatchRecord {
-    /// A delivery the watcher has just read: never attempted.
-    #[must_use]
-    pub const fn recorded(message_key: CrossZoneMessageKey, transaction: Vec<u8>) -> Self {
-        Self {
-            message_key,
-            transaction,
-            failed_attempts: 0,
-        }
-    }
-}
-
-/// Which peer message a delivery carried, kept so a lost one can be traced back
-/// to the peer block it was in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DispatchOrigin {
-    pub src_zone: PeerZoneKey,
-    pub src_block_id: u64,
-    pub src_tx_index: u32,
-}
-
-/// A cross-zone delivery this node has given up on.
-///
-/// A dispatch that fails execution is left out of the block, so nothing on
-/// chain records that it was attempted; this is the only durable trace. It
-/// carries the encoded transaction so a requeue can restore the delivery
-/// without re-reading the peer channel.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DeadLetterDispatch {
-    pub message_key: CrossZoneMessageKey,
-    pub origin: DispatchOrigin,
-    /// Attempts made before giving up, so the record carries the policy that was
-    /// in force at the time.
-    pub failed_attempts: u32,
-    /// The borsh-encoded dispatch transaction. Its length is the diagnostic for
-    /// size-related failures.
-    pub transaction: Vec<u8>,
-}
-
-/// What restoring a dead-lettered delivery did.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DeadLetterRequeue {
-    /// Moved back into the pending list with a clean attempt count.
-    Requeued,
-    /// The delivery was already pending again, so only the dead letter was
-    /// dropped.
-    AlreadyPending,
-    /// No retained dead letter under that key.
-    NotFound,
-    /// Listed, but its transaction was over the retention bound and was not
-    /// kept; the message must be read back off the peer channel instead.
-    NotRetained,
-}
-
-/// What counting a failed production attempt did to a delivery's record, the
-/// reply to [`RecordDispatchFailure`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DispatchFailure {
-    /// Counted; the delivery is still pending and will be attempted again.
-    Retried { failed_attempts: u32 },
-    /// Given up on: moved out of the pending list and into the dead letter.
-    Retired(Box<DeadLetterDispatch>),
-    /// No pending record, so nothing was counted and nothing was given up on.
-    Absent,
 }
 
 /// What [`ApplyStoreUpdate`] observed while staging, for the caller to act on

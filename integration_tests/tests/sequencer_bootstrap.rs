@@ -190,13 +190,10 @@ async fn empty_local_reconstructs_from_populated_bedrock() -> Result<()> {
     let (_bedrock, bedrock_addr) = setup_bedrock_node()
         .await
         .context("Failed to setup Bedrock")?;
-    let (indexer_handle, _indexer_dir) = setup_indexer(
-        bedrock_addr,
-        test_fixtures::config::bedrock_channel_id(),
-        None,
-    )
-    .await
-    .context("Failed to setup indexer")?;
+    let (indexer_handle, _indexer_dir) =
+        setup_indexer(bedrock_addr, test_fixtures::config::bedrock_channel_id())
+            .await
+            .context("Failed to setup indexer")?;
     let indexer_url = addr_to_url(UrlProtocol::Ws, indexer_handle.addr())
         .context("Failed to build indexer URL")?;
     let indexer = IndexerClient::new(&indexer_url)
@@ -358,13 +355,10 @@ async fn local_ahead_of_channel_resumes() -> Result<()> {
     let (_bedrock, bedrock_addr) = setup_bedrock_node()
         .await
         .context("Failed to setup Bedrock")?;
-    let (indexer_handle, _indexer_dir) = setup_indexer(
-        bedrock_addr,
-        test_fixtures::config::bedrock_channel_id(),
-        None,
-    )
-    .await
-    .context("Failed to setup indexer")?;
+    let (indexer_handle, _indexer_dir) =
+        setup_indexer(bedrock_addr, test_fixtures::config::bedrock_channel_id())
+            .await
+            .context("Failed to setup indexer")?;
     let indexer_url = addr_to_url(UrlProtocol::Ws, indexer_handle.addr())
         .context("Failed to build indexer URL")?;
     let indexer = IndexerClient::new(&indexer_url)
@@ -446,13 +440,10 @@ async fn local_behind_channel_reconstructs_forward() -> Result<()> {
     let (_bedrock, bedrock_addr) = setup_bedrock_node()
         .await
         .context("Failed to setup Bedrock")?;
-    let (indexer_handle, _indexer_dir) = setup_indexer(
-        bedrock_addr,
-        test_fixtures::config::bedrock_channel_id(),
-        None,
-    )
-    .await
-    .context("Failed to setup indexer")?;
+    let (indexer_handle, _indexer_dir) =
+        setup_indexer(bedrock_addr, test_fixtures::config::bedrock_channel_id())
+            .await
+            .context("Failed to setup indexer")?;
     let indexer_url = addr_to_url(UrlProtocol::Ws, indexer_handle.addr())
         .context("Failed to build indexer URL")?;
     let indexer = IndexerClient::new(&indexer_url)

@@ -200,9 +200,9 @@ mod tests {
                 ownership_id,
                 stake_entry,
             } => Some((sequencer_key, *ownership_id, stake_entry)),
-            GenesisAction::SupplyAccount { .. }
-            | GenesisAction::SupplyPrivateAccount { .. }
-            | GenesisAction::SupplyBridgeLockHolding { .. } => None,
+            GenesisAction::SupplyAccount { .. } | GenesisAction::SupplyPrivateAccount { .. } => {
+                None
+            }
         });
         for (index, (sequencer_key, ownership_id, stake_entry)) in stakes.enumerate() {
             let message = genesis_stake_message(index, *sequencer_key, ownership_id, minimum_stake);
