@@ -963,6 +963,24 @@ fn a_public_root_holds_no_private_grant_it_does_not_declare() {
     ));
 }
 
+// Without a witness, nothing vouches for a declared private signer, so execution refuses it even
+// where `check_stateless` does not run, as in simulation.
+#[test]
+fn a_private_signer_declared_without_a_witness_is_refused() {
+    let (router, signer) = (actor(2, 9), actor(1, 8));
+
+    let result = public_transaction(
+        private_signers(vec![router], [signer]),
+        router,
+        &mut Script::default(),
+    );
+
+    assert!(matches!(
+        result,
+        Err(ExecutionError::UnmarkedPrivateSigner { actor }) if actor == signer
+    ));
+}
+
 #[test]
 fn a_declared_private_signer_must_be_an_actor_an_authorized_witness_marks() {
     let keys = Keys::new(1);
