@@ -1983,7 +1983,10 @@ fn a_private_seed_grant_reaches_only_the_messages_it_is_attached_to() {
         })
         .on(
             relay,
-            sending(vec![send_to(custody).with_grants([custody])]),
+            sending(vec![
+                send_to(custody).with_grants([custody]),
+                send_to(custody),
+            ]),
         );
 
     private_part(
@@ -2006,6 +2009,7 @@ fn a_private_seed_grant_reaches_only_the_messages_it_is_attached_to() {
             (custody, true),
             (relay, false),
             (custody, true),
+            (custody, false),
             (custody, false),
         ]
     );
