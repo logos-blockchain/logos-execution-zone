@@ -3,7 +3,7 @@ use std::str::FromStr;
 use anyhow::{Context as _, Result, bail, ensure};
 use clap::Subcommand;
 use lee::{AccountId, PublicKey};
-use lee_core::{native_token::NATIVE_TOKEN_PROGRAM_ID, program::PdaSeed};
+use lee_core::program::PdaSeed;
 
 use crate::{
     AccountIdentity, AccountMention, WalletCore, WalletSequencerClient,
@@ -37,9 +37,8 @@ pub enum ProgramSubcommand {
         /// Another actor to declare. Repeatable.
         #[arg(long)]
         actor: Vec<CliActor>,
-        /// A funded account to pay the fee. It signs, but authorizes only its native balance
-        /// and actors marked `:sign`. If omitted, the wallet selects a payer from the
-        /// transaction's signing accounts.
+        /// A funded account to pay the fee. It signs, but authorizes only actors marked `:sign`.
+        /// If omitted, the wallet selects a payer from the transaction's signing accounts.
         #[arg(long)]
         payer: Option<PublicMention>,
     },
@@ -144,8 +143,8 @@ impl FromStr for CliActor {
 }
 
 impl CliActor {
-    // The payer signs wherever it's declared, but authorizes only its native balance unless the
-    // actor is marked `:sign`.
+    // The payer signs wherever it's declared, but authorizes only actors marked `:sign`; its
+    // signature authorizes the fee.
     fn mention(
         self,
         program: AccountId,
@@ -193,7 +192,7 @@ impl CliActor {
             CliActorAccount::Key(key) => AccountIdentity::PublicForeign(key),
         };
         let mention = identity.select_program_actor_state(actor_program);
-        Ok(if self.sign || actor_program == NATIVE_TOKEN_PROGRAM_ID {
+        Ok(if self.sign {
             mention
         } else {
             mention.without_authorization()
@@ -254,6 +253,8 @@ fn parse_seed(text: &str) -> Result<PdaSeed> {
 
 #[cfg(test)]
 mod tests {
+    use lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID;
+
     use super::*;
 
     const ID: &str = "6iArKUXxhUJqS7kCaPNhwMWt3ro71PDyBj7jwAyE2VQV";
@@ -287,7 +288,7 @@ mod tests {
     }
 
     #[test]
-    fn the_payer_authorizes_only_its_native_balance_and_its_signed_actors() {
+    fn the_payer_authorizes_only_its_signed_actors() {
         let (storage, _) = Storage::new();
         let payer = AccountId::from_str(ID).unwrap();
         let program = AccountId::new([5; 32]);
@@ -301,7 +302,8 @@ mod tests {
         let unsigned = mention(ID.to_owned());
         assert!(matches!(unsigned.identity, AccountIdentity::Public(id) if id == payer));
         assert!(!unsigned.authorizes);
-        assert!(mention(format!("{ID}@{NATIVE_TOKEN_PROGRAM_ID}")).authorizes);
+        assert!(!mention(format!("{ID}@{NATIVE_TOKEN_PROGRAM_ID}")).authorizes);
+        assert!(mention(format!("{ID}@{NATIVE_TOKEN_PROGRAM_ID}:sign")).authorizes);
         assert!(mention(format!("{ID}:sign")).authorizes);
     }
 

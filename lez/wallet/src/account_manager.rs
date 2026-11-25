@@ -450,8 +450,8 @@ impl AccountManager {
             let marks_signer = authorizes;
             payer_authorized |= is_payer && authorizes;
             // The payer's witness takes its authorization key however it is mentioned, scoped to
-            // the fee entry below unless the transaction authorizes it.
-            let authorizes = authorizes || is_payer;
+            // the fee entry below unless the transaction authorizes it; its rows authorize only as
+            // mentioned.
             let account_authorizes =
                 signing.contains(&account_id) || (is_payer && !identity.is_public());
             let actor_state_selector = Actor::new(account_id, program_account_id);
