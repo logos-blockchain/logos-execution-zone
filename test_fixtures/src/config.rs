@@ -41,12 +41,9 @@ pub const TEST_FINALITY_DEPTH: u64 = 11;
 pub const INITIAL_PUBLIC_BALANCES_FOR_WALLET: [u128; 2] = [10_000_000_000_000, 20_000_000_000_000];
 pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000_000_000, 20_000_000_000];
 
-/// The charged bytes of the shield that funds a private account at setup, which genesis must
-/// price before any transaction exists; setup checks it against what the wallet measures.
-///
-/// It is the fixed `PROOF_BYTES` (223,047) plus the rest of the serialized transaction (14,038),
-/// mostly its padded private slots.
-pub const SHIELD_BYTES: u64 = 237_085;
+/// What the funder is charged for a shield that funds a private account at setup, which
+/// genesis must price before any transaction exists; setup checks it against the charge.
+pub const SHIELD_FEE: u128 = 5_174_496;
 
 /// The funder's initial key, which its signature carries at nonce 0, so in the first shield only.
 const INITIAL_KEY_BYTES: u64 = 33;
@@ -269,15 +266,16 @@ pub fn private_fee(bytes: u64) -> u128 {
 
 /// The fee of a shield that funds a private account at setup, after the first.
 #[must_use]
-pub fn shield_fee() -> u128 {
-    private_fee(SHIELD_BYTES)
+pub const fn shield_fee() -> u128 {
+    SHIELD_FEE
 }
 
 /// The fee of the `index`-th shield that funds a private account at setup.
 #[must_use]
 pub fn shield_fee_at(index: usize) -> u128 {
     if index == 0 {
-        private_fee(SHIELD_BYTES.saturating_add(INITIAL_KEY_BYTES))
+        shield_fee()
+            .saturating_add(private_fee(INITIAL_KEY_BYTES).saturating_sub(private_fee(0)))
     } else {
         shield_fee()
     }
