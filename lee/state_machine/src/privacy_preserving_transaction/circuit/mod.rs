@@ -175,16 +175,38 @@ pub struct Simulation {
     pub admitted_accounts: Option<BTreeSet<AccountId>>,
 }
 
-/// A recorder deriving the presentations of private senders.
+/// What a private actor is presented as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Presenting {
+    Sender,
+    Grant,
+}
+
+/// Chooses how a private actor is presented; a closure presents a grant as it would a sender.
+pub trait Presenter {
+    fn present(&mut self, presenting: Presenting, actor: Actor) -> SenderPresentation;
+}
+
+impl<F: FnMut(Actor) -> SenderPresentation> Presenter for F {
+    fn present(&mut self, _presenting: Presenting, actor: Actor) -> SenderPresentation {
+        self(actor)
+    }
+}
+
+/// A recorder deriving the presentations of private senders and grants.
 struct SenderPresentationRecorder<'present> {
-    choose: &'present mut dyn FnMut(Actor) -> Option<SenderPresentation>,
+    choose: &'present mut dyn FnMut(Presenting, Actor) -> Option<SenderPresentation>,
     recorded: Vec<SenderPresentation>,
 }
 
 impl SenderPresentationRecorder<'_> {
-    fn present(&mut self, sender: Actor) -> Result<SenderPresentation, LeeError> {
-        let presentation =
-            (self.choose)(sender).ok_or(ExecutionError::MissingSenderPresentation { sender })?;
+    fn present(
+        &mut self,
+        presenting: Presenting,
+        actor: Actor,
+    ) -> Result<SenderPresentation, LeeError> {
+        let presentation = (self.choose)(presenting, actor)
+            .ok_or(ExecutionError::MissingSenderPresentation { sender: actor })?;
         self.recorded.push(presentation);
         Ok(presentation)
     }
@@ -275,7 +297,11 @@ impl ExecutionEnvironment for Simulator<'_> {
     }
 
     fn present(&mut self, sender: Actor) -> Result<SenderPresentation, LeeError> {
-        self.recorder.present(sender)
+        self.recorder.present(Presenting::Sender, sender)
+    }
+
+    fn present_grant(&mut self, grant: Actor) -> Result<SenderPresentation, LeeError> {
+        self.recorder.present(Presenting::Grant, grant)
     }
 
     fn admits(&mut self, account_id: AccountId) -> Result<bool, LeeError> {
@@ -349,7 +375,11 @@ impl ExecutionEnvironment for Prover<'_> {
     }
 
     fn present(&mut self, sender: Actor) -> Result<SenderPresentation, LeeError> {
-        self.recorder.present(sender)
+        self.recorder.present(Presenting::Sender, sender)
+    }
+
+    fn present_grant(&mut self, grant: Actor) -> Result<SenderPresentation, LeeError> {
+        self.recorder.present(Presenting::Grant, grant)
     }
 
     fn promote(
@@ -397,7 +427,7 @@ pub fn execute_and_prove(
     input: ProvingInput,
     simulation: &Simulation,
     programs: &ProgramCatalog,
-    mut present_sender: impl FnMut(Actor) -> SenderPresentation,
+    mut present_sender: impl Presenter,
     mut select_promotion: impl FnMut(Placement, &MessageBody) -> bool,
     mut choose_publications: impl FnMut(&[MessageBody]) -> Result<Vec<PublicationMode>, LeeError>,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
@@ -419,7 +449,7 @@ pub fn execute_unproven(
     input: ProvingInput,
     simulation: &Simulation,
     programs: &ProgramCatalog,
-    mut present_sender: impl FnMut(Actor) -> SenderPresentation,
+    mut present_sender: impl Presenter,
     mut select_promotion: impl FnMut(Placement, &MessageBody) -> bool,
     mut choose_publications: impl FnMut(&[MessageBody]) -> Result<Vec<PublicationMode>, LeeError>,
 ) -> Result<PrivacyPreservingCircuitOutput, LeeError> {
@@ -439,7 +469,7 @@ fn simulate_and_run(
     mut input: ProvingInput,
     simulation: &Simulation,
     programs: &ProgramCatalog,
-    present_sender: &mut dyn FnMut(Actor) -> SenderPresentation,
+    present_sender: &mut dyn Presenter,
     select_promotion: &mut dyn FnMut(Placement, &MessageBody) -> bool,
     choose_publications: &mut PublicationChooser<'_>,
     proving: bool,
@@ -454,7 +484,7 @@ fn simulate_and_run(
         &input,
         simulation,
         programs,
-        &mut |sender| Some(present_sender(sender)),
+        &mut |presenting, actor| Some(present_sender.present(presenting, actor)),
         select_promotion,
     )?;
     input.public_context.promotions = public_promotions;
@@ -466,7 +496,7 @@ fn simulate_and_run(
         input,
         predicted_cross_messages,
         programs,
-        &mut |_| presented.next(),
+        &mut |_, _| presented.next(),
         &mut |index, _| recorded.contains(&index),
         choose_publications,
         proving,
@@ -487,14 +517,14 @@ pub fn simulate_privacy_preserving_transaction(
     input: &ProvingInput,
     simulation: &Simulation,
     programs: &ProgramCatalog,
-    mut present_sender: impl FnMut(Actor) -> SenderPresentation,
+    mut present_sender: impl Presenter,
     mut select_promotion: impl FnMut(Placement, &MessageBody) -> bool,
 ) -> Result<Cycles, LeeError> {
     simulate_whole(
         input,
         simulation,
         programs,
-        &mut |sender| Some(present_sender(sender)),
+        &mut |presenting, actor| Some(present_sender.present(presenting, actor)),
         &mut select_promotion,
     )
     .map(|simulated| simulated.cycles_used)
@@ -511,7 +541,7 @@ pub fn simulate_public_transaction(
     cycle_budget: Cycles,
 ) -> (Cycles, Result<(), LeeError>) {
     let message = tx.message();
-    let mut choose = |_| None;
+    let mut choose = |_, _| None;
     let mut select = |_, _: &MessageBody| false;
     let mut simulator = Simulator {
         programs: &programs.programs,
@@ -551,7 +581,7 @@ fn simulate_whole(
     input: &ProvingInput,
     simulation: &Simulation,
     programs: &ProgramCatalog,
-    choose: &mut dyn FnMut(Actor) -> Option<SenderPresentation>,
+    choose: &mut dyn FnMut(Presenting, Actor) -> Option<SenderPresentation>,
     select: &mut dyn FnMut(Placement, &MessageBody) -> bool,
 ) -> Result<Simulated, LeeError> {
     // Build a simulator to generate the parameters to generate the proof with.
@@ -607,7 +637,7 @@ pub fn execute_and_prove_with_cross_messages(
     input: ProvingInput,
     predicted_cross_messages: PredictedCrossMessages,
     programs: &ProgramCatalog,
-    mut present_sender: impl FnMut(Actor) -> SenderPresentation,
+    mut present_sender: impl Presenter,
     mut select_promotion: impl FnMut(Placement, &MessageBody) -> bool,
     mut choose_publications: impl FnMut(&[MessageBody]) -> Result<Vec<PublicationMode>, LeeError>,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
@@ -629,7 +659,7 @@ pub fn execute_unproven_with_cross_messages(
     input: ProvingInput,
     predicted_cross_messages: PredictedCrossMessages,
     programs: &ProgramCatalog,
-    mut present_sender: impl FnMut(Actor) -> SenderPresentation,
+    mut present_sender: impl Presenter,
     mut select_promotion: impl FnMut(Placement, &MessageBody) -> bool,
     mut choose_publications: impl FnMut(&[MessageBody]) -> Result<Vec<PublicationMode>, LeeError>,
 ) -> Result<PrivacyPreservingCircuitOutput, LeeError> {
@@ -649,7 +679,7 @@ fn run_with_cross_messages(
     input: ProvingInput,
     mut predicted_cross_messages: PredictedCrossMessages,
     programs: &ProgramCatalog,
-    present_sender: &mut dyn FnMut(Actor) -> SenderPresentation,
+    present_sender: &mut dyn Presenter,
     select_promotion: &mut dyn FnMut(Placement, &MessageBody) -> bool,
     choose_publications: &mut PublicationChooser<'_>,
     proving: bool,
@@ -663,7 +693,7 @@ fn run_with_cross_messages(
         input,
         predicted_cross_messages,
         programs,
-        &mut |sender| Some(present_sender(sender)),
+        &mut |presenting, actor| Some(present_sender.present(presenting, actor)),
         &mut |index, body| requested.contains(&index) || select_promotion(Placement::Private, body),
         choose_publications,
         proving,
@@ -674,7 +704,7 @@ fn prove(
     mut input: ProvingInput,
     predicted_cross_messages: PredictedCrossMessages,
     programs: &ProgramCatalog,
-    choose: &mut dyn FnMut(Actor) -> Option<SenderPresentation>,
+    choose: &mut dyn FnMut(Presenting, Actor) -> Option<SenderPresentation>,
     select: &mut dyn FnMut(u64, &MessageBody) -> bool,
     choose_publications: &mut PublicationChooser<'_>,
     proving: bool,

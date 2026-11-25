@@ -7,8 +7,8 @@ use std::{
 use anyhow::Result;
 use keycard_wallet::KeycardWallet;
 use lee::{
-    AccountId, Authority, PrivateKey, PublicAccountEvidence, PublicKey, Recipient,
-    RecipientEncryption, Signature,
+    AccountId, Authority, Presenter, Presenting, PrivateKey, PublicAccountEvidence, PublicKey,
+    Recipient, RecipientEncryption, Signature,
 };
 use lee_core::{
     AuthorizationSecretKey, Commitment, CommitmentPosition, CommitmentSetDigest, DummyInput,
@@ -355,6 +355,35 @@ impl State {
     }
 }
 
+/// Presents a private account under a fresh random alias for each message or grant, except the fee
+/// payer's native actor, under the alias its refund is bound to, and a grant over a mentioned actor
+/// with openings, under the alias its mention names.
+pub struct WalletPresenter {
+    private: HashSet<AccountId>,
+    fee_alias: Option<(AccountId, [u8; 32])>,
+    mention_openings: HashMap<Actor, [u8; 32]>,
+}
+
+impl Presenter for WalletPresenter {
+    fn present(&mut self, presenting: Presenting, actor: Actor) -> SenderPresentation {
+        if let Some((payer, opening)) = self.fee_alias
+            && actor == Actor::native_balance(payer)
+        {
+            return SenderPresentation::Blinded(opening);
+        }
+        if presenting == Presenting::Grant
+            && let Some(&opening) = self.mention_openings.get(&actor)
+        {
+            return SenderPresentation::Blinded(opening);
+        }
+        if self.private.contains(&actor.account_id) {
+            SenderPresentation::Blinded(random_bytes())
+        } else {
+            SenderPresentation::Canonical
+        }
+    }
+}
+
 pub struct AccountManager {
     states: Vec<State>,
     rows: Vec<Row>,
@@ -365,8 +394,6 @@ pub struct AccountManager {
     message_path: Option<MembershipProof>,
     /// The membership path of each received message the transaction claims before its root.
     claim_paths: Vec<MembershipProof>,
-    /// Each authorizing private mention under every alias its openings give it.
-    private_signers: BTreeSet<Actor>,
     /// Each private mention with openings under the alias its first opening gives it.
     mention_openings: HashMap<Actor, [u8; 32]>,
 }
@@ -395,7 +422,6 @@ impl AccountManager {
         let mut states: Vec<State> = Vec::new();
         let mut rows = Vec::with_capacity(mentions.len());
         let mut prepared: HashMap<AccountId, (usize, AccountIdentity, bool)> = HashMap::new();
-        let mut private_signers = BTreeSet::new();
         let mut mention_openings = HashMap::new();
         let mut pin = None;
         // Whether the transaction itself authorizes the fee payer; if not, the payer's key
@@ -481,9 +507,6 @@ impl AccountManager {
                 }
                 if marks_signer {
                     pre.signer_programs.insert(program_account_id);
-                    private_signers.extend(address_openings.iter().map(|opening| {
-                        Actor::new(account_id.blinded(opening), program_account_id)
-                    }));
                 }
                 pre.address_openings.extend(address_openings);
             }
@@ -538,7 +561,6 @@ impl AccountManager {
             dummy_commitment_root,
             message_path,
             claim_paths,
-            private_signers,
             mention_openings,
         })
     }
@@ -595,10 +617,22 @@ impl AccountManager {
         actors
     }
 
-    /// The authorizing private mentions a public root holds grants over, as their openings present
-    /// them.
+    /// The actors an authorized private witness marks, under the alias their mention names, which a
+    /// public root holds grants over.
     pub fn private_signers(&self) -> BTreeSet<Actor> {
-        self.private_signers.clone()
+        self.private_states()
+            .filter(|pre| pre.kind.is_authorized())
+            .flat_map(|pre| {
+                pre.signer_programs
+                    .iter()
+                    .map(|&program| Actor::new(pre.pre_state.account_id, program))
+            })
+            .filter_map(|actor| {
+                self.mention_openings.get(&actor).map(|opening| {
+                    Actor::new(actor.account_id.blinded(opening), actor.program_account_id)
+                })
+            })
+            .collect()
     }
 
     pub fn signer_actors(&self) -> Vec<Actor> {
@@ -780,29 +814,14 @@ impl AccountManager {
             .collect()
     }
 
-    // A private account presents a fresh random alias for each message or grant, except the fee
-    // payer's native actor, which presents under the alias its refund is bound to, and a mentioned
-    // actor with openings, which presents under the alias its mention names.
-    pub fn presenter(
-        &self,
-        fee_alias: Option<(AccountId, [u8; 32])>,
-    ) -> impl FnMut(Actor) -> SenderPresentation + Send + 'static {
-        let private: HashSet<AccountId> = self
-            .private_states()
-            .map(|pre| pre.pre_state.account_id)
-            .collect();
-        let mention_openings = self.mention_openings.clone();
-        move |sender| match fee_alias {
-            Some((payer, opening)) if sender == Actor::native_balance(payer) => {
-                SenderPresentation::Blinded(opening)
-            }
-            _ if mention_openings.contains_key(&sender) => {
-                SenderPresentation::Blinded(mention_openings[&sender])
-            }
-            _ if private.contains(&sender.account_id) => {
-                SenderPresentation::Blinded(random_bytes())
-            }
-            _ => SenderPresentation::Canonical,
+    pub fn presenter(&self, fee_alias: Option<(AccountId, [u8; 32])>) -> WalletPresenter {
+        WalletPresenter {
+            private: self
+                .private_states()
+                .map(|pre| pre.pre_state.account_id)
+                .collect(),
+            fee_alias,
+            mention_openings: self.mention_openings.clone(),
         }
     }
 
@@ -1512,7 +1531,6 @@ mod tests {
             dummy_commitment_root: [0; 32],
             message_path: None,
             claim_paths: Vec::new(),
-            private_signers: BTreeSet::new(),
             mention_openings: HashMap::new(),
         }
     }
@@ -2108,27 +2126,28 @@ mod tests {
         }))])
         .presenter(None);
 
-        let factors: HashSet<[u8; 32]> =
-            std::iter::repeat_with(|| present(Actor::native_balance(private)))
-                .take(3)
-                .map(|presentation| {
-                    let SenderPresentation::Blinded(factor) = presentation else {
-                        panic!("a private account presents an alias");
-                    };
-                    factor
-                })
-                .collect();
+        let factors: HashSet<[u8; 32]> = std::iter::repeat_with(|| {
+            present.present(Presenting::Sender, Actor::native_balance(private))
+        })
+        .take(3)
+        .map(|presentation| {
+            let SenderPresentation::Blinded(factor) = presentation else {
+                panic!("a private account presents an alias");
+            };
+            factor
+        })
+        .collect();
 
         assert_eq!(factors.len(), 3);
         assert!(!factors.contains(&[9; 32]));
         assert_eq!(
-            present(Actor::native_balance(public)),
+            present.present(Presenting::Sender, Actor::native_balance(public)),
             SenderPresentation::Canonical
         );
     }
 
     #[test]
-    fn the_presenter_presents_a_mentioned_actor_under_its_mention_opening() {
+    fn the_presenter_presents_a_grant_over_a_mentioned_actor_under_its_mention_opening() {
         let private = AccountId::new([1; 32]);
         let mentioned = Actor::native_balance(private);
         let other = Actor::new(private, AccountId::new([3; 32]));
@@ -2149,8 +2168,10 @@ mod tests {
         }
         .presenter(None);
 
-        assert_eq!(present(mentioned), SenderPresentation::Blinded([9; 32]));
-        assert_eq!(present(mentioned), SenderPresentation::Blinded([9; 32]));
-        assert_ne!(present(other), SenderPresentation::Blinded([9; 32]));
+        let pinned = SenderPresentation::Blinded([9; 32]);
+        assert_eq!(present.present(Presenting::Grant, mentioned), pinned);
+        assert_eq!(present.present(Presenting::Grant, mentioned), pinned);
+        assert_ne!(present.present(Presenting::Grant, other), pinned);
+        assert_ne!(present.present(Presenting::Sender, mentioned), pinned);
     }
 }

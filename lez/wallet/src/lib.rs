@@ -29,9 +29,9 @@ pub use fees::{DeclaredFee, DryRunReport, FeeParams, PrivateFee};
 use futures::TryFutureExt as _;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
-    Account, AccountId, EncryptedNote, PredictedCrossMessages, PrivacyPreservingTransaction,
-    ProgramId, ProvingInput, PublicExecutionContext, PublicationMode, PublicationsPage, Recipient,
-    RecipientEncryption, SenderPresentation, Simulation,
+    Account, AccountId, EncryptedNote, PredictedCrossMessages, Presenter, Presenting,
+    PrivacyPreservingTransaction, ProgramId, ProvingInput, PublicExecutionContext, PublicationMode,
+    PublicationsPage, Recipient, RecipientEncryption, SenderPresentation, Simulation,
     privacy_preserving_transaction::{
         circuit::{Dependency, ProgramCatalog, ProgramKind},
         message::Message,
@@ -306,6 +306,29 @@ struct Receipt {
     position: CommitmentPosition,
     rho: Option<[u8; 32]>,
     commitment: Commitment,
+}
+
+// A presenter recording each actor as presented, for the publication choice to map back.
+struct RecordingPresenter<P> {
+    presenter: P,
+    senders: Arc<Mutex<HashMap<Actor, Actor>>>,
+}
+
+impl<P: Presenter> Presenter for RecordingPresenter<P> {
+    fn present(&mut self, presenting: Presenting, actor: Actor) -> SenderPresentation {
+        let presentation = self.presenter.present(presenting, actor);
+        let presented = match presentation {
+            SenderPresentation::Canonical => actor,
+            SenderPresentation::Blinded(factor) => {
+                Actor::new(actor.account_id.blinded(&factor), actor.program_account_id)
+            }
+        };
+        self.senders
+            .lock()
+            .expect("the sender map's lock is never poisoned")
+            .insert(presented, actor);
+        presentation
+    }
 }
 
 #[expect(async_fn_in_trait, reason = "For internal usage only")]
@@ -1849,13 +1872,13 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         }
         let (mut input, simulation, programs, cycles) = match cross_messages {
             None => {
-                let (mut present, mut select) = (acc_manager.presenter(None), select.clone());
+                let (present, mut select) = (acc_manager.presenter(None), select.clone());
                 tokio::task::spawn_blocking(move || {
                     let cycles = lee::simulate_privacy_preserving_transaction(
                         &input,
                         &simulation,
                         &programs,
-                        &mut present,
+                        present,
                         &mut select,
                     )?;
                     Ok::<_, lee::error::LeeError>((input, simulation, programs, cycles))
@@ -3281,39 +3304,20 @@ fn decrypt_note(
 
 // `presenter` recording each sender as presented, as the interpreter derives it, and the
 // publication choice that maps the presented senders back to their actors.
-#[expect(
-    clippy::type_complexity,
-    reason = "a presenter paired with the publication choice that reads what it records"
-)]
 fn present_and_publish(
-    mut presenter: impl FnMut(Actor) -> SenderPresentation,
+    presenter: impl Presenter + Send + 'static,
     seals: Vec<Recipient>,
     clear_messages: Vec<MessageBody>,
 ) -> (
-    impl FnMut(Actor) -> SenderPresentation,
+    impl Presenter + Send + 'static,
     impl FnMut(&[MessageBody]) -> Result<Vec<PublicationMode>, lee::error::LeeError>,
 ) {
     let senders = Arc::new(Mutex::new(HashMap::new()));
-    let present = {
-        let senders = Arc::clone(&senders);
-        move |sender: Actor| {
-            let presentation = presenter(sender);
-            let presented = match presentation {
-                SenderPresentation::Canonical => sender,
-                SenderPresentation::Blinded(factor) => Actor::new(
-                    sender.account_id.blinded(&factor),
-                    sender.program_account_id,
-                ),
-            };
-            senders
-                .lock()
-                .expect("the sender map's lock is never poisoned")
-                .insert(presented, sender);
-            presentation
-        }
-    };
     (
-        present,
+        RecordingPresenter {
+            presenter,
+            senders: Arc::clone(&senders),
+        },
         choose_publications_with(seals, clear_messages, senders),
     )
 }

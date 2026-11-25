@@ -942,7 +942,7 @@ fn preparation_meters_a_public_self_call_chain_as_settlement_does() {
             public_actor_states: &HashMap::new(),
             admitted_accounts: None,
             recorder: SenderPresentationRecorder {
-                choose: &mut |_| None,
+                choose: &mut |_, _| None,
                 recorded: Vec::new(),
             },
             selector: PromotionSelector {
