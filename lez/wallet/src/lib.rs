@@ -602,12 +602,6 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         })
     }
 
-    /// Pays every in-proof fee from `fee_payer`, an owned private account, unless a send names
-    /// its own; `None` lets each send pick its payer.
-    pub fn set_private_fee_payer(&mut self, fee_payer: Option<AccountId>) {
-        self.fee_params.payer = fee_payer.map(AccountIdWithPrivacy::Private);
-    }
-
     /// Refunds every in-proof fee's surplus to `target`, a public account, instead of the payer's
     /// alias: for a transaction that already credits `target` publicly (a deshield), which then
     /// leaves nothing behind. Any other target links the transaction to it.
@@ -2083,34 +2077,6 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             .filter_map(PendingMessage::native_credit)
             .sum();
         let balance = acc_manager.native_balance(payer).saturating_add(swept);
-        // A picked payer short of the fee pays out of what the root credits it; when the root
-        // credits it too little, a public signer declares the fee instead.
-        let fee_floor = self
-            .reserve_pricing(&quote, cycles, fee_core::market::PROOF_BYTES)
-            .fee_at_head;
-        if named_payer.is_none()
-            && balance < fee_floor
-            && let Some(signer) = public_signer()
-        {
-            let opening = account_manager::random_bytes();
-            let mut probe = input.clone();
-            probe
-                .recoveries
-                .push(acc_manager.fee_recovery(payer, opening)?);
-            probe.fee = Some(FeeTransfer {
-                payer,
-                recipient: fee_inbox,
-                amount: fee_floor,
-                refund_to: None,
-                tip: self.fee_params.tip,
-            });
-            if run_unproven(probe, acc_manager.presenter(Some((payer, opening))))
-                .await?
-                .is_err()
-            {
-                return send_publicly_paid(signer, input).await;
-            }
-        }
         let FeeParams { refund_to, tip, .. } = self.fee_params;
         if let Some(target) = refund_to
             && !acc_manager
@@ -2124,8 +2090,6 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             );
         }
         let opening = account_manager::random_bytes();
-        // What a public signer declares the fee for, should the payer's note fall short.
-        let unpaid = input.clone();
         // A refund to a public target is never published to the payer's alias.
         if refund_to.is_none() {
             input
@@ -2184,14 +2148,33 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         // The sequencer refuses a public part that can fail without a fee fallback to pay for it,
         // so there the reserve stays within the note, which keeps the fallback.
         let reservable = if public_part_can_fail { note } else { balance };
-        // A note short of the fee would lose it: a public signer declares the fee instead,
-        // unless the payer was named.
-        if public_part_can_fail
-            && named_payer.is_none()
-            && note < self.reserve_pricing(&quote, cycles, wire_bytes).fee_at_head
+        // A payer short of the fee has a public signer declare it instead, unless it was named.
+        // Where the public part can fail the note alone must cover the fee, to keep its fallback;
+        // elsewhere the payer may pay out of what the root credits it.
+        if named_payer.is_none()
             && let Some(signer) = public_signer()
         {
-            return send_publicly_paid(signer, unpaid).await;
+            let fee_floor = self
+                .reserve_pricing(&quote, cycles, wire_bytes)
+                .fee_at_head;
+            let short = if public_part_can_fail {
+                note < fee_floor
+            } else {
+                balance < fee_floor
+                    && run_unproven(
+                        priced(fee_floor),
+                        acc_manager.presenter(Some((payer, opening))),
+                    )
+                    .await?
+                    .is_err()
+            };
+            if short {
+                let mut unpaid = input.clone();
+                if refund_to.is_none() {
+                    unpaid.recoveries.pop();
+                }
+                return send_publicly_paid(signer, unpaid).await;
+            }
         }
 
         // Base fees move between the quote and inclusion; a reserve the screen finds below the
