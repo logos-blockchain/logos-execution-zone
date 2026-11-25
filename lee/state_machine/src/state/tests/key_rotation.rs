@@ -268,6 +268,27 @@ fn public_a_tampered_byte_in_any_signers_authentication_data_is_refused() {
 }
 
 #[test]
+fn public_metered_a_tampered_witness_entry_is_refused_free_of_charge() {
+    let (a, b) = (TestSigner::new(51), TestSigner::new(52));
+    let state = V03State::new().with_public_account_balances([(a.account_id(), 100)]);
+    let mut tx = transfer_transaction(a.account_id(), &a, 0, b.account_id(), &b, 0, 30);
+    let signer = tx.signer_account_ids()[0];
+    let last = tx.witness_set.entries[0].auth_data.len() - 1;
+    tx.witness_set.entries[0].auth_data[last] ^= 1;
+    let reason = tampered_reason(&tx.witness_set.entries[0].auth_data, last);
+
+    let (charge, result) = ValidatedStateDiff::from_public_transaction_metered(
+        &tx,
+        &state,
+        1,
+        0,
+        crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
+    );
+    assert_eq!(charge, crate::ExecutionCharge::FREE);
+    assert_refused(result, signer, reason);
+}
+
+#[test]
 fn public_a_successful_transaction_rotates_every_signers_key_and_advances_its_nonce() {
     let (a, b) = (TestSigner::new(51), TestSigner::new(52));
     let mut state = V03State::new().with_public_account_balances([(a.account_id(), 100)]);
@@ -924,6 +945,22 @@ fn privacy_a_witness_entry_of_an_unlisted_account_is_refused() {
         first,
         "revealed key does not give the account id",
     );
+}
+
+#[test]
+fn privacy_a_signer_without_a_witness_entry_is_refused() {
+    let (a, b) = (TestSigner::new(51), TestSigner::new(52));
+    let state = V03State::new().with_public_account_balances([(a.account_id(), 100)]);
+    let tx = privacy_shield(&state, &[&a, &b], &test_private_account_keys_1(), 30);
+
+    let (_, proof) = tx.witness_set.into_raw_parts();
+    let witness_set = privacy_witness_for(&tx.message, proof, &[&a]);
+    let tx = PrivacyPreservingTransaction::new(tx.message, witness_set);
+
+    assert!(matches!(
+        ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0),
+        Err(LeeError::InvalidInput(msg)) if msg == crate::InvalidTransaction::Nonces.to_string()
+    ));
 }
 
 // No pending transactions.
