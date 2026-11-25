@@ -14,9 +14,9 @@ use crate::{
     Result,
     error::Error,
     protocol::{
-        AccreditedKeys, ChannelReadStream, CreateChannel, FilterFinallyAbsent, FollowStart, MsgId,
-        PendingBlock, PreparePin, PreparedPin, PublishBlock, PublishOutcome, PublishPin,
-        ReadChannel, SequencerKey, Slot, WithdrawArg, ZoneMessage,
+        AccreditedKeys, CreateChannel, FilterFinallyAbsent, FollowStart, MsgId, PendingBlock,
+        PreparePin, PreparedPin, PublishBlock, PublishOutcome, PublishPin, SequencerKey, Slot,
+        WithdrawArg,
     },
 };
 
@@ -25,8 +25,6 @@ use crate::{
 pub struct CannedChannel {
     /// Channel frontier; `None` means the channel does not exist.
     pub tip_slot: Option<Slot>,
-    /// Finalized history served to [`ReadChannel`].
-    pub messages: Vec<(ZoneMessage, Slot)>,
     /// Entry the last publish left the channel at. A publish chained on any
     /// other entry is refused, as L1 does.
     pub tip: Option<MsgId>,
@@ -157,14 +155,6 @@ impl SharedChannel {
                     .copied()
                     .collect())
             }
-        });
-        mock.expect_handle_read_channel().returning({
-            let channel = self.clone();
-            move |ReadChannel {
-                      channel_id: _,
-                      after,
-                  },
-                  _ctx| Ok(history_after(&channel.lock().messages, after))
         });
         mock.expect_handle_get_channel_tip_message_id().returning({
             let channel = self.clone();
@@ -318,17 +308,6 @@ impl SharedChannel {
 #[must_use]
 pub fn mock_msg_of(block: &Block) -> MsgId {
     MsgId::from(block.header.hash.0)
-}
-
-/// The entries of `messages` past `after` (exclusive), as `ReadChannel` serves them.
-fn history_after(messages: &[(ZoneMessage, Slot)], after: Option<Slot>) -> ChannelReadStream {
-    let messages: Vec<_> = messages
-        .iter()
-        .filter(|(_, slot)| after.is_none_or(|after| *slot > after))
-        .cloned()
-        .map(Ok)
-        .collect();
-    Box::pin(futures::stream::iter(messages))
 }
 
 /// The notes the mock reports as released by `withdrawals`.

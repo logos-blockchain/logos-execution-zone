@@ -1280,28 +1280,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bridge_lock_core"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "cross_zone_emission_core",
- "lee_core",
- "risc0-zkvm",
-]
-
-[[package]]
-name = "bridge_lock_program"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "bridge_lock_core",
- "cross_zone_outbox_core",
- "lee_core",
- "risc0-zkvm",
- "wrapped_token_core",
-]
-
-[[package]]
 name = "bridge_program"
 version = "0.1.0"
 dependencies = [
@@ -1838,15 +1816,12 @@ dependencies = [
  "base64 0.22.1",
  "borsh",
  "bridge_core",
- "bridge_lock_core",
  "clock_core",
- "cross_zone_inbox_core",
  "fee_core",
  "hex",
  "lee",
  "lee_core",
  "logos-blockchain-zone-sdk",
- "ping_core",
  "programs",
  "serde",
  "serde_with",
@@ -2166,118 +2141,6 @@ name = "critical-section"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
-
-[[package]]
-name = "cross_zone"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "bridge_lock_core",
- "common",
- "cross_zone_emission_core",
- "cross_zone_inbox_core",
- "cross_zone_outbox_core",
- "hex",
- "lee",
- "lee_core",
- "ping_core",
- "programs",
- "serde",
- "tracing",
- "wrapped_token_core",
-]
-
-[[package]]
-name = "cross_zone_chat"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "axum 0.8.9",
- "borsh",
- "common",
- "cross_zone",
- "cross_zone_inbox_core",
- "cross_zone_outbox_core",
- "lee",
- "lee_core",
- "logging",
- "ping_core",
- "programs",
- "rand 0.8.6",
- "sequencer_service_rpc",
- "serde",
- "test_fixtures",
- "testnet_initial_state",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "cross_zone_emission_core"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "lee_core",
-]
-
-[[package]]
-name = "cross_zone_inbox_core"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "cross_zone_emission_core",
- "cross_zone_marker_core",
- "lee_core",
- "risc0-zkvm",
- "serde",
-]
-
-[[package]]
-name = "cross_zone_inbox_program"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "cross_zone_inbox_core",
- "lee_core",
-]
-
-[[package]]
-name = "cross_zone_marker_core"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "cross_zone_emission_core",
- "lee_core",
- "risc0-zkvm",
-]
-
-[[package]]
-name = "cross_zone_outbox_core"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "cross_zone_emission_core",
- "lee_core",
- "risc0-zkvm",
-]
-
-[[package]]
-name = "cross_zone_outbox_program"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "cross_zone_outbox_core",
- "lee_core",
-]
-
-[[package]]
-name = "cross_zone_receiver_core"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "cross_zone_marker_core",
- "lee_core",
-]
 
 [[package]]
 name = "crossbeam-channel"
@@ -4877,15 +4740,12 @@ dependencies = [
  "bridge_core",
  "chain_state",
  "common",
- "cross_zone",
- "cross_zone_inbox_core",
  "futures",
  "hex",
  "humantime-serde",
  "lee",
  "lee_core",
  "logos-blockchain-zone-sdk",
- "ping_core",
  "program_loader_core",
  "programs",
  "serde",
@@ -4896,7 +4756,6 @@ dependencies = [
  "test_guest_core",
  "test_programs",
  "testnet_initial_state",
- "thiserror 2.0.18",
  "tokio",
  "tracing",
  "url",
@@ -5057,12 +4916,8 @@ dependencies = [
  "async-trait",
  "borsh",
  "bridge_core",
- "bridge_lock_core",
  "common",
  "core_ffi",
- "cross_zone",
- "cross_zone_inbox_core",
- "cross_zone_outbox_core",
  "cucumber",
  "fee_core",
  "futures",
@@ -5078,7 +4933,6 @@ dependencies = [
  "lee_core",
  "logos-blockchain-zone-sdk",
  "num-bigint 0.4.6",
- "ping_core",
  "program_loader_core",
  "programs",
  "sequencer_bedrock_actor",
@@ -5099,7 +4953,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber 0.3.23",
  "wallet",
- "wrapped_token_core",
 ]
 
 [[package]]
@@ -9981,37 +9834,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
 
 [[package]]
-name = "ping_core"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "cross_zone_emission_core",
- "cross_zone_receiver_core",
- "lee_core",
- "risc0-zkvm",
-]
-
-[[package]]
-name = "ping_receiver_program"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "cross_zone_marker_core",
- "lee_core",
- "ping_core",
-]
-
-[[package]]
-name = "ping_sender_program"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "cross_zone_outbox_core",
- "lee_core",
- "ping_core",
-]
-
-[[package]]
 name = "pkcs1"
 version = "0.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10333,23 +10155,17 @@ version = "0.1.0"
 dependencies = [
  "borsh",
  "bridge_core",
- "bridge_lock_core",
  "build_utils",
  "clock_core",
- "cross_zone_inbox_core",
- "cross_zone_marker_core",
- "cross_zone_outbox_core",
  "fee_core",
  "lee",
  "lee_core",
- "ping_core",
  "program_loader_core",
  "risc0-binfmt",
  "sequencer_stake_core",
  "system_upgrader_core",
  "test_guest_core",
  "test_programs",
- "wrapped_token_core",
 ]
 
 [[package]]
@@ -12031,8 +11847,6 @@ dependencies = [
  "chrono",
  "clock_core",
  "common",
- "cross_zone",
- "cross_zone_inbox_core",
  "fee_core",
  "futures",
  "hex",
@@ -12046,7 +11860,6 @@ dependencies = [
  "logos-blockchain-zone-sdk",
  "mempool",
  "num-bigint 0.4.6",
- "ping_core",
  "program_loader_core",
  "programs",
  "rand 0.8.6",
@@ -12091,8 +11904,6 @@ dependencies = [
  "bytesize",
  "chain_state",
  "common",
- "cross_zone",
- "cross_zone_inbox_core",
  "fee_core",
  "futures",
  "kameo",
@@ -12104,7 +11915,6 @@ dependencies = [
  "mempool",
  "mockall",
  "num-traits",
- "ping_core",
  "programs",
  "sequencer_actors_common",
  "sequencer_bedrock_actor",
@@ -12138,10 +11948,8 @@ name = "sequencer_genesis"
 version = "0.1.0"
 dependencies = [
  "bridge_core",
- "bridge_lock_core",
  "chain_state",
  "common",
- "cross_zone",
  "fee_core",
  "hex",
  "lee",
@@ -13437,8 +13245,6 @@ name = "test_guest_core"
 version = "0.1.0"
 dependencies = [
  "borsh",
- "cross_zone_emission_core",
- "cross_zone_receiver_core",
  "lee_core",
  "risc0-zkvm",
 ]
@@ -13464,7 +13270,6 @@ dependencies = [
 name = "test_program_guests"
 version = "0.1.0"
 dependencies = [
- "borsh",
  "clock_core",
  "lee_core",
  "risc0-zkvm",
@@ -15511,26 +15316,6 @@ dependencies = [
  "ff 0.14.0",
  "group 0.14.0",
  "hybrid-array",
-]
-
-[[package]]
-name = "wrapped_token_core"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "cross_zone_emission_core",
- "lee_core",
- "risc0-zkvm",
-]
-
-[[package]]
-name = "wrapped_token_program"
-version = "0.1.0"
-dependencies = [
- "borsh",
- "cross_zone_marker_core",
- "lee_core",
- "wrapped_token_core",
 ]
 
 [[package]]

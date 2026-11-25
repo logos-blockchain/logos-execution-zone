@@ -551,7 +551,7 @@ fn tick_case(label: &'static str, block_id: BlockId) -> Result<Case> {
 /// times it.
 fn schedule_case(label: &'static str, committee_size: usize) -> Result<Case> {
     let (actor_states, message) =
-        system_upgrader::schedule_guest_input(committee_size, &programs::ping_receiver());
+        system_upgrader::schedule_guest_input(committee_size, &programs::bridge());
     Case::new(
         label,
         system_upgrader_core::registry_actor(),

@@ -26,12 +26,11 @@ use crate::{
     error::Error,
     protocol::{
         ChannelId, ExecutorStatus, FeeStateQuote, GetAccount, GetAccountBalance, GetAccountNonces,
-        GetAccountView, GetBlock, GetBlockRange, GetChannelId, GetCrossZoneDeadLetters,
-        GetCrossZoneDeadLettersReply, GetFeeQuote, GetLastBlockId, GetMessagePath,
-        GetProofsAndRoot, GetProofsAndRootReply, GetPublications, GetPublicationsReply,
-        GetRecoveryBinding, GetStatus, GetSystemProposals, GetSystemProposalsReply, GetTransaction,
-        GetTransactionReceipt, ProduceBlock, RequeueCrossZoneDeadLetter,
-        RequeueCrossZoneDeadLetterReply, SubmitSystemApproval, Transaction,
+        GetAccountView, GetBlock, GetBlockRange, GetChannelId, GetFeeQuote, GetLastBlockId,
+        GetMessagePath, GetProofsAndRoot, GetProofsAndRootReply, GetPublications,
+        GetPublicationsReply, GetRecoveryBinding, GetStatus, GetSystemProposals,
+        GetSystemProposalsReply, GetTransaction, GetTransactionReceipt, ProduceBlock,
+        SubmitSystemApproval, Transaction,
     },
 };
 
@@ -138,18 +137,6 @@ mockall::mock! {
             msg: GetStatus,
             ctx: &mut Context<Self, ExecutorStatus>
         ) -> ExecutorStatus;
-
-        pub fn handle_get_cross_zone_dead_letters(
-            &mut self,
-            msg: GetCrossZoneDeadLetters,
-            ctx: &mut Context<Self, Result<GetCrossZoneDeadLettersReply>>
-        ) -> Result<GetCrossZoneDeadLettersReply>;
-
-        pub fn handle_requeue_cross_zone_dead_letter(
-            &mut self,
-            msg: RequeueCrossZoneDeadLetter,
-            ctx: &mut Context<Self, Result<RequeueCrossZoneDeadLetterReply>>
-        ) -> Result<RequeueCrossZoneDeadLetterReply>;
 
         pub fn handle_get_system_proposals(
             &mut self,
@@ -404,30 +391,6 @@ impl Message<GetStatus> for MockExecutorActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_get_status(msg, ctx)
-    }
-}
-
-impl Message<GetCrossZoneDeadLetters> for MockExecutorActor {
-    type Reply = Result<GetCrossZoneDeadLettersReply>;
-
-    async fn handle(
-        &mut self,
-        msg: GetCrossZoneDeadLetters,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_get_cross_zone_dead_letters(msg, ctx)
-    }
-}
-
-impl Message<RequeueCrossZoneDeadLetter> for MockExecutorActor {
-    type Reply = Result<RequeueCrossZoneDeadLetterReply>;
-
-    async fn handle(
-        &mut self,
-        msg: RequeueCrossZoneDeadLetter,
-        ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.handle_requeue_cross_zone_dead_letter(msg, ctx)
     }
 }
 

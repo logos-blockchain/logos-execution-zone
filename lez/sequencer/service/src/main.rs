@@ -266,11 +266,10 @@ async fn start(args: StartArgs, traces: Option<&traces::Traces>) -> Result<()> {
         }
     }
 
-    // Stop the watchers, the publisher's drive task, the block loop and the RPC
-    // server, and wait for each. Dropping the handle only asks; the store stays
-    // open for an unbounded stretch after that, so a restart can find its own
-    // home directory locked, and a watcher can be killed between recording a
-    // delivery and handing it over.
+    // Stop the publisher's drive task, the block loop and the RPC server, and
+    // wait for each. Dropping the handle only asks; the store stays open for an
+    // unbounded stretch after that, so a restart can find its own home directory
+    // locked.
     ops_shutdown.cancel();
     if let Some(ops_server) = ops_server {
         match ops_server.await {

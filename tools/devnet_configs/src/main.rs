@@ -197,9 +197,9 @@ mod tests {
                 ownership_public_key,
                 stake_signature,
             } => Some((sequencer_key, ownership_public_key, stake_signature)),
-            GenesisAction::SupplyAccount { .. }
-            | GenesisAction::SupplyPrivateAccount { .. }
-            | GenesisAction::SupplyBridgeLockHolding { .. } => None,
+            GenesisAction::SupplyAccount { .. } | GenesisAction::SupplyPrivateAccount { .. } => {
+                None
+            }
         });
         for (index, (sequencer_key, ownership_public_key, stake_signature)) in stakes.enumerate() {
             let message = genesis_stake_message(

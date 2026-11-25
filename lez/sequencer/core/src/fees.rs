@@ -174,7 +174,7 @@ mod tests {
 
     #[test]
     fn a_funded_transfer_is_admitted() {
-        let state = initial_state(true);
+        let state = initial_state();
         let (from, sign_key) = funded();
         let tx = create_transaction_native_token_transfer(from, 0, recipient(), 10, &sign_key);
 
@@ -184,7 +184,7 @@ mod tests {
 
     #[test]
     fn a_transfer_without_a_fee_is_rejected() {
-        let state = initial_state(true);
+        let state = initial_state();
         let (from, sign_key) = funded();
         // Omitting the fee would be executed for free if admitted; the door
         // turns it away, and the block transition agrees.
@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn a_gas_limit_beyond_the_block_cap_is_rejected() {
-        let state = initial_state(true);
+        let state = initial_state();
         let (from, sign_key) = funded();
         let tx = create_transaction_native_token_transfer_with_fees(
             from,
@@ -227,7 +227,7 @@ mod tests {
 
     #[test]
     fn a_max_fee_below_the_reserve_is_rejected() {
-        let state = initial_state(true);
+        let state = initial_state();
         let (from, sign_key) = funded();
         let tx = create_transaction_native_token_transfer_with_fees(
             from,
@@ -260,7 +260,7 @@ mod tests {
     /// reservation the next block would take cannot succeed.
     #[test]
     fn a_payer_that_cannot_fund_the_reserve_is_rejected() {
-        let state = initial_state(true);
+        let state = initial_state();
         let broke_key = key(9);
         let broke = account_of(&broke_key);
         let tx = create_transaction_native_token_transfer_with_fees(
@@ -291,7 +291,7 @@ mod tests {
 
     #[test]
     fn a_payer_nothing_authorizes_is_rejected() {
-        let state = initial_state(true);
+        let state = initial_state();
         let (from, sign_key) = funded();
         let stranger = account_of(&key(9));
         let tx = create_transaction_native_token_transfer_with_fees(
@@ -328,7 +328,7 @@ mod tests {
             program::MessageEnvelope,
         };
 
-        let state = initial_state(true);
+        let state = initial_state();
         let private_tx = |reserve: Option<u128>| {
             let mut message = PrivateMessage::default();
             message.execution.boundary = reserve
@@ -376,7 +376,7 @@ mod tests {
             WitnessSet as PrivateWitnessSet, circuit::Proof,
         };
 
-        let state = initial_state(true);
+        let state = initial_state();
         let funded = initial_pub_accounts_private_keys()[0].pub_sign_key.clone();
         let unfunded = PrivateKey::try_new([7; 32]).unwrap();
         let account_id = |key| AccountId::from(&PublicKey::new_from_private_key(key));
@@ -413,7 +413,7 @@ mod tests {
     /// guaranteed +1 step.
     #[test]
     fn the_quote_prices_the_head_fee_state() {
-        let state = initial_state(true);
+        let state = initial_state();
         let quote = fee_quote(&state);
 
         assert_eq!(quote.height, 0);
@@ -432,7 +432,7 @@ mod tests {
     /// headroom below it is exactly what admission rejects.
     #[test]
     fn a_reserve_computed_from_the_quote_matches_the_one_admission_uses() {
-        let state = initial_state(true);
+        let state = initial_state();
         let (from, sign_key) = funded();
         let quote = fee_quote(&state);
         let build = |max_fee: u128| {

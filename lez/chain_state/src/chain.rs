@@ -675,7 +675,7 @@ mod tests {
     /// simulating the stake a real sequencer holds before producing: fee
     /// settlement credits it, and crediting an unclaimed account is rejected.
     fn claimed_initial_state() -> V03State {
-        initial_state(true).with_public_accounts([common::test_utils::producer_seed()])
+        initial_state().with_public_accounts([common::test_utils::producer_seed()])
     }
 
     fn entry(n: u8, parent: MsgId, block: Option<&Block>) -> ChannelEntry {
