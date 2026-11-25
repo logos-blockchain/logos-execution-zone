@@ -79,9 +79,10 @@ pub async fn fee_paid_by<C: WalletSequencerClient>(
     Ok((fee, nonce, signer))
 }
 
-/// `account_id`'s signer at `nonce`: its Schnorr key at that nonce, committing to its Schnorr key
-/// at the next nonce, which the account rotates to. `None` if this wallet does not hold the
-/// account's secret.
+/// `account_id`'s signer at `nonce`, or `None` if this wallet does not hold its secret.
+///
+/// Its Schnorr key at that nonce commits to its key at the next nonce, which the account rotates
+/// to.
 pub fn signer_at<C: WalletSequencerClient>(
     wallet_core: &WalletCore<C>,
     account_id: AccountId,
