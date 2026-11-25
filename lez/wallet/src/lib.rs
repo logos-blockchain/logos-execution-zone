@@ -638,7 +638,8 @@ impl<C: WalletSequencerClient> WalletCore<C> {
     /// The private account to pay `reserve` when no mentioned private account is authorized and
     /// holds it: an owned regular private account holding it, outside the root call, else the
     /// first mentioned owned regular private account, which pays out of what the root credits it
-    /// (a shielding into a fresh account).
+    /// when nothing public can fail; otherwise a public signer declares the fee (a shielding into
+    /// a fresh account).
     fn auto_fee_payer(&self, mentions: &[AccountMention], reserve: u128) -> Option<AccountId> {
         let holds = |account: &Account| {
             account
@@ -2123,6 +2124,8 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             );
         }
         let opening = account_manager::random_bytes();
+        // What a public signer declares the fee for, should the payer's note fall short.
+        let unpaid = input.clone();
         // A refund to a public target is never published to the payer's alias.
         if refund_to.is_none() {
             input
@@ -2156,7 +2159,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         // The fee's amount is fixed-width, so an unproven run paying nothing measures the
         // transaction, its proof charged at a fixed size. Its payer covers that fee, so it carries
         // the fee fallback a payer whose note falls short of the reserve goes without.
-        let (wire_bytes, fallback_bytes) = {
+        let (wire_bytes, fallback_bytes, public_part_can_fail) = {
             let output =
                 run_unproven(priced(0), acc_manager.presenter(Some((payer, opening)))).await??;
             let proof = lee::privacy_preserving_transaction::circuit::Proof::from_inner(Vec::new());
@@ -2170,14 +2173,26 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 .map_or(0, |fallback| {
                     borsh::object_length(fallback).expect("a fee fallback serializes")
                 });
+            let tx = LeeTransaction::PrivacyPreserving(tx);
             (
-                LeeTransaction::PrivacyPreserving(tx)
-                    .charged_bytes()
-                    .expect("a transaction serializes"),
+                tx.charged_bytes().expect("a transaction serializes"),
                 u64::try_from(fallback).expect("a fee fallback's size fits u64"),
+                tx.public_part_can_fail(),
             )
         };
         let note = acc_manager.native_balance(payer);
+        // The sequencer refuses a public part that can fail without a fee fallback to pay for it,
+        // so there the reserve stays within the note, which keeps the fallback.
+        let reservable = if public_part_can_fail { note } else { balance };
+        // A note short of the fee would lose it: a public signer declares the fee instead,
+        // unless the payer was named.
+        if public_part_can_fail
+            && named_payer.is_none()
+            && note < self.reserve_pricing(&quote, cycles, wire_bytes).fee_at_head
+            && let Some(signer) = public_signer()
+        {
+            return send_publicly_paid(signer, unpaid).await;
+        }
 
         // Base fees move between the quote and inclusion; a reserve the screen finds below the
         // head fee is priced again off a fresh quote and proven again.
@@ -2188,7 +2203,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 let pricing = self.reserve_pricing(&quote, cycles, bytes);
                 let reserve = pricing
                     .headroom_reserve
-                    .min(balance)
+                    .min(reservable)
                     .max(pricing.fee_at_head);
                 (pricing, reserve)
             };
@@ -2217,6 +2232,15 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             } else {
                 wire_bytes
             };
+            // The sequencer would refuse it; fail before the proof.
+            if public_part_can_fail && note < reserve {
+                return Err(ExecutionFailureKind::TransactionBuildError(
+                    lee::error::LeeError::InvalidInput(format!(
+                        "Fee payer {payer} holds {note}, short of the fee of {reserve}: fund it \
+                         first, or have a public signer pay the fee"
+                    )),
+                ));
+            }
             let fee = PrivateFee {
                 payer,
                 reserve,
