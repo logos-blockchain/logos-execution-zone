@@ -678,19 +678,21 @@ impl From<PublicExecutionContext> for FfiPublicExecutionContext {
     }
 }
 
-impl From<FfiPublicExecutionContext> for PublicExecutionContext {
-    fn from(value: FfiPublicExecutionContext) -> Self {
+impl TryFrom<FfiPublicExecutionContext> for PublicExecutionContext {
+    type Error = LeeError;
+
+    fn try_from(value: FfiPublicExecutionContext) -> Result<Self, Self::Error> {
         let actors: Vec<FfiDeclaredActor> = value.actors.into();
         let authorized_accounts: Vec<FfiAccountId> = value.authorized_accounts.into();
         let promotions: Vec<u64> = value.promotions.into();
         let private_signers: Vec<FfiActor> = value.private_signers.into();
 
-        Self {
-            actors: actors.into_iter().map(Into::into).collect(),
+        Ok(Self {
+            actors: lee::actor_map(actors.into_iter().map(Into::into))?,
             authorized_accounts: authorized_accounts.into_iter().map(Into::into).collect(),
             promotions: promotions.into_iter().collect(),
             private_signers: private_signers.into_iter().map(Into::into).collect(),
-        }
+        })
     }
 }
 
@@ -955,6 +957,22 @@ mod tests {
     }
 
     #[test]
+    fn a_context_declaring_an_actor_twice_is_refused() {
+        let context = FfiPublicExecutionContext {
+            actors: vec![
+                FfiDeclaredActor::from((actor(1, 2), Authority::None)),
+                FfiDeclaredActor::from((actor(1, 2), Authority::Signer)),
+            ]
+            .into(),
+            authorized_accounts: Vec::new().into(),
+            promotions: Vec::new().into(),
+            private_signers: Vec::new().into(),
+        };
+
+        assert!(PublicExecutionContext::try_from(context).is_err());
+    }
+
+    #[test]
     fn boundary_steps_decode_only_the_payload_their_kind_selects() {
         let delivery = Delivery {
             envelope: MessageEnvelope {
@@ -1037,7 +1055,10 @@ mod tests {
         let signer = lee::PrivateKey::try_new([1; 32]).expect("valid key");
 
         assert_eq!(
-            roundtrip::<FfiPublicExecutionContext, _>(public_context.clone()),
+            PublicExecutionContext::try_from(FfiPublicExecutionContext::from(
+                public_context.clone()
+            ))
+            .unwrap(),
             public_context
         );
         assert_eq!(roundtrip::<FfiSealedMessage, _>(sealed.clone()), sealed);

@@ -36,7 +36,7 @@ pub use public_transaction::PublicTransaction;
 pub use signature::{PrivateKey, PublicKey, Signature};
 pub use state::{GenesisBuilder, PublicationsPage, V03State};
 pub use transaction_message::{
-    InvalidTransaction, PublicAccountEvidence, TransactionMessage, nonce_map,
+    InvalidTransaction, PublicAccountEvidence, TransactionMessage, actor_map, nonce_map,
 };
 pub use validated_state_diff::{ExecutionCharge, ValidatedStateDiff};
 

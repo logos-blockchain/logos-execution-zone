@@ -64,6 +64,9 @@ impl PublicTransaction {
         if !self.message.public_context.promotions.is_empty() {
             return Err(InvalidTransaction::PublicPromotions);
         }
+        if !self.message.public_context.private_signers.is_empty() {
+            return Err(InvalidTransaction::PublicPrivateSigners);
+        }
         let signers = self.signer_account_ids();
         self.message.check_signers(&signers)?;
         if !self.witness_set.is_valid_for(&self.message) {
@@ -311,6 +314,24 @@ pub mod tests {
 
         let tx = signed(message, &[&key1, &key2]);
         let rejection = InvalidTransaction::PublicPromotions;
+        assert_eq!(tx.check_stateless(), Err(rejection));
+        assert!(matches!(
+            ValidatedStateDiff::from_public_transaction(&tx, &state_for_tests(), 1, 0),
+            Err(LeeError::InvalidInput(msg)) if msg == rejection.to_string()
+        ));
+    }
+
+    #[test]
+    fn a_public_transaction_cannot_declare_private_signers() {
+        let (key1, key2, ..) = keys_for_tests();
+        let mut message = transaction_for_tests().message;
+        message
+            .public_context
+            .private_signers
+            .insert(Actor::new(AccountId::new([7; 32]), AccountId::new([8; 32])));
+
+        let tx = signed(message, &[&key1, &key2]);
+        let rejection = InvalidTransaction::PublicPrivateSigners;
         assert_eq!(tx.check_stateless(), Err(rejection));
         assert!(matches!(
             ValidatedStateDiff::from_public_transaction(&tx, &state_for_tests(), 1, 0),

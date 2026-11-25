@@ -58,7 +58,7 @@ impl From<PublicTransaction> for FfiPublicTransactionBody {
 }
 
 struct OwnedPublicBody {
-    public_context: PublicExecutionContext,
+    public_context: Result<PublicExecutionContext, LeeError>,
     root: RootCall,
     fee: Option<FeeDeclaration>,
     nonces: Vec<FfiNonceEntry>,
@@ -74,7 +74,7 @@ impl From<Box<FfiPublicTransactionBody>> for OwnedPublicBody {
             witness_set,
         } = *value;
         Self {
-            public_context: message.public_context.into(),
+            public_context: message.public_context.try_into(),
             root: message.root.into(),
             fee: message.has_fee.then(|| message.fee.into()),
             nonces: message.nonces.into(),
@@ -98,7 +98,7 @@ impl TryFrom<Box<FfiPublicTransactionBody>> for PublicTransaction {
         } = value.into();
         Ok(Self {
             message: lee::public_transaction::Message {
-                public_context,
+                public_context: public_context.map_err(cast_error)?,
                 execution: lee::public_transaction::PublicExecution { root },
                 nonces: nonces_from_ffi(nonces).map_err(cast_error)?,
                 fee,
@@ -256,7 +256,7 @@ impl From<PrivacyPreservingTransaction> for FfiPrivateTransactionBody {
 }
 
 struct OwnedPrivateBody {
-    public_context: PublicExecutionContext,
+    public_context: Result<PublicExecutionContext, LeeError>,
     boundary: Vec<BoundaryStep>,
     async_messages: Vec<Publication>,
     recovery_bindings: Vec<RecoveryBinding>,
@@ -283,7 +283,7 @@ impl From<Box<FfiPrivateTransactionBody>> for OwnedPrivateBody {
         } = *value;
         let public_root = RootCall::from(message.public_root);
         Self {
-            public_context: message.public_context.into(),
+            public_context: message.public_context.try_into(),
             boundary: owned(message.boundary),
             async_messages: owned(message.async_messages),
             recovery_bindings: owned(message.recovery_bindings),
@@ -329,7 +329,7 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
         } = value.into();
         Ok(Self {
             message: lee::privacy_preserving_transaction::Message {
-                public_context,
+                public_context: public_context.map_err(cast_error)?,
                 execution: ProvenExecution {
                     boundary,
                     async_messages,

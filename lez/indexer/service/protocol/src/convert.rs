@@ -325,7 +325,7 @@ impl TryFrom<PublicMessage> for lee::public_transaction::Message {
             admission_evidence,
         } = value;
         Ok(Self {
-            public_context: public_context.into(),
+            public_context: public_context.try_into()?,
             execution: lee::public_transaction::PublicExecution { root: root.into() },
             nonces: nonce_map(nonces)?,
             fee: fee.map(Into::into),
@@ -516,23 +516,26 @@ impl From<lee_core::execution_state::PublicExecutionContext> for PublicExecution
     }
 }
 
-impl From<PublicExecutionContext> for lee_core::execution_state::PublicExecutionContext {
-    fn from(value: PublicExecutionContext) -> Self {
+impl TryFrom<PublicExecutionContext> for lee_core::execution_state::PublicExecutionContext {
+    type Error = lee::error::LeeError;
+
+    fn try_from(value: PublicExecutionContext) -> Result<Self, Self::Error> {
         let PublicExecutionContext {
             actors,
             authorized_accounts,
             promotions,
             private_signers,
         } = value;
-        Self {
-            actors: actors
-                .into_iter()
-                .map(|DeclaredActor { actor, authority }| (actor.into(), authority.into()))
-                .collect(),
+        Ok(Self {
+            actors: lee::actor_map(
+                actors
+                    .into_iter()
+                    .map(|DeclaredActor { actor, authority }| (actor.into(), authority.into())),
+            )?,
             authorized_accounts: authorized_accounts.into_iter().map(Into::into).collect(),
             promotions: promotions.into_iter().collect(),
             private_signers: private_signers.into_iter().map(Into::into).collect(),
-        }
+        })
     }
 }
 
@@ -713,7 +716,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
         let private_actions = private_actions.into_iter().map(Into::into).collect();
 
         Ok(Self {
-            public_context: public_context.into(),
+            public_context: public_context.try_into()?,
             execution: lee_core::ProvenExecution {
                 boundary: boundary.into_iter().map(Into::into).collect(),
                 async_messages: async_messages.into_iter().map(Into::into).collect(),
@@ -1369,6 +1372,24 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
+
+    #[test]
+    fn a_context_declaring_an_actor_twice_is_refused() {
+        let declared = |authority| DeclaredActor {
+            actor: lee_core::account::Actor::new(
+                lee_core::account::AccountId::new([1; 32]),
+                lee_core::account::AccountId::new([2; 32]),
+            )
+            .into(),
+            authority,
+        };
+        let context = PublicExecutionContext {
+            actors: vec![declared(Authority::None), declared(Authority::Signer)],
+            ..PublicExecutionContext::default()
+        };
+
+        assert!(lee_core::execution_state::PublicExecutionContext::try_from(context).is_err());
+    }
 
     #[test]
     fn a_nested_account_round_trips_through_the_indexer_mirror() {
