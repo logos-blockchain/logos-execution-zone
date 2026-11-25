@@ -1483,7 +1483,16 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         } in transition.response.sync_messages
         {
             let attached = self.attach(actor, &grants, attached)?;
-            let from = self.sender(actor, call_reply(to), environment)?;
+            // A private call to another actor of its own account names the account as is: the call
+            // stays in the proof, and the receiver holds the caller's grant under the account.
+            let within_account = private_sender
+                && call_reply(to).is_none()
+                && self.resolve(to).account_id == actor.account_id;
+            let from = if within_account {
+                actor
+            } else {
+                self.sender(actor, call_reply(to), environment)?
+            };
             let attached = if private_sender {
                 let crosses_out = self.public_context.runs_publicly(to);
                 self.present_grants(from, attached, crosses_out, environment)?

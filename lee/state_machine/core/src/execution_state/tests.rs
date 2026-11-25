@@ -1075,6 +1075,43 @@ fn a_private_and_a_public_receiver_see_a_senders_grant_under_its_address() {
     }
 }
 
+// An actor calls another actor of its own account with its grant; the callee sees the grant under
+// `from`, on a private account as on a public one.
+#[test]
+fn a_call_within_an_account_shows_the_callee_the_callers_grant_under_from() {
+    let keys = Keys::new(1);
+    let private = (holder(&keys), Actor::new(keys.regular_id(), id(7)));
+    let public = (actor(5, 8), actor(5, 7));
+    for (caller, callee) in [private, public] {
+        let mut script = Script::default()
+            .presenting([SenderPresentation::Blinded(OPENING)])
+            .on(
+                caller,
+                sending_when(None, vec![send_to(callee).with_grants([caller])]),
+            )
+            .on(callee, sending(Vec::new()));
+
+        whole(
+            PublicExecutionContext::new(
+                vec![(public.0, Authority::Signer), (public.1, Authority::None)],
+                [public.0.account_id],
+            ),
+            &[keys.regular(true)],
+            root(caller),
+            &mut script,
+        )
+        .unwrap();
+
+        let received = &script.log[1];
+        assert_eq!(received.from, Some(caller), "caller {caller:?}");
+        assert_eq!(
+            received.grants,
+            BTreeSet::from([caller]),
+            "caller {caller:?}"
+        );
+    }
+}
+
 // Alice's private root also hands the public `router` its grant over bob, which crosses out under
 // bob's own presentation rather than alice's address.
 #[test]
