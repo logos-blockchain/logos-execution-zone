@@ -108,6 +108,89 @@ fn wallet_ffi_public_credit_creates_only_the_native_actor_state() -> Result<()> 
 }
 
 #[test]
+fn wallet_ffi_public_transfer_to_an_account_the_wallet_does_not_own() -> Result<()> {
+    let sequencer_ffi_helpers::JoiningSetup {
+        ctx,
+        node: _,
+        ownership_id: _,
+        sequencer_ffi: sequencer_ffi_res,
+        sequencer_home,
+    } = sequencer_ffi_helpers::joining_setup(true)?;
+
+    tracing::info!(?sequencer_home, "Joining sequencer home");
+
+    let from: FfiBytes32 = ctx.ctx().existing_public_accounts()[0].into();
+    let read_account = |handle, account_id: &FfiBytes32| -> Account {
+        let mut out_account = FfiAccount::default();
+        unsafe {
+            wallet_ffi_get_account_public(handle, account_id, &raw mut out_account).unwrap();
+            (&out_account).try_into().unwrap()
+        }
+    };
+
+    // The owner creates the recipient and funds it, so it exists on chain.
+    let owner_home = tempfile::tempdir()?;
+    let FfiCreateWalletOutput {
+        wallet: owner,
+        mnemonic: _,
+    } = new_wallet_ffi_with_test_context_config(&ctx, owner_home.path(), sequencer_ffi_res.value)?;
+    let mut to = FfiBytes32::from_bytes([0; 32]);
+    let funded: [u8; 16] = 100_u128.to_le_bytes();
+    let mut funding = FfiTransferResult::default();
+    unsafe {
+        wallet_ffi_create_account_public(owner, &raw mut to).unwrap();
+        wallet_ffi_transfer_public(
+            owner,
+            &raw const from,
+            &raw const to,
+            &raw const funded,
+            &raw mut funding,
+        )
+        .unwrap();
+    }
+    wait_for_inclusion(owner, &funding);
+
+    // Another wallet, which holds no key for the recipient, sends to it.
+    let sender_home = tempfile::tempdir()?;
+    let FfiCreateWalletOutput {
+        wallet: sender,
+        mnemonic: _,
+    } = new_wallet_ffi_with_test_context_config(&ctx, sender_home.path(), sequencer_ffi_res.value)?;
+    let before = read_account(sender, &to);
+    let amount: [u8; 16] = 50_u128.to_le_bytes();
+    let mut transfer = FfiTransferResult::default();
+    unsafe {
+        wallet_ffi_transfer_public(
+            sender,
+            &raw const from,
+            &raw const to,
+            &raw const amount,
+            &raw mut transfer,
+        )
+        .unwrap();
+    }
+    wait_for_inclusion(sender, &transfer);
+
+    let after = read_account(sender, &to);
+    assert_eq!(after.data, Account::funded(150).data);
+    assert_eq!(after.nonce, before.nonce, "the recipient does not sign");
+
+    unsafe {
+        wallet_ffi_free_transfer_result(&raw mut funding);
+        wallet_ffi_free_transfer_result(&raw mut transfer);
+        wallet_ffi_destroy(owner);
+        wallet_ffi_destroy(sender);
+    }
+
+    // SAFETY: sequencer_ffi created by FFI, it is valid.
+    unsafe {
+        sequencer_ffi_helpers::sequencer_ffi_stop_sequencer(sequencer_ffi_res.value);
+    }
+
+    Ok(())
+}
+
+#[test]
 fn test_wallet_ffi_transfer_public() -> Result<()> {
     let sequencer_ffi_helpers::JoiningSetup {
         ctx,
