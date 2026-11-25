@@ -2,6 +2,7 @@
   "home": "/var/lib/sequencer_service",
   "max_num_tx_in_block": 20,
   "mempool_max_size": 10000,
+  "mempool_max_per_account": 16,
   "block_create_timeout": "10s",
   "retry_pending_blocks_timeout": "7s",
   "bedrock_config": {
@@ -57,8 +58,11 @@
             132,
             121
           ],
-          "ownership_public_key": "76d462a4242a2dfd73535dc608e3258986edd5f0b4e13ed09360c1c1e1d79016",
-          "stake_signature": "d928bf3964f623ce1966eef3f7d4dc6d89c2cbfe4c898ca4315996864d5866b8081166d7ccf65dfad8fd88a026cd58d704638dbd2b164335dcb463c04c075715"
+          "ownership_id": "4jtzC3h1bGzYPHCgdm3oiWSwKMQmatx98Rd25a92j9zd",
+          "stake_entry": {
+            "auth_data": "00c402e3444095b1e88e2366b857f389046b8beb613eab3eac25cbc4e958edc85c5d85f768173af46d5e3fa51250384eaf4556238a3213ac628f08f1f077739ad13f1a0459020672abf0713c9be474ccb854f1769c2d70e5bff6b921aa051f338954e2d0fc00f969adaf6e93d554c2f69217422b79501c482c3aa8fe709a82a4ab",
+            "next": "00042bc189a5165aef499d0edb40cafe76ddb469ec81ac4aa4eb9feb0a6c2cfc5d"
+          }
         }
       },
       {
@@ -97,8 +101,11 @@
             42,
             251
           ],
-          "ownership_public_key": "734c990c6e18e2787c6d302097b6e624f979c035fa27e9d07b2375d64057f6ba",
-          "stake_signature": "7764de1b449a724c8ba6c6e082ec738a62be320ffe95c353a0f8b2ac7d2d8689fb80da73c23213a26555314b29fac66112c028ce48e18e22a240b135290b658d"
+          "ownership_id": "Hy1zA7gfDdwp8Gt5rkxAVqqW3rCPem4kYRDeaV8SAMSj",
+          "stake_entry": {
+            "auth_data": "00c94fc8379f2f8401660cb885dc5a77caa2b36169c12ad2fc5b3b6a6e9af943a761b8b1748c9475d2f38cc4876b55c2c581d4698603af0c6168e30c43a96efdf072d52f276cb8e079d1e0f06eae337197c2c5c05871bbe4de461b6fbda7ce3d6c280ce24782a5eaff7388c70cb8df0d44ee8f25ba06d1e8694d56ab0abdf673ea",
+            "next": "0078e3e4747206d813bbafb5555ccf9df92db04ced9941ade339f4fc3fd6cdeb99"
+          }
         }
       },
       {
@@ -137,8 +144,11 @@
             113,
             209
           ],
-          "ownership_public_key": "1e88684905306c8867818142d79622cb648f5e0a48f979608adffff6cf2e441f",
-          "stake_signature": "e34acf0055f7207fc757fedfc1f6dab07b8a0863223e38afd99132e9192275cad60d0697db7be9c240ab96416adc456223de9c207245837c58eff2a8e3ecf6c6"
+          "ownership_id": "2obFgNoEuwTaQaw7J1uSS6orehDDgE1mNzo86G6ZgKAu",
+          "stake_entry": {
+            "auth_data": "00c79664aaf0b9c717fda5ec73660834436cab6e260a14750beb76a8a7b45b574c04d12c232e57ad6a034086f0f48537424c63a82a59530fbcd457672a16fbead7640691ab799b5bde8b4874593bb398e25244468bd2cd54d1acd495a4c8d906e7082d0ef878c52b75caddbcc9f96b38f94065950f369382e18c8a26504c9fca35",
+            "next": "00e8c21f381001bd733ddadac8bc5732505c8970ce7e1bfcb478f9875e77a84796"
+          }
         }
       },
       {
@@ -177,15 +187,18 @@
             17,
             10
           ],
-          "ownership_public_key": "44cb48cc1cbbdb3cf2e566d22a54412a821c115c6a3d65f0f2c7e1db82cdbca9",
-          "stake_signature": "279cf5a7818a267113568d85b05d25d5c46bb27a93d0d6d29a523c9f2ddf986e8d6e75c65a0089998312433e92602aa021d3f863c9995753e3b67637b4c41a9d"
+          "ownership_id": "7FQa9P9C6WAo2u5NtJsrfPtarrjJ3rVB54sHDihiRYmP",
+          "stake_entry": {
+            "auth_data": "007a2a57f78088ca4fa54f262416a845b96036cb41c44ac6c7ac99143f68d07809becd045f3b94b5bea067727e103da74c62297bdacfeabe96b13b176b4f0fb798279d68471b3e563dbf532e2a6126080d51a34910f377a8a7e28f555f7c95b569151250a6c7867d44d8590a964c19026262bf1fac31cc34bb4e35f300ca848735",
+            "next": "00199fc32c797f2853f32ac0dce8a3aadf580d6e1a283fc60ebf52c7768ec11aa8"
+          }
         }
       },
       {
         "supply_account": {
           "recipient": {
             "identified": {
-              "key": "b6eb0e598cb1fbcb8ffbb13bd9deef0e4ad4c6bb39382873f7b509e05f3214fa"
+              "key": "00f00d1e62fa5278307fbde46d84a022f571caff20c157b2831884cc3cc2ae4c29"
             }
           },
           "balance": 10000
@@ -195,7 +208,7 @@
         "supply_account": {
           "recipient": {
             "identified": {
-              "key": "97f49d1c817434bdefbeef2fa856d1602de6ca4ed6f72c6f3853be7e6fe97f47"
+              "key": "000223ea30d102c2f066dca058325ee30af21c23cf4dd9a16c3e4ab190ba0b49cb"
             }
           },
           "balance": 20000

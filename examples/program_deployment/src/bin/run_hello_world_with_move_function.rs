@@ -115,7 +115,8 @@ async fn main() {
             let message = (WRITE_FUNCTION_ID, greeting.into_bytes());
             let account_id = account_id.parse().unwrap();
             let account = Actor::new(account_id, program_account_id);
-            let (fee, payer_nonce, payer_key) = fee_paid_by(&wallet_core, cli.payer).await.unwrap();
+            let (fee, payer_nonce, payer_signer) =
+                fee_paid_by(&wallet_core, cli.payer).await.unwrap();
             let nonces = BTreeMap::from([(cli.payer, payer_nonce)]);
             let message = public_transaction::Message {
                 admission_evidence: admission_evidence(&wallet_core, account_id)
@@ -130,7 +131,7 @@ async fn main() {
                 )
                 .unwrap()
             };
-            let witness_set = public_transaction::WitnessSet::for_message(&message, &[&payer_key]);
+            let witness_set = public_transaction::WitnessSet::sign(&message, &[payer_signer]);
             let tx = PublicTransaction::new(message, witness_set);
 
             // Submit the transaction
@@ -165,7 +166,8 @@ async fn main() {
             let source = Actor::new(from, program_account_id);
             let destination = Actor::new(to, program_account_id);
             let message = (MOVE_DATA_FUNCTION_ID, moved, to);
-            let (fee, payer_nonce, payer_key) = fee_paid_by(&wallet_core, cli.payer).await.unwrap();
+            let (fee, payer_nonce, payer_signer) =
+                fee_paid_by(&wallet_core, cli.payer).await.unwrap();
             let nonces = BTreeMap::from([(cli.payer, payer_nonce)]);
             let message = public_transaction::Message {
                 admission_evidence: [from, to]
@@ -181,7 +183,7 @@ async fn main() {
                 )
                 .unwrap()
             };
-            let witness_set = public_transaction::WitnessSet::for_message(&message, &[&payer_key]);
+            let witness_set = public_transaction::WitnessSet::sign(&message, &[payer_signer]);
             let tx = PublicTransaction::new(message, witness_set);
 
             // Submit the transaction

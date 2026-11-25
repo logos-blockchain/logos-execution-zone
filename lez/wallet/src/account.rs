@@ -11,7 +11,7 @@ pub struct Label(String);
 
 impl Label {
     /// Characters an account label can't contain: `@`, `:` and `/` are the separators of an
-    /// actor (`<account>[@program][:sign]`, `pda:<owner>/<seed>`, `pk:<hex>`, `Public/<id>`,
+    /// actor (`<account>[@program][:sign]`, `pda:<owner>/<seed>`, `ik:<hex>`, `Public/<id>`,
     /// `m/<path>`), so a label holding one would be read as something else.
     pub const RESERVED_CHARS: [char; 3] = ['@', ':', '/'];
 

@@ -1,11 +1,14 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::account::AccountId;
+use lee_core::{
+    account::{AccountId, Nonce},
+    signing_key::SigningKeyState,
+};
 use sha2::{Digest as _, digest::FixedOutput as _};
 
 use super::{message::Message, witness_set::WitnessSet};
-use crate::InvalidTransaction;
+use crate::{InvalidTransaction, SignedTransaction, public_transaction::WitnessEntry};
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PrivacyPreservingTransaction {
@@ -40,21 +43,8 @@ impl PrivacyPreservingTransaction {
         hasher.finalize_fixed().into()
     }
 
-    pub fn check_stateless(&self) -> Result<Vec<AccountId>, InvalidTransaction> {
-        let signers = self.signer_account_ids();
-        self.message.check_signers(&signers)?;
-        if !self.witness_set.signatures_are_valid_for(&self.message) {
-            return Err(InvalidTransaction::Signature);
-        }
-        Ok(signers)
-    }
-
     pub(crate) fn signer_account_ids(&self) -> Vec<AccountId> {
-        self.witness_set
-            .signatures_and_public_keys()
-            .iter()
-            .map(|(_, public_key)| AccountId::from(public_key))
-            .collect()
+        self.message.nonces.keys().copied().collect()
     }
 
     #[must_use]
@@ -67,35 +57,65 @@ impl PrivacyPreservingTransaction {
 
         acc_set.into_iter().collect()
     }
+
+    /// Whether the proof verifies against the message: the part of its check that no head state
+    /// changes.
+    #[must_use]
+    pub fn has_valid_proof(&self) -> bool {
+        self.witness_set
+            .proof
+            .is_valid_for(&self.message.public_context, &self.message.execution)
+    }
+}
+
+impl SignedTransaction for PrivacyPreservingTransaction {
+    fn check_stateless(&self) -> Result<Vec<AccountId>, InvalidTransaction> {
+        let signers = self.signer_account_ids();
+        if self.witness_set.entries().len() != signers.len() {
+            return Err(InvalidTransaction::Nonces);
+        }
+        self.message.check_signers()?;
+        crate::transaction_message::check_auth_data(&signers, self.witness_set.entries())?;
+        Ok(signers)
+    }
+
+    fn nonces(&self) -> &BTreeMap<AccountId, Nonce> {
+        &self.message.nonces
+    }
+
+    fn witness_entries(&self) -> &[WitnessEntry] {
+        self.witness_set.entries()
+    }
+
+    fn message_with_keys(&self, next: &[SigningKeyState]) -> [u8; 32] {
+        self.message.message_with_keys(next)
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use lee_core::account::Nonce;
+
     use crate::{
-        AccountId, PrivacyPreservingTransaction, PrivateKey, PublicKey,
+        PrivacyPreservingTransaction,
         privacy_preserving_transaction::{
             circuit::Proof, message::tests::message_for_tests, witness_set::WitnessSet,
         },
+        test_utils::TestSigner,
     };
-
-    fn keys_for_tests() -> (PrivateKey, PrivateKey, AccountId, AccountId) {
-        let key1 = PrivateKey::try_new([1; 32]).unwrap();
-        let key2 = PrivateKey::try_new([2; 32]).unwrap();
-        let addr1 = AccountId::from(&PublicKey::new_from_private_key(&key1));
-        let addr2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
-        (key1, key2, addr1, addr2)
-    }
 
     fn proof_for_tests() -> Proof {
         Proof(vec![1, 2, 3, 4, 5])
     }
 
     fn transaction_for_tests() -> PrivacyPreservingTransaction {
-        let (key1, key2, _, _) = keys_for_tests();
-
         let message = message_for_tests();
 
-        let witness_set = WitnessSet::for_message(&message, proof_for_tests(), &[&key1, &key2]);
+        let entries = [TestSigner::new(1), TestSigner::new(2)]
+            .iter()
+            .map(|signer| signer.entry(Nonce(0), &message.hash()))
+            .collect();
+        let witness_set = WitnessSet::from_raw_parts(entries, proof_for_tests());
         PrivacyPreservingTransaction::new(message, witness_set)
     }
 

@@ -20,6 +20,7 @@ fee_core.workspace = true
 sequencer_bridge.workspace = true
 sequencer_stake_core.workspace = true
 
+borsh.workspace = true
 serde.workspace = true
 hex.workspace = true
 tracing.workspace = true

@@ -124,7 +124,7 @@ fn transfer(nonce: u128, amount: u128) -> LeeTransaction {
         nonce,
         initial_public_user_accounts()[1].account_id,
         amount,
-        &initial_pub_accounts_private_keys()[0].pub_sign_key,
+        &lee::test_utils::TestSigner::from(&initial_pub_accounts_private_keys()[0].secret),
     )
 }
 

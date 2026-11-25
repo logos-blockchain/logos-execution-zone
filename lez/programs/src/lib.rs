@@ -623,8 +623,8 @@ mod inner {
             fn system_upgrader_header_cannot_be_updated() {
                 let (mut state, ids) = staged();
                 let header_before = state.get_account_by_id(system_upgrader_account_id());
-                let signer = lee::PrivateKey::try_new([0x44; 32]).unwrap();
-                let signer_id = AccountId::from(&lee::PublicKey::new_from_private_key(&signer));
+                let signer = lee::test_utils::TestSigner::new(0x44);
+                let signer_id = signer.account_id();
                 let header = Actor::new(system_upgrader_account_id(), PROGRAM_LOADER_ACCOUNT_ID);
 
                 let message = public_transaction::Message::try_new(
@@ -637,7 +637,7 @@ mod inner {
                     },
                 )
                 .unwrap();
-                let witness_set = public_transaction::WitnessSet::for_message(&message, &[&signer]);
+                let witness_set = lee::test_utils::witness_for(&message, &[&signer]);
                 let err = state
                     .transition_from_public_transaction(
                         &PublicTransaction::new(message, witness_set),

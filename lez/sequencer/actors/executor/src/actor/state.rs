@@ -168,6 +168,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
         }
     }
 
+    pub const fn online_mut(&mut self) -> Result<&mut online::OnlineState<S, B>> {
+        if let Self::Online(online) = self {
+            Ok(online)
+        } else {
+            Err(Error::NotOnline)
+        }
+    }
+
     /// Modify internal state by value.
     ///
     /// In case of `f` failing or cancelling a [`Self::Error`] will be set as the current state.
