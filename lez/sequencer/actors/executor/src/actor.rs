@@ -9,7 +9,6 @@ use fee_core::validity::FeeError;
 use futures::{
     FutureExt as _, StreamExt as _, TryFutureExt as _, TryStreamExt as _, future::ready, stream,
 };
-use glob::Pattern;
 use kameo::{
     actor::{ActorId, ActorRef, WeakActorRef},
     error::ActorStopReason,
@@ -17,10 +16,7 @@ use kameo::{
     message::{Context, Message},
     reply::DelegatedReply,
 };
-use kameo_actors::{
-    broker::{Broker, Subscribe, Unsubscribe},
-    pubsub::PubSub,
-};
+use kameo_actors::pubsub::PubSub;
 use lee::Account;
 use lee_core::{
     BlockId, EncryptedNote, MembershipProof,
@@ -29,7 +25,7 @@ use lee_core::{
 use sequencer_actors_common::{Reply, SendErrorExt};
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
-    protocol::{ChannelEvent, ChannelEventKind, Ed25519Key, PublisherEvent},
+    protocol::{ChannelEvent, ChannelEventKind, Ed25519Key},
 };
 use sequencer_channel_signing_actor::{ChannelSigningActor, protocol as channel_signing_protocol};
 use sequencer_core::{StakeConfigUpdate, config::SequencerConfig};
@@ -75,7 +71,6 @@ pub struct Args<S: StorageActorTrait, B: BedrockActorTrait> {
     pub stake_config_pubsub_ref: ActorRef<PubSub<StakeConfigUpdate>>,
     pub slasher_ref: ActorRef<SlasherActor<S>>,
     pub channel_signer_ref: ActorRef<ChannelSigningActor>,
-    pub bedrock_broker_ref: ActorRef<Broker<ChannelEvent>>,
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> Clone for Args<S, B> {
@@ -88,12 +83,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Clone for Args<S, B> {
             stake_config_pubsub_ref: self.stake_config_pubsub_ref.clone(),
             slasher_ref: self.slasher_ref.clone(),
             channel_signer_ref: self.channel_signer_ref.clone(),
-            bedrock_broker_ref: self.bedrock_broker_ref.clone(),
         }
     }
 }
 
-/// Marks where the channel events published before this start end in the mailbox.
+/// Marks where the channel events of the Bedrock actor of an earlier start end in the mailbox.
 struct ChannelEventsResumed;
 
 /// Restarts along with the Bedrock actor of its channel, so it is meant to be supervised.
@@ -136,24 +130,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> kameo::Actor for ExecutorActor<
             .await
             .map_err(Error::from_infallible_bedrock_error)?;
 
-        // Once unsubscribed, the events published so far are all in the mailbox, ahead of the
-        // marker.
-        args.bedrock_broker_ref
-            .ask(Unsubscribe {
-                topic: None,
-                actor_id: actor_ref.id(),
-            })
-            .await
-            .map_err(Error::from_infallible_bedrock_error)?;
+        // The reset stopped that actor, so its events are all in the mailbox, ahead of the marker.
         actor_ref
             .tell(ChannelEventsResumed)
-            .await
-            .map_err(Error::from_infallible_bedrock_error)?;
-        args.bedrock_broker_ref
-            .ask(Subscribe {
-                topic: Pattern::new(&format!("channel/{channel_id}/**")).expect("Valid pattern"),
-                recipient: actor_ref.clone().recipient(),
-            })
             .await
             .map_err(Error::from_infallible_bedrock_error)?;
 
@@ -167,17 +146,16 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> kameo::Actor for ExecutorActor<
         if !bedrock_started {
             return Err(Error::BedrockActorStartFailed);
         }
-        let anchor = args
-            .storage_ref
-            .ask(sequencer_storage_actor::protocol::GetZoneAnchor)
-            .await?;
-        bedrock_pool_ref
-            .ask(sequencer_bedrock_actor::protocol::FollowChannel { channel_id, anchor })
+        let follow_start = bedrock_pool_ref
+            .ask(sequencer_bedrock_actor::protocol::FollowChannel {
+                channel_id,
+                recipient: actor_ref.clone().reply_recipient(),
+            })
             .await
             .map_err(SendErrorExt::flatten)?;
 
         let storage_ref = args.storage_ref.clone();
-        let state = State::initialize(args).await?;
+        let state = State::initialize(args, follow_start).await?;
 
         Ok(Self {
             state,
@@ -852,7 +830,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountTransactions>
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEvent> for ExecutorActor<S, B> {
-    type Reply = Result<()>;
+    /// An `Err` stops the Bedrock actor, and so this one, as they are linked.
+    type Reply = std::result::Result<(), sequencer_bedrock_actor::protocol::ChannelEventFailed>;
 
     async fn handle(
         &mut self,
@@ -871,87 +850,42 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEvent> for Execu
             );
         }
 
-        match msg.event {
-            ChannelEventKind::FinalizedBlock(finalized_block) => {
+        let event = msg.event;
+        match &mut self.state {
+            State::Error(details) => panic!("Actor has encountered an error state: {details}"),
+            State::Bootstrapping(_) => {
                 // A failure can leave the chain ahead of the store, so it ends in the error state.
-                self.state
-                    .modify(|mut state| async move {
-                        match &mut state {
-                            State::Error(details) => {
-                                panic!("Actor has encountered an error state: {details}")
-                            }
-                            State::Bootstrapping(bootstrapping) => {
-                                bootstrapping.on_finalized_block(&finalized_block).await?;
-                            }
-                            // Online state listens for Publisher events
-                            State::Online(_) => {}
+                Box::pin(self.state.modify(|state| async move {
+                    match state {
+                        State::Bootstrapping(bootstrapping) => {
+                            bootstrapping.on_channel_event(&event).await
                         }
-                        Ok(state)
-                    })
-                    .await?;
+                        State::Error(_) | State::Online(_) => Ok(state),
+                    }
+                }))
+                .await
+                .map_err(anyhow::Error::from)?;
             }
-            ChannelEventKind::FinalizedUpTo(up_to) => {
-                self.state
-                    .modify(|state| async move {
-                        match state {
-                            State::Error(details) => {
-                                panic!("Actor has encountered an error state: {details}")
-                            }
-                            State::Bootstrapping(bootstrapping) => {
-                                bootstrapping.on_finalized_up_to(up_to).await
-                            }
-                            // Online state listens for Publisher events
-                            State::Online(_) => Ok(state),
-                        }
-                    })
-                    .await?;
-            }
-            ChannelEventKind::FinalizedDeposit(deposit) => match &self.state {
-                State::Error(details) => panic!("Actor has encountered an error state: {details}"),
-                State::Bootstrapping(bootstrapping) => {
-                    bootstrapping.on_finalized_deposit(&deposit).await?;
+            State::Online(online) => match &event {
+                ChannelEventKind::Update(channel_update) => {
+                    online
+                        .sequencer_mut()
+                        .on_channel_update(channel_update)
+                        .await;
                 }
-                // Online state listens for Publisher events
-                State::Online(_) => {}
-            },
-            ChannelEventKind::FinalizedWithdrawal(withdrawal) => match &self.state {
-                State::Error(details) => panic!("Actor has encountered an error state: {details}"),
-                State::Bootstrapping(bootstrapping) => {
-                    bootstrapping.on_finalized_withdrawal(&withdrawal).await?;
+                ChannelEventKind::Ready => {}
+                ChannelEventKind::Turn {
+                    our_turn_to_write,
+                    starting_slot,
+                } => {
+                    online.update_turn(*our_turn_to_write, *starting_slot);
                 }
-                // Online state listens for Publisher events
-                State::Online(_) => {}
-            },
-            ChannelEventKind::Publisher(publisher_event) => match &mut self.state {
-                State::Error(details) => panic!("Actor has encountered an error state: {details}"),
-                State::Bootstrapping(_) => {
-                    warn!(
-                        "Ignoring a publisher event while bootstrapping, as no publisher runs yet"
-                    );
+                ChannelEventKind::Config(live_channel_config) => {
+                    online
+                        .sequencer_mut()
+                        .on_channel_config_update(live_channel_config)
+                        .await;
                 }
-                State::Online(online) => match &*publisher_event {
-                    PublisherEvent::Update(channel_update) => {
-                        online
-                            .sequencer_mut()
-                            .on_channel_update(channel_update)
-                            .await;
-                    }
-                    PublisherEvent::Turn {
-                        our_turn_to_write,
-                        starting_slot,
-                    } => {
-                        online.update_turn(*our_turn_to_write, *starting_slot);
-                    }
-                    PublisherEvent::Config(live_channel_config) => {
-                        online
-                            .sequencer_mut()
-                            .on_channel_config_update(live_channel_config)
-                            .await;
-                    }
-                    PublisherEvent::Deposits(deposits) => {
-                        online.sequencer_mut().on_observed_deposits(deposits).await;
-                    }
-                },
             },
         }
 

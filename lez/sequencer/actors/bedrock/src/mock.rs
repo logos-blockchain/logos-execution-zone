@@ -13,16 +13,17 @@ use kameo::{
 pub use sequencer_actors_common::mock::ReplaceReply;
 use sharding_pool_actor::ShardingKey;
 
-pub use self::canned_channel::{CannedChannel, SharedChannel, checkpoint_at, mock_msg_of};
+pub use self::canned_channel::{CannedChannel, SharedChannel, mock_msg_of};
 use crate::{
     BedrockActorTrait, Result,
     error::Error,
     protocol::{
-        AccreditedKeys, ChangeChannelConfig, ChannelId, ChannelReadStream, ChannelSeq,
-        CheckChannelExists, CheckIsOurTurn, CreateChannel, FilterFinallyAbsent, FollowChannel,
+        AccreditedKeys, ChangeChannelConfig, ChannelId, ChannelReadStream, CheckChannelExists,
+        CheckIsOurTurn, CreateChannel, FilterFinallyAbsent, FollowChannel, FollowStart,
         GetAccreditedKeys, GetChannelNotes, GetChannelTipMessageId, GetChannelTipSlot,
-        InitializeChannelPublisher, MsgId, NoteId, PrepareConfig, PreparePin, PreparedConfig,
-        PreparedPin, PublishBlock, PublishOutcome, PublishPin, ReadChannel, SequencerKey, Slot,
+        InitializeChannelPublisher, MsgId, NoteId, PendingBlock, PrepareConfig, PreparePin,
+        PreparedConfig, PreparedPin, PublishBlock, PublishOutcome, PublishPin, ReadChannel,
+        SequencerKey, Slot,
     },
 };
 
@@ -65,14 +66,14 @@ mockall::mock! {
         pub fn handle_follow_channel(
             &mut self,
             msg: FollowChannel,
-            ctx: &mut Context<Self, Result<()>>
-        ) -> Result<()>;
+            ctx: &mut Context<Self, Result<FollowStart>>
+        ) -> Result<FollowStart>;
 
         pub fn handle_initialize_channel_publisher(
             &mut self,
             msg: InitializeChannelPublisher,
-            ctx: &mut Context<Self, Result<Option<ChannelSeq>>>
-        ) -> Result<Option<ChannelSeq>>;
+            ctx: &mut Context<Self, Result<Vec<PendingBlock>>>
+        ) -> Result<Vec<PendingBlock>>;
 
         pub fn handle_create_channel(
             &mut self,
@@ -200,7 +201,7 @@ impl Message<Replace> for MockBedrockActor {
 }
 
 impl Message<FollowChannel> for MockBedrockActor {
-    type Reply = Result<()>;
+    type Reply = Result<FollowStart>;
 
     async fn handle(
         &mut self,
@@ -212,7 +213,7 @@ impl Message<FollowChannel> for MockBedrockActor {
 }
 
 impl Message<InitializeChannelPublisher> for MockBedrockActor {
-    type Reply = Result<Option<ChannelSeq>>;
+    type Reply = Result<Vec<PendingBlock>>;
 
     async fn handle(
         &mut self,

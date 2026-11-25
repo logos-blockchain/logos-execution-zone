@@ -14,10 +14,10 @@ use logos_blockchain_zone_sdk::core::{
     mantle::{TxHash, ledger::Inputs, ops::channel::deposit::Metadata},
 };
 use sequencer_bedrock_actor::{
-    mock::{CannedChannel, MockBedrockActor, SharedChannel, checkpoint_at, mock_msg_of},
+    mock::{CannedChannel, MockBedrockActor, SharedChannel, mock_msg_of},
     protocol::{
-        ChannelEntry, ChannelEvent, ChannelEventKind, ChannelSeq, ChannelUpdate, DepositInfo,
-        MsgId, PublisherEvent, Slot, ViewChange,
+        ChannelEntry, ChannelEvent, ChannelEventKind, ChannelUpdate, DepositInfo, FollowStart,
+        MsgId, PendingBlock, PublishOutcome, Slot, ViewChange,
     },
 };
 use sequencer_core::config::SequencerConfig;
@@ -29,7 +29,7 @@ use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_us
 use tokio::test;
 
 use super::{
-    catching_up, executor_args, finalized_at, finalized_up_to, sequencer_config,
+    channel_event, executor_args, feed, finalized_at, finalized_updates, ready, sequencer_config,
     spawn_bedrock_pool, spawn_executor, stored_chain::genesis,
 };
 use crate::{
@@ -58,15 +58,36 @@ async fn start(
     .await
 }
 
+/// Replays `blocks` as the channel's finalized history, all at slot 0, and reports it read up to
+/// the node's LIB.
+async fn replay(
+    config: &SequencerConfig,
+    executor: &ActorRef<Executor>,
+    blocks: &[Block],
+) -> Result<()> {
+    let channel_id = config.bedrock_config.channel_id;
+    feed(
+        executor,
+        finalized_updates(
+            channel_id,
+            blocks.iter().map(|block| finalized_at(block, 0)),
+        ),
+    )
+    .await?;
+    executor.ask(ready(channel_id)).await?;
+    Ok(())
+}
+
 /// A follow update carrying nothing, to fill in the fields a test does not
 /// exercise via `..empty_channel_update()`.
 fn empty_channel_update() -> ChannelUpdate {
     ChannelUpdate {
-        checkpoint: checkpoint_at(MsgId::from([0; 32])),
-        seq: ChannelSeq::mocked(0),
+        lib_slot: Slot::from(0),
+        finalized_config: MsgId::root(),
         view: ViewChange::Extension(Vec::new()),
         finalized: Vec::new(),
         deposits: Vec::new(),
+        pending_deposits: Vec::new(),
         withdrawals: Vec::new(),
         undecodable: Vec::new(),
         finalized_signers: Vec::new(),
@@ -198,7 +219,12 @@ async fn an_empty_store_does_not_create_a_channel_that_is_only_configured() {
                 let mut bedrock = MockBedrockActor::default();
                 bedrock
                     .expect_handle_follow_channel()
-                    .returning(|_msg, _ctx| Ok(()));
+                    .returning(|_msg, _ctx| {
+                        Ok(FollowStart {
+                            finalized_config: MsgId::root(),
+                            lib_slot: None,
+                        })
+                    });
                 bedrock
                     .expect_handle_get_channel_tip_slot()
                     .returning(|_msg, _ctx| Ok(Some(Slot::from(5))));
@@ -253,24 +279,22 @@ async fn a_start_over_a_stored_genesis_bootstraps_from_the_channel() -> Result<(
     }
     .share();
     let executor = start(&config, &store, &channel).await?;
-    executor
-        .ask(ChannelEvent {
-            channel_id: config.bedrock_config.channel_id,
-            event: ChannelEventKind::FinalizedBlock(Arc::new(finalized_at(&genesis, 0))),
-        })
-        .await?;
-    executor
-        .ask(finalized_up_to(config.bedrock_config.channel_id, 0))
-        .await?;
+    let channel_id = config.bedrock_config.channel_id;
+    feed(
+        &executor,
+        finalized_updates(channel_id, [finalized_at(&genesis, 0)]),
+    )
+    .await?;
+    executor.ask(ready(channel_id)).await?;
 
     assert_eq!(executor.ask(GetLastBlockId).await?, 1);
     Ok(())
 }
 
 /// The channel tip at startup can be orphaned and never finalize, so bootstrapping completes once
-/// it replays the history the node has finalized, even with no message at that slot.
+/// the finalized history is read up to the node's LIB, even with no message there.
 #[test]
-async fn bootstrapping_completes_at_the_finalized_slot_without_reaching_the_tip() -> Result<()> {
+async fn bootstrapping_completes_once_ready_without_reaching_the_tip() -> Result<()> {
     let (config, _home) = sequencer_config();
     let channel_id = config.bedrock_config.channel_id;
     let genesis = genesis();
@@ -283,26 +307,24 @@ async fn bootstrapping_completes_at_the_finalized_slot_without_reaching_the_tip(
     .share();
     let executor = start(&config, &SharedStore::default(), &channel).await?;
 
-    executor
-        .ask(ChannelEvent {
-            channel_id,
-            event: ChannelEventKind::FinalizedBlock(Arc::new(finalized_at(&genesis, 10))),
-        })
-        .await?;
-    executor.ask(catching_up(channel_id, 49, 50)).await?;
+    feed(
+        &executor,
+        finalized_updates(channel_id, [finalized_at(&genesis, 10)]),
+    )
+    .await?;
     let bootstrapping = executor.ask(GetStatus).await?;
     assert!(
         matches!(bootstrapping, ExecutorStatus::Bootstrapping { .. }),
         "{bootstrapping:?}"
     );
 
-    executor.ask(finalized_up_to(channel_id, 50)).await?;
+    executor.ask(ready(channel_id)).await?;
     let online = executor.ask(GetStatus).await?;
     assert!(
         matches!(online, ExecutorStatus::Online { height: 1, .. }),
         "{online:?}"
     );
-    assert_eq!(channel.lock().replayed_up_to, Some(Slot::from(50)));
+    assert_eq!(channel.lock().publisher_inits, 1);
     Ok(())
 }
 
@@ -321,20 +343,18 @@ async fn an_empty_chain_bootstraps_until_a_block_finalizes() -> Result<()> {
     .share();
     let executor = start(&config, &SharedStore::default(), &channel).await?;
 
-    executor.ask(finalized_up_to(channel_id, 5)).await?;
+    executor.ask(ready(channel_id)).await?;
     let bootstrapping = executor.ask(GetStatus).await?;
     assert!(
         matches!(bootstrapping, ExecutorStatus::Bootstrapping { .. }),
         "{bootstrapping:?}"
     );
 
-    executor
-        .ask(ChannelEvent {
-            channel_id,
-            event: ChannelEventKind::FinalizedBlock(Arc::new(finalized_at(&genesis, 6))),
-        })
-        .await?;
-    executor.ask(finalized_up_to(channel_id, 6)).await?;
+    feed(
+        &executor,
+        finalized_updates(channel_id, [finalized_at(&genesis, 6)]),
+    )
+    .await?;
     let online = executor.ask(GetStatus).await?;
     assert!(
         matches!(online, ExecutorStatus::Online { height: 1, .. }),
@@ -343,46 +363,9 @@ async fn an_empty_chain_bootstraps_until_a_block_finalizes() -> Result<()> {
     Ok(())
 }
 
-/// The executor follows its channel from the anchor it stored, so a restart resumes the finalized
-/// history where the replay left off.
+/// Bootstrapping records the finalized deposits the replayed updates carry.
 #[test]
-async fn the_channel_is_followed_from_the_stored_anchor() -> Result<()> {
-    let (config, _home) = sequencer_config();
-    let channel_id = config.bedrock_config.channel_id;
-    let genesis = genesis();
-    let channel = CannedChannel {
-        tip_slot: Some(Slot::from(10)),
-        tip: Some(mock_msg_of(&genesis)),
-        ..CannedChannel::absent()
-    }
-    .share();
-    let store = SharedStore::default();
-
-    {
-        let executor = start(&config, &store, &channel).await?;
-        executor
-            .ask(ChannelEvent {
-                channel_id,
-                event: ChannelEventKind::FinalizedBlock(Arc::new(finalized_at(&genesis, 10))),
-            })
-            .await?;
-        executor.ask(finalized_up_to(channel_id, 10)).await?;
-        executor.stop_gracefully().await?;
-        executor.wait_for_shutdown().await;
-    }
-    let anchor = store.lock().anchor;
-    assert!(anchor.is_some(), "the replay stores an anchor");
-
-    let _executor = start(&config, &store, &channel).await?;
-
-    assert_eq!(channel.lock().follows, vec![None, anchor]);
-    Ok(())
-}
-
-/// Bootstrapping records the deposits the channel replay carries, and hands the publisher the slot
-/// it replayed up to, past which the publisher reports them instead.
-#[test]
-async fn bootstrapping_records_replayed_deposits_up_to_the_publisher_handoff() -> Result<()> {
+async fn bootstrapping_records_replayed_deposits() -> Result<()> {
     let (config, _home) = sequencer_config();
     let channel_id = config.bedrock_config.channel_id;
     let genesis = genesis();
@@ -394,25 +377,17 @@ async fn bootstrapping_records_replayed_deposits_up_to_the_publisher_handoff() -
     .share();
     let store = SharedStore::default();
     let executor = start(&config, &store, &channel).await?;
-    let deposit_event = |op_id| ChannelEvent {
-        channel_id,
-        event: ChannelEventKind::FinalizedDeposit(Arc::new(deposit(op_id))),
-    };
 
-    executor.ask(deposit_event([1; 32])).await?;
-    executor
-        .ask(ChannelEvent {
-            channel_id,
-            event: ChannelEventKind::FinalizedBlock(Arc::new(finalized_at(&genesis, 10))),
-        })
-        .await?;
-    executor.ask(finalized_up_to(channel_id, 10)).await?;
+    for mut update in finalized_updates(channel_id, [finalized_at(&genesis, 10)]) {
+        if let ChannelEventKind::Update(channel_update) = &mut update.event {
+            channel_update.deposits.push(deposit([1; 32]));
+        }
+        executor.ask(update).await?;
+    }
     assert!(matches!(
         executor.ask(GetStatus).await?,
-        ExecutorStatus::Online { .. }
+        ExecutorStatus::Bootstrapping { .. }
     ));
-    assert_eq!(channel.lock().replayed_up_to, Some(Slot::from(10)));
-    executor.ask(deposit_event([2; 32])).await?;
 
     let recorded: Vec<[u8; 32]> = store
         .lock()
@@ -420,11 +395,7 @@ async fn bootstrapping_records_replayed_deposits_up_to_the_publisher_handoff() -
         .iter()
         .map(|record| record.deposit_op_id.0)
         .collect();
-    assert_eq!(
-        recorded,
-        [[1; 32]],
-        "the publisher reports what follows the handoff"
-    );
+    assert_eq!(recorded, [[1; 32]]);
     Ok(())
 }
 
@@ -453,17 +424,7 @@ async fn a_restart_restores_the_state_from_storage() -> Result<()> {
     }
 
     let executor = start(&config, &store, &channel).await?;
-    for block in store.blocks() {
-        executor
-            .ask(ChannelEvent {
-                channel_id: config.bedrock_config.channel_id,
-                event: ChannelEventKind::FinalizedBlock(Arc::new(finalized_at(&block, 0))),
-            })
-            .await?;
-    }
-    executor
-        .ask(finalized_up_to(config.bedrock_config.channel_id, 0))
-        .await?;
+    replay(&config, &executor, &store.blocks()).await?;
 
     // The recipient gained exactly the transfer; the sender also paid a real fee.
     assert!(
@@ -506,17 +467,7 @@ async fn a_block_produced_after_a_restart_chains_on_the_stored_tip() -> Result<(
     let expected_prev_meta = store.lock().tip().expect("block 2 is stored");
 
     let executor = start(&config, &store, &channel).await?;
-    for block in store.blocks() {
-        executor
-            .ask(ChannelEvent {
-                channel_id: config.bedrock_config.channel_id,
-                event: ChannelEventKind::FinalizedBlock(Arc::new(finalized_at(&block, 0))),
-            })
-            .await?;
-    }
-    executor
-        .ask(finalized_up_to(config.bedrock_config.channel_id, 0))
-        .await?;
+    replay(&config, &executor, &store.blocks()).await?;
 
     let tx = transfer(1, 50);
     executor
@@ -534,6 +485,102 @@ async fn a_block_produced_after_a_restart_chains_on_the_stored_tip() -> Result<(
         "the new block must chain on the stored tip"
     );
     assert_carries(&new_block, &[tx]);
+    Ok(())
+}
+
+/// A stop after a publish but before its block is stored leaves zone-sdk holding the block as
+/// pending, refusing any other block on its parent. A restart must recover the block so production
+/// chains on it.
+#[test]
+async fn a_restart_recovers_a_published_block_the_store_lost() -> Result<()> {
+    let (config, _home) = sequencer_config();
+    let store = SharedStore::default();
+    let channel = CannedChannel::absent().share();
+    let recipient = initial_public_user_accounts()[1].clone();
+    let balance_to_move = 10;
+
+    let store_before_publish = {
+        let executor = start(&config, &store, &channel).await?;
+        let store_before_publish = store.lock().clone();
+        executor
+            .ask(Transaction {
+                transaction: transfer(0, balance_to_move),
+                origin: TransactionOrigin::User,
+            })
+            .await?;
+        executor.ask(ProduceBlock).await?;
+        executor.stop_gracefully().await?;
+        executor.wait_for_shutdown().await;
+        store_before_publish
+    };
+    let [genesis, block2] =
+        <[Block; 2]>::try_from(store.blocks()).expect("genesis and block 2 are stored");
+    *store.lock() = store_before_publish;
+    channel.lock().pending_blocks = vec![PendingBlock {
+        block: block2.clone(),
+        outcome: PublishOutcome {
+            this_msg: mock_msg_of(&block2),
+            parent: mock_msg_of(&genesis),
+            released_notes: Vec::new(),
+        },
+    }];
+
+    let executor = start(&config, &store, &channel).await?;
+    replay(&config, &executor, std::slice::from_ref(&genesis)).await?;
+    assert_eq!(stored_ids(&store), [1, 2], "block 2 must be recovered");
+    assert_eq!(
+        executor
+            .ask(GetAccountBalance {
+                account_id: recipient.account_id
+            })
+            .await?,
+        recipient.balance + balance_to_move,
+        "the recovered block's transfer must apply"
+    );
+
+    executor.ask(ProduceBlock).await?;
+    let block3 = store.blocks().pop().expect("block 3 is stored");
+    assert_eq!(block3.header.block_id, 3);
+    assert_eq!(
+        block3.header.prev_block_hash, block2.header.hash,
+        "block 3 must chain on the recovered block"
+    );
+    Ok(())
+}
+
+#[test]
+async fn a_restart_keeps_a_pending_block_the_store_holds() -> Result<()> {
+    let (config, _home) = sequencer_config();
+    let store = SharedStore::default();
+    let channel = CannedChannel::absent().share();
+
+    {
+        let executor = start(&config, &store, &channel).await?;
+        executor.ask(ProduceBlock).await?;
+        executor.stop_gracefully().await?;
+        executor.wait_for_shutdown().await;
+    }
+    let [genesis, block2] =
+        <[Block; 2]>::try_from(store.blocks()).expect("genesis and block 2 are stored");
+    channel.lock().pending_blocks = vec![PendingBlock {
+        block: block2.clone(),
+        outcome: PublishOutcome {
+            this_msg: mock_msg_of(&block2),
+            parent: mock_msg_of(&genesis),
+            released_notes: Vec::new(),
+        },
+    }];
+
+    let executor = start(&config, &store, &channel).await?;
+    replay(&config, &executor, std::slice::from_ref(&genesis)).await?;
+    executor.ask(ProduceBlock).await?;
+
+    assert_eq!(stored_ids(&store), [1, 2, 3]);
+    assert_eq!(
+        store.lock().blocks[&3].header.prev_block_hash,
+        block2.header.hash,
+        "block 3 must chain on the pending block"
+    );
     Ok(())
 }
 
@@ -559,39 +606,6 @@ async fn the_pin_the_genesis_publish_leaves_survives_a_lagging_channel_read() ->
         stored_ids(&store),
         [1, 2],
         "the first turn must produce, pinned on what the genesis publish left"
-    );
-    Ok(())
-}
-
-/// The sdk can deliver a checkpoint it built before our publishes, whose tip is
-/// root on a channel that did not exist yet. Believing it would rewind the pin
-/// onto a channel we have since filled.
-#[test]
-async fn a_buffered_startup_checkpoint_cannot_rewind_the_pin() -> Result<()> {
-    let (config, _home) = sequencer_config();
-    let store = SharedStore::default();
-    let executor = start(&config, &store, &CannedChannel::absent().share()).await?;
-
-    // Built before our publishes, so it names none of them and its tip is root.
-    executor
-        .ask(ChannelEvent {
-            channel_id: config.bedrock_config.channel_id,
-            event: ChannelEventKind::Publisher(Arc::new(PublisherEvent::Update(Box::new(
-                ChannelUpdate {
-                    checkpoint: checkpoint_at(MsgId::root()),
-                    ..empty_channel_update()
-                },
-            )))),
-        })
-        .await?;
-    executor.ask(ProduceBlock).await?;
-
-    // The channel refuses a publish chained on anything but our genesis, so a
-    // pin rewound onto root would fail the turn.
-    assert_eq!(
-        stored_ids(&store),
-        [1, 2],
-        "the turn after a stale startup checkpoint must still produce"
     );
     Ok(())
 }
@@ -626,15 +640,7 @@ async fn a_restart_restores_the_head_tier_and_recovers_from_an_orphan() -> Resul
         ..CannedChannel::empty()
     });
     let executor = start(&config, &store, &channel).await?;
-    executor
-        .ask(ChannelEvent {
-            channel_id: config.bedrock_config.channel_id,
-            event: ChannelEventKind::FinalizedBlock(Arc::new(finalized_at(&genesis, 0))),
-        })
-        .await?;
-    executor
-        .ask(finalized_up_to(config.bedrock_config.channel_id, 0))
-        .await?;
+    replay(&config, &executor, std::slice::from_ref(&genesis)).await?;
     assert_eq!(executor.ask(GetLastBlockId).await?, 2);
 
     // The L1 orphans block 2 and adopts a competing empty block 2'.
@@ -648,16 +654,13 @@ async fn a_restart_restores_the_head_tier_and_recovers_from_an_orphan() -> Resul
     executor
         .ask(ChannelEvent {
             channel_id: config.bedrock_config.channel_id,
-            event: ChannelEventKind::Publisher(Arc::new(PublisherEvent::Update(Box::new(
-                ChannelUpdate {
-                    checkpoint: checkpoint_at(block2_prime_msg),
-                    view: ViewChange::Conflict {
-                        canonical: vec![entry(&block2_prime, &genesis)],
-                        orphaned: vec![entry(&block2, &genesis)],
-                    },
-                    ..empty_channel_update()
+            event: ChannelEventKind::Update(Box::new(ChannelUpdate {
+                view: ViewChange::Conflict {
+                    canonical: vec![entry(&block2_prime, &genesis)],
+                    orphaned: vec![entry(&block2, &genesis)],
                 },
-            )))),
+                ..empty_channel_update()
+            })),
         })
         .await?;
 
@@ -707,12 +710,10 @@ async fn a_restart_reanchors_on_the_persisted_final_snapshot() -> Result<()> {
         executor
             .ask(ChannelEvent {
                 channel_id: config.bedrock_config.channel_id,
-                event: ChannelEventKind::Publisher(Arc::new(PublisherEvent::Update(Box::new(
-                    ChannelUpdate {
-                        finalized: vec![entry(&block2, &store.blocks()[0])],
-                        ..empty_channel_update()
-                    },
-                )))),
+                event: ChannelEventKind::Update(Box::new(ChannelUpdate {
+                    finalized: vec![entry(&block2, &store.blocks()[0])],
+                    ..empty_channel_update()
+                })),
             })
             .await?;
         executor.stop_gracefully().await?;
@@ -732,30 +733,18 @@ async fn a_restart_reanchors_on_the_persisted_final_snapshot() -> Result<()> {
     // and an orphan report can no longer revert it.
     let executor = start(&config, &store, &channel).await?;
     let blocks = store.blocks();
-    for block in &blocks {
-        executor
-            .ask(ChannelEvent {
-                channel_id: config.bedrock_config.channel_id,
-                event: ChannelEventKind::FinalizedBlock(Arc::new(finalized_at(block, 0))),
-            })
-            .await?;
-    }
+    replay(&config, &executor, &blocks).await?;
     executor
-        .ask(finalized_up_to(config.bedrock_config.channel_id, 0))
-        .await?;
-    executor
-        .ask(ChannelEvent {
-            channel_id: config.bedrock_config.channel_id,
-            event: ChannelEventKind::Publisher(Arc::new(PublisherEvent::Update(Box::new(
-                ChannelUpdate {
-                    view: ViewChange::Conflict {
-                        canonical: Vec::new(),
-                        orphaned: vec![entry(&blocks[1], &blocks[0])],
-                    },
-                    ..empty_channel_update()
+        .ask(channel_event(
+            config.bedrock_config.channel_id,
+            ChannelEventKind::Update(Box::new(ChannelUpdate {
+                view: ViewChange::Conflict {
+                    canonical: Vec::new(),
+                    orphaned: vec![entry(&blocks[1], &blocks[0])],
                 },
-            )))),
-        })
+                ..empty_channel_update()
+            })),
+        ))
         .await?;
 
     assert_eq!(executor.ask(GetLastBlockId).await?, 2);
@@ -815,9 +804,11 @@ async fn a_failed_channel_read_at_startup_is_retried() -> Result<()> {
 #[test]
 async fn the_status_follows_bootstrapping_to_online() -> Result<()> {
     let (config, _home) = sequencer_config();
+    let channel_id = config.bedrock_config.channel_id;
     let genesis = genesis();
     let channel = CannedChannel {
         tip: Some(mock_msg_of(&genesis)),
+        lib_slot: Some(Slot::from(5)),
         ..CannedChannel::empty()
     }
     .share();
@@ -828,23 +819,19 @@ async fn the_status_follows_bootstrapping_to_online() -> Result<()> {
         matches!(
             bootstrapping,
             ExecutorStatus::Bootstrapping {
-                target: None,
+                target: Some(target),
                 replayed_up_to: None,
                 height: None,
-            }
+            } if target == Slot::from(5)
         ),
         "{bootstrapping:?}"
     );
 
-    executor
-        .ask(ChannelEvent {
-            channel_id: config.bedrock_config.channel_id,
-            event: ChannelEventKind::FinalizedBlock(Arc::new(finalized_at(&genesis, 0))),
-        })
-        .await?;
-    executor
-        .ask(catching_up(config.bedrock_config.channel_id, 0, 5))
-        .await?;
+    feed(
+        &executor,
+        finalized_updates(channel_id, [finalized_at(&genesis, 0)]),
+    )
+    .await?;
     let catching = executor.ask(GetStatus).await?;
     assert!(
         matches!(
@@ -858,9 +845,7 @@ async fn the_status_follows_bootstrapping_to_online() -> Result<()> {
         "{catching:?}"
     );
 
-    executor
-        .ask(finalized_up_to(config.bedrock_config.channel_id, 5))
-        .await?;
+    executor.ask(ready(channel_id)).await?;
 
     let online = executor.ask(GetStatus).await?;
     assert!(

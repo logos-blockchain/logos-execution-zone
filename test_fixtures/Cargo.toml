@@ -36,7 +36,6 @@ futures.workspace = true
 hex.workspace = true
 jsonrpsee = { workspace = true, features = ["ws-client"] }
 kameo.workspace = true
-kameo_actors.workspace = true
 tracing.workspace = true
 num-bigint.workspace = true
 serde.workspace = true

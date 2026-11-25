@@ -8,17 +8,15 @@ use std::{
 use anyhow::anyhow;
 use common::block::Block;
 use logos_blockchain_zone_sdk::core::mantle::ledger::{Inputs, NoteId, Utxo};
-use sequencer_storage_actor::protocol::ZoneAnchorRecord;
 
 use super::MockBedrockActor;
 use crate::{
     Result,
     error::Error,
     protocol::{
-        AccreditedKeys, ChannelReadStream, ChannelSeq, CreateChannel, FilterFinallyAbsent,
-        HeaderId, InitializeChannelPublisher, MsgId, PreparePin, PreparedPin, PublishBlock,
-        PublishOutcome, PublishPin, ReadChannel, SequencerCheckpoint, SequencerKey, Slot,
-        WithdrawArg, ZoneMessage,
+        AccreditedKeys, ChannelReadStream, CreateChannel, FilterFinallyAbsent, FollowStart, MsgId,
+        PendingBlock, PreparePin, PreparedPin, PublishBlock, PublishOutcome, PublishPin,
+        ReadChannel, SequencerKey, Slot, WithdrawArg, ZoneMessage,
     },
 };
 
@@ -49,13 +47,12 @@ pub struct CannedChannel {
     pub pins: Arc<Mutex<Vec<Vec<NoteId>>>>,
     /// Keys whose removal config is reported not yet final; every other key's is.
     pub pending_removals: BTreeSet<SequencerKey>,
-    /// Channel sequence the last publish left the channel at.
-    pub seq: u64,
-    /// [`InitializeChannelPublisher::replayed_up_to`] of the last publisher initialized.
-    pub replayed_up_to: Option<Slot>,
-    /// [`FollowChannel::anchor`](crate::protocol::FollowChannel::anchor) of every follow, in
-    /// order.
-    pub follows: Vec<Option<ZoneAnchorRecord>>,
+    /// [`FollowStart::lib_slot`] a follow reports.
+    pub lib_slot: Option<Slot>,
+    /// Publishers initialized so far.
+    pub publisher_inits: u32,
+    /// What an initialized publisher reports zone-sdk holds as pending.
+    pub pending_blocks: Vec<PendingBlock>,
 }
 
 impl CannedChannel {
@@ -98,17 +95,20 @@ impl SharedChannel {
         mock.expect_handle_initialize_channel_publisher()
             .returning({
                 let channel = self.clone();
-                move |msg: InitializeChannelPublisher, _ctx| {
+                move |_msg, _ctx| {
                     let mut channel = channel.lock();
-                    channel.replayed_up_to = msg.replayed_up_to;
-                    Ok(Some(ChannelSeq::mocked(channel.seq)))
+                    channel.publisher_inits = channel.publisher_inits.saturating_add(1);
+                    Ok(channel.pending_blocks.clone())
                 }
             });
         mock.expect_handle_follow_channel().returning({
             let channel = self.clone();
-            move |msg, _ctx| {
-                channel.lock().follows.push(msg.anchor);
-                Ok(())
+            move |_msg, _ctx| {
+                let channel = channel.lock();
+                Ok(FollowStart {
+                    finalized_config: MsgId::root(),
+                    lib_slot: channel.lib_slot,
+                })
             }
         });
         mock.expect_handle_check_channel_exists().returning({
@@ -130,8 +130,8 @@ impl SharedChannel {
                 Ok(channel.tip_slot)
             }
         });
-        // The config entry is the root, which `checkpoint_at` reports
-        // finalized, so the committee reads as final.
+        // The config entry is the root, which a follow reports finalized, so the committee reads
+        // as final.
         mock.expect_handle_get_accredited_keys().returning({
             let channel = self.clone();
             move |_msg, _ctx| {
@@ -184,7 +184,6 @@ impl SharedChannel {
                       block,
                       withdrawals,
                       parent,
-                      expected_seq: _,
                   },
                   _ctx| {
                 let outcome = channel.publish(&block, parent, mock_released_notes(&withdrawals))?;
@@ -201,7 +200,6 @@ impl SharedChannel {
                       block,
                       parent,
                       notes,
-                      expected_seq: _,
                   },
                   _ctx| {
                 let (prepare_pin_fails, channel_notes) = {
@@ -234,7 +232,6 @@ impl SharedChannel {
                       channel_id: _,
                       prepared: pin,
                       signatures: _,
-                      expected_seq: _,
                   },
                   _ctx| {
                 let (block, notes) = prepared
@@ -302,12 +299,9 @@ impl SharedChannel {
         let this_msg = mock_msg_of(block);
         let tip = channel.tip.replace(this_msg);
         let parent = parent.or(tip).unwrap_or_else(MsgId::root);
-        channel.seq = channel.seq.saturating_add(1);
         Ok(PublishOutcome {
             this_msg,
             parent,
-            checkpoint: checkpoint_at(this_msg),
-            seq: ChannelSeq::mocked(channel.seq),
             released_notes,
         })
     }
@@ -324,20 +318,6 @@ impl SharedChannel {
 #[must_use]
 pub fn mock_msg_of(block: &Block) -> MsgId {
     MsgId::from(block.header.hash.0)
-}
-
-/// A checkpoint whose channel tip is `tip`, with the root as its finalized config entry.
-#[must_use]
-pub fn checkpoint_at(tip: MsgId) -> SequencerCheckpoint {
-    SequencerCheckpoint {
-        last_msg_id: tip,
-        pending_txs: Vec::new(),
-        lib: HeaderId::from([0; 32]),
-        lib_slot: Slot::from(0),
-        channel_notes: Vec::new(),
-        finalized_config: MsgId::root(),
-        funding: Vec::new(),
-    }
 }
 
 /// The entries of `messages` past `after` (exclusive), as `ReadChannel` serves them.
