@@ -1030,6 +1030,51 @@ fn a_private_root_grant_crossing_out_passes_along_public_holders() {
     }));
 }
 
+// A vault returns its sender's grant by `from` alone; a private vault runs the same code as a
+// public one, seeing the grant under the address the sender calls from.
+#[test]
+fn a_private_and_a_public_receiver_see_a_senders_grant_under_its_address() {
+    let (alice_keys, vault_keys) = (Keys::new(1), Keys::new(2));
+    let alice = holder(&alice_keys);
+    let public_vault = actor(3, 9);
+    for vault in [holder(&vault_keys), public_vault] {
+        let mut script = Script::default()
+            .presenting([SenderPresentation::Blinded(OPENING)])
+            .on(
+                alice,
+                sending_when(None, vec![send_to(vault).with_grants([alice])]),
+            )
+            .on(vault, |input| {
+                let from = input.from.expect("the vault is called");
+                echo(
+                    input,
+                    Response::keep_state().send(send_to(from).with_grants([from])),
+                )
+            });
+
+        whole(
+            public_context(vec![public_vault]),
+            &[alice_keys.regular(true), vault_keys.regular(false)],
+            root(alice),
+            &mut script,
+        )
+        .unwrap();
+
+        let received = &script.log[1];
+        assert_eq!(received.from, Some(blinded(alice)), "vault {vault:?}");
+        assert_eq!(
+            received.grants,
+            BTreeSet::from([blinded(alice)]),
+            "vault {vault:?}"
+        );
+        assert_eq!(
+            authorized(&script),
+            vec![(alice, true), (vault, false), (alice, true)],
+            "vault {vault:?}"
+        );
+    }
+}
+
 // Alice's private root also hands the public `router` its grant over bob, which crosses out under
 // bob's own presentation rather than alice's address.
 #[test]

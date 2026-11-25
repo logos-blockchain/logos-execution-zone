@@ -173,6 +173,11 @@ pub trait ExecutionEnvironment {
         Err(ExecutionError::MissingSenderPresentation { sender }.into())
     }
 
+    /// Presents `grant` as a sender by default.
+    fn present_grant(&mut self, grant: Actor) -> Result<SenderPresentation, Self::Error> {
+        self.present(grant)
+    }
+
     /// Admits no account by default.
     fn admits(&mut self, _account_id: AccountId) -> Result<bool, Self::Error> {
         Ok(false)
@@ -1309,7 +1314,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
     }
 
     // A sync message carries exactly the grants its sender attaches, each of which it must hold. A
-    // private sender holds grants over its accounts' actors, a public one as they were presented.
+    // private sender may name a grant it holds under any address of its account.
     fn attach(
         &self,
         sender: Actor,
@@ -1320,37 +1325,36 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         attached
             .into_iter()
             .map(|actor| {
-                let grant = if private_sender {
-                    self.resolve(actor)
-                } else {
-                    actor
-                };
-                if held.contains(&grant) {
-                    Ok(grant)
-                } else {
-                    Err(ExecutionError::UnheldGrant { actor })
-                }
+                let target = self.resolve(actor);
+                held.iter()
+                    .copied()
+                    .find(|&grant| {
+                        grant == actor || (private_sender && self.resolve(grant) == target)
+                    })
+                    .ok_or(ExecutionError::UnheldGrant { actor })
             })
             .collect()
     }
 
-    // A grant from a private sender crosses to the public side presented: one over the sender's
-    // account under the address it sends from, one over another private account as presented anew.
+    // A private sender's grant over its own account carries the address it sends from; one over
+    // another private account crossing to the public side is presented anew.
     fn present_grants<E: ExecutionEnvironment>(
         &mut self,
         from: Actor,
         grants: BTreeSet<Actor>,
+        crosses_out: bool,
         environment: &mut E,
     ) -> Result<BTreeSet<Actor>, E::Error> {
         let sender_account = self.resolve(from).account_id;
         let mut presented = BTreeSet::new();
         for grant in grants {
-            presented.insert(if !self.is_private(&grant.account_id) {
-                grant
-            } else if grant.account_id == sender_account {
+            presented.insert(if self.resolve(grant).account_id == sender_account {
                 Actor::new(from.account_id, grant.program_account_id)
+            } else if crosses_out && self.is_private(&grant.account_id) {
+                let presentation = environment.present_grant(grant)?;
+                self.presented(grant, presentation)?
             } else {
-                self.present(grant, environment)?
+                grant
             });
         }
         Ok(presented)
@@ -1361,7 +1365,16 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         actor: Actor,
         environment: &mut E,
     ) -> Result<Actor, E::Error> {
-        match environment.present(actor)? {
+        let presentation = environment.present(actor)?;
+        Ok(self.presented(actor, presentation)?)
+    }
+
+    fn presented(
+        &mut self,
+        actor: Actor,
+        presentation: SenderPresentation,
+    ) -> Result<Actor, ExecutionError> {
+        match presentation {
             SenderPresentation::Canonical => Ok(actor),
             SenderPresentation::Blinded(factor) => {
                 let alias = actor.account_id.blinded(&factor);
@@ -1460,9 +1473,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         }
         let reached = delivery.envelope.to;
         let call_reply = |to: Actor| (input.from == Some(to)).then_some(reached);
-        let crosses_out = |executor: &Self, to: Actor| {
-            executor.is_private(&actor.account_id) && executor.public_context.runs_publicly(to)
-        };
+        let private_sender = self.is_private(&actor.account_id);
         let mut sent = Vec::new();
         for SyncMessage {
             to,
@@ -1473,8 +1484,9 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         {
             let attached = self.attach(actor, &grants, attached)?;
             let from = self.sender(actor, call_reply(to), environment)?;
-            let attached = if crosses_out(self, to) {
-                self.present_grants(from, attached, environment)?
+            let attached = if private_sender {
+                let crosses_out = self.public_context.runs_publicly(to);
+                self.present_grants(from, attached, crosses_out, environment)?
             } else {
                 attached
             };
@@ -1554,12 +1566,20 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
                 private_seed_grant(issuer, &delivery.pda_seeds, &self.witnesses[*witness_index])
             }
         };
-        // A private receiver holds a grant under the account its presentation names.
+        // A private receiver holds a grant over its own account under the account, any other under
+        // the address its sender named, as a public receiver does.
         let mut grants: BTreeSet<Actor> = if self.is_private(&account_id) {
             delivery
                 .grants
                 .iter()
-                .map(|&grant| self.resolve(grant))
+                .map(|&grant| {
+                    let resolved = self.resolve(grant);
+                    if resolved.account_id == account_id {
+                        resolved
+                    } else {
+                        grant
+                    }
+                })
                 .collect()
         } else {
             delivery.grants.clone()
