@@ -97,8 +97,8 @@ pub struct WrappedTokenConfig {
     /// authority's behalf, or `None` for top-level only.
     ///
     /// Exists because a PDA cannot sign: a program-held authority acts only
-    /// through its own program. Unset closes the ambient path where any program
-    /// the authority signed for could rewrite the list.
+    /// through its own program. Unset, no program the authority attaches its
+    /// grant to can rewrite the list.
     pub governance: Option<AccountId>,
     /// The account allowed to change `sources`, or `None` for a list fixed at
     /// genesis.

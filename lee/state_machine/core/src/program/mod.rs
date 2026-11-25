@@ -429,7 +429,7 @@ pub struct ReceiveInput {
     /// The actor that sent this message, at the address it presented; `None` when the transaction
     /// itself submitted it.
     pub from: Option<Actor>,
-    /// Input is authorized when signed by the receiver or authorized by owning program.
+    /// Whether the delivery carries a grant over the receiver.
     pub is_authorized: bool,
     /// The actors whose grants this handler holds and may attach to its sync messages.
     pub grants: BTreeSet<Actor>,

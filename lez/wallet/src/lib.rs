@@ -2828,9 +2828,8 @@ impl<C: WalletSequencerClient> WalletCore<C> {
     }
 
     // Executes the message as published. Its recipient takes part as `accounts` declare its
-    // account, unauthorized otherwise, and each declared program missing from `programs` runs
-    // from its deployment. Authorization is per account: authorizing the recipient's account
-    // authorizes the published message too.
+    // account, and each declared program missing from `programs` runs from its deployment. The
+    // published message carries no grant, so authorizing the recipient authorizes nothing it asks.
     pub async fn receive_pending_message_with(
         &mut self,
         PendingMessage {
@@ -5024,8 +5023,8 @@ mod tests {
         ));
     }
 
-    // The recipient pays the receipt's fee, but its key authorizes only the fee entry: the transfer
-    // the message asks of it runs only when the caller mentions it as authorizing.
+    // The recipient pays the receipt's fee, but its key authorizes only the fee entry: the message
+    // carries no grant, so the transfer it asks of the recipient never runs.
     #[tokio::test]
     async fn a_receipt_runs_unauthorized_even_when_its_caller_authorizes_the_recipient() {
         let (mut wallet, _home, _sequencer, served) = wallet_with_a_received_message().await;

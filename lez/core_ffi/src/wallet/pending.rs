@@ -169,9 +169,9 @@ pub unsafe extern "C" fn wallet_ffi_receive_pending_message(
 /// Receive a pending message as `wallet_ffi_receive_pending_message` does, beside the accounts,
 /// programs, async delivery and predicted cross messages a transaction takes.
 ///
-/// The recipient takes part unauthorized unless `account_mentions` declares its account.
-/// Authorization is per account: a mention authorizing the recipient's account authorizes the
-/// published message too. Each declared program missing from `programs` runs from its deployment.
+/// The recipient takes part as `account_mentions` declares its account. The published message
+/// carries no grant, so a mention authorizing the recipient authorizes nothing it asks. Each
+/// declared program missing from `programs` runs from its deployment.
 ///
 /// # Parameters
 /// - `handle`: Valid wallet handle

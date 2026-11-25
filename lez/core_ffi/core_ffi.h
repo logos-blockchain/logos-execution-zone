@@ -1118,7 +1118,7 @@ typedef struct FfiAccountIdentity {
  * An account identity with the program actor state it selects, whether it authorizes, and the
  * openings of the blinded addresses it is reached at.
  *
- * `authorizes` covers that actor alone for a public account, the whole account for a private one.
+ * `authorizes` covers that actor alone, for a public account and a private one alike.
  *
  * `address_openings` must point to `address_openings_size` openings, or be null if that is 0.
  */
@@ -2759,9 +2759,9 @@ enum FfiOperationError wallet_ffi_receive_pending_message(struct WalletHandle *h
  * Receive a pending message as `wallet_ffi_receive_pending_message` does, beside the accounts,
  * programs, async delivery and predicted cross messages a transaction takes.
  *
- * The recipient takes part unauthorized unless `account_mentions` declares its account.
- * Authorization is per account: a mention authorizing the recipient's account authorizes the
- * published message too. Each declared program missing from `programs` runs from its deployment.
+ * The recipient takes part as `account_mentions` declares its account. The published message
+ * carries no grant, so a mention authorizing the recipient authorizes nothing it asks. Each
+ * declared program missing from `programs` runs from its deployment.
  *
  * # Parameters
  * - `handle`: Valid wallet handle

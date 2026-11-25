@@ -1507,8 +1507,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
                 environment.promote(placement, self.candidates.next(placement), &body)?
             };
             if promoted {
-                // A promoted async message keeps transaction credentials but inherits no
-                // authorization.
+                // A promoted async message carries no grant.
                 sent.push(Delivery::sent(
                     body.from,
                     body.to,
