@@ -7708,3 +7708,102 @@ async fn a_transaction_dropped_at_build_time_frees_its_nonce() {
         crate::pending::Admission::New
     );
 }
+
+#[tokio::test]
+async fn an_orphaned_transaction_holds_its_nonce_again() {
+    let channel = CannedChannel::empty().share();
+    let (mut sequencer, mempool_handle) =
+        start_sequencer_on(setup_sequencer_config(), channel.clone()).await;
+    let accounts = initial_pub_accounts_private_keys();
+    let signer = TestSigner::from(&accounts[0].secret);
+    let transfer_at = |nonce, amount| {
+        common::test_utils::create_transaction_native_token_transfer(
+            accounts[0].account_id,
+            nonce,
+            accounts[1].account_id,
+            amount,
+            &signer,
+        )
+    };
+    let included = transfer_at(0, 1);
+    assert_eq!(
+        sequencer.admit(&included).await.unwrap(),
+        crate::pending::Admission::New
+    );
+    mempool_handle
+        .push((TransactionOrigin::User, included.clone()))
+        .await
+        .unwrap();
+    sequencer.record_pending(&included);
+    sequencer.run_production_turn().await.unwrap();
+    // The next build frees the slot the included transaction filled.
+    sequencer.run_production_turn().await.unwrap();
+
+    reorg_to_genesis(&mut sequencer, &channel, CannedChannel::empty()).await;
+
+    assert!(matches!(
+        sequencer.admit(&transfer_at(0, 2)).await,
+        Err(crate::AdmissionError::Pending(
+            crate::pending::PendingRefusal::NoncePending { .. }
+        ))
+    ));
+    assert_eq!(
+        sequencer.admit(&transfer_at(1, 1)).await.unwrap(),
+        crate::pending::Admission::New,
+        "the next transaction is authenticated on top of the resubmitted one"
+    );
+}
+
+#[tokio::test]
+async fn an_orphaned_transaction_that_finds_the_mempool_full_frees_its_nonce() {
+    let channel = CannedChannel::empty().share();
+    let config = SequencerConfig {
+        mempool_max_size: 1,
+        ..setup_sequencer_config()
+    };
+    let (mut sequencer, mempool_handle) = start_sequencer_on(config, channel.clone()).await;
+    let accounts = initial_pub_accounts_private_keys();
+    let signer = TestSigner::from(&accounts[0].secret);
+    let transfer_at = |nonce, amount| {
+        common::test_utils::create_transaction_native_token_transfer(
+            accounts[0].account_id,
+            nonce,
+            accounts[1].account_id,
+            amount,
+            &signer,
+        )
+    };
+    let included = transfer_at(0, 1);
+    assert_eq!(
+        sequencer.admit(&included).await.unwrap(),
+        crate::pending::Admission::New
+    );
+    mempool_handle
+        .push((TransactionOrigin::User, included.clone()))
+        .await
+        .unwrap();
+    sequencer.record_pending(&included);
+    // Its slot is not pruned until the next build.
+    sequencer.run_production_turn().await.unwrap();
+
+    // Another account's transaction fills the mempool, so the orphan cannot go back.
+    let other = TestSigner::from(&accounts[1].secret);
+    let filler = common::test_utils::create_transaction_native_token_transfer(
+        accounts[1].account_id,
+        0,
+        accounts[0].account_id,
+        1,
+        &other,
+    );
+    mempool_handle
+        .push((TransactionOrigin::User, filler))
+        .await
+        .unwrap();
+    reorg_to_genesis(&mut sequencer, &channel, CannedChannel::empty()).await;
+
+    assert_eq!(
+        sequencer.admit(&transfer_at(0, 2)).await.unwrap(),
+        crate::pending::Admission::New,
+        "the dropped orphan frees its nonce"
+    );
+}

@@ -605,17 +605,21 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     fn resubmit_orphaned(&mut self, txs: Vec<LeeTransaction>) {
         for tx in txs {
             let tx_hash = tx.hash();
-            if let Err(err) = self
+            match self
                 .mempool
                 .handle()
                 .try_push((TransactionOrigin::User, tx.clone()))
             {
-                self.pending.remove(&tx);
-                warn!(
-                    %tx_hash,
-                    error = format_args!("{:#}", anyhow!(err)),
-                    "Dropping orphaned transaction on resubmit"
-                );
+                // Its slots may have been freed once it was included.
+                Ok(()) => self.record_pending(&tx),
+                Err(err) => {
+                    self.pending.remove(&tx);
+                    warn!(
+                        %tx_hash,
+                        error = format_args!("{:#}", anyhow!(err)),
+                        "Dropping orphaned transaction on resubmit"
+                    );
+                }
             }
         }
     }
