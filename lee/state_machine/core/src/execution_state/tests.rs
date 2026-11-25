@@ -685,7 +685,6 @@ fn a_seed_grant_reaches_only_the_messages_it_is_attached_to() {
     let (owner, forwarder, relay) = (actor(1, 9), actor(2, 7), actor(3, 8));
     let seed = PdaSeed::new([5; 32]);
     let vault = public_pda(owner.program_account_id, seed);
-    let vault_sibling = Actor::new(vault.account_id, id(6));
     let mut script = Script::default()
         .on(
             owner,
@@ -693,20 +692,16 @@ fn a_seed_grant_reaches_only_the_messages_it_is_attached_to() {
         )
         .on(
             vault,
-            sending_when(
-                Some(owner),
-                vec![send_to(relay).with_grants([vault]), send_to(vault_sibling)],
-            ),
+            sending_when(Some(owner), vec![send_to(relay).with_grants([vault])]),
         )
         .on(
             relay,
             sending(vec![send_to(vault).with_grants([vault]), send_to(vault)]),
         )
-        .on(vault_sibling, sending(Vec::new()))
         .on(forwarder, sending(vec![send_to(vault)]));
 
     public_transaction(
-        public_context(vec![owner, forwarder, relay, vault, vault_sibling]),
+        public_context(vec![owner, forwarder, relay, vault]),
         owner,
         &mut script,
     )
@@ -720,7 +715,6 @@ fn a_seed_grant_reaches_only_the_messages_it_is_attached_to() {
             (relay, false),
             (vault, true),
             (vault, false),
-            (vault_sibling, false),
             (forwarder, false),
             (vault, false),
         ]
@@ -826,29 +820,35 @@ fn an_async_root_to_a_signer_actor_carries_no_grant() {
 fn a_private_root_grants_only_the_actors_its_witness_marks() {
     let keys = Keys::new(1);
     let (marked, unmarked) = (holder(&keys), Actor::new(keys.regular_id(), id(7)));
-    let mut script = Script::default()
-        .on(
-            marked,
-            sending_when(
-                None,
-                vec![send_to(unmarked), send_to(marked).with_grants([marked])],
-            ),
-        )
-        .on(unmarked, sending(Vec::new()));
+    let mut script = Script::default().on(
+        marked,
+        sending(vec![send_to(unmarked).with_grants([unmarked])]),
+    );
 
-    private_part(
+    let result = private_part(
         PublicExecutionContext::default(),
         &[keys.regular(true)],
         root(marked),
         Vec::new(),
         &mut script,
+    );
+
+    assert!(matches!(
+        result,
+        Err(ExecutionError::UnheldGrant { actor }) if actor == unmarked
+    ));
+    assert_eq!(authorized(&script), vec![(marked, true)]);
+
+    let mut root_script = Script::default().on(unmarked, sending(Vec::new()));
+    private_part(
+        PublicExecutionContext::default(),
+        &[keys.regular(true)],
+        root(unmarked),
+        Vec::new(),
+        &mut root_script,
     )
     .unwrap();
-
-    assert_eq!(
-        authorized(&script),
-        vec![(marked, true), (unmarked, false), (marked, true)]
-    );
+    assert_eq!(authorized(&root_script), vec![(unmarked, false)]);
 }
 
 fn blinded(actor: Actor) -> Actor {
@@ -1183,20 +1183,52 @@ fn a_seeded_program_cannot_debit_another_actor_of_the_pda() {
     let (scam_holding, holding) = (Actor::new(vault, scam_token), Actor::new(vault, token));
     let mut script = Script::default()
         .on(pool, sending(vec![seeded_to(scam_holding, seed)]))
-        .on(scam_holding, sending(vec![send_to(holding)]))
-        .on(holding, sending(Vec::new()));
+        .on(
+            scam_holding,
+            sending(vec![send_to(holding).with_grants([holding])]),
+        );
 
-    public_transaction(
+    let result = public_transaction(
         public_context(vec![pool, scam_holding, holding]),
         pool,
         &mut script,
-    )
-    .unwrap();
-
-    assert_eq!(
-        authorized(&script),
-        vec![(pool, false), (scam_holding, true), (holding, false)]
     );
+
+    assert!(matches!(
+        result,
+        Err(ExecutionError::UnheldGrant { actor }) if actor == holding
+    ));
+}
+
+#[test]
+fn a_seeded_program_cannot_debit_another_actor_of_a_private_pda() {
+    let (keys, pda_keys) = (Keys::new(1), Keys::new(2));
+    let owner = holder(&keys);
+    let seed = PdaSeed::new([5; 32]);
+    let custody = Actor::new(pda_keys.pda_id(owner.program_account_id, seed), id(8));
+    let sibling = Actor::new(custody.account_id, id(7));
+    let mut script = Script::default()
+        .on(owner, sending(vec![seeded_to(custody, seed)]))
+        .on(
+            custody,
+            sending(vec![send_to(sibling).with_grants([sibling])]),
+        );
+
+    let result = private_part(
+        PublicExecutionContext::default(),
+        &[
+            keys.regular(false),
+            pda_keys.pda(owner.program_account_id, seed),
+        ],
+        root(owner),
+        Vec::new(),
+        &mut script,
+    );
+
+    assert!(matches!(
+        result,
+        Err(ExecutionError::UnheldGrant { actor }) if actor == sibling
+    ));
 }
 
 #[test]
@@ -1263,21 +1295,25 @@ fn a_signer_grant_reaches_its_actor_only_where_attached() {
 #[test]
 fn a_signature_authorizes_only_the_actors_marked_signer() {
     let (marked, unmarked) = (actor(1, 9), actor(1, 8));
-    let mut script = Script::default()
-        .on(marked, sending(vec![send_to(unmarked)]))
-        .on(unmarked, sending(vec![]));
+    let mut script = Script::default().on(
+        marked,
+        sending(vec![send_to(unmarked).with_grants([unmarked])]),
+    );
 
-    public_transaction(
+    let result = public_transaction(
         PublicExecutionContext::new(
             vec![(marked, Authority::Signer), (unmarked, Authority::None)],
             [marked.account_id],
         ),
         marked,
         &mut script,
-    )
-    .unwrap();
+    );
 
-    assert_eq!(authorized(&script), vec![(marked, true), (unmarked, false)]);
+    assert!(matches!(
+        result,
+        Err(ExecutionError::UnheldGrant { actor }) if actor == unmarked
+    ));
+    assert_eq!(authorized(&script), vec![(marked, true)]);
 }
 
 #[test]
@@ -1869,7 +1905,6 @@ fn a_private_seed_grant_reaches_only_the_messages_it_is_attached_to() {
     let owner = holder(&keys);
     let seed = PdaSeed::new([5; 32]);
     let custody = Actor::new(pda_keys.pda_id(owner.program_account_id, seed), id(8));
-    let forwarded = Actor::new(custody.account_id, id(7));
     let relay = holder(&relay_keys);
     let mut visited = false;
     let mut script = Script::default()
@@ -1881,7 +1916,7 @@ fn a_private_seed_grant_reaches_only_the_messages_it_is_attached_to() {
             let sync_messages = if std::mem::replace(&mut visited, true) {
                 Vec::new()
             } else {
-                vec![send_to(forwarded), send_to(relay).with_grants([custody])]
+                vec![send_to(relay).with_grants([custody])]
             };
             echo(
                 input,
@@ -1891,7 +1926,6 @@ fn a_private_seed_grant_reaches_only_the_messages_it_is_attached_to() {
                 },
             )
         })
-        .on(forwarded, sending(Vec::new()))
         .on(
             relay,
             sending(vec![send_to(custody).with_grants([custody])]),
@@ -1915,7 +1949,6 @@ fn a_private_seed_grant_reaches_only_the_messages_it_is_attached_to() {
         vec![
             (owner, false),
             (custody, true),
-            (forwarded, false),
             (relay, false),
             (custody, true),
             (custody, false),
