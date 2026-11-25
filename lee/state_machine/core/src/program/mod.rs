@@ -372,6 +372,13 @@ impl SyncMessage {
         self.grants.extend(grants);
         self
     }
+
+    /// Attaches the grant over the destination that `input` carried, if any.
+    #[must_use]
+    pub fn with_lent_grant(self, input: &ReceiveInput) -> Self {
+        let lent = input.grants.get(&self.to).copied();
+        self.with_grants(lent)
+    }
 }
 
 /// An asynchronous message that can be processed in a separate transaction.

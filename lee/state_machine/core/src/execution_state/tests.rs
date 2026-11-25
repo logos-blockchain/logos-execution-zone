@@ -2168,6 +2168,55 @@ fn a_public_part_publishes_live_events() {
     assert_eq!(events, vec![(ENTRY, event)]);
 }
 
+// A signer reads its native balance's state; the reply returns the grant it lent, so its handler is
+// authorized only when it lent it.
+#[test]
+fn a_state_read_reply_returns_the_grant_its_reader_lent() {
+    let reader = actor(1, 9);
+    let balance = Actor::native_balance(id(2));
+    for lend in [true, false] {
+        let mut script = Script::default()
+            .on(reader, move |input| {
+                let read = SyncMessage::new(balance, &native_token::Message::ReadState);
+                let sync_messages = if input.from.is_none() {
+                    vec![if lend {
+                        read.with_grants([reader])
+                    } else {
+                        read
+                    }]
+                } else {
+                    Vec::new()
+                };
+                echo(
+                    input,
+                    Response {
+                        sync_messages,
+                        ..Response::keep_state()
+                    },
+                )
+            })
+            .on(balance, |input| {
+                native_token::handle_message(input).unwrap_or_else(|error| panic!("{error}"))
+            });
+
+        public_transaction(
+            PublicExecutionContext::new(
+                vec![(reader, Authority::Signer), (balance, Authority::None)],
+                [reader.account_id],
+            ),
+            reader,
+            &mut script,
+        )
+        .unwrap();
+
+        assert_eq!(
+            authorized(&script),
+            vec![(reader, true), (balance, false), (reader, lend)],
+            "lend {lend}"
+        );
+    }
+}
+
 // A public root asks a private account's native balance to pay, attaching the payer's declared
 // signer grant; only a payer whose witness authorizes it can be declared.
 #[test]
