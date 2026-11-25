@@ -23,6 +23,7 @@ pub struct ClientConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IndexerConfig {
     #[serde(with = "humantime_serde")]
     pub consensus_info_polling_interval: Duration,
@@ -229,5 +230,19 @@ mod tests {
             ] }}"#
         );
         assert!(serde_json::from_str::<EventFilterConfig>(&json).is_err());
+    }
+
+    #[test]
+    fn unknown_indexer_field_is_rejected() {
+        let json = r#"{
+            "consensus_info_polling_interval": "1s",
+            "bedrock_config": { "addr": "http://localhost:18080" },
+            "channel_id": "0101010101010101010101010101010101010101010101010101010101010101",
+            "cross_zone": { "lock_target_zones": [] }
+        }"#;
+        let err = serde_json::from_str::<IndexerConfig>(json)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unknown field `cross_zone`"), "{err}");
     }
 }
