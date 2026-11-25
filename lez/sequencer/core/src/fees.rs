@@ -25,6 +25,12 @@ pub enum Error {
     #[error("payer {payer:?} holds a native balance actor state that is not canonically encoded")]
     PayerBalanceMalformed { payer: AccountId },
 
+    #[error(
+        "private transaction pays its fee in its proof without a fee fallback: fund the payer \
+         beforehand or declare a public payer"
+    )]
+    MissingFeeFallback,
+
     #[error("transaction fee classification failed")]
     Classification(#[from] ClassifyError),
 
@@ -59,8 +65,24 @@ pub fn screen(tx: &LeeTransaction, state: &lee::V03State) -> Result<()> {
     validate_static_tx(&view, &fee_state)?;
 
     let payer = match view {
-        // A fee paid inside the proof leaves nothing to check against the payer.
-        FeeTxView::Private { .. } => return Ok(()),
+        // A fee paid inside the proof leaves nothing to check against the payer, but only its
+        // fallback pays when the public part fails.
+        FeeTxView::Private { .. } => {
+            let has_fallback = matches!(
+                tx,
+                LeeTransaction::PrivacyPreserving(tx) if tx
+                    .message()
+                    .execution
+                    .proven_fee
+                    .as_ref()
+                    .is_some_and(|fee| fee.fallback.is_some())
+            );
+            return if has_fallback {
+                Ok(())
+            } else {
+                Err(Error::MissingFeeFallback)
+            };
+        }
         FeeTxView::Public { payer, .. } => payer,
     };
     if !tx.is_fee_authorized() {
@@ -319,7 +341,7 @@ mod tests {
         };
 
         let state = initial_state();
-        let private_tx = |reserve: Option<u128>| {
+        let private_message = |reserve: Option<u128>| {
             let mut message = PrivateMessage::default();
             message.execution.boundary = reserve
                 .map(|reserve| {
@@ -336,12 +358,25 @@ mod tests {
                     })
                 })
                 .into_iter()
+                .chain([BoundaryStep::EndPublicSubtree])
                 .collect();
+            message.execution.proven_fee = Some(lee_core::ProvenFee {
+                refund_to: None,
+                tip: 0,
+                fallback: Some(lee_core::FeeFallback {
+                    action: lee_core::PrivateAction::default(),
+                    boundary: message.execution.boundary.clone(),
+                }),
+            });
+            message
+        };
+        let wrap = |message| {
             LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
                 message,
                 PrivateWitnessSet::from_raw_parts(vec![], Proof::from_inner(vec![])),
             ))
         };
+        let private_tx = |reserve| wrap(private_message(reserve));
 
         // The reserve's value leaves the size alone.
         let size = private_tx(Some(0)).charged_bytes().unwrap();
@@ -354,6 +389,14 @@ mod tests {
         assert!(matches!(
             screen(&private_tx(Some(flat - 1)), &state),
             Err(Error::FeeCore(FeeError::PrivateFeeBelowRequired { .. }))
+        ));
+
+        // Without the fee fallback nothing pays when the public part fails.
+        let mut bare = private_message(Some(flat));
+        bare.execution.proven_fee = None;
+        assert!(matches!(
+            screen(&wrap(bare), &state),
+            Err(Error::MissingFeeFallback)
         ));
     }
 
