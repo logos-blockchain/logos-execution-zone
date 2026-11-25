@@ -23,6 +23,16 @@ pub const fn scripted() -> Program {
 
 #[must_use]
 #[inline]
+pub const fn grant_relay() -> Program {
+    use guests::{GRANT_RELAY_ELF, GRANT_RELAY_ID, GRANT_RELAY_PATH};
+
+    let _unused = GRANT_RELAY_PATH;
+
+    Program::new_unchecked(GRANT_RELAY_ID, Cow::Borrowed(GRANT_RELAY_ELF))
+}
+
+#[must_use]
+#[inline]
 pub const fn time_locked_transfer() -> Program {
     use guests::{TIME_LOCKED_TRANSFER_ELF, TIME_LOCKED_TRANSFER_ID, TIME_LOCKED_TRANSFER_PATH};
 

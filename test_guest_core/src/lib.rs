@@ -77,6 +77,15 @@ pub enum ForgeField {
     Message,
 }
 
+/// What `grant_relay` does with the grants it holds: passes them along `via`, and at the last hop
+/// debits each native balance among them by `amount` to `to`.
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
+pub struct Relay {
+    pub via: Vec<Actor>,
+    pub to: AccountId,
+    pub amount: Balance,
+}
+
 #[derive(Clone, Copy, BorshSerialize, BorshDeserialize)]
 pub struct PayoutRequest {
     pub to: AccountId,

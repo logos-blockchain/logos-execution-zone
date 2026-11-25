@@ -4,11 +4,11 @@
 use lee_core::{
     account::{Actor, ActorState},
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID, custody_transfer},
-    program::{ReceiveInput, Response, StateReply, read_input_frame},
+    program::{ReceiveInput, Response, StateReply, SyncMessage, read_input_frame},
 };
 use risc0_zkvm::guest::env;
 
-use crate::{ForgeField, LIVE_PAYOUT_SEED, PayoutRequest, Script};
+use crate::{ForgeField, LIVE_PAYOUT_SEED, PayoutRequest, Relay, Script};
 
 pub fn scripted(input: &ReceiveInput, script: Script) -> Response {
     if script.require_authorized {
@@ -26,6 +26,32 @@ pub fn scripted(input: &ReceiveInput, script: Script) -> Response {
         );
     }
     script.response
+}
+
+// Uses only the grants it holds, never naming whose they are, as a privacy-agnostic program would.
+pub fn grant_relay(input: &ReceiveInput, relay: Relay) -> Response {
+    let Relay {
+        mut via,
+        to,
+        amount,
+    } = relay;
+    if via.is_empty() {
+        return input
+            .grants
+            .iter()
+            .filter(|grant| grant.program_account_id == NATIVE_TOKEN_PROGRAM_ID)
+            .fold(Response::keep_state(), |response, &grant| {
+                response.send(
+                    SyncMessage::new(grant, &native_token::Message::Transfer { to, amount })
+                        .with_grants([grant]),
+                )
+            });
+    }
+    let next = via.remove(0);
+    Response::keep_state().send(
+        SyncMessage::new(next, &Relay { via, to, amount })
+            .with_grants(input.grants.iter().copied()),
+    )
 }
 
 pub fn forges_echo() -> ! {
