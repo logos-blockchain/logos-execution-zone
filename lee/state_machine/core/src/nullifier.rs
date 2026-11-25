@@ -103,8 +103,6 @@ impl From<&NullifierSecretKey> for NullifierPublicKey {
 
 pub type NullifierSecretKey = [u8; 32];
 
-// Copyable in the guest too: a fee fallback spends the nullifier its payer's action does, and
-// copying it is cheaper than deriving it again.
 #[derive(Clone, Copy, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(
     any(feature = "host", test),
