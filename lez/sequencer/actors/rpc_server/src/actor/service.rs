@@ -499,7 +499,6 @@ fn map_executor_error<M>(
             | sequencer_executor_actor::error::Error::StoreAndChannelDivergence(_)
             | sequencer_executor_actor::error::Error::StorageInconsistency(_)
             | sequencer_executor_actor::error::Error::InvalidSequencerKey
-            | sequencer_executor_actor::error::Error::CheckpointEncodingFailed(_)
             | sequencer_executor_actor::error::Error::InvalidGenesisConfig(_)
             | sequencer_executor_actor::error::Error::MissingGenesisConfig(_)
             | sequencer_executor_actor::error::Error::ChannelWithoutBlocks(_)

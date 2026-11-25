@@ -2,6 +2,7 @@
   "home": "/var/lib/sequencer_service",
   "max_num_tx_in_block": 20,
   "mempool_max_size": 10000,
+  "mempool_max_per_account": 16,
   "block_create_timeout": "10s",
   "retry_pending_blocks_timeout": "7s",
   "bedrock_config": {
@@ -57,10 +58,10 @@
             132,
             121
           ],
-          "ownership_id": "J5sTKEfnZpDxcdtSNFUqnZWfrKzup2tRnicZ1C4inCRT",
+          "ownership_id": "8t4tUsadtmUCJr64dPJJSMqiBPWe9Mvy9g9jpCg7h957",
           "stake_entry": {
-            "auth_data": "002b45b9f023194e95342a8518ed2ff50401e76b84f2909165c362b1d7830ba10956e1ddbcd2dfa78fc9215988b5a838d50aa1ead52c17a3743cc79cc9b0b5c6916a50b9f822896cc3d0bd3a870714a6140dd156b68fdf9c270ad95eed797707e6609b6395fe796d796ac846ec3cfd776e2d4761530771df315f82497990d00823",
-            "next": "009e8e552585153280ac5fe1f50efa4a9f70eb482f85db90c157725911b9cea3a7"
+            "auth_data": "00c9f919003d287ad060ae14898c62102023101cb702f47f5c7568f222ff8ee5a359668a278949d74c6881f4cafcde439653dc0526c0d68d71a25d4b60570fcabb4549eaafbce621b14f7596bfd98d8c761ad149dd76817148e8068db632147ab98873a98ab8831789e047f2201d5fa36e8fc95101911634a45919ea8af0d314bf",
+            "next": "0052eca6fbdabee072641abc93a632e7bf194d2660b8c284a43327a53117a21417"
           }
         }
       },
@@ -100,10 +101,10 @@
             42,
             251
           ],
-          "ownership_id": "or46Fg7qtBMZfc68AJAz43VJCdv4aUfE7mWJZk8raBD",
+          "ownership_id": "J78oQk2atj8UJjZu9j2FpuyyRTcUK9dCsTBPXoYfeD6K",
           "stake_entry": {
-            "auth_data": "003a816a3925b9b6862dcbbb36596161d2d155e0cc56185f5c056d9f7b97285ce2c62ab824ee114e2a8a0c95a02f7eb9bc4061efdbad473a7efc63871e0deae95d7eb6ab37e9eb318ae5c321b8fbf890f82ea9276e94fb5360640ad93d6c28c73999be7424052e2dd400e63d03746461f550e4168278641ca2dd20355c7bdb5854",
-            "next": "00c66a3fe58e9a78ff3535034af95af070ad291421aba378f9a0e0646bd48ab5a6"
+            "auth_data": "00dd3ff78ff585d8dd99560505eadd9336cfa2b124032dc3fb1d4b8afbf7f61372d658b371f2ece34e15f63d62670711f65e0ea69562f17316e6ad2241de754d292d35e7947e2e36429d9e779297e7629d80420da0dd5121d6540ac0b62a30267961019c09bed9c07cdc75d812dfe63bbeee231d543762db8bbfc5f80ac74ce830",
+            "next": "0087fba971d984ddf1f8d6f827859c13796b62441d10d7776a8860f5018a1d7d95"
           }
         }
       },
@@ -143,10 +144,10 @@
             113,
             209
           ],
-          "ownership_id": "Azw4Ta4hFATyfpmtbaWJE8g2uKgtRC99jbfNuSdzusbD",
+          "ownership_id": "8WqMqYiyK27s4mQU5tYLSDko2vX6nuEjgheYXZDQr4XY",
           "stake_entry": {
-            "auth_data": "00d6e1a34a7b49d62c70696bd6f421d2376be1a596ab2ca1de89d958859c1cb89070c3f2c6af9aa4cd3837fcd4194cb8c13d108b2a97097561639c170225aac16842690b58931c95b2fe2fa16ba76b51b2204f4d7fff322d48aedc8c5db4d64d9536f78ac2fd35e1b3c529bfcda64eca6ccf396a3920f97e0081055cc32d46c3b6",
-            "next": "005142dbbb963b0f9708f5f21b9ad1a5f9a0be5b1f6036a24af6ab926296b6be91"
+            "auth_data": "0094d9ba773a11cbb7008d1fe3d87ebafb7d00b6c8d955960234df1662fc5732a64f96336f3a7e961dc559a8a75aa7bf6f0c8851286d1faa635e792a3dfe3816df3ddc8f8a7fbd955a5ddeca8a476c15f878bf1af75cd98aac485794b02a1dbf6c8099690644767c26a47ea4aeb2d707f46b422998a59965281be0774e74f148a1",
+            "next": "005764766590f611935973d3f2afd830f7006dca34375bde767dcc2277a8c1e21e"
           }
         }
       },
@@ -186,10 +187,10 @@
             17,
             10
           ],
-          "ownership_id": "DSQi5m18xN2UWAU8WXGTy3vGubBpFgYqXpFaeBk4mBSV",
+          "ownership_id": "2jMWFaRmQVqdh5tZtt8feEtkW1LKaGhHFcfV3TwFeLmT",
           "stake_entry": {
-            "auth_data": "003adcca687edae0434320ea59b3c59b02aecfc937e24785ebc7c21a8382e01e5ddf1e127af49cb19d5af31e719fcbbb8ab624003f5aa465dc8e823ee0f7d7c15cae237eb9d161c979e28a82fbfa3d16c4f1f60a40dfc51357a8251eb21ecc45dc2555a5062133bbe89c7130757d88356d2fb9262cc6d8d14c2707ef06653b8818",
-            "next": "005994de4f0eff738acac1e1badbf2688942d9ea355bf769e25fab909a9b2137fa"
+            "auth_data": "00f140102a86a02e3b28ddbc8ff1b27eb87279e6cd5cfb72ab172fc7bea729b51a6d8925190ed4ec78d1020999cac79aba1068e4203164148b96e99efe895d9d024dd5e441cfba1ef3619ad0b88c67f270b84f8688dc5fc12afcad3f20a92a2c6e5c0a33b304f53ee23d40263a60b72351f85f1cc78fa5e7e2b43c13a43899e7e2",
+            "next": "004fd5cffe33e38d3806eaccee0fbe039016ea824fa83dd4b4e3c21c1a20cb4294"
           }
         }
       },

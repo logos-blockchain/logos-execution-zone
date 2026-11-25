@@ -14,9 +14,6 @@ pub enum Error {
     #[error("Invalid sequencer key")]
     InvalidSequencerKey,
 
-    #[error("Failed to (de-)encode checkpoint")]
-    CheckpointEncodingFailed(#[source] anyhow::Error),
-
     #[error("Invalid genesis configuration")]
     InvalidGenesisConfig(#[source] anyhow::Error),
 

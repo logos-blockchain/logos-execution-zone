@@ -85,8 +85,8 @@ pub struct ExecutorStatusResult {
     pub height: FfiBlockId,
     pub has_height: bool,
     /// `Bootstrapping` only: the Bedrock slot bootstrapping completes at, the last one the
-    /// node had finalized as of the latest batch. Only meaningful when `has_target_slot` is
-    /// `true`.
+    /// node had finalized when following the channel started. Only meaningful when
+    /// `has_target_slot` is `true`.
     pub target_slot: u64,
     pub has_target_slot: bool,
     /// `Bootstrapping` only: the Bedrock slot the finalized history is replayed

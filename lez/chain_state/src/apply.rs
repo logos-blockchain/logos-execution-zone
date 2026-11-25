@@ -503,6 +503,7 @@ fn settle_private_transaction(
             payer,
             reserve,
             data_bytes,
+            tip: proven_tip,
         },
     ) = (transaction, view)
     else {
@@ -516,13 +517,13 @@ fn settle_private_transaction(
         accumulate_exec_gas(summary.gas_used_exec, market::PRIVATE_VERIFY_GAS).map_err(gas_cap)?;
     let gas_used_stor = accumulate_stor_gas(summary.gas_used_stor, *data_bytes).map_err(gas_cap)?;
     // The effects may use what is left of the block's execution gas, up to what the reserve
-    // pays for, so a public part running out of it is a charged revert and never costs more
-    // than was reserved.
+    // pays for past the tip, so running out of it is a charged revert.
+    let proven_tip = u128::from(*proven_tip);
     let cycle_budget = market::MAX_GAS_EXEC
         .checked_sub(gas_used_exec)
         .expect("the accumulator is cap-checked")
         .min(private_cycles_affordable(
-            *reserve,
+            reserve.saturating_sub(proven_tip),
             *data_bytes,
             opening.base_fee_exec,
             opening.base_fee_stor,
@@ -548,10 +549,13 @@ fn settle_private_transaction(
         opening.base_fee_exec,
         opening.base_fee_stor,
     );
-    let surplus = reserve.checked_sub(actual).ok_or_else(|| {
+    let required = actual
+        .checked_add(proven_tip)
+        .expect("a fee and a u64 tip fit u128");
+    let surplus = reserve.checked_sub(required).ok_or_else(|| {
         fee_validity(
             FeeError::PrivateFeeBelowRequired {
-                required: actual,
+                required,
                 reserve: *reserve,
             }
             .to_string(),
@@ -568,9 +572,8 @@ fn settle_private_transaction(
         .apply_state_diff(diff)
         .map_err(|err| fee_validity(format!("private action failed: {err}")))?;
 
-    // A surplus worth a note goes to the public refund target, else back to the payer if a
-    // recovery binding lets it be published there; dust and an unbound payer's surplus stay
-    // as tip.
+    // A surplus worth a note goes to the refund target, else to a bound payer; otherwise it
+    // adds to the tip.
     let refund_to = private_tx
         .message()
         .execution
@@ -579,9 +582,14 @@ fn settle_private_transaction(
         .and_then(|fee| fee.refund_to);
     let refundable = refund_to.is_some() || state.recovery_binding(*payer).is_some();
     let (refund, tip) = if surplus > market::MIN_PRIVATE_REFUND && refundable {
-        (surplus, 0)
+        (surplus, proven_tip)
     } else {
-        (0, surplus)
+        (
+            0,
+            proven_tip
+                .checked_add(surplus)
+                .expect("the tip and surplus fit in the reserve"),
+        )
     };
     if refund > 0 {
         let refund_msg = refund_to.map_or_else(
@@ -1871,6 +1879,7 @@ mod tests {
             recipient: system_accounts::fee_inbox_account_id(),
             amount,
             refund_to: None,
+            tip: 0,
         }
     }
 
@@ -2078,6 +2087,80 @@ mod tests {
     }
 
     #[test]
+    fn a_private_transaction_pays_its_proven_tip_before_the_refund() {
+        const TIP: u64 = 5;
+        let (state, senders) = private_sender_state(&[0x58]);
+        let sender = &senders[0];
+        let alias = sender.0.account_id().blinded(&ALIAS_OPENING);
+        let recipient = initial_pub_accounts_private_keys()[0].account_id;
+        let build = |amount| {
+            private_tx(
+                &state,
+                sender,
+                recipient,
+                10,
+                Some(lee_core::FeeTransfer {
+                    tip: TIP,
+                    ..inbox_fee(amount, sender.0.account_id())
+                }),
+            )
+        };
+        let required = required_for(0, build);
+        let surplus = fee_core::market::MIN_PRIVATE_REFUND + 1;
+        let tx = build(required + u128::from(TIP) + surplus);
+
+        let mut settled = state.clone();
+        let mut summary = BlockFeeSummary::default();
+        let (_, receipt) = settle_transaction(
+            &tx,
+            &mut settled,
+            &FeeState::genesis(),
+            1,
+            100,
+            0,
+            &mut summary,
+        )
+        .expect("a reserve covering the fee and tip settles");
+        assert_eq!(summary.revenue_base, required);
+        assert_eq!(summary.revenue_tip, u128::from(TIP));
+        assert_eq!(receipt.fee.tip, u128::from(TIP));
+        assert_eq!(receipt.fee.refund, surplus);
+        assert_eq!(published_credit(&settled, alias), Some(surplus));
+
+        // A dust surplus adds to the proven tip.
+        let dust = fee_core::market::MIN_PRIVATE_REFUND;
+        let mut dust_summary = BlockFeeSummary::default();
+        let (_, dust_receipt) = settle_transaction(
+            &build(required + u128::from(TIP) + dust),
+            &mut state.clone(),
+            &FeeState::genesis(),
+            1,
+            100,
+            0,
+            &mut dust_summary,
+        )
+        .expect("settles");
+        assert_eq!(dust_summary.revenue_tip, u128::from(TIP) + dust);
+        assert_eq!(dust_receipt.fee.tip, u128::from(TIP) + dust);
+        assert_eq!(dust_receipt.fee.refund, 0);
+
+        // A reserve covering the fee but not the tip is not admissible.
+        let short = build(required + u128::from(TIP) - 1);
+        assert!(matches!(
+            settle_transaction(
+                &short,
+                &mut state.clone(),
+                &FeeState::genesis(),
+                1,
+                100,
+                0,
+                &mut BlockFeeSummary::default(),
+            ),
+            Err(BlockIngestError::InvalidFeeClass { .. })
+        ));
+    }
+
+    #[test]
     fn an_unbound_payers_surplus_is_kept_as_tip() {
         let (state, senders) = private_sender_state(&[0x56]);
         let sender = &senders[0];
@@ -2241,17 +2324,21 @@ mod tests {
         // The block has `budget` execution gas left after the proof's verification: the
         // scripted public root runs out of it, which settlement charges in full.
         let budget = 5_000;
+        let tip = 5;
         let build = |amount| {
             public_root_private_tx(
                 &state,
                 sender,
                 scripted,
-                inbox_fee(amount, sender.0.account_id()),
+                lee_core::FeeTransfer {
+                    tip,
+                    ..inbox_fee(amount, sender.0.account_id())
+                },
             )
         };
         let required = required_for(budget, build);
         let surplus = fee_core::market::MIN_PRIVATE_REFUND + 1;
-        let tx = build(required + surplus);
+        let tx = build(required + u128::from(tip) + surplus);
         let LeeTransaction::PrivacyPreserving(private_tx) = &tx else {
             unreachable!("a privacy-preserving transaction was built");
         };
@@ -2288,7 +2375,7 @@ mod tests {
                     gas_exec: fee_core::market::PRIVATE_VERIFY_GAS + budget,
                     gas_stor: summary.gas_used_stor,
                     fee_base: required,
-                    tip: 0,
+                    tip: u128::from(tip),
                     refund: surplus,
                 },
             }
@@ -2296,11 +2383,11 @@ mod tests {
         assert!(events.is_empty());
         assert_eq!(summary.gas_used_exec, fee_core::market::MAX_GAS_EXEC);
         assert_eq!(summary.revenue_base, required);
-        assert_eq!(summary.revenue_tip, 0);
+        assert_eq!(summary.revenue_tip, u128::from(tip));
         // The reserve reached the inbox and the surplus went back to the alias.
         assert_eq!(
             native_balance(&settled, system_accounts::fee_inbox_account_id()),
-            required
+            required + u128::from(tip)
         );
         assert_eq!(published_credit(&settled, alias), Some(surplus));
         // The payer's note is spent for the fallback's state; none of the other proven
@@ -2327,18 +2414,24 @@ mod tests {
             initial_pub_accounts_private_keys()[0].account_id,
             AccountId::from_builtin_program(event_emitter().id()),
         );
-        // The block is empty, but the reserve pays for only `budget` cycles, which the scripted
-        // public root runs out of: a charged revert, not a fee above the reserve.
+        // The block is empty, but the reserve pays for only `budget` cycles past the tip, which
+        // the scripted public root runs out of: a charged revert, not a fee above the reserve.
         let budget = 5_000;
+        // Worth 100 cycles at the genesis base fee, so a budget that ignored it would show.
+        let tip = 800;
         let build = |amount| {
             public_root_private_tx(
                 &state,
                 sender,
                 scripted,
-                inbox_fee(amount, sender.0.account_id()),
+                lee_core::FeeTransfer {
+                    tip,
+                    ..inbox_fee(amount, sender.0.account_id())
+                },
             )
         };
-        let reserve = required_for(budget, build);
+        let required = required_for(budget, build);
+        let reserve = required + u128::from(tip);
         let tx = build(reserve);
 
         let mut settled = state;
@@ -2358,7 +2451,8 @@ mod tests {
             summary.gas_used_exec,
             fee_core::market::PRIVATE_VERIFY_GAS + budget
         );
-        assert_eq!(summary.revenue_base, reserve);
+        assert_eq!(summary.revenue_base, required);
+        assert_eq!(summary.revenue_tip, u128::from(tip));
         assert_eq!(
             native_balance(&settled, system_accounts::fee_inbox_account_id()),
             reserve

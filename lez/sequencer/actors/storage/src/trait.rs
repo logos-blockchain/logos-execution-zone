@@ -22,7 +22,7 @@ use crate::{
         GetZoneCheckpoint, PendingCrossZoneDispatchRecord, PendingDepositEventRecord,
         PutFinalConfigsBytes, PutSlashRecordBytes, PutSystemApprovalsBytes, RecordDispatchFailure,
         RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
-        StoreUpdateOutcome, UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
+        StoreUpdateOutcome, UpdateZoneCheckpoint, ZoneAnchorRecord,
     },
 };
 
@@ -39,7 +39,7 @@ pub trait StorageActorTrait:
     + Message<GetLatestBlockMeta, Reply = Result<Option<BlockMeta>>>
     + Message<GetLeeState, Reply = Result<Option<V03State>>>
     + Message<GetFinalSnapshot, Reply = Result<Option<(V03State, BlockMeta)>>>
-    + Message<GetZoneCheckpoint, Reply = Result<Option<ZoneCheckpointRecord>>>
+    + Message<GetZoneCheckpoint, Reply = Result<Option<Vec<u8>>>>
     + Message<UpdateZoneCheckpoint, Reply = Result<()>>
     + Message<GetSlashRecordBytes, Reply = Result<Option<Vec<u8>>>>
     + Message<PutSlashRecordBytes, Reply = Result<()>>

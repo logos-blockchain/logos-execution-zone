@@ -192,6 +192,7 @@ fn privacy_transfer_paying_privately(
                 recipient: FEE_INBOX,
                 amount: FEE,
                 refund_to: None,
+                tip: 0,
             }),
             ..proving_input(root(sender, &transfer(recipient, amount)))
         },
