@@ -7807,3 +7807,44 @@ async fn an_orphaned_transaction_that_finds_the_mempool_full_frees_its_nonce() {
         "the dropped orphan frees its nonce"
     );
 }
+
+#[tokio::test]
+async fn a_failed_block_build_returns_its_transactions_to_the_mempool() {
+    let (mut sequencer, mempool_handle) = common_setup().await;
+    let accounts = initial_pub_accounts_private_keys();
+    let signer = TestSigner::from(&accounts[0].secret);
+    let tx = common::test_utils::create_transaction_native_token_transfer(
+        accounts[0].account_id,
+        0,
+        accounts[1].account_id,
+        1,
+        &signer,
+    );
+    assert_eq!(
+        sequencer.admit(&tx).await.unwrap(),
+        crate::pending::Admission::New
+    );
+    mempool_handle
+        .push((TransactionOrigin::User, tx.clone()))
+        .await
+        .unwrap();
+    sequencer.record_pending(&tx);
+
+    sequencer.fail_build = true;
+    assert!(sequencer.build_block_from_mempool().await.is_err());
+    sequencer.fail_build = false;
+
+    // Still pending, and still in the mempool for the next block.
+    assert_eq!(
+        sequencer.admit(&tx).await.unwrap(),
+        crate::pending::Admission::Duplicate
+    );
+    let built = sequencer.build_block_from_mempool().await.unwrap();
+    assert!(
+        built
+            .mempool_transactions
+            .iter()
+            .any(|(_, included)| included.hash() == tx.hash()),
+        "the next block includes the transaction"
+    );
+}
