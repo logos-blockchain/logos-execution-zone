@@ -1,25 +1,21 @@
-#[cfg(keycard)]
-mod imp {
-    use anyhow::Result;
+use anyhow::{Result, anyhow};
 
-    #[expect(
-        clippy::unnecessary_wraps,
-        reason = "Matches the stub, which always fails"
-    )]
-    pub const fn ensure_available() -> Result<()> {
-        Ok(())
-    }
+// A Keycard holds one fixed key, so it cannot derive the per-nonce keys an account rotates through.
+pub fn unsupported() -> anyhow::Error {
+    anyhow!("Keycard accounts are not supported: a Keycard key cannot rotate")
 }
 
-#[cfg(not(keycard))]
-mod imp {
-    use anyhow::{Result, anyhow};
-
-    const UNSUPPORTED: &str = "Keycard support is not built into this wallet";
-
-    pub fn ensure_available() -> Result<()> {
-        Err(anyhow!(UNSUPPORTED))
-    }
+pub fn ensure_available() -> Result<()> {
+    Err(unsupported())
 }
 
-pub use imp::*;
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn a_keycard_cannot_sign_whatever_the_build() {
+        assert_eq!(
+            super::ensure_available().unwrap_err().to_string(),
+            "Keycard accounts are not supported: a Keycard key cannot rotate"
+        );
+    }
+}

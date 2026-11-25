@@ -1041,8 +1041,8 @@ async fn prepare_account<C: WalletSequencerClient>(
     let (secret, evidence) = match identity {
         AccountIdentity::Public(_) => (owned_secret.filter(|_| authorizes), owned_evidence),
         AccountIdentity::PublicKeycard { .. } if authorizes => {
-            let (account, _) = prepare_public_account(wallet, actor_state_selector).await?;
             keycard_support::ensure_available().map_err(ExecutionFailureKind::SignError)?;
+            let (account, _) = prepare_public_account(wallet, actor_state_selector).await?;
             return Ok(State::PublicKeycard { account });
         }
         AccountIdentity::PublicNoSign(_) | AccountIdentity::PublicKeycard { .. } => {

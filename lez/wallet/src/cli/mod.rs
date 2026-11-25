@@ -186,7 +186,7 @@ impl CliAccountMention {
             Self::Label(label) => storage
                 .resolve_label(label)
                 .ok_or_else(|| anyhow::anyhow!("No account found for label `{label}`")),
-            Self::KeyPath(_) => Err(keycard_unsupported()),
+            Self::KeyPath(_) => Err(crate::keycard_support::unsupported()),
         }
     }
 
@@ -220,7 +220,7 @@ impl CliAccountMention {
     // An account that signs where public, with its keycard when named by a key path.
     pub(crate) fn signer(self, storage: &Storage) -> Result<AccountIdentity> {
         match self {
-            Self::KeyPath(_) => Err(keycard_unsupported()),
+            Self::KeyPath(_) => Err(crate::keycard_support::unsupported()),
             Self::Id(_) | Self::Label(_) => self.stored(storage, AccountIdentity::Public),
         }
     }
@@ -228,7 +228,7 @@ impl CliAccountMention {
     // An account that does not sign.
     pub(crate) fn unsigned(self, storage: &Storage) -> Result<AccountIdentity> {
         match self {
-            Self::KeyPath(_) => Err(keycard_unsupported()),
+            Self::KeyPath(_) => Err(crate::keycard_support::unsupported()),
             Self::Id(_) | Self::Label(_) => self.stored(storage, AccountIdentity::PublicNoSign),
         }
     }
@@ -453,11 +453,6 @@ pub(crate) fn destination(
         vpk,
         kind: PrivateAccountKind::Regular,
     })
-}
-
-// A Keycard holds one fixed key, so it cannot derive the per-nonce keys an account rotates through.
-fn keycard_unsupported() -> anyhow::Error {
-    anyhow::anyhow!("Keycard accounts are not supported: a Keycard key cannot rotate")
 }
 
 pub(crate) fn decode_npk_vpk(
