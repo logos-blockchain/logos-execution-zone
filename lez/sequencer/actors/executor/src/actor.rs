@@ -972,5 +972,8 @@ fn admission_error(err: sequencer_core::AdmissionError) -> Error {
             Error::PendingAuthentication(err)
         }
         sequencer_core::AdmissionError::Pending(refusal) => Error::PendingSlot(refusal.into()),
+        sequencer_core::AdmissionError::InvalidProof => {
+            Error::InvalidTransaction(lee::error::LeeError::InvalidPrivacyPreservingProof)
+        }
     }
 }

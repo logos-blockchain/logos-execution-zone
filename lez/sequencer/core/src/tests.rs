@@ -7848,3 +7848,54 @@ async fn a_failed_block_build_returns_its_transactions_to_the_mempool() {
         "the next block includes the transaction"
     );
 }
+
+#[tokio::test]
+async fn a_privacy_transaction_with_an_invalid_proof_takes_no_slot() {
+    let (mut sequencer, _mempool_handle) = common_setup().await;
+    let accounts = initial_pub_accounts_private_keys();
+    let signer = TestSigner::from(&accounts[0].secret);
+    let account_id = accounts[0].account_id;
+    // Signed by its funded payer, but with a proof that does not verify: the signatures do not
+    // cover it, so anyone could have swapped it in.
+    let message = lee::privacy_preserving_transaction::Message {
+        public_context: lee::PublicExecutionContext::new(vec![], [account_id]),
+        fee: Some(lee::FeeDeclaration::new(
+            account_id,
+            fee_core::market::PRIVATE_VERIFY_GAS,
+            0,
+            u128::MAX >> 1,
+        )),
+        nonces: BTreeMap::from([(account_id, lee_core::account::Nonce(0))]),
+        ..lee::privacy_preserving_transaction::Message::default()
+    };
+    let junk = LeeTransaction::PrivacyPreserving(lee::PrivacyPreservingTransaction::new(
+        message.clone(),
+        lee::test_utils::privacy_witness_for(
+            &message,
+            lee::privacy_preserving_transaction::circuit::Proof::from_inner(vec![1, 2, 3]),
+            &[&signer],
+        ),
+    ));
+
+    let refused = sequencer.admit(&junk).await;
+    if matches!(refused, Ok(crate::pending::Admission::New)) {
+        sequencer.record_pending(&junk);
+    }
+    assert!(
+        matches!(refused, Err(crate::AdmissionError::InvalidProof)),
+        "{refused:?}"
+    );
+
+    let transfer = common::test_utils::create_transaction_native_token_transfer(
+        account_id,
+        0,
+        accounts[1].account_id,
+        1,
+        &signer,
+    );
+    assert_eq!(
+        sequencer.admit(&transfer).await.unwrap(),
+        crate::pending::Admission::New,
+        "the signer's nonce is still free"
+    );
+}

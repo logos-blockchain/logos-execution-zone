@@ -191,6 +191,8 @@ pub enum AdmissionError {
     Authentication(#[from] lee::HeadAuthError),
     #[error(transparent)]
     Pending(#[from] pending::PendingRefusal),
+    #[error("Invalid privacy-preserving proof")]
+    InvalidProof,
 }
 
 pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
@@ -2020,19 +2022,29 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     }
 
     /// Admission against the head state and the mempool's pending slots: the fee screen, then
-    /// the signers' authentication (against pending keys ahead of the head), then the slots.
+    /// the signers' authentication (against pending keys ahead of the head), then the slots, and
+    /// a new privacy-preserving transaction's proof, which its signatures do not cover.
     /// Admits nothing: [`Self::record_pending`] does, once the transaction is in the mempool.
     pub async fn admit(
         &mut self,
         tx: &LeeTransaction,
     ) -> Result<pending::Admission, AdmissionError> {
-        let chain = self.chain.lock().await;
-        let state = chain.head_state();
-        fees::screen(tx, state)?;
-        self.pending.prune_signers(tx, state);
-        let pending = &self.pending;
-        tx.authenticate_at_head(state, |account, nonce| pending.key_at(account, nonce))?;
-        Ok(self.pending.check(tx)?)
+        {
+            let chain = self.chain.lock().await;
+            let state = chain.head_state();
+            fees::screen(tx, state)?;
+            self.pending.prune_signers(tx, state);
+            let pending = &self.pending;
+            tx.authenticate_at_head(state, |account, nonce| pending.key_at(account, nonce))?;
+        }
+        let admission = self.pending.check(tx)?;
+        if admission == pending::Admission::New
+            && let LeeTransaction::PrivacyPreserving(tx) = tx
+            && !tx.has_valid_proof()
+        {
+            return Err(AdmissionError::InvalidProof);
+        }
+        Ok(admission)
     }
 
     /// Records the slots of a transaction now in the mempool.

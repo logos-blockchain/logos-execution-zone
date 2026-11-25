@@ -57,6 +57,15 @@ impl PrivacyPreservingTransaction {
 
         acc_set.into_iter().collect()
     }
+
+    /// Whether the proof verifies against the message: the part of its check that no head state
+    /// changes.
+    #[must_use]
+    pub fn has_valid_proof(&self) -> bool {
+        self.witness_set
+            .proof
+            .is_valid_for(&self.message.public_context, &self.message.execution)
+    }
 }
 
 impl SignedTransaction for PrivacyPreservingTransaction {
