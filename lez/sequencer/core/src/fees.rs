@@ -26,7 +26,7 @@ pub enum Error {
     PayerBalanceMalformed { payer: AccountId },
 
     #[error(
-        "private transaction pays its fee in its proof without a fee fallback: fund the payer \
+        "private transaction has a public part that can fail but no fee fallback: fund the payer \
          beforehand or declare a public payer"
     )]
     MissingFeeFallback,
@@ -68,6 +68,12 @@ pub fn screen(tx: &LeeTransaction, state: &lee::V03State) -> Result<()> {
         // A fee paid inside the proof leaves nothing to check against the payer, but only its
         // fallback pays when the public part fails.
         FeeTxView::Private { .. } => {
+            // the public part can't fail if the only public thing is paying the fee
+            if !tx.public_part_can_fail() {
+                return Ok(());
+            }
+
+            // otherwise, it needs to have a fallback in case public part fails
             let has_fallback = matches!(
                 tx,
                 LeeTransaction::PrivacyPreserving(tx) if tx
@@ -391,13 +397,27 @@ mod tests {
             Err(Error::FeeCore(FeeError::PrivateFeeBelowRequired { .. }))
         ));
 
-        // Without the fee fallback nothing pays when the public part fails.
-        let mut bare = private_message(Some(flat));
-        bare.execution.proven_fee = None;
+        // Without the fee fallback nothing pays when the public part fails, which takes one
+        // doing more than delivering the fee.
+        let shaped = |fallback: bool, public_part: bool| {
+            let mut message = private_message(Some(2 * flat));
+            if !fallback {
+                message.execution.proven_fee.as_mut().unwrap().fallback = None;
+            }
+            if public_part {
+                message
+                    .execution
+                    .boundary
+                    .push(BoundaryStep::EndPublicSubtree);
+            }
+            wrap(message)
+        };
         assert!(matches!(
-            screen(&wrap(bare), &state),
+            screen(&shaped(false, true), &state),
             Err(Error::MissingFeeFallback)
         ));
+        screen(&shaped(false, false), &state).expect("a lone fee delivery cannot fail");
+        screen(&shaped(true, true), &state).expect("a fee fallback pays for a failed part");
     }
 
     /// A private transaction whose fee a public signer declares is screened as a public one: the
