@@ -417,7 +417,17 @@ mod tests {
             Err(Error::MissingFeeFallback)
         ));
         screen(&shaped(false, false), &state).expect("a lone fee delivery cannot fail");
+        screen(&shaped(true, false), &state).expect("nor does its fee fallback hurt");
         screen(&shaped(true, true), &state).expect("a fee fallback pays for a failed part");
+
+        // A public promotion the lone fee delivery never reaches fails settlement.
+        let mut promoting = private_message(Some(2 * flat));
+        promoting.execution.proven_fee.as_mut().unwrap().fallback = None;
+        promoting.public_context.promotions.insert(7);
+        assert!(matches!(
+            screen(&wrap(promoting), &state),
+            Err(Error::MissingFeeFallback)
+        ));
     }
 
     /// A private transaction whose fee a public signer declares is screened as a public one: the

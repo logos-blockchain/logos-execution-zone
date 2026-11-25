@@ -76,7 +76,8 @@ impl LeeTransaction {
         let Self::PrivacyPreserving(tx) = self else {
             return true;
         };
-        let execution = &tx.message().execution;
+        let message = tx.message();
+        let execution = &message.execution;
         let inbox = Actor::native_balance(system_accounts::fee_inbox_account_id());
         let delivers_fee_alone = matches!(
             execution.boundary.as_slice(),
@@ -88,7 +89,9 @@ impl LeeTransaction {
             .async_messages
             .iter()
             .any(|publication| matches!(publication, Publication::Clear(_)));
-        execution.public_root.is_some() || !delivers_fee_alone || publishes_clear
+        // The proof enforces private promotions only; an unreached public one fails settlement.
+        let promotes = !message.public_context.promotions.is_empty();
+        execution.public_root.is_some() || !delivers_fee_alone || publishes_clear || promotes
     }
 
     #[must_use]
