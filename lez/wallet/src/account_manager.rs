@@ -1553,6 +1553,57 @@ mod tests {
         }))
     }
 
+    // Each witness marks `PROGRAM` and holds two openings; only the authorized one whose actor was
+    // mentioned with an opening is declared, once, under that mention's opening.
+    #[test]
+    fn private_signers_declare_one_alias_per_actor_an_authorized_witness_marks() {
+        const PROGRAM: AccountId = AccountId::new([5; 32]);
+        let marked = |seed: u8, kind: Option<WitnessKind>| {
+            let State::Private(mut pre) = private_signing_state(seed, 0) else {
+                unreachable!("a signing state is private");
+            };
+            if let Some(kind) = kind {
+                pre.kind = kind;
+            }
+            pre.signer_programs.insert(PROGRAM);
+            pre.address_openings
+                .extend([[seed; 32], [seed.wrapping_add(100); 32]]);
+            State::Private(pre)
+        };
+        let states = vec![
+            marked(1, None),
+            marked(
+                2,
+                Some(WitnessKind::Pda {
+                    nsk: NullifierSecretKey::from(&AuthorizationSecretKey([2; 32])),
+                    binding: (AccountId::new([7; 32]), PdaSeed::new([8; 32])),
+                }),
+            ),
+            marked(
+                3,
+                Some(WitnessKind::Regular(RegularKey::FeeOnly(
+                    AuthorizationSecretKey([3; 32]),
+                ))),
+            ),
+            marked(4, None),
+        ];
+        let ids: Vec<AccountId> = states.iter().map(State::account_id).collect();
+        let manager = AccountManager {
+            // The fourth is marked but its mention carried no opening.
+            mention_openings: HashMap::from([
+                (Actor::new(ids[0], PROGRAM), [1; 32]),
+                (Actor::new(ids[1], PROGRAM), [2; 32]),
+                (Actor::new(ids[2], PROGRAM), [3; 32]),
+            ]),
+            ..manager(states)
+        };
+
+        assert_eq!(
+            manager.private_signers(),
+            BTreeSet::from([Actor::new(ids[0].blinded(&[1; 32]), PROGRAM)])
+        );
+    }
+
     #[test]
     fn the_private_fee_payer_is_the_first_authorized_account_that_can_pay_else_the_first() {
         let poor = private_signing_state(1, 99);
