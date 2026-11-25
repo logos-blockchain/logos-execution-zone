@@ -51,17 +51,10 @@ pub struct GetLeeState;
 
 pub struct GetZoneCheckpoint;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ZoneCheckpointRecord {
+/// Stores the zone checkpoint `bytes`, replacing the stored one.
+pub struct UpdateZoneCheckpoint {
     // TODO: Consider `bytes` crate for all `Vec<u8>` in protocol.
     pub bytes: Vec<u8>,
-    /// The channel sequence this checkpoint was minted at.
-    pub seq: u64,
-}
-
-/// Stores the checkpoint, keeping whichever of it and the stored one is newer.
-pub struct UpdateZoneCheckpoint {
-    pub checkpoint: ZoneCheckpointRecord,
 }
 
 pub struct DeleteZoneCheckpoint;
@@ -195,10 +188,6 @@ pub struct DumpDb;
 // TODO: Process orphaned blocks
 // TODO: Experiment with per-actor data types and agnostic storage.
 pub struct AtomicUpdate {
-    /// Zone-sdk checkpoint for this event, kept only if it is newer than the
-    /// stored one. The rest of the update lands either way.
-    pub checkpoint: Option<ZoneCheckpointRecord>,
-
     /// Block payloads to write.
     pub blocks: Vec<Block>,
 
@@ -247,7 +236,6 @@ impl AtomicUpdate {
         events: Vec<(BlockId, Vec<TxEvents>)>,
     ) -> Self {
         Self {
-            checkpoint: None,
             head_tip: Some(BlockMeta::from(&block)),
             blocks: vec![block],
             channel_view: None,

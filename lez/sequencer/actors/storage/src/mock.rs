@@ -34,7 +34,7 @@ use crate::{
         PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutFinalConfigsBytes,
         PutSlashRecordBytes, PutSystemApprovalsBytes, RecordDispatchFailure,
         RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes, SetCrossZonePeerTip, SetZoneAnchor,
-        StoreUpdateOutcome, UpdateZoneCheckpoint, ZoneAnchorRecord, ZoneCheckpointRecord,
+        StoreUpdateOutcome, UpdateZoneCheckpoint, ZoneAnchorRecord,
     },
 };
 
@@ -99,8 +99,8 @@ mockall::mock! {
         pub fn handle_get_zone_checkpoint(
             &mut self,
             msg: GetZoneCheckpoint,
-            ctx: &mut Context<Self, Result<Option<ZoneCheckpointRecord>>>
-        ) -> Result<Option<ZoneCheckpointRecord>>;
+            ctx: &mut Context<Self, Result<Option<Vec<u8>>>>
+        ) -> Result<Option<Vec<u8>>>;
 
         pub fn handle_update_zone_checkpoint(
             &mut self,
@@ -431,7 +431,7 @@ impl Message<GetLeeState> for MockStorageActor {
 }
 
 impl Message<GetZoneCheckpoint> for MockStorageActor {
-    type Reply = Result<Option<ZoneCheckpointRecord>>;
+    type Reply = Result<Option<Vec<u8>>>;
 
     async fn handle(
         &mut self,
