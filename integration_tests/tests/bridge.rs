@@ -30,6 +30,7 @@ use logos_blockchain_zone_sdk::{
         gas::GasCost,
         ops::channel::{deposit::Metadata, inscribe::Step},
     },
+    groth16::fr_to_bytes,
     http_api_common::{
         bodies::channel::{
             ChannelDepositRequestBody, ChannelPrepareDepositResponseBody, ChannelStepRequestBody,
@@ -45,6 +46,7 @@ use test_fixtures::config::{
 };
 use tokio::test;
 use vault_circuit::{Committee, Deposit, SigningKey};
+use wallet::program_facades::bridge::Bridge;
 
 /// The indexer's reads, apart from the sequencer's methods of the same names.
 mod indexed {
@@ -185,6 +187,62 @@ async fn a_vault_deposit_is_minted_exactly_once() -> anyhow::Result<()> {
         indexed == Some(get_account(&ctx, recipient_id).await?.into()),
         "The indexer and the sequencer disagree on the recipient: {indexed:?}"
     );
+
+    Ok(())
+}
+
+#[test]
+async fn a_withdrawal_is_paid_out_of_the_vault() -> anyhow::Result<()> {
+    let ctx = TestContext::new().await?;
+    let sender = ctx.existing_public_accounts()[0];
+    let payee = bedrock_funding_key();
+    let (deposited, withdrawn) = (1_000_u64, 137_u64);
+
+    // The vault pays out of what was deposited to it.
+    let recipient = PublicKey::new_from_private_key(&PrivateKey::new_os_random());
+    let deposit = program_deposit(&ctx, recipient, deposited).await?;
+    ctx.sequencer_client()
+        .submit_program_deposit(HexBytes(deposit))
+        .await
+        .context("The sequencer refused the deposit")?;
+
+    // A withdrawal is left out until Bedrock lets the vault spend its note, so it is sent again.
+    let before = account_balance(&ctx, sender).await?;
+    let mut sent = Vec::new();
+    'burned: for _ in 0_u32..30 {
+        sent.push(
+            Bridge(ctx.wallet())
+                .send_withdraw(sender, withdrawn, fr_to_bytes(payee.as_fr()))
+                .await
+                .map_err(|err| anyhow::anyhow!("Failed to send the withdrawal: {err:?}"))?,
+        );
+        tokio::time::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS)).await;
+        for tx_hash in &sent {
+            if ctx
+                .sequencer_client()
+                .get_transaction(*tx_hash)
+                .await?
+                .is_some()
+            {
+                break 'burned;
+            }
+        }
+    }
+
+    ensure!(
+        account_balance(&ctx, sender).await? <= before.saturating_sub(u128::from(withdrawn)),
+        "No withdrawal was burned"
+    );
+
+    // Bedrock takes the block's inscription only with a valid vault step, and the indexer reads
+    // what Bedrock finalized. The payout is a channel note: its payee withdraws it from the
+    // channel after Bedrock's delay, which no test waits out.
+    wait_for_indexer_to_catch_up(&ctx).await?;
+    wait_until("the indexer to see the withdrawal", || async {
+        let burned = get_account(&ctx, sender).await?;
+        Ok(indexed::account(&ctx, sender).await? == Some(burned.into()))
+    })
+    .await?;
 
     Ok(())
 }
