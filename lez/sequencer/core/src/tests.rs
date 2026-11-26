@@ -678,32 +678,37 @@ async fn a_reverted_withdraw_is_included_as_reverted() {
 }
 
 #[tokio::test]
-async fn a_withdrawal_is_dropped_until_payouts_are_supported() {
-    let (mut sequencer, mempool_handle) = common_setup().await;
-    let withdraw = bridge_withdraw_tx(1);
+async fn a_withdrawal_is_burned_by_the_block_whose_vault_step_pays_it_out() {
+    let channel = CannedChannel::empty().share();
+    let (mut sequencer, mempool_handle) =
+        start_sequencer_on(setup_sequencer_config(), channel.clone()).await;
+    let withdraw = bridge_withdraw_tx(2);
+
+    // The vault holds less than the withdrawal: it is left out.
+    channel.lock().vault_funds = 1;
     mempool_handle
         .push((TransactionOrigin::User, withdraw.clone()))
         .await
         .unwrap();
-
-    // It settles and emits its withdrawal: only the guard keeps it out.
-    let mut state = sequencer.with_state(Clone::clone).await;
-    let opening = chain_state::apply::opening_fee_state(&state);
-    let (events, _) = chain_state::apply::settle_transaction(
-        &withdraw,
-        &mut state,
-        &opening,
-        2,
-        0,
-        0,
-        &mut fee_core::BlockFeeSummary::default(),
-    )
-    .expect("a withdrawal the payer can afford settles");
-    assert_eq!(crate::bridge_withdrawals(&events).count(), 1);
-
     let built = sequencer.build_block_from_mempool().await.unwrap();
-
     assert_block_tail(&built.block, &[]);
+
+    channel.lock().vault_funds = 2;
+    mempool_handle
+        .push((TransactionOrigin::User, withdraw.clone()))
+        .await
+        .unwrap();
+    let block_id = sequencer.run_production_turn().await.unwrap();
+    let block = sequencer
+        .storage_ref
+        .ask(GetBlock { block_id })
+        .await
+        .unwrap()
+        .expect("produced block is stored");
+
+    assert_block_tail(&block, std::slice::from_ref(&withdraw));
+    assert!(!block.body.is_reverted(0));
+    assert_eq!(channel.lock().paid_out, [(2, [0; 32])]);
 }
 
 #[tokio::test]

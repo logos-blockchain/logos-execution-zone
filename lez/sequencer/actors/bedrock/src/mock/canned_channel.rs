@@ -50,6 +50,10 @@ pub struct CannedChannel {
     pub admitted: Vec<(Vec<u8>, VaultMint)>,
     /// The deposits of every publish, in order.
     pub taken_in: Vec<Vec<u8>>,
+    /// What the vault can pay out in one step.
+    pub vault_funds: u64,
+    /// The payouts of every publish, in order.
+    pub paid_out: Vec<(u64, [u8; 32])>,
 }
 
 impl CannedChannel {
@@ -125,6 +129,10 @@ impl SharedChannel {
                     ))
             }
         });
+        mock.expect_handle_vault_funds().returning({
+            let channel = self.clone();
+            move |_msg, _ctx| Ok(channel.lock().vault_funds)
+        });
         mock.expect_handle_get_channel_tip_slot().returning({
             let channel = self.clone();
             move |_msg, _ctx| {
@@ -192,7 +200,9 @@ impl SharedChannel {
                   },
                   _ctx| {
                 let outcome = channel.publish(&block, parent)?;
-                channel.lock().taken_in.extend(bridge.deposits);
+                let mut channel = channel.lock();
+                channel.taken_in.extend(bridge.deposits);
+                channel.paid_out.extend(bridge.payouts);
                 Ok(outcome)
             }
         });

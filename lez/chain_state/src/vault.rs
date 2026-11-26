@@ -16,6 +16,9 @@ use sequencer_bridge::{Credited, deposit_tx};
 /// The deposits one vault step takes in.
 pub use vault_circuit::MAX_DEPOSITS;
 
+/// The payouts one vault step makes: its outputs, less the note it keeps the rest in.
+pub const MAX_PAYOUTS: usize = vault_circuit::MAX_OUTPUTS - 1;
+
 /// The id Bedrock gives the vault program.
 pub static VAULT_PROGRAM: LazyLock<ProgramId> = LazyLock::new(|| derive_program_id(&vault_key()));
 

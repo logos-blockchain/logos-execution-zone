@@ -44,7 +44,7 @@ use crate::{
         GetAccreditedKeys, GetChannelTipMessageId, GetChannelTipSlot, HeaderId,
         InitializeChannelPublisher, LiveChannelConfig, MsgId, PrepareConfig, PreparedConfig,
         PublishBlock, PublishOutcome, ReadChannel, SequencerCheckpoint, SequencerKey, Slot,
-        UnverifiedEd25519PublicKey, VaultMint,
+        UnverifiedEd25519PublicKey, VaultFunds, VaultMint,
     },
 };
 
@@ -441,6 +441,20 @@ impl<S: StorageActorTrait> Message<AdmitDeposit> for BedrockActor<S> {
         self.assert_channel_id(channel_id);
 
         self.publisher()?.admit_deposit(&deposit)
+    }
+}
+
+impl<S: StorageActorTrait> Message<VaultFunds> for BedrockActor<S> {
+    type Reply = Result<u64>;
+
+    async fn handle(
+        &mut self,
+        VaultFunds { channel_id }: VaultFunds,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.assert_channel_id(channel_id);
+
+        Ok(self.publisher()?.vault_funds())
     }
 }
 

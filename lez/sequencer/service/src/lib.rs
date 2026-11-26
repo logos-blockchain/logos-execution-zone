@@ -695,6 +695,8 @@ fn bedrock_actor_args(
 
     mock.expect_handle_check_is_our_turn()
         .returning(|_msg, _ctx| Ok(true));
+    mock.expect_handle_vault_funds()
+        .returning(|_msg, _ctx| Ok(0));
 
     mock.expect_handle_get_accredited_keys()
         .returning(|_msg, _ctx| {

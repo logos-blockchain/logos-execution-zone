@@ -98,6 +98,9 @@ pub enum Error {
     #[error("Invalid vault step: {0}")]
     InvalidVaultStep(&'static str),
 
+    #[error("The vault's spendable notes do not cover the payouts")]
+    VaultUnderfunded,
+
     #[error("zone-sdk refused the vault step")]
     VaultStepRefused(#[source] anyhow::Error),
 

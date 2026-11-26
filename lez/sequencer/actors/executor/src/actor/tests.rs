@@ -145,6 +145,9 @@ fn prepare_mock_bedrock_on_genesis(_channel_id: &ChannelId) -> MockBedrockActor 
         .expect_handle_check_is_our_turn()
         .returning(|_msg, _ctx| Ok(true));
     mock_bedrock
+        .expect_handle_vault_funds()
+        .returning(|_msg, _ctx| Ok(0));
+    mock_bedrock
 }
 
 /// A genesis block carrying no transactions.
@@ -614,6 +617,9 @@ async fn a_publish_expects_the_sequence_the_publisher_started_at() -> Result<()>
                 .expect_handle_check_is_our_turn()
                 .returning(|_msg, _ctx| Ok(true));
             mock_bedrock
+                .expect_handle_vault_funds()
+                .returning(|_msg, _ctx| Ok(0));
+            mock_bedrock
                 .expect_handle_get_accredited_keys()
                 .returning(|_msg, _ctx| Ok(None));
             let expected_tx = expected_tx.clone();
@@ -681,6 +687,9 @@ async fn spawn_supervised_on_genesis(
         mock_bedrock
             .expect_handle_check_is_our_turn()
             .returning(|_msg, _ctx| Ok(true));
+        mock_bedrock
+            .expect_handle_vault_funds()
+            .returning(|_msg, _ctx| Ok(0));
         mock_bedrock
     });
     let args = Box::pin(executor_args(config, storage_ref, bedrock_pool_ref.clone())).await;

@@ -22,7 +22,7 @@ use crate::{
         ChannelSeq, CheckChannelExists, CheckIsOurTurn, CreateChannel, FilterFinallyAbsent,
         FollowChannel, GetAccreditedKeys, GetChannelTipMessageId, GetChannelTipSlot,
         InitializeChannelPublisher, MsgId, PrepareConfig, PreparedConfig, PublishBlock,
-        PublishOutcome, ReadChannel, SequencerKey, Slot, VaultMint,
+        PublishOutcome, ReadChannel, SequencerKey, Slot, VaultFunds, VaultMint,
     },
 };
 
@@ -115,6 +115,12 @@ mockall::mock! {
             msg: AdmitDeposit,
             ctx: &mut Context<Self, Result<VaultMint>>
         ) -> Result<VaultMint>;
+
+        pub fn handle_vault_funds(
+            &mut self,
+            msg: VaultFunds,
+            ctx: &mut Context<Self, Result<u64>>
+        ) -> Result<u64>;
 
         pub fn handle_get_accredited_keys(
             &mut self,
@@ -280,6 +286,18 @@ impl Message<AdmitDeposit> for MockBedrockActor {
         ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         self.handle_admit_deposit(msg, ctx)
+    }
+}
+
+impl Message<VaultFunds> for MockBedrockActor {
+    type Reply = Result<u64>;
+
+    async fn handle(
+        &mut self,
+        msg: VaultFunds,
+        ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.handle_vault_funds(msg, ctx)
     }
 }
 

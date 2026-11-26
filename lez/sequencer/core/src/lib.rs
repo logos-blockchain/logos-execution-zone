@@ -642,26 +642,33 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             block,
             mempool_transactions,
             deposits,
+            withdrawals,
             ..
         } = built;
 
+        // Refused by the vault or by Bedrock, which a later turn would not change.
+        let vault_refused = matches!(
+            &publish_res,
+            Err(kameo::error::SendError::HandlerError(
+                sequencer_bedrock_actor::error::Error::InvalidVaultDeposit(_)
+                    | sequencer_bedrock_actor::error::Error::InvalidVaultStep(_)
+                    | sequencer_bedrock_actor::error::Error::VaultStepRefused(_)
+                    | sequencer_bedrock_actor::error::Error::VaultProofFailed(_)
+            ))
+        );
         if publish_res.is_err() {
-            // Nothing was inscribed, so the block's transactions go back in front.
+            // Nothing was inscribed, so the block's transactions go back in front. A withdrawal
+            // the vault refused to pay out would stop every later block too.
             for (origin, tx) in mempool_transactions.into_iter().rev() {
+                if vault_refused && withdrawals.contains(&tx.hash()) {
+                    warn!(tx_hash = %tx.hash(), "Dropping a withdrawal the vault refused to pay out");
+                    continue;
+                }
                 self.mempool.push_front((origin, tx));
             }
         }
-        // Minted, or refused by the vault or by Bedrock, which a later turn would not change.
-        // Any other failure leaves them for the next turn.
-        if matches!(
-            &publish_res,
-            Ok(_)
-                | Err(kameo::error::SendError::HandlerError(
-                    sequencer_bedrock_actor::error::Error::InvalidVaultDeposit(_)
-                        | sequencer_bedrock_actor::error::Error::InvalidVaultStep(_)
-                        | sequencer_bedrock_actor::error::Error::VaultStepRefused(_)
-                ))
-        ) {
+        // Minted or refused; any other failure leaves the deposits for the next turn.
+        if publish_res.is_ok() || vault_refused {
             self.forget_deposits(deposits.iter().map(|(_, id)| *id));
         }
         let outcome = match publish_res {
@@ -713,7 +720,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                         .iter()
                         .map(|(deposit, _)| deposit.clone())
                         .collect(),
-                    payouts: Vec::new(),
+                    payouts: built.payouts.clone(),
                 },
             })
             .await
@@ -990,6 +997,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         opening: &fee_core::state::FeeState,
         tx_index: u64,
         summary: &mut fee_core::BlockFeeSummary,
+        payouts: &mut Payouts,
     ) -> Option<TransactionReceipt> {
         let tx_hash = tx.hash();
         let mut receipt = TransactionReceipt::EXEMPT;
@@ -1035,11 +1043,12 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     &mut scratch_summary,
                 ) {
                     Ok((events, tx_receipt)) => {
-                        // FIXME: interim. The sequencer cannot pay a withdrawal out on L1
-                        // yet, so every one is refused. Once it builds the vault's program
-                        // step, check the withdrawal against what the vault holds instead.
-                        if bridge_withdrawals(&events).next().is_some() {
-                            warn!(%tx_hash, "Dropping bridge withdrawal: payouts are not supported yet");
+                        // The vault pays a withdrawal out with the block that burns it.
+                        if !payouts.owe(tx_hash, bridge_withdrawals(&events)) {
+                            warn!(
+                                %tx_hash,
+                                "Dropping bridge withdrawal: the vault cannot pay it out with this block"
+                            );
                             return None;
                         }
                         *state = scratch;
@@ -1310,6 +1319,24 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .filter_map(|(deposit, mint)| Some((deposit.clone(), mint.id, mint.transaction()?)))
             .collect();
         pending_from_store.extend(mints.iter().map(|(_, _, tx)| tx.clone()));
+        let funds = self
+            .bedrock_pool_ref
+            .ask(sequencer_bedrock_actor::protocol::VaultFunds {
+                channel_id: self.channel_id,
+            })
+            .await
+            .unwrap_or_else(|err| {
+                warn!(
+                    error = format_args!("{:#}", anyhow!(err)),
+                    "Paying no withdrawal out this turn"
+                );
+                0
+            });
+        let mut payouts = Payouts {
+            funds,
+            owed: Vec::new(),
+            withdrawals: Vec::new(),
+        };
         while let Some((origin, tx, from_store)) = pending_from_store
             .pop_front()
             .map(|tx| (TransactionOrigin::Sequencer, tx, true))
@@ -1444,6 +1471,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     full_stake_releases::stake_entries(&working_state),
                     working_state.clone(),
                     summary,
+                    payouts.clone(),
                 )
             });
             let applied = Self::apply_mempool_transaction(
@@ -1455,9 +1483,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 &opening,
                 valid_transactions.len().try_into().expect("fits u64"),
                 &mut summary,
+                &mut payouts,
             );
             if applied.is_some()
-                && let Some((stake_entries_before, state, summary_before)) = snapshot
+                && let Some((stake_entries_before, state, summary_before, payouts_before)) =
+                    snapshot
             {
                 let stake_entries_after = full_stake_releases::stake_entries(&working_state);
                 let released =
@@ -1475,6 +1505,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     );
                     working_state = state;
                     summary = summary_before;
+                    payouts = payouts_before;
                     continue;
                 }
             }
@@ -1569,6 +1600,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 &opening,
                 valid_transactions.len().try_into().expect("fits u64"),
                 &mut summary,
+                &mut payouts,
             ) {
                 receipts.push(receipt);
                 if !matches!(origin, TransactionOrigin::Sequencer) {
@@ -1657,6 +1689,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 .into_iter()
                 .map(|(deposit, id, _)| (deposit, id))
                 .collect(),
+            payouts: payouts.owed,
+            withdrawals: payouts.withdrawals,
         })
     }
 
@@ -1980,6 +2014,47 @@ struct BlockWithMeta {
     mempool_transactions: Vec<(TransactionOrigin, LeeTransaction)>,
     /// The vault deposits this block mints, in its order, each with its id.
     deposits: Vec<(Vec<u8>, [u8; 32])>,
+    /// The amount and Bedrock key of each withdrawal this block burns.
+    payouts: Vec<(u64, [u8; 32])>,
+    /// The transactions that burn them.
+    withdrawals: Vec<HashType>,
+}
+
+/// What the vault pays out with the block being built.
+#[derive(Clone)]
+struct Payouts {
+    /// What its step can still pay.
+    funds: u64,
+    owed: Vec<(u64, [u8; 32])>,
+    /// The transactions owed to.
+    withdrawals: Vec<HashType>,
+}
+
+impl Payouts {
+    /// Owes the `withdrawals` of `tx` too, unless the step cannot pay them all.
+    fn owe(
+        &mut self,
+        tx: HashType,
+        withdrawals: impl Iterator<Item = bridge_core::event::Withdraw>,
+    ) -> bool {
+        let mut owed = self.clone();
+        for withdrawal in withdrawals {
+            let Some(funds) = owed.funds.checked_sub(withdrawal.amount) else {
+                return false;
+            };
+            owed.funds = funds;
+            owed.owed
+                .push((withdrawal.amount, withdrawal.bedrock_account_pk));
+        }
+        if owed.owed.len() > chain_state::vault::MAX_PAYOUTS {
+            return false;
+        }
+        if owed.owed.len() > self.owed.len() {
+            owed.withdrawals.push(tx);
+        }
+        *self = owed;
+        true
+    }
 }
 
 /// Why a publish did not go out.

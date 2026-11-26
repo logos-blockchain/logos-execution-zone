@@ -693,8 +693,39 @@ impl Publisher {
         Ok((inscription.op, step_proofs))
     }
 
-    /// The spendable vault notes of `committee` a step consumes to pay `payouts`, the largest
-    /// first. A step that pays nothing out consumes none.
+    /// What the vault can pay out in one step: its spendable notes, as many as a step consumes.
+    pub fn vault_funds(&mut self) -> u64 {
+        let committee = Self::committee(&self.vault_signing_key());
+        self.spendable_vault_notes(&committee)
+            .iter()
+            .fold(0, |funds, note| funds.saturating_add(note.opening.value))
+    }
+
+    /// The spendable vault notes of `committee`, the largest first, as many as a step consumes.
+    fn spendable_vault_notes(&mut self, committee: &Committee) -> Vec<VaultNote> {
+        let committee = committee.id();
+        let view = self.sequencer.handle().program_notes();
+        let mut notes: Vec<_> = view
+            .finalized
+            .iter()
+            .chain(&view.unfinalized)
+            .filter(|note| {
+                note.program == *VAULT_PROGRAM
+                    && note.opening.data == committee
+                    && view.spendable.contains(&note.commitment)
+            })
+            .map(|note| VaultNote {
+                commitment: note.commitment,
+                opening: note.opening,
+            })
+            .collect();
+        notes.sort_unstable_by_key(|note| std::cmp::Reverse(note.opening.value));
+        notes.truncate(vault_circuit::MAX_INPUTS);
+        notes
+    }
+
+    /// The vault notes a step consumes to pay `payouts`. A step that pays nothing out consumes
+    /// none.
     fn vault_inputs(
         &mut self,
         committee: &Committee,
@@ -714,35 +745,16 @@ impl Publisher {
             return Err(overflows);
         };
 
-        let committee = committee.id();
-        let view = self.sequencer.handle().program_notes();
-        let mut spendable: Vec<_> = view
-            .finalized
-            .iter()
-            .chain(&view.unfinalized)
-            .filter(|note| {
-                note.program == *VAULT_PROGRAM
-                    && note.opening.data == committee
-                    && view.spendable.contains(&note.commitment)
-            })
-            .collect();
-        spendable.sort_unstable_by_key(|note| std::cmp::Reverse(note.opening.value));
-
         let mut inputs = Vec::new();
-        for note in spendable {
-            if held >= owed || inputs.len() == vault_circuit::MAX_INPUTS {
+        for note in self.spendable_vault_notes(committee) {
+            if held >= owed {
                 break;
             }
             held = held.saturating_add(note.opening.value);
-            inputs.push(VaultNote {
-                commitment: note.commitment,
-                opening: note.opening,
-            });
+            inputs.push(note);
         }
         if held < owed {
-            return Err(Error::InvalidVaultStep(
-                "its spendable notes do not cover its payouts",
-            ));
+            return Err(Error::VaultUnderfunded);
         }
         Ok(inputs)
     }

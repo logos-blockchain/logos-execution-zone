@@ -10,7 +10,7 @@ use crate::{
         CheckChannelExists, CheckIsOurTurn, CreateChannel, FilterFinallyAbsent, FollowChannel,
         GetAccreditedKeys, GetChannelTipMessageId, GetChannelTipSlot, InitializeChannelPublisher,
         MsgId, PrepareConfig, PreparedConfig, PublishBlock, PublishOutcome, ReadChannel,
-        SequencerKey, Slot, VaultMint,
+        SequencerKey, Slot, VaultFunds, VaultMint,
     },
 };
 
@@ -24,6 +24,7 @@ pub trait BedrockActorTrait:
     + Message<ChangeChannelConfig, Reply = Result<()>>
     + Message<CheckChannelExists, Reply = Result<bool>>
     + Message<AdmitDeposit, Reply = Result<VaultMint>>
+    + Message<VaultFunds, Reply = Result<u64>>
     + Message<CheckIsOurTurn, Reply = Result<bool>>
     + Message<GetAccreditedKeys, Reply = Result<Option<AccreditedKeys>>>
     + Message<GetChannelTipSlot, Reply = Result<Option<Slot>>>

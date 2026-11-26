@@ -403,6 +403,20 @@ impl ShardingKey for CheckChannelExists {
     }
 }
 
+/// What the vault can pay out in the next block's step.
+#[derive(Debug, Clone, Copy)]
+pub struct VaultFunds {
+    pub channel_id: ChannelId,
+}
+
+impl ShardingKey for VaultFunds {
+    type Key = ChannelId;
+
+    fn sharding_key(&self) -> Self::Key {
+        self.channel_id
+    }
+}
+
 /// Checks a program deposit as its holder submitted it, the step and then its proof in Bedrock's
 /// encoding, and answers with what the zone mints once the vault takes it in.
 #[derive(Debug, Clone)]
