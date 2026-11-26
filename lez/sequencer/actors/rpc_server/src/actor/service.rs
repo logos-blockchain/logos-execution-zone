@@ -414,7 +414,8 @@ fn map_executor_error<M>(
             | sequencer_executor_actor::error::Error::InvalidTransaction(_)
             | sequencer_executor_actor::error::Error::RefusedAtHead(_)
             | sequencer_executor_actor::error::Error::PendingAuthentication(_)
-            | sequencer_executor_actor::error::Error::PendingSlot(_)) => {
+            | sequencer_executor_actor::error::Error::PendingSlot(_)
+            | sequencer_executor_actor::error::Error::BridgeDepositNotSequencer) => {
                 // With its cause, which the sender is shown.
                 let message = std::error::Error::source(&invalid).map_or_else(
                     || invalid.to_string(),
@@ -427,6 +428,20 @@ fn map_executor_error<M>(
                 "Mempool is full".to_owned(),
                 None::<()>,
             ),
+            underpriced @ sequencer_executor_actor::error::Error::MempoolUnderpriced => {
+                ErrorObjectOwned::owned(
+                    sequencer_service_rpc::MEMPOOL_UNDERPRICED_ERROR_CODE,
+                    underpriced.to_string(),
+                    None::<()>,
+                )
+            }
+            cycle @ sequencer_executor_actor::error::Error::MempoolNonceCycle => {
+                ErrorObjectOwned::owned(
+                    sequencer_service_rpc::MEMPOOL_NONCE_CYCLE_ERROR_CODE,
+                    cycle.to_string(),
+                    None::<()>,
+                )
+            }
             sequencer_executor_actor::error::Error::NotOnline => ErrorObjectOwned::owned(
                 sequencer_service_rpc::SEQUENCER_IS_NOT_ONLINE_ERROR_CODE,
                 "Sequencer is not online yet, try again later".to_owned(),

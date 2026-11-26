@@ -46,7 +46,6 @@ borsh.workspace = true
 hex.workspace = true
 url.workspace = true
 num-bigint.workspace = true
-futures.workspace = true
 libp2p.workspace = true
 thiserror.workspace = true
 
@@ -60,7 +59,6 @@ chain_state = { workspace = true, features = ["test-utils"] }
 common = { workspace = true, features = ["test-utils"] }
 sequencer_storage_actor = { workspace = true, features = ["actor", "mock"] }
 sequencer_bedrock_actor = { workspace = true, features = ["mock"] }
-futures.workspace = true
 test_programs.workspace = true
 program_loader_core.workspace = true
 lee = { workspace = true, features = ["test-utils"] }

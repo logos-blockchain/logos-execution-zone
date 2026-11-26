@@ -8249,10 +8249,6 @@ dependencies = [
 [[package]]
 name = "mempool"
 version = "0.1.0"
-dependencies = [
- "futures",
- "tokio",
-]
 
 [[package]]
 name = "merlin"
@@ -11559,7 +11555,6 @@ dependencies = [
  "clock_core",
  "common",
  "fee_core",
- "futures",
  "hex",
  "humantime-serde",
  "kameo",
@@ -11623,7 +11618,6 @@ dependencies = [
  "lee_core",
  "logging",
  "logos-blockchain-zone-sdk",
- "mempool",
  "mockall",
  "num-traits",
  "programs",
@@ -11688,7 +11682,6 @@ dependencies = [
  "lee",
  "libp2p 0.57.1",
  "logos-blockchain-zone-sdk",
- "mempool",
  "sequencer_channel_signing_actor",
  "sequencer_core",
  "sequencer_slasher_actor",

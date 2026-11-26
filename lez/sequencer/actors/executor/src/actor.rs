@@ -27,7 +27,7 @@ use sequencer_bedrock_actor::{
     protocol::{ChannelEvent, ChannelEventKind, Ed25519Key},
 };
 use sequencer_channel_signing_actor::{ChannelSigningActor, protocol as channel_signing_protocol};
-use sequencer_core::{StakeConfigUpdate, config::SequencerConfig};
+use sequencer_core::{Rejected, StakeConfigUpdate, config::SequencerConfig};
 use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::StorageActorTrait;
 use sharding_pool_actor::{
@@ -314,6 +314,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
             return Err(Error::TransactionTooLarge { size, max });
         }
 
+        // Only the sequencer mints deposits, from their L1 events.
+        if sequencer_core::extract_bridge_deposit_id(&transaction).is_some() {
+            return Err(Error::BridgeDepositNotSequencer);
+        }
+
         // Admission against the head state and the pending slots, before the
         // mempool sees it: the fee screen first, so an unfundable transaction
         // costs no signature verification, then authentication, then the slots
@@ -321,7 +326,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
         // (see `Error::is_definitive`); the rest depend on this node's head and
         // mempool. An identical re-send is already pending.
         let admission = online
-            .sequencer_mut()
+            .sequencer()
             .admit(&transaction)
             .await
             .map_err(admission_error)?;
@@ -330,10 +335,17 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
         }
 
         online
-            .mempool_handle()
-            .try_push((origin.into(), transaction.clone()))
-            .map_err(|_err| Error::MempoolIsFull)?;
-        online.sequencer_mut().record_pending(&transaction);
+            .sequencer_mut()
+            .mempool_mut()
+            .insert((origin.into(), transaction))
+            .map_err(|rejected| match rejected {
+                Rejected::Full => Error::MempoolIsFull,
+                Rejected::Occupied => {
+                    Error::PendingSlot(anyhow::anyhow!("a slot is already pending"))
+                }
+                Rejected::Underpriced => Error::MempoolUnderpriced,
+                Rejected::Cycle => Error::MempoolNonceCycle,
+            })?;
         Ok(())
     }
 }

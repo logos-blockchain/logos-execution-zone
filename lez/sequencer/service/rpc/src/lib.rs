@@ -26,6 +26,14 @@ pub const PRIVATE_FEE_BELOW_HEAD_ERROR_CODE: i32 = -31901;
 /// from the channel.
 pub const SEQUENCER_IS_NOT_ONLINE_ERROR_CODE: i32 = -31902;
 
+/// Error code of a transaction turned away from a full mempool because it does not raise the tip
+/// per gas enough over the pending one it would evict.
+pub const MEMPOOL_UNDERPRICED_ERROR_CODE: i32 = -31903;
+
+/// Error code of a transaction turned away because its nonces order it both before and after a
+/// pending transaction, so neither could ever be included.
+pub const MEMPOOL_NONCE_CYCLE_ERROR_CODE: i32 = -31904;
+
 /// Type alias for RPC client. Only available when `client` feature is enabled.
 ///
 /// It's cheap to clone this client, so it can be cloned and shared across the application.

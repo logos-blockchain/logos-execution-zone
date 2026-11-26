@@ -4,7 +4,7 @@ use common::HashType;
 
 /// Bounded, FIFO-eviction membership cache over transaction hashes.
 ///
-/// The mempool is a plain channel with no dedup, so the gossip layer tracks
+/// The mempool only dedups signed transactions, by nonce, so the gossip layer tracks
 /// recently seen transactions here to avoid re-admitting duplicates that
 /// arrive from multiple peers or echo back after a local publish.
 ///
