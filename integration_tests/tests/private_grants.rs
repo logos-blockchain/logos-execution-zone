@@ -19,10 +19,14 @@ use lee::{
     AccountId, Actor, privacy_preserving_transaction::circuit::ProgramCatalog, program::Program,
 };
 use lee_core::program::SyncMessage;
+use logos_blockchain_zone_sdk::key_management_system_service::keys::Ed25519Key;
 use sequencer_service_rpc::RpcClient as _;
 use test_guest_core::{Relay, Script};
 use tokio::test;
-use wallet::{AccountIdentity, AccountMention, program_facades::program_loader::ProgramLoader};
+use wallet::{
+    AccountIdentity, AccountMention,
+    program_facades::{program_loader::ProgramLoader, sequencer_stake::SequencerStake},
+};
 
 const AMOUNT: u128 = 7;
 const FUNDING: u128 = 10_000_000;
@@ -219,6 +223,66 @@ async fn a_private_signer_declared_for_a_public_root_is_used_by_public_programs(
         );
         assert_eq!(received, if opened { AMOUNT } else { 0 }, "opened {opened}");
         assert!(spent >= received, "opened {opened}: alice spent {spent}");
+    }
+    Ok(())
+}
+
+// A private funder pays a stake for a public owner and for a private one: the funds account
+// receives it, and the published transaction never names the funder's account.
+#[test]
+async fn a_private_funder_pays_a_stake_without_publishing_its_account() -> Result<()> {
+    let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+    let key = sequencer_stake_core::SequencerKey::new(
+        Ed25519Key::from_bytes(&[0x42; 32]).public_key().to_bytes(),
+    )
+    .expect("a channel signing public key is a valid Ed25519 public key");
+
+    for private_owner in [false, true] {
+        // Each stake registers a sequencer nobody runs, so each case gets its own chain.
+        let mut ctx = TestContext::new().await?;
+        let funder = funded_private_account(&mut ctx, FUNDING).await?;
+        let owner = new_account(&mut ctx, private_owner, None).await?;
+        let funder_before = private_balance(&ctx, funder)?;
+
+        let (hash, _) = SequencerStake(ctx.wallet())
+            .send_stake(
+                if private_owner {
+                    AccountIdentity::PrivateOwned(owner)
+                } else {
+                    AccountIdentity::Public(owner)
+                },
+                AccountIdentity::PrivateOwned(funder),
+                key,
+                amount,
+            )
+            .await
+            .context("the stake should be sent")?;
+        wait_for_inclusion(&ctx, hash).await?;
+        sync_private(&mut ctx).await?;
+        let (tx, _) = ctx
+            .sequencer_client()
+            .get_transaction(hash)
+            .await?
+            .context("the included transaction should be served")?;
+
+        assert_eq!(
+            account_balance(&ctx, system_accounts::stake_funds_account_id(&owner)).await?,
+            amount,
+            "private owner {private_owner}"
+        );
+        let spent = funder_before
+            .checked_sub(private_balance(&ctx, funder)?)
+            .context("the funder's balance should not grow")?;
+        assert!(
+            spent >= amount,
+            "private owner {private_owner}: the funder spent {spent}"
+        );
+        assert!(
+            !borsh::to_vec(&tx)?
+                .windows(32)
+                .any(|window| window == funder.value()),
+            "private owner {private_owner}: the transaction names the funder"
+        );
     }
     Ok(())
 }
