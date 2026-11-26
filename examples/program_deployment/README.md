@@ -335,7 +335,7 @@ it to a message it sends.
 
 Programs receive the grants they hold in `ReceiveInput::grants`, and
 `ReceiveInput::is_authorized()` reports whether they include the receiver's own. The authorized
-Hello World example checks it before writing:
+Hello World example checks this before writing:
 
 ```rust
 assert!(input.is_authorized(), "Missing required authorization");

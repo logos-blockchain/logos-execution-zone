@@ -12,8 +12,6 @@ lee_core::actor_entrypoint!(handle_message);
 fn handle_message(input: &ReceiveInput, greeting: Vec<u8>) -> Response {
     // #### Difference with `hello_world` example here:
     // Fail if the receiving account is not authorized
-    // `is_authorized()` reports the grant the system gives from the account's signature or from a
-    // PDA seed the sending program grants.
     assert!(input.is_authorized(), "Missing required authorization");
     // ####
 
