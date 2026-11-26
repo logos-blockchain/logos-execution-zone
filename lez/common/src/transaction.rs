@@ -3,8 +3,11 @@ use std::collections::BTreeMap;
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee::{AccountId, Actor, SignedTransaction as _, V03State, ValidatedStateDiff};
 use lee_core::{
-    BlockId, Timestamp, account::Balance, native_token::NATIVE_TOKEN_PROGRAM_ID,
-    program::TransactionEvent,
+    BlockId, Timestamp,
+    account::Balance,
+    execution_state::BoundaryStep,
+    native_token::NATIVE_TOKEN_PROGRAM_ID,
+    program::{Publication, TransactionEvent},
 };
 use serde::{Deserialize, Serialize};
 use tracing::warn;
@@ -63,6 +66,32 @@ impl LeeTransaction {
             Self::Public(tx) => lee::is_fee_authorized(tx.message()),
             Self::PrivacyPreserving(tx) => lee::is_fee_authorized(tx.message()),
         }
+    }
+
+    /// Whether the public part can fail once the transaction is admitted.
+    ///
+    /// It is only `false` for a pptx that does nothing publicly except delivering its in-proof fee.
+    #[must_use]
+    pub fn public_part_can_fail(&self) -> bool {
+        let Self::PrivacyPreserving(tx) = self else {
+            return true;
+        };
+        let message = tx.message();
+        let execution = &message.execution;
+        let inbox = Actor::native_balance(system_accounts::fee_inbox_account_id());
+        let delivers_fee_alone = matches!(
+            execution.boundary.as_slice(),
+            [BoundaryStep::PrivateToPublic(delivery), BoundaryStep::EndPublicSubtree]
+                if delivery.envelope.to == inbox
+        );
+        // A sealed publication is checked by the proof; a clear one against the state.
+        let publishes_clear = execution
+            .async_messages
+            .iter()
+            .any(|publication| matches!(publication, Publication::Clear(_)));
+        // The proof enforces private promotions only; an unreached public one fails settlement.
+        let promotes = !message.public_context.promotions.is_empty();
+        execution.public_root.is_some() || !delivers_fee_alone || publishes_clear || promotes
     }
 
     #[must_use]
