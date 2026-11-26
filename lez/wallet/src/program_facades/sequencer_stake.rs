@@ -7,7 +7,8 @@ use lee_core::SharedSecretKey;
 use sequencer_stake_core::{ChannelParams, Message, SequencerKey, StakeRecord, stake_funds_seed};
 
 use crate::{
-    AccountIdentity, AsyncDelivery, ExecutionFailureKind, WalletCore, WalletSequencerClient,
+    AccountIdentity, AccountMention, AsyncDelivery, ExecutionFailureKind, WalletCore,
+    WalletSequencerClient, account_manager::random_bytes,
 };
 
 pub struct SequencerStake<'wallet, C: WalletSequencerClient>(pub &'wallet WalletCore<C>);
@@ -31,11 +32,20 @@ impl<C: WalletSequencerClient> SequencerStake<'_, C> {
             program,
             seed: stake_funds_seed(&ownership.account_id()),
         };
+        // A private funder's grant is held under the address its opening gives, so the message
+        // names that address.
+        let opening = funding.is_private().then(random_bytes);
+        let funding_id = funding.account_id();
+        let funding_address = opening.map_or(funding_id, |opening| funding_id.blinded(&opening));
+        let funding_mention = AccountMention {
+            address_openings: opening.into_iter().collect(),
+            ..funding.balance()
+        };
         let message = Program::serialize_message(Message::Stake {
             sequencer_key,
             amount,
             has_record,
-            funding: funding.account_id(),
+            funding: funding_address,
         })
         .expect("Message should serialize");
         // A private owner's fee payouts are published under its recovery binding.
@@ -47,7 +57,7 @@ impl<C: WalletSequencerClient> SequencerStake<'_, C> {
         let accounts = vec![
             ownership.select_program_actor_state(program),
             funds.balance().without_authorization(),
-            funding.balance(),
+            funding_mention,
             AccountIdentity::PublicNoSign(system_accounts::sequencer_stake_config_account_id())
                 .select_program_actor_state(program),
         ];
