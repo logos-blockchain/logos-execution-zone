@@ -7,7 +7,10 @@
 
 use std::collections::HashMap;
 
-use lee_core::account::{AccountId, Actor};
+use lee_core::{
+    account::{AccountId, Actor},
+    signing_key::signature_program_id,
+};
 
 use super::*;
 
@@ -376,6 +379,61 @@ fn a_header_cannot_be_created_at_the_loader_address() {
             &message,
         ),
         ActorStates::default().read(),
+    );
+}
+
+// The signature program's address is a `system_upgrader` PDA: without that authorization, no
+// loader message can write there.
+
+#[test]
+#[should_panic(expected = "WriteSegment target must be an authorized account")]
+fn a_segment_still_cannot_be_written_at_the_signature_program_address_without_authorization() {
+    let message = Message::WriteSegment {
+        bytecode: vec![0_u8; 32],
+        next_segment: None,
+    };
+
+    let _transition = handle_message(
+        &input(signature_program_id(), false, ActorState::empty(), &message),
+        ActorStates::default().read(),
+    );
+}
+
+#[test]
+#[should_panic(expected = "CreateHeader target must be an authorized account")]
+fn a_header_still_cannot_be_created_at_the_signature_program_address_without_authorization() {
+    let message = Message::CreateHeader {
+        first_segment: AccountId::new([2; 32]),
+        immutable: false,
+    };
+
+    let _transition = handle_message(
+        &input(signature_program_id(), false, ActorState::empty(), &message),
+        ActorStates::default().read(),
+    );
+}
+
+#[test]
+#[should_panic(expected = "must be authorized by the signer")]
+fn the_signature_program_header_still_cannot_be_updated_without_authorization() {
+    let first_segment = AccountId::new([2; 32]);
+    let actor_states = ActorStates::default().header(
+        signature_program_id(),
+        &ProgramHeader {
+            image_id: [0; 8],
+            program_first_segment: first_segment,
+            immutable: false,
+        },
+    );
+    let pre_state = actor_states.read()(signature_program_id()).clone();
+    let message = Message::UpdateHeader {
+        first_segment,
+        immutable: false,
+    };
+
+    let _transition = handle_message(
+        &input(signature_program_id(), false, pre_state, &message),
+        actor_states.read(),
     );
 }
 

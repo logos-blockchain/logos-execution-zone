@@ -2,6 +2,7 @@
   "home": "/var/lib/sequencer_service",
   "max_num_tx_in_block": 20,
   "mempool_max_size": 10000,
+  "mempool_max_per_account": 16,
   "block_create_timeout": "10s",
   "retry_pending_blocks_timeout": "7s",
   "bedrock_config": {
@@ -57,8 +58,11 @@
             132,
             121
           ],
-          "ownership_public_key": "e1c90d8ca44ed786846e9312e7a68ffc034220dbaa77b58283a869e33d30c9f2",
-          "stake_signature": "4a633f3cbd47dd9e21959772f25d280f964ded15ded28d85b4caebdcf52fa09257f5ab88aabf02b03204f3642a135cf07a4099d0983da2d8c2955d8ffb5d5615"
+          "ownership_id": "3DpQ7crHm9mYi59LvGA2jPtXT929hRULYKuJBBam3jEr",
+          "stake_entry": {
+            "auth_data": "00d09b81a9d7f33fdadc30104413f441b56305804f41a592f30b31f1bec8a047b29b8ca0d65ebaa03fb2c7a7df7453575d00ce956d20090c4eb7af0691ebee018280682766c9d220c33b59bc68d6cefac6772729e6c4052845effce2d33c56d7ae83c75274f05c6ef19377de60a36208543ae0494f90fd24952984d2fdad17c9a4",
+            "next": "00ba54ccf73eb5ce8f74189232d83734265dac87cabc2bdc267bf715a63252ae9c"
+          }
         }
       },
       {
@@ -97,8 +101,11 @@
             42,
             251
           ],
-          "ownership_public_key": "444e065ab604a6350ea5824409ebe9059f3be6a608be72d2f4aa5342d3cf5b38",
-          "stake_signature": "291caa75a4030b3d016ed036763f1ab0cb79c3ec0697209e433fec916ea3982f12edf5691eb8df0eaa8afc7a218cdb725181132cc718a7fab28ed267e6622a5f"
+          "ownership_id": "81XH42vBEN4XLLDttQvv2uapGtoUVBtVgPCZgX8YYQHS",
+          "stake_entry": {
+            "auth_data": "00cf080a9d8004a13d114fd3398cec0821542844a1b1522c5ee27e0e52f27be31d873c5f376eab0bd8852a85bd199a72f51a4022907e2ddb328f6fde3eddac63f770209712da7024381e1a726c4389f3644350ef86a3be74cce8c9ee432a505e62f270a1c8380c68b67e1ccd38becb932ab2da11a51108dec638086db6932a5dea",
+            "next": "00e80013da98a58f08aa23f1991fa4e1958f8f8477c413365f4026a640eb61d2a0"
+          }
         }
       },
       {
@@ -137,8 +144,11 @@
             113,
             209
           ],
-          "ownership_public_key": "a4fca61ec688bdfbe497b37933aac8cadedec6047739b31f5cd8fb0492a3f85c",
-          "stake_signature": "e292bfb5128186feaf13c43d37e2aca7735fce1a6d5bcf5ef1371d98cccb5c50af8f36a61cc49c8c5a8c950b201f1447babe2c62b867d37f61048df4480bbeb4"
+          "ownership_id": "4sxWS7CrTDKtyqeuSqSA9qBDWgUvwK3iJhjydyCGUiet",
+          "stake_entry": {
+            "auth_data": "000b9c8fac8ed11205f124738f82e9d9850534016cb80fbfd119cb5d0f8b902df5bcbd4c814efb923cb910b7aebd4a45cec1c64a1a31a5941d2c0e6d5a34dc33825789c417bccfe6773a30da44caadac34c4ca7f2ff1504aab8dda22cd493f8894b1c8132b7764c62e702602e30af066ceadc47727d205214b2c39afbdd00ff253",
+            "next": "00c66e462087952f1d4ca66a6a3fae67a55495b98824afef48b62991127f38f964"
+          }
         }
       },
       {
@@ -177,15 +187,18 @@
             17,
             10
           ],
-          "ownership_public_key": "86bf4dfda7643fe22f067f34cf76634a08f5601abd591144e564a2ccc7f677b9",
-          "stake_signature": "b68f17f35eea16dbce2ee21bf87abd806f1712d6b5fba6bb4edf4e169b3f914a158c5d2a57eb9ee19d56175015865519c428193be6a95c36811b37b6eb1de488"
+          "ownership_id": "HGkYVqzWRoJoq7898iFLj2uNmC56f1bqxuQVWifPMvS7",
+          "stake_entry": {
+            "auth_data": "001dd441ec9d3b8350021ef1726e53ddcc777b0f1ead132d01564ab7a102bba496395bf7a99911ff8775d74e0f7818cb7f617681886ddcfff0574152758381e5efe9f467a48a1d5455b9b18a1c0d8449835d05f078fa81a5ae571f9f5b18c52a635c3cb7cf548f0fa9454e4251b9a0b983b53f34b399965614463398e536fa1877",
+            "next": "0049ee0c8de7012e99ff9b203a4001f025c4213b09d75153abb9cf3ee9fbeffaef"
+          }
         }
       },
       {
         "supply_account": {
           "recipient": {
             "identified": {
-              "key": "b6eb0e598cb1fbcb8ffbb13bd9deef0e4ad4c6bb39382873f7b509e05f3214fa"
+              "key": "00f00d1e62fa5278307fbde46d84a022f571caff20c157b2831884cc3cc2ae4c29"
             }
           },
           "balance": 10000
@@ -195,7 +208,7 @@
         "supply_account": {
           "recipient": {
             "identified": {
-              "key": "97f49d1c817434bdefbeef2fa856d1602de6ca4ed6f72c6f3853be7e6fe97f47"
+              "key": "000223ea30d102c2f066dca058325ee30af21c23cf4dd9a16c3e4ab190ba0b49cb"
             }
           },
           "balance": 20000
@@ -215,7 +228,6 @@
       }
     ]
   },
-  "cross_zone": null,
   "metrics_listen_address": "0.0.0.0:9000",
   "gossip": {
     "listen_addr": "/ip4/0.0.0.0/udp/0/quic-v1",

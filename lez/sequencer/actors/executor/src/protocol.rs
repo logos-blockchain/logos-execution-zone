@@ -8,9 +8,6 @@ use lee_core::{
     account::{AccountId, Actor},
 };
 pub use sequencer_bedrock_actor::protocol::{ChannelId, MsgId, Slot};
-// TODO: Move to this module once sequencer_core will be in internal implementation detail of
-// executor.
-pub use sequencer_storage_actor::protocol::{CrossZoneMessageKey, DeadLetterRequeue};
 
 /// The widest range a [`GetBlockRange`] may span.
 pub const MAX_BLOCK_RANGE_LEN: usize = 1024;
@@ -178,18 +175,6 @@ pub enum ExecutorStatus {
     Online { height: BlockId, is_our_turn: bool },
 }
 
-pub struct GetCrossZoneDeadLetters;
-
-#[derive(Reply)]
-pub struct GetCrossZoneDeadLettersReply {
-    pub total_retired: u64,
-    pub retained: Vec<sequencer_storage_actor::protocol::DeadLetterDispatch>,
-}
-
-pub struct RequeueCrossZoneDeadLetter {
-    pub message_key: CrossZoneMessageKey,
-}
-
 /// The `system_upgrader` changes the approval pool holds approvals of.
 pub struct GetSystemProposals;
 
@@ -203,11 +188,6 @@ pub struct GetSystemProposalsReply {
 /// A committee member's approval of a `system_upgrader` change, for the producer's pool.
 pub struct SubmitSystemApproval {
     pub approval: system_upgrader_core::SignedApproval,
-}
-
-#[derive(Reply)]
-pub struct RequeueCrossZoneDeadLetterReply {
-    pub outcome: sequencer_storage_actor::protocol::DeadLetterRequeue,
 }
 
 pub struct GetBlockByHash {

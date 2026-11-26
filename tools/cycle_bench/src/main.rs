@@ -70,6 +70,11 @@ struct Cli {
     #[arg(long)]
     ppe: bool,
 
+    /// With --ppe, run only this fee case (0 = no fee, 1 = recovery under its own key, 2 =
+    /// recovery under the note key, 3 = public refund target) and nothing else.
+    #[arg(long, requires = "ppe")]
+    ppe_fee_case: Option<usize>,
+
     /// Iterations for executor wall-time sampling per case. First iter is
     /// discarded as warmup, remaining N feed the stats.
     #[arg(long, default_value_t = 5)]
@@ -558,7 +563,7 @@ fn tick_case(label: &'static str, block_id: BlockId) -> Result<Case> {
 /// times it.
 fn schedule_case(label: &'static str, committee_size: usize) -> Result<Case> {
     let (actor_states, message) =
-        system_upgrader::schedule_guest_input(committee_size, &programs::ping_receiver());
+        system_upgrader::schedule_guest_input(committee_size, &programs::bridge());
     Case::new(
         label,
         system_upgrader_core::registry_actor(),
@@ -608,6 +613,13 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let prove = cli.prove;
     let exec_iters = cli.exec_iters.max(1);
+    #[cfg(feature = "ppe")]
+    if let Some(case) = cli.ppe_fee_case {
+        let results = ppe::run_all(Some(case));
+        anyhow::ensure!(!results.is_empty(), "no fee case {case}");
+        ppe::print_table(&results);
+        return Ok(());
+    }
     if prove {
         eprintln!("cycle_bench: prove mode ON, this will be slow (~minutes per program)");
     }
@@ -640,7 +652,11 @@ fn main() -> Result<()> {
     }
 
     #[cfg(feature = "ppe")]
-    let ppe_results = if cli.ppe { ppe::run_all() } else { Vec::new() };
+    let ppe_results = if cli.ppe {
+        ppe::run_all(None)
+    } else {
+        Vec::new()
+    };
     #[cfg(not(feature = "ppe"))]
     let ppe_results: Vec<ppe::PpeBenchResult> = {
         if cli.ppe {

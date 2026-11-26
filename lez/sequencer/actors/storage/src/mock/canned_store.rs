@@ -11,9 +11,9 @@ use lee_core::BlockId;
 
 use super::MockStorageActor;
 use crate::protocol::{
-    AtomicUpdate, DropSettledCrossZoneDispatches, GetBlock, PendingCrossZoneDispatchRecord,
-    PendingDepositEventRecord, PutSlashRecordBytes, PutSystemApprovalsBytes, SetZoneAnchor,
-    StoreUpdateOutcome, UpdateZoneCheckpoint, ZoneAnchorRecord,
+    AtomicUpdate, GetBlock, PendingDepositEventRecord, PutSlashRecordBytes,
+    PutSystemApprovalsBytes, SetZoneAnchor, StoreUpdateOutcome, UpdateZoneCheckpoint,
+    ZoneAnchorRecord,
 };
 
 /// What a mocked store holds.
@@ -30,7 +30,6 @@ pub struct CannedStore {
     /// Serialized unfinalized channel view.
     pub channel_view: Option<Vec<u8>>,
     pub pending_deposits: Vec<PendingDepositEventRecord>,
-    pub pending_dispatches: Vec<PendingCrossZoneDispatchRecord>,
     pub slash_record: Option<Vec<u8>>,
     pub system_approvals: Option<Vec<u8>>,
 }
@@ -66,11 +65,6 @@ impl CannedStore {
             !update
                 .finalized_deposit_records
                 .contains(&record.deposit_op_id)
-        });
-        self.pending_dispatches.retain(|record| {
-            !update
-                .finalized_dispatch_records
-                .contains(&record.message_key)
         });
     }
 
@@ -156,22 +150,6 @@ impl SharedStore {
             let store = self.clone();
             move |_msg, _ctx| Ok(store.lock().pending_deposits.clone())
         });
-        mock.expect_handle_get_pending_cross_zone_dispatches()
-            .returning({
-                let store = self.clone();
-                move |_msg, _ctx| Ok(store.lock().pending_dispatches.clone())
-            });
-        mock.expect_handle_drop_settled_cross_zone_dispatches()
-            .returning({
-                let store = self.clone();
-                move |DropSettledCrossZoneDispatches { message_keys }, _ctx| {
-                    store
-                        .lock()
-                        .pending_dispatches
-                        .retain(|record| !message_keys.contains(&record.message_key));
-                    Ok(())
-                }
-            });
         mock.expect_handle_get_slash_record_bytes().returning({
             let store = self.clone();
             move |_msg, _ctx| Ok(store.lock().slash_record.clone())
@@ -194,15 +172,6 @@ impl SharedStore {
                 Ok(())
             }
         });
-        mock.expect_handle_get_dead_letter_dispatches()
-            .returning(|_msg, _ctx| Ok(Vec::new()));
-        mock.expect_handle_get_dead_letter_dispatch_retained_count()
-            .returning(|_msg, _ctx| Ok(0));
-        mock.expect_handle_get_pending_cross_zone_dispatch_count()
-            .returning({
-                let store = self.clone();
-                move |_msg, _ctx| Ok(store.lock().pending_dispatches.len())
-            });
         mock
     }
 

@@ -77,7 +77,6 @@ pub fn setup_indexer_ffi(bedrock_addr: SocketAddr) -> Result<(IndexerServiceFFI,
     let indexer_config = integration_tests::config::indexer_config(
         bedrock_addr,
         integration_tests::config::bedrock_channel_id(),
-        None,
     )
     .context("Failed to create Indexer config")?;
 

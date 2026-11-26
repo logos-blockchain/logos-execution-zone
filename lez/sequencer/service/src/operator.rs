@@ -117,8 +117,7 @@ pub fn setup(
                 .filter_map(|action| match action {
                     GenesisAction::StakeSequencer { sequencer_key, .. } => Some(*sequencer_key),
                     GenesisAction::SupplyAccount { .. }
-                    | GenesisAction::SupplyPrivateAccount { .. }
-                    | GenesisAction::SupplyBridgeLockHolding { .. } => None,
+                    | GenesisAction::SupplyPrivateAccount { .. } => None,
                 })
                 .collect();
             founding.is_empty() || own_key.is_some_and(|key| founding.contains(&key))
@@ -219,9 +218,7 @@ pub async fn unstake(
     );
     // The wallet drops a signature it holds no key for without saying so.
     ensure!(
-        wallet
-            .get_account_public_signing_key(entry.account_id)
-            .is_some(),
+        wallet.get_account_initial_key(entry.account_id).is_some(),
         "The wallet holds no key for the stake's ownership account {}; import it with `wallet \
          account import public`",
         entry.account_id
@@ -321,9 +318,7 @@ fn stake_owner(
         .context("This channel signing key has no stake")?;
     // The wallet drops a signature it holds no key for without saying so.
     ensure!(
-        wallet
-            .get_account_public_signing_key(entry.account_id)
-            .is_some(),
+        wallet.get_account_initial_key(entry.account_id).is_some(),
         "The wallet holds no key for the stake's ownership account {}; import it with `wallet \
          account import public`",
         entry.account_id

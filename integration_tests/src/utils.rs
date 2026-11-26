@@ -173,7 +173,7 @@ pub async fn send(
         to_npk: None,
         to_vpk: None,
         to_keys: None,
-        to_pk: None,
+        to_initial_key: None,
         amount,
     });
     let SubcommandReturnValue::TransactionExecuted { tx_hash } =
@@ -314,7 +314,7 @@ pub fn assert_public_account_restored(ctx: &TestContext, account_id: AccountId, 
     ctx.wallet()
         .storage()
         .key_chain()
-        .pub_account_signing_key(account_id)
+        .pub_account_initial_key(account_id)
         .unwrap_or_else(|| panic!("{label} should be restored"));
 }
 
@@ -381,8 +381,8 @@ async fn indexer_diagnosis(ctx: &TestContext) -> String {
 
     match tokio::time::timeout(INDEXER_STATUS_TIMEOUT, ctx.indexer_client().get_status()).await {
         Ok(Ok(status)) => format!(
-            "Indexer state {:?}, last error {:?}, stall reason {:?}, cross-zone halt {:?}",
-            status.state, status.last_error, status.stall_reason, status.cross_zone_halt
+            "Indexer state {:?}, last error {:?}, stall reason {:?}",
+            status.state, status.last_error, status.stall_reason
         ),
         Ok(Err(err)) => format!("Indexer status unavailable: {err}"),
         Err(_elapsed) => format!("Indexer status did not answer within {INDEXER_STATUS_TIMEOUT:?}"),

@@ -7,7 +7,7 @@ use std::{
 
 use anyhow::Context as _;
 use async_trait::async_trait;
-use lee::PrivateKey;
+use lee::signature::PublicAccountSecret;
 use logos_blockchain_zone_sdk::{
     testing_framework_app::{AppDeployment, AppHostEnv, DeployContext},
     testing_framework_core::scenario::DynError,
@@ -24,7 +24,7 @@ use crate::{
 struct SequencerInstance {
     client: SequencerClient,
     addr: SocketAddr,
-    public_accounts: Vec<(PrivateKey, u128)>,
+    public_accounts: Vec<(PublicAccountSecret, u128)>,
     private_accounts: Vec<InitialPrivateAccountForWallet>,
     service: Mutex<Option<SequencerHandle>>,
     _state_dir: Option<TempDir>,
@@ -41,7 +41,7 @@ impl LezSequencerClient {
     pub(crate) fn new(
         client: SequencerClient,
         addr: SocketAddr,
-        public_accounts: Vec<(PrivateKey, u128)>,
+        public_accounts: Vec<(PublicAccountSecret, u128)>,
         private_accounts: Vec<InitialPrivateAccountForWallet>,
         service: SequencerHandle,
         state_dir: Option<TempDir>,
@@ -85,7 +85,7 @@ impl LezSequencerClient {
         Ok(())
     }
 
-    pub(super) fn public_accounts(&self) -> &[(PrivateKey, u128)] {
+    pub(super) fn public_accounts(&self) -> &[(PublicAccountSecret, u128)] {
         &self.0.public_accounts
     }
 

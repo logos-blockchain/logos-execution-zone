@@ -45,7 +45,6 @@ members = [
   "lez/explorer_service",
   "lez/testnet_initial_state",
   "lez/indexer/ffi",
-  "lez/keycard_wallet",
   "lez/mempool",
   "lez/wallet",
   "lez/common",
@@ -57,17 +56,7 @@ members = [
   "lez/programs/clock",
   "lez/programs/fee",
   "lez/programs/fee/core",
-  "lez/programs/cross_zone_marker",
-  "lez/programs/cross_zone_emission_core",
-  "lez/programs/cross_zone_receiver_core",
-  "lez/programs/cross_zone_inbox",
-  "lez/programs/cross_zone_outbox",
-  "lez/programs/bridge_lock",
-  "lez/programs/wrapped_token",
-  "lez/programs/ping_sender",
-  "lez/programs/ping_receiver",
   "lez/programs/sequencer_stake",
-  "lez/cross_zone",
   "lez/core_ffi",
 
   "test_guest_core",
@@ -85,10 +74,10 @@ members = [
   "tools/cycle_bench",
   "tools/crypto_primitives_bench",
   "tools/integration_bench",
-  "tools/cross_zone_chat",
   "tools/dashboard_gen",
   "tools/devnet_configs",
 ]
+exclude = ["lez/keycard_wallet"]
 
 [workspace.dependencies]
 lee = { path = "lee/state_machine" }
@@ -134,18 +123,9 @@ programs = { path = "lez/programs", default-features = false, features = [
 system_accounts = { path = "lez/system_accounts" }
 clock_core = { path = "lez/programs/clock/core" }
 system_upgrader_core = { path = "lez/programs/system_upgrader/core" }
-cross_zone_marker_core = { path = "lez/programs/cross_zone_marker" }
 fee_core = { path = "lez/programs/fee/core" }
 bridge_core = { path = "lez/programs/bridge/core" }
-cross_zone_inbox_core = { path = "lez/programs/cross_zone_inbox/core" }
-cross_zone_outbox_core = { path = "lez/programs/cross_zone_outbox/core" }
-cross_zone_emission_core = { path = "lez/programs/cross_zone_emission_core" }
-cross_zone_receiver_core = { path = "lez/programs/cross_zone_receiver_core" }
-bridge_lock_core = { path = "lez/programs/bridge_lock/core" }
-wrapped_token_core = { path = "lez/programs/wrapped_token/core" }
-ping_core = { path = "lez/programs/ping_core" }
 sequencer_stake_core = { path = "lez/programs/sequencer_stake/core" }
-cross_zone = { path = "lez/cross_zone" }
 build_utils = { path = "build_utils" }
 test_guest_core = { path = "test_guest_core" }
 test_methods = { path = "lee/state_machine/test_methods" }
@@ -284,6 +264,13 @@ enum-iterator = "2.3.0"
 cbindgen = "0.29"
 glob = "0.3.4"
 
+# The guests are built with this profile, and every cycle they run is proven.
+# LTO: link-time optimization at "fat" level
+# 1 codegen unit: no splitting, code is optimized wholely
+[profile.release]
+lto = "fat"
+codegen-units = 1
+
 # Profile for leptos WASM release builds
 [profile.wasm-release]
 inherits = "release"
@@ -314,6 +301,7 @@ debug = "line-tables-only"
 
 [workspace.lints.rust]
 warnings = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(keycard)"] }
 
 [workspace.lints]
 clippy.all = { level = "deny", priority = -1 }

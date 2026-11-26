@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use common::HashType;
 use futures::future::try_join_all;
-use lee::{Account, AccountId, PublicKey};
+use lee::{Account, AccountId, test_utils::TestSigner};
 use lee_core::{account::ActorState, program::MessageData};
 use sequencer_service_rpc::RpcClient as _;
 use sequencer_stake_core::{SequencerEntry, SequencerKey, SequencerStakeConfig, stake_funds_seed};
@@ -123,9 +123,7 @@ async fn configured_public_accounts(
     let existing = context.existing_public_accounts().await?;
     Ok(crate::config::default_public_accounts_for_wallet()
         .iter()
-        .map(|(private_key, _balance)| {
-            AccountId::from(&PublicKey::new_from_private_key(private_key))
-        })
+        .map(|(private_key, _balance)| TestSigner::from(private_key).account_id())
         .filter(|account_id| existing.contains(account_id))
         .collect())
 }

@@ -18,6 +18,13 @@ typedef enum FfiPublicAccountEvidenceKind {
   Pda,
 } FfiPublicAccountEvidenceKind;
 
+/**
+ * A signing key's type.
+ */
+typedef enum FfiKeyType {
+  Schnorr = 0,
+} FfiKeyType;
+
 typedef enum FfiPublicationKind {
   FfiPublicationKind_Clear = 0,
   FfiPublicationKind_Sealed,
@@ -194,11 +201,20 @@ typedef struct FfiPublicExecutionContext {
   FfiActorList private_signers;
 } FfiPublicExecutionContext;
 
-typedef struct FfiBytes32 FfiPublicKey;
+/**
+ * A signing key's type and 32-byte commitment.
+ */
+typedef struct FfiSigningKeyState {
+  enum FfiKeyType key_type;
+  struct FfiBytes32 key_commitment;
+} FfiSigningKeyState;
 
 typedef struct FfiPublicAccountEvidence {
   enum FfiPublicAccountEvidenceKind kind;
-  FfiPublicKey key;
+  /**
+   * The account's initial key, for `Key` evidence.
+   */
+  struct FfiSigningKeyState key;
   FfiAccountId program;
   struct FfiBytes32 seed;
 } FfiPublicAccountEvidence;
@@ -263,19 +279,20 @@ typedef struct FfiVec_FfiPublication {
 
 typedef struct FfiVec_FfiPublication FfiPublicationList;
 
-typedef struct FfiBytes64 FfiSignature;
+/**
+ * One signer's authentication data, and the key it rotates to.
+ */
+typedef struct FfiWitnessEntry {
+  FfiVecU8 auth_data;
+  struct FfiSigningKeyState next;
+} FfiWitnessEntry;
 
-typedef struct FfiSignaturePubKeyEntry {
-  FfiSignature signature;
-  FfiPublicKey public_key;
-} FfiSignaturePubKeyEntry;
-
-typedef struct FfiVec_FfiSignaturePubKeyEntry {
-  struct FfiSignaturePubKeyEntry *entries;
+typedef struct FfiVec_FfiWitnessEntry {
+  struct FfiWitnessEntry *entries;
   uintptr_t len;
   uintptr_t capacity;
-} FfiVec_FfiSignaturePubKeyEntry;
+} FfiVec_FfiWitnessEntry;
 
-typedef struct FfiVec_FfiSignaturePubKeyEntry FfiSignaturePubKeyList;
+typedef struct FfiVec_FfiWitnessEntry FfiWitnessEntryList;
 
 #endif  /* FFI_TYPES_H */

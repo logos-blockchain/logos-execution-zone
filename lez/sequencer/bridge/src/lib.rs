@@ -17,10 +17,11 @@ pub enum Credited<'recipient> {
 }
 
 impl Credited<'_> {
-    fn account_id(&self) -> AccountId {
+    /// `None` for public evidence that names no account.
+    fn account_id(&self) -> Option<AccountId> {
         match self {
             Self::Public(evidence) => evidence.account_id(),
-            Self::Private(address) => *address,
+            Self::Private(address) => Some(*address),
         }
     }
 
@@ -36,14 +37,19 @@ impl Credited<'_> {
 ///
 /// # Errors
 ///
-/// Returns an error when the deposit message fails to serialize.
+/// Returns an error when the deposit message fails to serialize, or the recipient's evidence
+/// names no account.
 pub fn deposit_tx(
     op_id: [u8; 32],
     credited: &Credited<'_>,
     amount: BridgeAmount,
 ) -> Result<PublicTransaction, lee::error::LeeError> {
     let receipt = receipt_actor(op_id);
-    let recipient_id = credited.account_id();
+    let recipient_id = credited.account_id().ok_or_else(|| {
+        lee::error::LeeError::InvalidInput(
+            "the deposit recipient's evidence names no account".into(),
+        )
+    })?;
     let message = Message {
         admission_evidence: std::iter::once(PublicAccountEvidence::Pda {
             program: programs::bridge_account_id(),
@@ -53,7 +59,7 @@ pub fn deposit_tx(
         .collect(),
         ..Message::try_new(
             receipt,
-            deposit_actors(receipt, credited),
+            deposit_actors(receipt, credited, recipient_id),
             BTreeMap::new(),
             bridge_core::Message::Deposit {
                 l1_deposit_op_id: op_id,
@@ -78,16 +84,17 @@ fn receipt_actor(op_id: [u8; 32]) -> Actor {
 
 /// The receipt, then the bridge custody and the public recipient the deposit's transfer moves
 /// balance between. A private recipient is not declared: its credit is published to it.
-fn deposit_actors(receipt: Actor, credited: &Credited<'_>) -> Vec<(Actor, Authority)> {
+fn deposit_actors(
+    receipt: Actor,
+    credited: &Credited<'_>,
+    recipient_id: AccountId,
+) -> Vec<(Actor, Authority)> {
     let custody = Actor::native_balance(system_accounts::bridge_account_id());
     match credited {
-        Credited::Public(evidence) => vec![
+        Credited::Public(_) => vec![
             (receipt, Authority::None),
             (custody, Authority::None),
-            (
-                Actor::native_balance(evidence.account_id()),
-                Authority::None,
-            ),
+            (Actor::native_balance(recipient_id), Authority::None),
         ],
         Credited::Private(_) => vec![(receipt, Authority::None), (custody, Authority::None)],
     }

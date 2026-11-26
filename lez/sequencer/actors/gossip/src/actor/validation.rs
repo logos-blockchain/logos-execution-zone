@@ -16,7 +16,7 @@ use system_upgrader_core::SignedApproval;
 // is short-lived per gossiped message, so boxing it would only add a heap
 // allocation on the hot validation path.
 pub enum TxEvaluation {
-    /// Structurally valid and authenticated; forward and admit.
+    /// Structurally valid; forward and admit, where its signatures are verified.
     Accept(Box<LeeTransaction>),
     /// Malformed / forbidden; do not forward. `GossipSub` peer scoring is not
     /// configured, so this does not currently penalize the propagating peer.
@@ -51,8 +51,9 @@ pub enum ConfigEvaluation {
 }
 
 /// Decodes and stateless-checks a gossiped transaction the same way the RPC
-/// admits a submitted one: size check, signature/witness check, then the
-/// sequencer-only-program guard.
+/// admits a submitted one: size check, witness structure check, then the
+/// sequencer-only-program guard. Signatures need the head state: the
+/// executor verifies them when the transaction is submitted.
 #[must_use]
 pub fn evaluate_transaction(data: &[u8], max_block_size: u64) -> TxEvaluation {
     let tx_size = u64::try_from(data.len()).unwrap_or(u64::MAX);
@@ -66,18 +67,18 @@ pub fn evaluate_transaction(data: &[u8], max_block_size: u64) -> TxEvaluation {
         Err(err) => return TxEvaluation::Reject(format!("undecodable transaction: {err}")),
     };
 
-    let authenticated = match tx.transaction_stateless_check() {
+    let checked = match tx.transaction_stateless_check() {
         Ok(tx) => tx,
         Err(err) => return TxEvaluation::Reject(format!("stateless check failed: {err:?}")),
     };
 
-    if let Some((to, _)) = authenticated.public_call()
+    if let Some((to, _)) = checked.public_call()
         && sequencer_core::is_sequencer_only_program(to.program_account_id)
     {
         return TxEvaluation::Reject("sequencer-only program".to_owned());
     }
 
-    TxEvaluation::Accept(Box::new(authenticated))
+    TxEvaluation::Accept(Box::new(checked))
 }
 
 /// Decodes a gossiped slash approval, drops it if the committee does not
@@ -166,6 +167,7 @@ pub fn evaluate_config_message(
 
 #[cfg(test)]
 mod tests {
+    use lee::test_utils::TestSigner;
     use logos_blockchain_zone_sdk::{
         core::proofs::channel_multi_sig_proof::IndexedSignature,
         key_management_system_service::keys::Ed25519Key,
@@ -290,8 +292,8 @@ mod tests {
     fn valid_transaction() -> LeeTransaction {
         let acc1 = initial_public_user_accounts()[0].account_id;
         let acc2 = initial_public_user_accounts()[1].account_id;
-        let sign_key1 = initial_pub_accounts_private_keys()[0].pub_sign_key.clone();
-        common::test_utils::create_transaction_native_token_transfer(acc1, 0, acc2, 10, &sign_key1)
+        let signer1 = TestSigner::from(&initial_pub_accounts_private_keys()[0].secret);
+        common::test_utils::create_transaction_native_token_transfer(acc1, 0, acc2, 10, &signer1)
     }
 
     #[test]

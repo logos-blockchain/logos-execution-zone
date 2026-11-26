@@ -10,10 +10,11 @@ use lee_core::{
 
 use crate::{
     AccountId, PublicAccountEvidence, TransactionMessage, error::LeeError, fees::FeeDeclaration,
-    program::Program,
+    program::Program, transaction_message::MessageDomain,
 };
 
 const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Public/\x00\x00\x00\x00\x00\x00\x00";
+const KEYED_PREFIX: &[u8; 32] = b"/LEE/v0.3/KeyedMessage/Public/\x00\x00";
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PublicExecution {
@@ -87,22 +88,44 @@ impl Message {
     ) -> Self {
         Self::new(to, message, public_actors, nonces, fee, Vec::new())
     }
+}
 
-    #[must_use]
-    pub fn hash(&self) -> [u8; 32] {
-        self.hash_under(PREFIX)
-    }
+impl MessageDomain for PublicExecution {
+    const KEYED_PREFIX: &'static [u8; 32] = KEYED_PREFIX;
+    const PREFIX: &'static [u8; 32] = PREFIX;
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
 
-    use lee_core::account::{AccountId, Actor, Nonce};
+    use hex_literal::hex;
+    use lee_core::{
+        account::{AccountId, Actor, Nonce},
+        signing_key::{KeyType, SigningKeyState},
+    };
     use sha2::{Digest as _, Sha256};
 
     use super::{Message, PREFIX};
     use crate::Authority;
+
+    fn key(commitment: u8) -> SigningKeyState {
+        SigningKeyState {
+            key_type: KeyType::Schnorr,
+            key_commitment: [commitment; 32],
+        }
+    }
+
+    fn pinned_message() -> Message {
+        let to = Actor::new(AccountId::new([42; 32]), AccountId::new([0; 32]));
+        Message::new_preserialized(
+            to,
+            vec![0],
+            [(to, Authority::Signer)],
+            BTreeMap::from([(to.account_id, Nonce(1))]),
+            None,
+        )
+    }
 
     #[test]
     fn a_public_message_has_a_pinned_layout_and_hash() {
@@ -139,5 +162,41 @@ mod tests {
         assert_eq!(message.to_bytes(), expected);
         let digest: [u8; 32] = Sha256::digest([&PREFIX[..], &expected].concat()).into();
         assert_eq!(message.hash(), digest);
+    }
+
+    #[test]
+    fn message_with_keys_has_known_answers() {
+        let message = pinned_message();
+        assert_eq!(
+            message.message_with_keys(&[key(7)]),
+            hex!("ae983ec82822a8363e7fc615b34760e312acba3b319b34b6d58e96b4192b6ed7")
+        );
+        assert_eq!(
+            message.message_with_keys(&[key(1), key(2), key(3)]),
+            hex!("53a14d2f1445b1e1eb042d95a39d58268edf89efc90600be5eb8fa5aa9da37fc")
+        );
+    }
+
+    #[test]
+    fn message_with_keys_changes_with_the_order_of_the_next_keys() {
+        let message = pinned_message();
+        assert_ne!(
+            message.message_with_keys(&[key(1), key(2), key(3)]),
+            message.message_with_keys(&[key(2), key(1), key(3)])
+        );
+    }
+
+    #[test]
+    fn message_with_keys_changes_with_any_byte_of_any_next_key_commitment() {
+        let message = pinned_message();
+        let next = [key(1), key(2), key(3)];
+        let signed = message.message_with_keys(&next);
+        for signer in 0..next.len() {
+            for byte in 0..32 {
+                let mut changed = next;
+                changed[signer].key_commitment[byte] ^= 1;
+                assert_ne!(message.message_with_keys(&changed), signed);
+            }
+        }
     }
 }

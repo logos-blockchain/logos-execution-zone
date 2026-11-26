@@ -1,12 +1,15 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::account::AccountId;
+use lee_core::{
+    account::{AccountId, Nonce},
+    signing_key::SigningKeyState,
+};
 use sha2::{Digest as _, digest::FixedOutput as _};
 
 use crate::{
-    InvalidTransaction,
-    public_transaction::{Message, WitnessSet},
+    InvalidTransaction, SignedTransaction,
+    public_transaction::{Message, WitnessEntry, WitnessSet},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -35,11 +38,7 @@ impl PublicTransaction {
     }
 
     pub(crate) fn signer_account_ids(&self) -> Vec<AccountId> {
-        self.witness_set
-            .signatures_and_public_keys()
-            .iter()
-            .map(|(_, public_key)| AccountId::from(public_key))
-            .collect()
+        self.message.nonces.keys().copied().collect()
     }
 
     #[must_use]
@@ -60,7 +59,17 @@ impl PublicTransaction {
         acc_set.into_iter().collect()
     }
 
-    pub fn check_stateless(&self) -> Result<Vec<AccountId>, InvalidTransaction> {
+    #[must_use]
+    pub fn hash(&self) -> [u8; 32] {
+        let bytes = self.to_bytes();
+        let mut hasher = sha2::Sha256::new();
+        hasher.update(&bytes);
+        hasher.finalize_fixed().into()
+    }
+}
+
+impl SignedTransaction for PublicTransaction {
+    fn check_stateless(&self) -> Result<Vec<AccountId>, InvalidTransaction> {
         if !self.message.public_context.promotions.is_empty() {
             return Err(InvalidTransaction::PublicPromotions);
         }
@@ -68,19 +77,24 @@ impl PublicTransaction {
             return Err(InvalidTransaction::PublicPrivateSigners);
         }
         let signers = self.signer_account_ids();
-        self.message.check_signers(&signers)?;
-        if !self.witness_set.is_valid_for(&self.message) {
-            return Err(InvalidTransaction::Signature);
+        if self.witness_set.entries().len() != signers.len() {
+            return Err(InvalidTransaction::Nonces);
         }
+        self.message.check_signers()?;
+        crate::transaction_message::check_auth_data(&signers, self.witness_set.entries())?;
         Ok(signers)
     }
 
-    #[must_use]
-    pub fn hash(&self) -> [u8; 32] {
-        let bytes = self.to_bytes();
-        let mut hasher = sha2::Sha256::new();
-        hasher.update(&bytes);
-        hasher.finalize_fixed().into()
+    fn nonces(&self) -> &BTreeMap<AccountId, Nonce> {
+        &self.message.nonces
+    }
+
+    fn witness_entries(&self) -> &[WitnessEntry] {
+        self.witness_set.entries()
+    }
+
+    fn message_with_keys(&self, next: &[SigningKeyState]) -> [u8; 32] {
+        self.message.message_with_keys(next)
     }
 }
 
@@ -91,22 +105,24 @@ pub mod tests {
     use lee_core::{
         account::{Account, Actor, Nonce},
         native_token::Message as NativeMessage,
+        signing_key::signature_program_id,
     };
     use sha2::{Digest as _, digest::FixedOutput as _};
 
     use crate::{
-        AccountId, Authority, InvalidTransaction, PrivateKey, PublicKey, PublicTransaction,
-        Signature, V03State,
+        AccountId, Authority, InvalidTransaction, PublicTransaction, SignedTransaction as _,
+        V03State,
         error::LeeError,
         public_transaction::{Message, WitnessSet},
+        test_utils::{TestSigner, witness_for},
         validated_state_diff::ValidatedStateDiff,
     };
 
-    fn keys_for_tests() -> (PrivateKey, PrivateKey, AccountId, AccountId) {
-        let key1 = PrivateKey::try_new([1; 32]).unwrap();
-        let key2 = PrivateKey::try_new([2; 32]).unwrap();
-        let addr1 = AccountId::from(&PublicKey::new_from_private_key(&key1));
-        let addr2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
+    fn keys_for_tests() -> (TestSigner, TestSigner, AccountId, AccountId) {
+        let key1 = TestSigner::new(1);
+        let key2 = TestSigner::new(2);
+        let addr1 = key1.account_id();
+        let addr2 = key2.account_id();
         (key1, key2, addr1, addr2)
     }
 
@@ -123,8 +139,8 @@ pub mod tests {
         V03State::new().with_public_account_balances(initial_data)
     }
 
-    fn signed(message: Message, keys: &[&PrivateKey]) -> PublicTransaction {
-        let witness_set = WitnessSet::for_message(&message, keys);
+    fn signed(message: Message, keys: &[&TestSigner]) -> PublicTransaction {
+        let witness_set = witness_for(&message, keys);
         PublicTransaction::new(message, witness_set)
     }
 
@@ -172,12 +188,12 @@ pub mod tests {
         let tx = transaction_for_tests();
         let expected_signer_account_ids = vec![
             AccountId::new([
-                148, 179, 206, 253, 199, 51, 82, 86, 232, 2, 152, 122, 80, 243, 54, 207, 237, 112,
-                83, 153, 44, 59, 204, 49, 128, 84, 160, 227, 216, 149, 97, 102,
+                114, 83, 166, 143, 160, 156, 94, 122, 224, 105, 223, 2, 29, 64, 102, 35, 77, 69,
+                163, 112, 86, 191, 187, 179, 35, 250, 63, 42, 139, 197, 161, 45,
             ]),
             AccountId::new([
-                30, 145, 107, 3, 207, 73, 192, 230, 160, 63, 238, 207, 18, 69, 54, 216, 103, 244,
-                92, 94, 124, 248, 42, 16, 141, 19, 119, 18, 14, 226, 140, 204,
+                181, 34, 253, 23, 228, 197, 158, 103, 215, 145, 57, 36, 172, 61, 169, 218, 159,
+                133, 254, 66, 40, 25, 75, 112, 207, 251, 110, 125, 246, 232, 196, 243,
             ]),
         ];
         let signer_account_ids = tx.signer_account_ids();
@@ -218,7 +234,7 @@ pub mod tests {
         let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);
         assert!(matches!(
             result,
-            Err(LeeError::InvalidInput(msg)) if msg.contains("Duplicate signers")
+            Err(LeeError::InvalidInput(msg)) if msg == InvalidTransaction::Nonces.to_string()
         ));
     }
 
@@ -228,7 +244,13 @@ pub mod tests {
         let mut message = transaction_for_tests().message;
         message.nonces.remove(&addr2);
 
-        let tx = signed(message, &[&key1, &key2]);
+        let message_with_keys =
+            message.message_with_keys(&[key1.key_state(Nonce(1)), key2.key_state(Nonce(1))]);
+        let witness_set = WitnessSet::from_raw_parts(vec![
+            key1.entry(Nonce(0), &message_with_keys),
+            key2.entry(Nonce(0), &message_with_keys),
+        ]);
+        let tx = PublicTransaction::new(message, witness_set);
         assert_eq!(tx.check_stateless(), Err(InvalidTransaction::Nonces));
     }
 
@@ -294,7 +316,8 @@ pub mod tests {
                 Account {
                     nonce: Nonce(1),
                     ..Account::funded(20000)
-                },
+                }
+                .with_actor_state(signature_program_id(), key2.key_state(Nonce(1)).encode()),
             ),
         ]);
         let mut message = transaction_for_tests().message;
@@ -343,9 +366,15 @@ pub mod tests {
     fn all_signatures_must_be_valid() {
         let state = state_for_tests();
         let mut tx = transaction_for_tests();
-        tx.witness_set.signatures_and_public_keys[0].0 = Signature::new_for_tests([1; 64]);
+        let first = tx.signer_account_ids()[0];
+        let last = tx.witness_set.entries[0].auth_data.len() - 1;
+        tx.witness_set.entries[0].auth_data[last] ^= 1;
         let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);
-        assert!(matches!(result, Err(LeeError::InvalidInput(_))));
+        assert!(matches!(
+            result,
+            Err(LeeError::InvalidInput(msg))
+                if msg == format!("Signer {first} fails authentication: invalid signature")
+        ));
     }
 
     #[test]
@@ -402,6 +431,33 @@ pub mod tests {
         assert!(matches!(
             result,
             Err(LeeError::UnknownProgram { at_root: true })
+        ));
+    }
+
+    #[test]
+    fn witness_entries_must_follow_the_nonces_order() {
+        let tx = transaction_for_tests();
+        let mut entries = tx.witness_set.into_raw_parts();
+        entries.swap(0, 1);
+
+        let tx = PublicTransaction::new(tx.message, WitnessSet::from_raw_parts(entries));
+        assert!(matches!(
+            ValidatedStateDiff::from_public_transaction(&tx, &state_for_tests(), 1, 0),
+            Err(LeeError::InvalidInput(msg)) if msg == InvalidTransaction::AuthData.to_string()
+        ));
+    }
+
+    #[test]
+    fn a_witness_entry_of_an_unlisted_account_is_rejected() {
+        let mut tx = transaction_for_tests();
+        let stranger = TestSigner::new(3);
+        let message_with_keys = tx
+            .message
+            .message_with_keys(&[stranger.key_state(Nonce(1)), tx.witness_set.entries[1].next]);
+        tx.witness_set.entries[0] = stranger.entry(Nonce(0), &message_with_keys);
+        assert!(matches!(
+            ValidatedStateDiff::from_public_transaction(&tx, &state_for_tests(), 1, 0),
+            Err(LeeError::InvalidInput(msg)) if msg == InvalidTransaction::AuthData.to_string()
         ));
     }
 }

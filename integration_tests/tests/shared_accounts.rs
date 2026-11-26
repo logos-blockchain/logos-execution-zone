@@ -202,7 +202,7 @@ async fn fund_shared_account_from_public() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         to_keys: None,
-        to_pk: None,
+        to_initial_key: None,
         amount: 100,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;

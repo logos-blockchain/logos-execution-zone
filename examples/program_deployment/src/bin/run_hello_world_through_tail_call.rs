@@ -83,9 +83,9 @@ async fn main() {
     .unwrap();
 
     // The fee is charged to `payer`, so the payer's nonce is listed and its key signs the message.
-    let (fee, payer_nonce, payer_key) = fee_paid_by(&wallet_core, payer).await.unwrap();
+    let (fee, payer_nonce, payer_signer) = fee_paid_by(&wallet_core, payer).await.unwrap();
     let nonces = BTreeMap::from([(payer, payer_nonce)]);
-    let signing_keys = [&payer_key];
+    let signing_keys = [payer_signer];
     // The caller's actor receives the message and sends the greeting to the callee's actor on the
     // same account, so both are declared.
     let caller = Actor::new(account_id, caller_account_id);
@@ -105,7 +105,7 @@ async fn main() {
         )
         .unwrap()
     };
-    let witness_set = WitnessSet::for_message(&message, &signing_keys);
+    let witness_set = WitnessSet::sign(&message, &signing_keys);
     let tx = PublicTransaction::new(message, witness_set);
 
     // Submit the transaction

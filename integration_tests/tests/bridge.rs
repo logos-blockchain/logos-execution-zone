@@ -16,9 +16,11 @@ use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, no_seal, utils::account_balance,
 };
 use lee::{
-    AccountId, Actor, PrivateKey, PublicAccountEvidence, PublicKey,
-    execute_and_prove_with_cross_messages, privacy_preserving_transaction, program::Program,
+    Actor, execute_and_prove_with_cross_messages, privacy_preserving_transaction,
+    program::Program,
     public_transaction,
+    signature::PublicAccountSecret,
+    test_utils::{TestSigner, privacy_witness_for},
 };
 use lee_core::{RootCall, execution_state::TransactionEntry};
 use logos_blockchain_zone_sdk::{
@@ -234,7 +236,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let message =
         privacy_preserving_transaction::Message::from_circuit_output(BTreeMap::new(), output);
 
-    let witness_set = privacy_preserving_transaction::WitnessSet::for_message(&message, proof, &[]);
+    let witness_set = privacy_witness_for(&message, proof, &[]);
     let attack_tx = LeeTransaction::PrivacyPreserving(lee::PrivacyPreservingTransaction::new(
         message,
         witness_set,
@@ -266,7 +268,7 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
 /// channel for `recipient` and returns the channel note the deposit re-creates.
 async fn submit_bedrock_deposit(
     ctx: &TestContext,
-    recipient: PublicKey,
+    recipient: &TestSigner,
     amount: u64,
 ) -> anyhow::Result<NoteId> {
     let node = CommonHttpClient::new(None);
@@ -312,7 +314,7 @@ async fn submit_bedrock_deposit(
     let metadata =
         logos_blockchain_zone_sdk::core::mantle::ops::channel::deposit::Metadata::new_unchecked(
             borsh::to_vec(&DepositMetadata {
-                recipient: DepositRecipient::Identified(PublicAccountEvidence::Key(recipient)),
+                recipient: DepositRecipient::Identified(recipient.evidence()),
             })?,
         );
     let deposit = DepositOp {
@@ -375,8 +377,8 @@ async fn a_bedrock_deposit_seen_before_finality_is_minted_in_a_block_pinned_on_i
         .with_bedrock_settings("deployment-settings-slow-finality.yaml")
         .build()
         .await?;
-    let recipient = PublicKey::new_from_private_key(&PrivateKey::new_os_random());
-    let recipient_id = AccountId::from(&recipient);
+    let recipient = TestSigner::from(&PublicAccountSecret::new_os_random());
+    let recipient_id = recipient.account_id();
     let amount = 1_u64;
 
     // Subscribed before the deposit, so no block after it is missed.
@@ -385,7 +387,7 @@ async fn a_bedrock_deposit_seen_before_finality_is_minted_in_a_block_pinned_on_i
         .await
         .context("Failed to subscribe to Bedrock blocks")?;
     let mut blocks = std::pin::pin!(blocks);
-    let deposited_note = submit_bedrock_deposit(&ctx, recipient, amount).await?;
+    let deposited_note = submit_bedrock_deposit(&ctx, &recipient, amount).await?;
 
     let pinned_at = tokio::time::timeout(TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK, async {
         while let Some(event) = blocks.next().await {
@@ -433,11 +435,11 @@ async fn a_bedrock_deposit_seen_before_finality_is_minted_in_a_block_pinned_on_i
 #[test]
 async fn a_bedrock_deposit_is_minted_exactly_once() -> anyhow::Result<()> {
     let ctx = TestContext::new().await?;
-    let recipient = PublicKey::new_from_private_key(&PrivateKey::new_os_random());
-    let recipient_id = AccountId::from(&recipient);
+    let recipient = TestSigner::from(&PublicAccountSecret::new_os_random());
+    let recipient_id = recipient.account_id();
     let amount = 1_u64;
 
-    submit_bedrock_deposit(&ctx, recipient, amount).await?;
+    submit_bedrock_deposit(&ctx, &recipient, amount).await?;
 
     tokio::time::timeout(TIME_TO_FINALIZE_DEPOSIT_EVENT_ON_BEDROCK, async {
         while account_balance(&ctx, recipient_id).await? < u128::from(amount) {

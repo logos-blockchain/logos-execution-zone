@@ -22,7 +22,7 @@ staked at genesis rather than joining later — but keyed independently of it.
 ## When to rerun
 
 Most of the shared config is safe to edit by hand. The genesis stake entries are not: each
-`stake_signature` covers the minimum stake and the node's position in the committee, so changing
+`stake_entry` covers the minimum stake and the node's position in the committee, so changing
 `minimum_sequencer_stake`, the number of nodes, their order, or the stake message format invalidates
 all four, and a node with an invalid founding stake panics as it applies genesis. Rerun here instead.
 This crate's unit test checks the committed signatures, so a stale config fails CI rather than the

@@ -8,26 +8,65 @@ use common::{
     block::{Block, HashableBlockData, TransactionReceipt},
     transaction::{FeePayee, LeeTransaction, TxEvents, clock_invocation, fee_invocation},
 };
-pub use cross_zone::CrossZoneConfig;
 use lee::{
-    AccountId, Actor, Authority, GENESIS_BLOCK_ID, PublicAccountEvidence, PublicKey,
-    PublicTransaction, Signature, public_transaction::Message,
+    AccountId, Actor, Authority, GENESIS_BLOCK_ID, PublicAccountEvidence, PublicTransaction,
+    public_transaction::{Message, WitnessEntry},
+    signature::{
+        INITIAL_KEY_TYPE, PublicAccountSecret, Signer, authenticate, current_key, initial_key,
+        public_account_id,
+    },
 };
-use lee_core::account::Nonce;
+use lee_core::{account::Nonce, signing_key::SigningKeyState};
 use sequencer_bridge::Credited;
 use sequencer_stake_core::{ChannelParams, SequencerKey};
 use serde::{Deserialize, Serialize};
 
-/// Fixed, public key behind a genesis-only funding account.
+mod hex_witness_entry {
+    use lee::public_transaction::WitnessEntry;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
+
+    #[derive(Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct HexWitnessEntry {
+        auth_data: String,
+        next: String,
+    }
+
+    pub fn serialize<S: Serializer>(
+        entry: &WitnessEntry,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        HexWitnessEntry {
+            auth_data: hex::encode(&entry.auth_data),
+            next: hex::encode(
+                borsh::to_vec(&entry.next).expect("a signing key state encodes to 33 bytes"),
+            ),
+        }
+        .serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<WitnessEntry, D::Error> {
+        let HexWitnessEntry { auth_data, next } = HexWitnessEntry::deserialize(deserializer)?;
+        Ok(WitnessEntry {
+            auth_data: hex::decode(auth_data).map_err(D::Error::custom)?,
+            next: borsh::from_slice(&hex::decode(next).map_err(D::Error::custom)?)
+                .map_err(D::Error::custom)?,
+        })
+    }
+}
+
+/// Fixed, public secret behind a genesis-only funding account, the id of its nonce-0 key.
 ///
 /// The bridge can only be called top-level, not from `Stake`, so this
 /// account is a pass-through that receives the genesis deposit and then moves
-/// it into the real stake account. Not a secret: every node derives the same
+/// it into the real stake account. Not kept secret: every node derives the same
 /// account, and it holds nothing once genesis has run.
 // TODO: replace the pass-through with a real Bedrock deposit, once that path
 // exists. The genesis deposit funding it is synthetic, so this stays a fixed
 // genesis-only key rather than a founding sequencer staking bridged funds.
-pub const GENESIS_STAKE_FUNDING_KEY: [u8; 32] = [9; 32];
+pub const GENESIS_STAKE_FUNDING_KEY: PublicAccountSecret = PublicAccountSecret::new([9; 32]);
 
 /// A transaction to be applied at genesis to supply initial balances.
 ///
@@ -46,17 +85,17 @@ pub enum GenesisAction {
         address: AccountId,
         balance: BridgeAmount,
     },
-    /// Funds a holder's holding PDA at genesis with one replayable genesis
-    /// credit; the balance-only PDA needs no claim.
-    SupplyBridgeLockHolding {
-        holder: AccountId,
-        amount: BridgeAmount,
-    },
     /// Stakes `sequencer_key` at genesis.
     StakeSequencer {
         sequencer_key: SequencerKey,
-        ownership_public_key: PublicKey,
-        stake_signature: Signature,
+        /// The account owning the stake.
+        ownership_id: AccountId,
+        /// The ownership account's witness entry for its genesis `Stake`, from
+        /// `sign_genesis_stake`: `{"auth_data": hex, "next": hex}`, the next key in its 33-byte
+        /// encoding (key type byte, then key commitment). At nonce 0, `auth_data` starts with
+        /// the account's initial key.
+        #[serde(with = "hex_witness_entry")]
+        stake_entry: WitnessEntry,
     },
 }
 
@@ -65,8 +104,6 @@ pub enum GenesisAction {
 pub struct GenesisSpec {
     pub channel_id: [u8; 32],
     pub channel_params: ChannelParams,
-    /// Presence selects the genesis program set.
-    pub cross_zone: Option<CrossZoneConfig>,
     /// Applied in order, founding stakes included.
     pub actions: Vec<GenesisAction>,
 }
@@ -77,15 +114,15 @@ struct FoundingStake {
     /// the genesis deposit funding it.
     genesis_index: u64,
     key: SequencerKey,
-    owner: PublicKey,
-    signature: Signature,
+    owner: AccountId,
+    entry: WitnessEntry,
 }
 
 /// The pre-genesis state: `testnet_initial_state`, nothing else. Everything is
 /// applied as genesis transactions in [`build_genesis_state`] so followers replay it.
 #[must_use]
-pub fn build_initial_state(cross_zone: bool) -> lee::V03State {
-    let base = testnet_initial_state::initial_state(cross_zone);
+pub fn build_initial_state() -> lee::V03State {
+    let base = testnet_initial_state::initial_state();
 
     // Stamped on fresh genesis and restore-replay: compare against the
     // indexer's on divergence.
@@ -124,44 +161,9 @@ pub fn genesis_block_and_state(spec: &GenesisSpec) -> (Block, lee::V03State, Vec
 pub fn build_genesis_state(
     spec: &GenesisSpec,
 ) -> (lee::V03State, Vec<LeeTransaction>, Vec<TxEvents>) {
-    let mut state = build_initial_state(spec.cross_zone.is_some());
+    let mut state = build_initial_state();
     let genesis_opening = chain_state::apply::opening_fee_state(&state);
 
-    // Config txs seed the config accounts by transaction, so every node
-    // reconstructs them by replaying the genesis block. Every cross-zone config
-    // is initialized: each builtin has a user-callable InitConfig, so an empty
-    // config actor state would be left for whoever calls it first. The inbox's is
-    // receiving-zones-only.
-    let cross_zone_declared = spec.cross_zone.as_ref();
-    let seeds_bridge_lock = seeds_a_bridge_lock_account(&spec.actions);
-    assert!(
-        cross_zone_declared.is_some() || !seeds_bridge_lock,
-        "seeding a bridge_lock account requires cross_zone to be configured: bridge_lock is not registered on this zone"
-    );
-    assert!(
-        cross_zone_declared.is_some_and(|cross_zone| !cross_zone.lock_target_zones.is_empty())
-            || !seeds_bridge_lock,
-        "seeding a bridge_lock account requires cross_zone.lock_target_zones to name a zone: the seeded holdings could never be locked anywhere"
-    );
-    // The inbox refuses a dispatch whose source is this zone, so nothing could ever mint it.
-    assert!(
-        !cross_zone_declared
-            .is_some_and(|cross_zone| cross_zone.lock_target_zones.contains(&spec.channel_id)),
-        "cross_zone.lock_target_zones must not name this zone: a lock to it could never be delivered"
-    );
-    let cross_zone_config_txs = cross_zone_declared
-        .map(|cross_zone| {
-            [
-                cross_zone::build_wrapped_token_init_config_tx(cross_zone),
-                cross_zone::build_ping_sender_init_config_tx(),
-                cross_zone::build_ping_receiver_init_config_tx(cross_zone),
-                cross_zone::build_bridge_lock_init_config_tx(cross_zone),
-            ]
-        })
-        .into_iter()
-        .flatten();
-    let inbox_config_tx =
-        cross_zone_declared.map(|_| cross_zone::build_inbox_init_config_tx(spec.channel_id));
     let supply_txs = spec
         .actions
         .iter()
@@ -184,16 +186,6 @@ pub fn build_genesis_state(
                     )
                     .expect("Failed to serialize genesis deposit instruction"),
                 ),
-                GenesisAction::SupplyBridgeLockHolding { holder, amount } => {
-                    Some(build_supply_account_genesis_transaction(
-                        &DepositRecipient::Identified(PublicAccountEvidence::Pda {
-                            program: programs::bridge_lock_account_id(),
-                            seed: bridge_lock_core::holding_seed(&holder.into_value()),
-                        }),
-                        *amount,
-                        genesis_deposit_op_id(index),
-                    ))
-                }
                 // Stakes are built below.
                 GenesisAction::StakeSequencer { .. } => None,
             }
@@ -212,7 +204,7 @@ pub fn build_genesis_state(
     // credit is zero and the account is left untouched.
     let producer = staked
         .first()
-        .map_or_else(AccountId::default, |stake| AccountId::from(&stake.owner));
+        .map_or_else(AccountId::default, |stake| stake.owner);
     let genesis_summary = fee_core::BlockFeeSummary::default();
     let genesis_payout = chain_state::apply::block_payout(&genesis_opening, &genesis_summary);
 
@@ -220,8 +212,6 @@ pub fn build_genesis_state(
         spec.channel_params,
         spec.channel_id,
     ))
-    .chain(cross_zone_config_txs)
-    .chain(inbox_config_tx)
     .chain(supply_txs)
     .chain(bootstrap_stake_txs)
     .chain([
@@ -257,19 +247,19 @@ pub fn stakes_any_sequencer(actions: &[GenesisAction]) -> bool {
         .any(|action| matches!(action, GenesisAction::StakeSequencer { .. }))
 }
 
-/// A solo channel creator's own genesis stake, owned by `ownership_key`.
+/// A solo channel creator's own genesis stake, owned by `ownership_secret`.
 ///
 /// It is the only stake, so it is the first to sign with the funding key.
 #[must_use]
 pub fn self_stake(
     sequencer_key: SequencerKey,
-    ownership_key: &lee::PrivateKey,
+    ownership_secret: &PublicAccountSecret,
     minimum_stake: u128,
 ) -> GenesisAction {
     GenesisAction::StakeSequencer {
         sequencer_key,
-        ownership_public_key: PublicKey::new_from_private_key(ownership_key),
-        stake_signature: sign_genesis_stake(0, sequencer_key, ownership_key, minimum_stake),
+        ownership_id: public_account_id(ownership_secret),
+        stake_entry: sign_genesis_stake(0, sequencer_key, ownership_secret, minimum_stake),
     }
 }
 
@@ -297,9 +287,38 @@ pub fn founding_committee(
 
 #[must_use]
 pub fn genesis_stake_funding_account() -> AccountId {
-    let key = lee::PrivateKey::try_new(GENESIS_STAKE_FUNDING_KEY)
-        .expect("GENESIS_STAKE_FUNDING_KEY is a valid private key");
-    AccountId::from(&PublicKey::new_from_private_key(&key))
+    public_account_id(&GENESIS_STAKE_FUNDING_KEY)
+}
+
+/// The genesis funding account as a signer at its nonce in `message`.
+fn genesis_stake_funding_signer(message: &Message) -> Signer {
+    let nonce = message.nonces[&genesis_stake_funding_account()];
+    Signer::new(
+        &GENESIS_STAKE_FUNDING_KEY,
+        nonce,
+        INITIAL_KEY_TYPE,
+        INITIAL_KEY_TYPE,
+    )
+}
+
+/// What both signers of a genesis `Stake` sign: `message` with the funding account's next key
+/// and the owner's `owner_next`, in `nonces` order.
+#[must_use]
+pub fn genesis_stake_message_with_keys(
+    message: &Message,
+    ownership_id: AccountId,
+    owner_next: SigningKeyState,
+) -> [u8; 32] {
+    let next_keys: Vec<_> = BTreeMap::from([
+        (
+            genesis_stake_funding_account(),
+            genesis_stake_funding_signer(message).next(),
+        ),
+        (ownership_id, owner_next),
+    ])
+    .into_values()
+    .collect();
+    message.message_with_keys(&next_keys)
 }
 
 /// The exact `Stake` message the founding sequencer at `index` must sign. Shared
@@ -360,32 +379,28 @@ pub fn genesis_stake_message(
 
 /// Signs the founding sequencer at `index`'s genesis `Stake`, for an operator
 /// producing their [`GenesisAction::StakeSequencer`] entry.
+///
+/// Signs with the ownership account's nonce-0 key, rotating to its nonce-1 key.
 #[must_use]
 pub fn sign_genesis_stake(
     index: usize,
     sequencer_key: SequencerKey,
-    ownership_key: &lee::PrivateKey,
+    ownership_secret: &PublicAccountSecret,
     minimum_stake: u128,
-) -> Signature {
-    let ownership_id = AccountId::from(&PublicKey::new_from_private_key(ownership_key));
+) -> WitnessEntry {
+    let owner = Signer::new(
+        ownership_secret,
+        Nonce(0),
+        INITIAL_KEY_TYPE,
+        INITIAL_KEY_TYPE,
+    );
+    let ownership_id = owner.account_id();
     let message = genesis_stake_message(index, sequencer_key, ownership_id, minimum_stake);
-    Signature::new(ownership_key, &message.hash())
-}
-
-/// Whether genesis funds an account under `bridge_lock`, under either spelling:
-/// a `SupplyAccount` at the holding PDA builds the transaction
-/// `SupplyBridgeLockHolding` builds, so reading one action leaves the other
-/// unguarded.
-fn seeds_a_bridge_lock_account(genesis: &[GenesisAction]) -> bool {
-    genesis.iter().any(|action| match action {
-        GenesisAction::SupplyBridgeLockHolding { .. } => true,
-        GenesisAction::SupplyAccount { recipient, .. } => matches!(
-            recipient,
-            DepositRecipient::Identified(PublicAccountEvidence::Pda { program, .. })
-                if *program == programs::bridge_lock_account_id()
-        ),
-        GenesisAction::SupplyPrivateAccount { .. } | GenesisAction::StakeSequencer { .. } => false,
-    })
+    let message_with_keys = genesis_stake_message_with_keys(&message, ownership_id, owner.next());
+    WitnessEntry {
+        auth_data: owner.auth_data(&message_with_keys),
+        next: owner.next(),
+    }
 }
 
 /// The founding sequencers' `Stake`s, funded by a genesis deposit. Real
@@ -398,10 +413,9 @@ fn build_stake_genesis_transactions(
         return Vec::new();
     }
 
-    let funding_key = lee::PrivateKey::try_new(GENESIS_STAKE_FUNDING_KEY).unwrap();
-    let funding_public_key = PublicKey::new_from_private_key(&funding_key);
-    let funding =
-        DepositRecipient::Identified(PublicAccountEvidence::Key(funding_public_key.clone()));
+    let funding = DepositRecipient::Identified(PublicAccountEvidence::Key(initial_key(
+        &GENESIS_STAKE_FUNDING_KEY,
+    )));
     let amount =
         BridgeAmount::try_from(minimum_stake).expect("minimum sequencer stake exceeds u64");
 
@@ -419,21 +433,38 @@ fn build_stake_genesis_transactions(
         .collect();
 
     for (index, stake) in staked.iter().enumerate() {
-        let ownership_id = AccountId::from(&stake.owner);
+        let ownership_id = stake.owner;
         let stake_message = genesis_stake_message(index, stake.key, ownership_id, minimum_stake);
-        let stake_witness_set = lee::public_transaction::WitnessSet::from_raw_parts(vec![
-            (
-                Signature::new(&funding_key, &stake_message.hash()),
-                funding_public_key.clone(),
-            ),
-            (stake.signature.clone(), stake.owner.clone()),
-        ]);
+        let message_with_keys =
+            genesis_stake_message_with_keys(&stake_message, ownership_id, stake.entry.next);
 
-        // Redundant with the signature check every tx gets, but names the entry.
+        // Redundant with the authentication every tx gets, but names the entry.
         assert!(
-            stake_witness_set.is_valid_for(&stake_message),
+            current_key(None, ownership_id, &stake.entry.auth_data)
+                .and_then(|(current, signature)| authenticate(
+                    &current,
+                    &message_with_keys,
+                    signature,
+                    &stake.entry.next
+                ))
+                .is_ok(),
             "genesis stake signature does not match founding sequencer {index} ({})",
             hex::encode(stake.key)
+        );
+
+        let funding_signer = genesis_stake_funding_signer(&stake_message);
+        let funding_entry = WitnessEntry {
+            auth_data: funding_signer.auth_data(&message_with_keys),
+            next: funding_signer.next(),
+        };
+        // Witness entries follow `nonces` order.
+        let stake_witness_set = lee::public_transaction::WitnessSet::from_raw_parts(
+            BTreeMap::from([
+                (genesis_stake_funding_account(), funding_entry),
+                (ownership_id, stake.entry.clone()),
+            ])
+            .into_values()
+            .collect(),
         );
 
         txs.push(PublicTransaction::new(stake_message, stake_witness_set));
@@ -500,89 +531,20 @@ fn founding_stakes(genesis: &[GenesisAction]) -> Vec<FoundingStake> {
         .filter_map(|(index, action)| match action {
             GenesisAction::StakeSequencer {
                 sequencer_key,
-                ownership_public_key,
-                stake_signature,
+                ownership_id,
+                stake_entry,
             } => {
                 let index = u64::try_from(index).expect("genesis action count fits in u64");
                 Some(FoundingStake {
                     genesis_index: index,
                     key: *sequencer_key,
-                    owner: ownership_public_key.clone(),
-                    signature: stake_signature.clone(),
+                    owner: *ownership_id,
+                    entry: stake_entry.clone(),
                 })
             }
-            GenesisAction::SupplyAccount { .. }
-            | GenesisAction::SupplyPrivateAccount { .. }
-            | GenesisAction::SupplyBridgeLockHolding { .. } => None,
+            GenesisAction::SupplyAccount { .. } | GenesisAction::SupplyPrivateAccount { .. } => {
+                None
+            }
         })
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn spec(cross_zone: CrossZoneConfig, actions: Vec<GenesisAction>) -> GenesisSpec {
-        GenesisSpec {
-            channel_id: [1; 32],
-            channel_params: ChannelParams {
-                minimum_sequencer_stake: system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE,
-                posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
-                posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
-                max_block_size: system_accounts::DEFAULT_MAX_BLOCK_SIZE,
-                finality_depth: system_accounts::DEFAULT_FINALITY_DEPTH,
-            },
-            cross_zone: Some(cross_zone),
-            actions,
-        }
-    }
-
-    fn locks_nowhere() -> CrossZoneConfig {
-        CrossZoneConfig {
-            peers: Vec::new(),
-            lock_target_zones: Vec::new(),
-            source_authority: None,
-            source_governance: None,
-        }
-    }
-
-    #[test]
-    #[should_panic(expected = "could never be locked anywhere")]
-    fn seeding_a_holding_without_a_lock_target_zone_is_refused() {
-        let _genesis = build_genesis_state(&spec(
-            locks_nowhere(),
-            vec![GenesisAction::SupplyBridgeLockHolding {
-                holder: AccountId::new([9; 32]),
-                amount: 1_000,
-            }],
-        ));
-    }
-
-    /// `SupplyAccount` at the holding PDA builds what `SupplyBridgeLockHolding`
-    /// builds, so the guard has to read both or the operator just spells it the
-    /// other way.
-    #[test]
-    #[should_panic(expected = "could never be locked anywhere")]
-    fn supplying_a_bridge_lock_pda_directly_is_refused_too() {
-        let _genesis = build_genesis_state(&spec(
-            locks_nowhere(),
-            vec![GenesisAction::SupplyAccount {
-                recipient: DepositRecipient::Identified(PublicAccountEvidence::Pda {
-                    program: programs::bridge_lock_account_id(),
-                    seed: bridge_lock_core::holding_seed(&[9; 32]),
-                }),
-                balance: 1_000,
-            }],
-        ));
-    }
-
-    #[test]
-    #[should_panic(expected = "must not name this zone")]
-    fn pinning_this_zone_as_a_lock_target_is_refused() {
-        let cross_zone = CrossZoneConfig {
-            lock_target_zones: vec![[1; 32]],
-            ..locks_nowhere()
-        };
-        let _genesis = build_genesis_state(&spec(cross_zone, Vec::new()));
-    }
 }

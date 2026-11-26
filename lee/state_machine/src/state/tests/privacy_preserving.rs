@@ -1,6 +1,7 @@
 use lee_core::{
     RootCall,
     execution_state::{Authority, BoundaryStep},
+    signing_key::signature_program_id,
 };
 
 use super::*;
@@ -127,6 +128,10 @@ fn transition_from_privacy_preserving_transaction_shielded() {
         let post_balance = this.data.native_balance().unwrap() - balance_to_move;
         this.data
             .set_actor_state(NATIVE_TOKEN_PROGRAM_ID, encode_balance(post_balance));
+        this.data.set_actor_state(
+            signature_program_id(),
+            sender_keys.key_state(Nonce(1)).encode(),
+        );
         this.nonce.public_account_nonce_increment();
         this
     };
@@ -164,17 +169,13 @@ fn privacy_preserving_witness_set_cannot_have_duplicate_signers() {
     // current state, so only the repeat is at fault.
     let (_, proof) = tx.witness_set.into_raw_parts();
     let message = tx.message;
-    let witness_set = WitnessSet::for_message(
-        &message,
-        proof,
-        &[&sender_keys.signing_key, &sender_keys.signing_key],
-    );
+    let witness_set = privacy_witness_for(&message, proof, &[&sender_keys, &sender_keys]);
     let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
     let result = state.transition_from_privacy_preserving_transaction(&tx, 1, 0);
     assert!(matches!(
         result,
-        Err(LeeError::InvalidInput(msg)) if msg.contains("Duplicate signers")
+        Err(LeeError::InvalidInput(msg)) if msg == crate::InvalidTransaction::Nonces.to_string()
     ));
 }
 
@@ -294,7 +295,7 @@ fn a_journal_claiming_an_unsigned_account_authorized_is_rejected() {
     message.nonces.clear();
     let unsigned = PrivacyPreservingTransaction::new(
         message.clone(),
-        WitnessSet::for_message(&message, witness_set.proof.clone(), &[]),
+        privacy_witness_for(&message, witness_set.proof.clone(), &[]),
     );
 
     assert!(matches!(
@@ -309,7 +310,7 @@ fn a_journal_claiming_an_unsigned_account_authorized_is_rejected() {
     }
     let unclaimed = PrivacyPreservingTransaction::new(
         message.clone(),
-        WitnessSet::for_message(&message, witness_set.proof, &[]),
+        privacy_witness_for(&message, witness_set.proof, &[]),
     );
 
     assert!(matches!(
@@ -395,7 +396,7 @@ fn a_failing_public_transition_leaves_the_state_untouched() {
     let tx = private_tx(
         proven,
         vec![state.get_account_by_id(sender_id).nonce],
-        &[&sender_keys.signing_key],
+        &[&sender_keys],
     );
     let public_state = state.public_state.clone();
 

@@ -16,7 +16,10 @@ use std::{collections::BTreeMap, fmt::Debug, time::Duration};
 use anyhow::{Context as _, Result, ensure};
 use common::transaction::LeeTransaction;
 use integration_tests::{get_account, init_logger, wait_for_inclusion, wait_until};
-use lee::{AccountId, Actor, PrivateKey, PublicKey};
+use lee::{
+    AccountId, Actor,
+    test_utils::{TestSigner, witness_for},
+};
 use lee_core::account::Nonce;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient,
@@ -63,22 +66,20 @@ async fn stake_config(ctx: &TestContext) -> Result<SequencerStakeConfig> {
 /// with a funded wallet account to pay its fees.
 ///
 /// A founding ownership account holds only what its sequencer has earned producing blocks.
-fn founding_owner(ctx: &mut TestContext, index: usize) -> Result<(AccountId, AccountId)> {
-    let owner = config::founding_stake_owner_key(index)?;
-    let ownership = AccountId::from(&PublicKey::new_from_private_key(&owner));
+fn founding_owner(ctx: &mut TestContext, index: usize) -> (AccountId, AccountId) {
+    let owner = config::founding_stake_owner_secret(index);
+    let ownership = TestSigner::from(&owner).account_id();
     ctx.wallet_mut()
         .storage_mut()
         .key_chain_mut()
         .add_imported_public_account(owner);
-    let payer = AccountId::from(&PublicKey::new_from_private_key(
-        &config::default_public_accounts_for_wallet()[0].0,
-    ));
-    Ok((ownership, payer))
+    let payer = TestSigner::from(&config::default_public_accounts_for_wallet()[0].0).account_id();
+    (ownership, payer)
 }
 
 /// Sends founding sequencer `index`'s vote for `params` and waits for its block.
 async fn vote(ctx: &mut TestContext, index: usize, params: ChannelParams) -> Result<()> {
-    let (ownership, payer) = founding_owner(ctx, index)?;
+    let (ownership, payer) = founding_owner(ctx, index);
     let tx_hash = SequencerStake(ctx.wallet())
         .send_params_vote(ownership, params, Some(payer))
         .await
@@ -88,7 +89,7 @@ async fn vote(ctx: &mut TestContext, index: usize, params: ChannelParams) -> Res
 
 /// Withdraws founding sequencer `index`'s vote and waits for its block.
 async fn withdraw_vote(ctx: &mut TestContext, index: usize) -> Result<()> {
-    let (ownership, payer) = founding_owner(ctx, index)?;
+    let (ownership, payer) = founding_owner(ctx, index);
     let tx_hash = SequencerStake(ctx.wallet())
         .send_params_vote_withdrawal(ownership, Some(payer))
         .await
@@ -101,8 +102,8 @@ async fn withdraw_vote(ctx: &mut TestContext, index: usize) -> Result<()> {
 /// A signed but unfunded `WriteSegment` carrying `bytecode_len` bytes, which admission
 /// size-checks before the fee screen refuses it.
 fn unfunded_segment_write(bytecode_len: usize) -> Result<LeeTransaction> {
-    let segment_key = PrivateKey::try_new([220; 32])?;
-    let segment_id = AccountId::from(&PublicKey::new_from_private_key(&segment_key));
+    let segment_signer = TestSigner::new(220);
+    let segment_id = segment_signer.account_id();
     let segment = Actor::new(segment_id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID);
     let message = lee::public_transaction::Message::try_new(
         segment,
@@ -113,7 +114,7 @@ fn unfunded_segment_write(bytecode_len: usize) -> Result<LeeTransaction> {
             next_segment: None,
         },
     )?;
-    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&segment_key]);
+    let witness_set = witness_for(&message, &[&segment_signer]);
     Ok(LeeTransaction::Public(lee::PublicTransaction::new(
         message,
         witness_set,

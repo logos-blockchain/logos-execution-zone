@@ -180,13 +180,13 @@ impl LezScenarioContext {
             .map_err(StepError::query_failed_boxed)
     }
 
-    /// Returns the public signing key for an imported public account.
-    pub async fn public_account_signing_key(
+    /// Returns the initial key of a held public account.
+    pub async fn public_account_initial_key(
         &self,
         account_id: AccountId,
-    ) -> Result<Option<lee::PublicKey>, StepError> {
+    ) -> Result<Option<lee_core::signing_key::SigningKeyState>, StepError> {
         self.wallet()
-            .public_account_signing_key(account_id)
+            .public_account_initial_key(account_id)
             .await
             .map_err(StepError::query_failed_boxed)
     }

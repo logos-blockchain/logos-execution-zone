@@ -9,11 +9,8 @@ mod inner {
     use std::borrow::Cow;
 
     use guests::{
-        BRIDGE_ELF, BRIDGE_ID, BRIDGE_LOCK_ELF, BRIDGE_LOCK_ID, CLOCK_ELF, CLOCK_ID,
-        CROSS_ZONE_INBOX_ELF, CROSS_ZONE_INBOX_ID, CROSS_ZONE_OUTBOX_ELF, CROSS_ZONE_OUTBOX_ID,
-        FEE_ELF, FEE_ID, PING_RECEIVER_ELF, PING_RECEIVER_ID, PING_SENDER_ELF, PING_SENDER_ID,
-        SEQUENCER_STAKE_ELF, SEQUENCER_STAKE_ID, SYSTEM_UPGRADER_ELF, SYSTEM_UPGRADER_ID,
-        WRAPPED_TOKEN_ELF, WRAPPED_TOKEN_ID,
+        BRIDGE_ELF, BRIDGE_ID, CLOCK_ELF, CLOCK_ID, FEE_ELF, FEE_ID, SEQUENCER_STAKE_ELF,
+        SEQUENCER_STAKE_ID, SYSTEM_UPGRADER_ELF, SYSTEM_UPGRADER_ID,
     };
     use lee::{AccountId, program::Program};
     use system_upgrader_core::SystemProgramName;
@@ -23,14 +20,9 @@ mod inner {
     }
 
     pub use bridge_core::BRIDGE_NAME;
-    pub use bridge_lock_core::BRIDGE_LOCK_NAME;
     pub use clock_core::CLOCK_NAME;
-    pub use cross_zone_inbox_core::CROSS_ZONE_INBOX_NAME;
-    pub use cross_zone_outbox_core::CROSS_ZONE_OUTBOX_NAME;
     pub use fee_core::FEE_NAME;
-    pub use ping_core::{PING_RECEIVER_NAME, PING_SENDER_NAME};
     pub use sequencer_stake_core::SEQUENCER_STAKE_NAME;
-    pub use wrapped_token_core::WRAPPED_TOKEN_NAME;
 
     #[must_use]
     #[inline]
@@ -66,54 +58,6 @@ mod inner {
 
     #[must_use]
     #[inline]
-    pub const fn cross_zone_outbox() -> Program {
-        Program::new_unchecked(CROSS_ZONE_OUTBOX_ID, Cow::Borrowed(CROSS_ZONE_OUTBOX_ELF))
-    }
-
-    pub use cross_zone_outbox_core::cross_zone_outbox_account_id;
-
-    #[must_use]
-    #[inline]
-    pub const fn cross_zone_inbox() -> Program {
-        Program::new_unchecked(CROSS_ZONE_INBOX_ID, Cow::Borrowed(CROSS_ZONE_INBOX_ELF))
-    }
-
-    pub use cross_zone_inbox_core::cross_zone_inbox_account_id;
-
-    #[must_use]
-    #[inline]
-    pub const fn ping_sender() -> Program {
-        Program::new_unchecked(PING_SENDER_ID, Cow::Borrowed(PING_SENDER_ELF))
-    }
-
-    pub use ping_core::ping_sender_account_id;
-
-    #[must_use]
-    #[inline]
-    pub const fn ping_receiver() -> Program {
-        Program::new_unchecked(PING_RECEIVER_ID, Cow::Borrowed(PING_RECEIVER_ELF))
-    }
-
-    pub use ping_core::ping_receiver_account_id;
-
-    #[must_use]
-    #[inline]
-    pub const fn bridge_lock() -> Program {
-        Program::new_unchecked(BRIDGE_LOCK_ID, Cow::Borrowed(BRIDGE_LOCK_ELF))
-    }
-
-    pub use bridge_lock_core::bridge_lock_account_id;
-
-    #[must_use]
-    #[inline]
-    pub const fn wrapped_token() -> Program {
-        Program::new_unchecked(WRAPPED_TOKEN_ID, Cow::Borrowed(WRAPPED_TOKEN_ELF))
-    }
-
-    pub use wrapped_token_core::wrapped_token_account_id;
-
-    #[must_use]
-    #[inline]
     pub const fn sequencer_stake() -> Program {
         Program::new_unchecked(SEQUENCER_STAKE_ID, Cow::Borrowed(SEQUENCER_STAKE_ELF))
     }
@@ -131,48 +75,28 @@ mod inner {
         ]
     }
 
-    #[must_use]
-    pub fn builtin_cross_zone_programs() -> [(SystemProgramName, Program); 6] {
-        [
-            (CROSS_ZONE_INBOX_NAME, cross_zone_inbox()),
-            (CROSS_ZONE_OUTBOX_NAME, cross_zone_outbox()),
-            (PING_SENDER_NAME, ping_sender()),
-            (PING_RECEIVER_NAME, ping_receiver()),
-            (BRIDGE_LOCK_NAME, bridge_lock()),
-            (WRAPPED_TOKEN_NAME, wrapped_token()),
-        ]
-    }
-
     /// `system_upgrader`, then the system programs at their name-derived addresses.
     ///
     /// The refusal list and the elf check derive from this, genesis from its parts. The fixed
     /// lengths are the enforcement: adding to either half fails to compile until every length
     /// here is updated too.
     #[must_use]
-    pub fn builtin_programs() -> [(AccountId, Program); 11] {
+    pub fn builtin_programs() -> [(AccountId, Program); 5] {
         let at_name = |(name, program): (SystemProgramName, Program)| {
             (AccountId::from_system_program_name(&name), program)
         };
         let [clock, fee, bridge, stake] = builtin_core_programs().map(at_name);
-        let [inbox, outbox, sender, receiver, lock, wrapped] =
-            builtin_cross_zone_programs().map(at_name);
         [
             (system_upgrader_account_id(), system_upgrader()),
             clock,
             fee,
             bridge,
             stake,
-            inbox,
-            outbox,
-            sender,
-            receiver,
-            lock,
-            wrapped,
         ]
     }
 
     #[must_use]
-    pub fn builtin_program_account_ids() -> [AccountId; 11] {
+    pub fn builtin_program_account_ids() -> [AccountId; 5] {
         builtin_programs().map(|(account_id, _)| account_id)
     }
 
@@ -279,7 +203,7 @@ mod inner {
                 Proposal::Schedule {
                     name,
                     first_segment,
-                    image_id: ping_receiver().id(),
+                    image_id: bridge().id(),
                     immutable,
                     activation_height: ACTIVATION_HEIGHT,
                 }
@@ -302,7 +226,7 @@ mod inner {
                 )
             }
 
-            /// `clock` deployed upgradable and registered, and `ping_receiver`'s code uploaded
+            /// `clock` deployed upgradable and registered, and `bridge`'s code uploaded
             /// as the new version's segment chain. Returns the chain's account ids.
             fn staged() -> (V03State, Vec<AccountId>) {
                 staged_with([(clock_account_id(), clock(), false)])
@@ -312,7 +236,7 @@ mod inner {
             fn staged_with(
                 programs: impl IntoIterator<Item = (AccountId, Program, bool)>,
             ) -> (V03State, Vec<AccountId>) {
-                let new_code = ping_receiver();
+                let new_code = bridge();
                 let user_elf = risc0_binfmt::ProgramBinary::decode(new_code.elf())
                     .unwrap()
                     .user_elf
@@ -383,7 +307,7 @@ mod inner {
             ) -> PublicTransaction {
                 let upgrade = ScheduledUpgrade {
                     first_segment,
-                    image_id: ping_receiver().id(),
+                    image_id: bridge().id(),
                     immutable,
                     activation_height: ACTIVATION_HEIGHT,
                 };
@@ -396,7 +320,7 @@ mod inner {
                     &Message::Schedule {
                         name,
                         first_segment,
-                        image_id: ping_receiver().id(),
+                        image_id: bridge().id(),
                         immutable,
                         activation_height: ACTIVATION_HEIGHT,
                         approvals,
@@ -428,14 +352,14 @@ mod inner {
             ) -> PublicTransaction {
                 let upgrade = ScheduledUpgrade {
                     first_segment,
-                    image_id: ping_receiver().id(),
+                    image_id: bridge().id(),
                     immutable: false,
                     activation_height,
                 };
                 let proposal = Proposal::Schedule {
                     name: CLOCK_NAME,
                     first_segment,
-                    image_id: ping_receiver().id(),
+                    image_id: bridge().id(),
                     immutable: false,
                     activation_height,
                 };
@@ -448,7 +372,7 @@ mod inner {
                     &Message::Schedule {
                         name: CLOCK_NAME,
                         first_segment,
-                        image_id: ping_receiver().id(),
+                        image_id: bridge().id(),
                         immutable: false,
                         activation_height,
                         approvals: approvals_for(&proposal, &[1, 2], VALID_UNTIL),
@@ -510,7 +434,7 @@ mod inner {
                 let proposal = Proposal::Install {
                     name,
                     first_segment,
-                    image_id: ping_receiver().id(),
+                    image_id: bridge().id(),
                     immutable,
                 };
                 system_upgrader_tx(
@@ -518,7 +442,7 @@ mod inner {
                     &Message::Install {
                         name,
                         first_segment,
-                        image_id: ping_receiver().id(),
+                        image_id: bridge().id(),
                         immutable,
                         approvals: approvals_for(&proposal, &[1, 2], VALID_UNTIL),
                     },
@@ -560,7 +484,7 @@ mod inner {
             fn scheduled_at(ids: &[AccountId]) -> Option<ScheduledUpgrade> {
                 Some(ScheduledUpgrade {
                     first_segment: ids[0],
-                    image_id: ping_receiver().id(),
+                    image_id: bridge().id(),
                     immutable: false,
                     activation_height: ACTIVATION_HEIGHT,
                 })
@@ -596,7 +520,7 @@ mod inner {
                     .expect("the upgrade applies at its height");
                 assert_eq!(
                     state.get_program_image_id(clock_account_id()),
-                    Some(ping_receiver().id())
+                    Some(bridge().id())
                 );
                 assert_eq!(schedule(&state), None, "applying clears the schedule");
                 assert!(!header(&state, clock_account_id()).immutable);
@@ -622,7 +546,7 @@ mod inner {
                     .expect("the upgrade applies at its height");
                 assert_eq!(
                     state.get_program_image_id(clock_account_id()),
-                    Some(ping_receiver().id())
+                    Some(bridge().id())
                 );
                 assert!(header(&state, clock_account_id()).immutable);
                 assert!(has_mirror(&state, clock_account_id()));
@@ -701,8 +625,8 @@ mod inner {
             fn system_upgrader_header_cannot_be_updated() {
                 let (mut state, ids) = staged();
                 let header_before = state.get_account_by_id(system_upgrader_account_id());
-                let signer = lee::PrivateKey::try_new([0x44; 32]).unwrap();
-                let signer_id = AccountId::from(&lee::PublicKey::new_from_private_key(&signer));
+                let signer = lee::test_utils::TestSigner::new(0x44);
+                let signer_id = signer.account_id();
                 let header = Actor::new(system_upgrader_account_id(), PROGRAM_LOADER_ACCOUNT_ID);
 
                 let message = public_transaction::Message::try_new(
@@ -715,7 +639,7 @@ mod inner {
                     },
                 )
                 .unwrap();
-                let witness_set = public_transaction::WitnessSet::for_message(&message, &[&signer]);
+                let witness_set = lee::test_utils::witness_for(&message, &[&signer]);
                 let err = state
                     .transition_from_public_transaction(
                         &PublicTransaction::new(message, witness_set),
@@ -888,7 +812,7 @@ mod inner {
 
                 let err = state
                     .transition_from_public_transaction(&tx, 1, 0)
-                    .expect_err("the chain is ping_receiver's code, not clock's");
+                    .expect_err("the chain is bridge's code, not clock's");
                 assert!(
                     err.to_string()
                         .contains("the chain's image ID is not the expected one"),
@@ -921,7 +845,7 @@ mod inner {
 
                 let err = state
                     .transition_from_public_transaction(&tx, 1, 0)
-                    .expect_err("the chain is ping_receiver's code, not clock's");
+                    .expect_err("the chain is bridge's code, not clock's");
                 assert!(
                     err.to_string()
                         .contains("the chain's image ID is not the expected one"),
@@ -960,7 +884,7 @@ mod inner {
                 let staging = staging_actor(&CLOCK_NAME, &scheduled_at(&ids).unwrap());
                 assert_eq!(
                     state.get_program_image_id(staging.account_id),
-                    Some(ping_receiver().id())
+                    Some(bridge().id())
                 );
             }
 
@@ -1037,7 +961,7 @@ mod inner {
                     &Message::Schedule {
                         name: CLOCK_NAME,
                         first_segment: ids[0],
-                        image_id: ping_receiver().id(),
+                        image_id: bridge().id(),
                         immutable: false,
                         activation_height: ACTIVATION_HEIGHT,
                         approvals: approvals_for(
@@ -1082,10 +1006,7 @@ mod inner {
                 state
                     .transition_from_public_transaction(&install_tx(name, ids[0]), 1, 0)
                     .expect("a new system program installs");
-                assert_eq!(
-                    state.get_program_image_id(program),
-                    Some(ping_receiver().id())
-                );
+                assert_eq!(state.get_program_image_id(program), Some(bridge().id()));
                 let header = lee_core::program::ProgramHeader::from_loader_actor_state(
                     state
                         .get_account_by_id(program)
@@ -1113,10 +1034,7 @@ mod inner {
                 state
                     .transition_from_public_transaction(&install_tx_for(name, ids[0], true), 1, 0)
                     .expect("a new system program installs immutable");
-                assert_eq!(
-                    state.get_program_image_id(program),
-                    Some(ping_receiver().id())
-                );
+                assert_eq!(state.get_program_image_id(program), Some(bridge().id()));
                 assert!(header(&state, program).immutable);
                 assert!(has_mirror(&state, program));
                 assert_eq!(registry(&state).programs.get(&name), Some(&None));
@@ -1152,7 +1070,7 @@ mod inner {
                 installed
                     .transition_from_public_transaction(&install_tx(name, ids[0]), 1, 0)
                     .expect("a new system program installs");
-                let seeded = V03State::new().with_programs_at([(program, ping_receiver(), false)]);
+                let seeded = V03State::new().with_programs_at([(program, bridge(), false)]);
 
                 let reconstructed = installed.get_builtin_program(program);
                 assert!(
@@ -1418,12 +1336,6 @@ mod inner {
                     fee_account_id(),
                     bridge_account_id(),
                     sequencer_stake_account_id(),
-                    cross_zone_inbox_account_id(),
-                    cross_zone_outbox_account_id(),
-                    ping_sender_account_id(),
-                    ping_receiver_account_id(),
-                    bridge_lock_account_id(),
-                    wrapped_token_account_id(),
                 ]
             );
         }

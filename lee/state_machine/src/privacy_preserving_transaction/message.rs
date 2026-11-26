@@ -3,9 +3,10 @@ use std::collections::{BTreeMap, HashSet};
 pub use lee_core::EncryptedNote;
 use lee_core::{PrivacyPreservingCircuitOutput, ProvenExecution, account::Nonce};
 
-use crate::{AccountId, TransactionMessage};
+use crate::{AccountId, TransactionMessage, transaction_message::MessageDomain};
 
 const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
+const KEYED_PREFIX: &[u8; 32] = b"/LEE/v0.3/KeyedMessage/Privacy/\x00";
 
 pub type Message = TransactionMessage<ProvenExecution>;
 
@@ -38,29 +39,51 @@ impl Message {
             .filter(|account_id| seen.insert(*account_id))
             .collect()
     }
+}
 
-    #[must_use]
-    pub fn hash(&self) -> [u8; 32] {
-        self.hash_under(PREFIX)
-    }
+impl MessageDomain for ProvenExecution {
+    const KEYED_PREFIX: &'static [u8; 32] = KEYED_PREFIX;
+    const PREFIX: &'static [u8; 32] = PREFIX;
 }
 
 #[cfg(test)]
 pub mod tests {
     use std::collections::BTreeMap;
 
+    use hex_literal::hex;
     use lee_core::{
         Commitment, EphemeralPublicKey, Nullifier, NullifierPublicKey, PrivateAction,
         ProvenExecution,
-        account::{Account, AccountId, Nonce},
+        account::{Account, AccountId, Actor, Nonce},
         encryption::{Ciphertext, ViewingPublicKey},
         execution_state::{Boundary, PublicExecutionContext},
         program::{PdaSeed, ValidityWindows},
+        signing_key::{KeyType, SigningKeyState},
     };
     use sha2::{Digest as _, Sha256};
 
-    use super::{EncryptedNote, Message, PREFIX};
-    use crate::PublicAccountEvidence;
+    use super::{EncryptedNote, KEYED_PREFIX, Message, PREFIX};
+    use crate::{
+        Authority, PublicAccountEvidence, public_transaction, transaction_message::hash_with_keys,
+    };
+
+    fn key(commitment: u8) -> SigningKeyState {
+        SigningKeyState {
+            key_type: KeyType::Schnorr,
+            key_commitment: [commitment; 32],
+        }
+    }
+
+    fn pinned_message() -> Message {
+        Message {
+            nonces: BTreeMap::from([(AccountId::new([2; 32]), Nonce(1))]),
+            admission_evidence: vec![PublicAccountEvidence::Pda {
+                program: AccountId::new([0; 32]),
+                seed: PdaSeed::new([1; 32]),
+            }],
+            ..Message::default()
+        }
+    }
 
     #[must_use]
     pub fn message_for_tests() -> Message {
@@ -149,5 +172,39 @@ pub mod tests {
         assert_eq!(message.to_bytes(), expected);
         let digest: [u8; 32] = Sha256::digest([&PREFIX[..], &expected].concat()).into();
         assert_eq!(message.hash(), digest);
+    }
+
+    #[test]
+    fn message_with_keys_has_known_answers() {
+        let message = pinned_message();
+        assert_eq!(
+            message.message_with_keys(&[key(7)]),
+            hex!("2c2b3dc299c78e6295c07d79be857b89b7c136d0b951bbf3cb60b0576bac039e")
+        );
+        assert_eq!(
+            message.message_with_keys(&[key(1), key(2), key(3)]),
+            hex!("793768ee23f3dfe964b7ffc3015e7842a6903f45191bd608f2f00058d19328b9")
+        );
+    }
+
+    #[test]
+    fn a_public_and_a_privacy_message_with_the_same_bytes_and_next_keys_differ() {
+        let to = Actor::new(AccountId::new([42; 32]), AccountId::new([0; 32]));
+        let public = public_transaction::Message::new_preserialized(
+            to,
+            vec![0],
+            [(to, Authority::Signer)],
+            BTreeMap::from([(to.account_id, Nonce(1))]),
+            None,
+        );
+        let next = [key(7)];
+        // What a privacy message with the public message's bytes would have its signers sign.
+        let as_privacy = hash_with_keys(KEYED_PREFIX, &public.hash_under(PREFIX), &next);
+
+        assert_eq!(
+            as_privacy,
+            hex!("fa0f92a59ce95c6054aff7667dd68882b859b259eda8af872aa51872022e2571")
+        );
+        assert_ne!(public.message_with_keys(&next), as_privacy);
     }
 }

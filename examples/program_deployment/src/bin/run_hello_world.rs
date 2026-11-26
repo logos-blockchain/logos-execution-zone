@@ -65,9 +65,9 @@ async fn main() {
     // The program needs no authorization from `account_id` (see
     // `run_hello_world_with_authorization` for that), but the fee is charged to `payer`, so the
     // payer's nonce is listed and its key signs the message.
-    let (fee, payer_nonce, payer_key) = fee_paid_by(&wallet_core, payer).await.unwrap();
+    let (fee, payer_nonce, payer_signer) = fee_paid_by(&wallet_core, payer).await.unwrap();
     let nonces = BTreeMap::from([(payer, payer_nonce)]);
-    let signing_keys = [&payer_key];
+    let signing_keys = [payer_signer];
     let hello = Actor::new(account_id, program_account_id);
     // `account_id` doesn't sign and may not exist on chain yet, so the sequencer only admits it
     // as a public actor with evidence: its public key, which hashes to the account id.
@@ -78,7 +78,7 @@ async fn main() {
         ..Message::try_new_with_fees(hello, vec![(hello, Authority::None)], nonces, greeting, fee)
             .unwrap()
     };
-    let witness_set = WitnessSet::for_message(&message, &signing_keys);
+    let witness_set = WitnessSet::sign(&message, &signing_keys);
     let tx = PublicTransaction::new(message, witness_set);
 
     // Submit the transaction

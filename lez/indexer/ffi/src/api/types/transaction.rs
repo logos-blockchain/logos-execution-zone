@@ -1,22 +1,22 @@
 pub use ffi_types::{
     FfiActor, FfiBoundaryStep, FfiBoundaryStepKind, FfiDeclaredActor, FfiDelivery,
-    FfiEncryptedAccountData, FfiFeeDeclaration, FfiPrivateAction, FfiProvenFee,
+    FfiEncryptedAccountData, FfiFeeDeclaration, FfiKeyType, FfiPrivateAction, FfiProvenFee,
     FfiPublicAccountEvidence, FfiPublicAccountEvidenceKind, FfiPublicExecutionContext,
-    FfiPublication, FfiRecoveryBinding, FfiRootCall, FfiSignaturePubKeyEntry,
+    FfiPublication, FfiRecoveryBinding, FfiRootCall, FfiSigningKeyState, FfiWitnessEntry,
 };
 use ffi_types::{empty_root_call, proven_fee_from_ffi};
 use indexer_service_protocol::{
     DeclaredActor, HashType, PdaSeed, PrivacyPreservingMessage, PrivacyPreservingTransaction,
-    Proof, PublicAccountEvidence, PublicExecutionContext, PublicKey, PublicMessage,
-    PublicTransaction, Signature, Transaction, ValidityWindow, WitnessSet,
+    Proof, PublicAccountEvidence, PublicExecutionContext, PublicMessage, PublicTransaction,
+    Transaction, ValidityWindow, WitnessSet,
 };
 
 use crate::api::types::{
-    FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiPublicKey, FfiVec,
+    FfiAccountId, FfiBytes32, FfiHashType, FfiOption, FfiVec,
     vectors::{
         FfiBoundaryStepList, FfiNonceList, FfiPrivateActionList, FfiProof,
         FfiPublicAccountEvidenceList, FfiPublicationList, FfiRecoveryBindingList,
-        FfiSignaturePubKeyList,
+        FfiWitnessEntryList,
     },
 };
 
@@ -24,7 +24,7 @@ use crate::api::types::{
 pub struct FfiPublicTransactionBody {
     pub hash: FfiHashType,
     pub message: FfiPublicMessage,
-    pub witness_set: FfiSignaturePubKeyList,
+    pub witness_set: FfiWitnessEntryList,
 }
 
 impl From<PublicTransaction> for FfiPublicTransactionBody {
@@ -39,9 +39,9 @@ impl From<PublicTransaction> for FfiPublicTransactionBody {
             hash: hash.into(),
             message: message.into(),
             witness_set: witness_set
-                .signatures_and_public_keys
+                .entries
                 .into_iter()
-                .map(signature_entry)
+                .map(Into::into)
                 .collect::<Vec<_>>()
                 .into(),
         }
@@ -72,17 +72,9 @@ impl From<Box<FfiPublicTransactionBody>> for PublicTransaction {
                 },
             },
             witness_set: WitnessSet {
-                signatures_and_public_keys: {
-                    let std_vec: Vec<_> = value.witness_set.into();
-                    std_vec
-                        .into_iter()
-                        .map(|ffi_val| {
-                            (
-                                Signature(ffi_val.signature.data),
-                                PublicKey(ffi_val.public_key.data),
-                            )
-                        })
-                        .collect()
+                entries: {
+                    let std_vec: Vec<FfiWitnessEntry> = value.witness_set.into();
+                    std_vec.into_iter().map(Into::into).collect()
                 },
                 proof: None,
             },
@@ -135,7 +127,7 @@ impl From<PublicMessage> for FfiPublicMessage {
 pub struct FfiPrivateTransactionBody {
     pub hash: FfiHashType,
     pub message: FfiPrivacyPreservingMessage,
-    pub witness_set: FfiSignaturePubKeyList,
+    pub witness_set: FfiWitnessEntryList,
     pub proof: FfiProof,
 }
 
@@ -151,9 +143,9 @@ impl From<PrivacyPreservingTransaction> for FfiPrivateTransactionBody {
             hash: hash.into(),
             message: message.into(),
             witness_set: witness_set
-                .signatures_and_public_keys
+                .entries
                 .into_iter()
-                .map(signature_entry)
+                .map(Into::into)
                 .collect::<Vec<_>>()
                 .into(),
             proof: witness_set
@@ -229,17 +221,9 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
                     .then(|| lee::FeeDeclaration::from(value.message.fee).into()),
             },
             witness_set: WitnessSet {
-                signatures_and_public_keys: {
-                    let std_vec: Vec<_> = value.witness_set.into();
-                    std_vec
-                        .into_iter()
-                        .map(|ffi_val| {
-                            (
-                                Signature(ffi_val.signature.data),
-                                PublicKey(ffi_val.public_key.data),
-                            )
-                        })
-                        .collect()
+                entries: {
+                    let std_vec: Vec<FfiWitnessEntry> = value.witness_set.into();
+                    std_vec.into_iter().map(Into::into).collect()
                 },
                 proof: Some(Proof(value.proof.into())),
             },
@@ -490,7 +474,7 @@ fn public_account_evidence_to_ffi(evidence: &PublicAccountEvidence) -> FfiPublic
         },
         PublicAccountEvidence::Pda { program, seed } => FfiPublicAccountEvidence {
             kind: FfiPublicAccountEvidenceKind::Pda,
-            key: FfiPublicKey::default(),
+            key: FfiSigningKeyState::default(),
             program: program.into(),
             seed: FfiBytes32 { data: seed.0 },
         },
@@ -499,20 +483,11 @@ fn public_account_evidence_to_ffi(evidence: &PublicAccountEvidence) -> FfiPublic
 
 fn public_account_evidence_from_ffi(evidence: &FfiPublicAccountEvidence) -> PublicAccountEvidence {
     match evidence.kind {
-        FfiPublicAccountEvidenceKind::Key => {
-            PublicAccountEvidence::Key(PublicKey(evidence.key.data))
-        }
+        FfiPublicAccountEvidenceKind::Key => PublicAccountEvidence::Key(evidence.key.into()),
         FfiPublicAccountEvidenceKind::Pda => PublicAccountEvidence::Pda {
             program: evidence.program.into(),
             seed: PdaSeed(evidence.seed.data),
         },
-    }
-}
-
-fn signature_entry((signature, public_key): (Signature, PublicKey)) -> FfiSignaturePubKeyEntry {
-    FfiSignaturePubKeyEntry {
-        signature: signature.into(),
-        public_key: public_key.into(),
     }
 }
 
@@ -602,8 +577,8 @@ mod tests {
     use indexer_service_protocol::{
         AccountId, Actor, Authority, BoundaryStep, Ciphertext, Commitment, CommitmentSetDigest,
         DeclaredActor, Delivery, EncryptedNote, EphemeralPublicKey, FeeDeclaration, FeeFallback,
-        MessageEnvelope, Nullifier, PrivateAction, ProvenFee, PublicExecutionContext, Publication,
-        RootCall, SealedMessage,
+        KeyType, MessageEnvelope, Nullifier, ProvenFee, PublicExecutionContext, Publication,
+        RootCall, SealedMessage, SigningKeyState,
     };
 
     use super::*;
@@ -621,7 +596,10 @@ mod tests {
 
     fn admission_evidence() -> Vec<PublicAccountEvidence> {
         vec![
-            PublicAccountEvidence::Key(PublicKey([1; 32])),
+            PublicAccountEvidence::Key(SigningKeyState {
+                key_type: KeyType::Schnorr,
+                key_commitment: [1; 32],
+            }),
             PublicAccountEvidence::Pda {
                 program: account_id(2),
                 seed: PdaSeed([3; 32]),
@@ -673,7 +651,7 @@ mod tests {
                     admission_evidence: admission_evidence(),
                 },
                 witness_set: WitnessSet {
-                    signatures_and_public_keys: vec![],
+                    entries: vec![],
                     proof: None,
                 },
             };
@@ -743,15 +721,10 @@ mod tests {
                     refund_to: Some(account_id(70)),
                     tip: 9,
                     fallback: Some(FeeFallback {
-                        action: PrivateAction {
-                            nullifier: Nullifier([71; 32]),
-                            root: CommitmentSetDigest([72; 32]),
-                            commitment: Commitment([73; 32]),
-                            encrypted_post_state: EncryptedNote {
-                                ciphertext: Ciphertext(vec![74; 3]),
-                                epk: EphemeralPublicKey(vec![75; 2]),
-                            },
-                        },
+                        nullifier: Nullifier([71; 32]),
+                        root: CommitmentSetDigest([72; 32]),
+                        commitment: Commitment([73; 32]),
+                        ciphertext: Ciphertext(vec![74; 3]),
                         boundary: vec![
                             BoundaryStep::PrivateToPublic(repeated),
                             BoundaryStep::EndPublicSubtree,
@@ -766,7 +739,7 @@ mod tests {
                 }),
             },
             witness_set: WitnessSet {
-                signatures_and_public_keys: vec![],
+                entries: vec![],
                 proof: Some(Proof(vec![])),
             },
         }

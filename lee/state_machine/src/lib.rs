@@ -27,7 +27,7 @@ pub use privacy_preserving_transaction::{
     PrivacyPreservingTransaction,
     circuit::{
         Presenter, Presenting, Simulation, execute_and_prove,
-        execute_and_prove_with_cross_messages, execute_unproven,
+        execute_and_prove_with_cross_messages, execute_and_prove_with_stats, execute_unproven,
         execute_unproven_with_cross_messages, simulate_privacy_preserving_transaction,
         simulate_public_transaction,
     },
@@ -36,9 +36,12 @@ pub use public_transaction::PublicTransaction;
 pub use signature::{PrivateKey, PublicKey, Signature};
 pub use state::{GenesisBuilder, PublicationsPage, V03State};
 pub use transaction_message::{
-    InvalidTransaction, PublicAccountEvidence, TransactionMessage, actor_map, nonce_map,
+    InvalidTransaction, MessageDomain, PublicAccountEvidence, SignedTransaction,
+    TransactionMessage, actor_map, nonce_map,
 };
-pub use validated_state_diff::{ExecutionCharge, ValidatedStateDiff};
+pub use validated_state_diff::{
+    ExecutionCharge, HeadAuthError, ValidatedStateDiff, authenticate_transaction_at_head,
+};
 
 pub mod encoding;
 pub mod error;
@@ -47,9 +50,9 @@ mod merkle_tree;
 pub mod privacy_preserving_transaction;
 pub mod program;
 pub mod public_transaction;
-mod signature;
+pub mod signature;
 mod state;
-#[cfg(any(test, feature = "test-utils"))]
+#[cfg(any(test, feature = "test-signer"))]
 pub mod test_utils;
 mod transaction_message;
 mod validated_state_diff;

@@ -39,17 +39,17 @@ You should see `✅All looks good!` if everything went well.
 Deploying a program and sending a transaction both cost fees, and a new account has no balance to pay them. The local network's genesis funds a test account, so import it:
 
 ```bash
-wallet account import public --private-key 7f273098f25b71e6c005a9519f2678da8d1c7f01f6a27778e2d9948abdf901fb
+wallet account import public --secret 10a26a9aec7d34b82364eeae45c5294dbb0a764b000b94eeb9b58511dc487c4d
 ```
 
 Output:
 ```
-Imported public account Public/CbgR6tj5kWx5oziiFptM7jMvrQeYY3Mzaao6ciuhSr2r
+Imported public account Public/7VDm7YRPvimbZgCzuFqCGf6RwPsTV3XY5W9DzT71oain
 ```
 
 Every runner takes this account as its fee payer. For convenience, export it:
 ```bash
-export PAYER=CbgR6tj5kWx5oziiFptM7jMvrQeYY3Mzaao6ciuhSr2r
+export PAYER=7VDm7YRPvimbZgCzuFqCGf6RwPsTV3XY5W9DzT71oain
 ```
 
 # 2. Compile the example programs
@@ -199,9 +199,9 @@ lee_core::actor_entrypoint!(handle_message);
 The [public runner](src/bin/run_hello_world.rs) loads the wallet and guest binary, deploys the program, selects its actor state on the supplied account, and submits a public transaction:
 
 ```rust
-let (fee, payer_nonce, payer_key) = fee_paid_by(&wallet_core, payer).await.unwrap();
+let (fee, payer_nonce, payer_signer) = fee_paid_by(&wallet_core, payer).await.unwrap();
 let nonces = BTreeMap::from([(payer, payer_nonce)]);
-let signing_keys = [&payer_key];
+let signing_keys = [payer_signer];
 let hello = Actor::new(account_id, program_account_id);
 let message = Message {
     admission_evidence: admission_evidence(&wallet_core, account_id)
@@ -209,7 +209,7 @@ let message = Message {
         .collect(),
     ..Message::try_new_with_fees(hello, vec![hello], nonces, greeting, fee).unwrap()
 };
-let witness_set = WitnessSet::for_message(&message, &signing_keys);
+let witness_set = WitnessSet::sign(&message, &signing_keys);
 let tx = PublicTransaction::new(message, witness_set);
 ```
 
@@ -368,9 +368,10 @@ cargo run --bin run_hello_world_with_authorization \
 
 The [authorized runner](src/bin/run_hello_world_with_authorization.rs) selects the program's actor state as before. It also:
 
-- loads the account's signing key;
 - includes the account's current nonce in the message, next to the fee payer's;
-- passes the key to `WitnessSet::for_message`, next to the fee payer's, to sign the transaction.
+- passes the account's signer at that nonce (its key at that nonce, with the key state at the next
+  nonce, which the account rotates to) to `WitnessSet::sign`, next to the fee payer's, to sign the
+  transaction.
 
 The account's signature is what authorizes it. The fee payer's signature only covers the fee.
 

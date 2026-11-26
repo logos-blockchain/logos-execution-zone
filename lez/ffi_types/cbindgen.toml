@@ -22,7 +22,7 @@ include = [
   "FfiRecoveryBindingList",
   "FfiRootCall",
   "FfiPublicationList",
-  "FfiSignaturePubKeyList",
   "FfiU128",
   "FfiVecU8",
+  "FfiWitnessEntryList",
 ]

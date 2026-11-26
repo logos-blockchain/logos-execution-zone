@@ -1,7 +1,7 @@
 use indexer_service_protocol::{
     AccountId, BoundaryStep, FeeDeclaration, FeeReceipt, PrivacyPreservingMessage,
     PrivacyPreservingTransaction, ProvenFee, PublicExecutionContext, PublicMessage,
-    PublicTransaction, RootCall, TransactionReceipt, WitnessSet,
+    PublicTransaction, RootCall, TransactionReceipt, WitnessEntry, WitnessSet,
 };
 use leptos::prelude::*;
 
@@ -26,16 +26,13 @@ pub fn PublicTxDetails(
         admission_evidence: _,
     } = message;
     let public_actors = public_context.actors;
-    let WitnessSet {
-        signatures_and_public_keys,
-        proof,
-    } = witness_set;
+    let WitnessSet { entries, proof } = witness_set;
 
     let program_id_str = to.program_account_id.to_string();
     let message_str = format!("{} bytes", data.len());
     let root_actors = vec![to];
     let proof_len = proof.map_or(0, |p| p.0.len());
-    let signatures_count = signatures_and_public_keys.len();
+    let witness_entries_str = witness_entries(&entries);
     let signer_nonces_str = signer_nonces(&nonces);
     let (fee_payer_str, fee_amounts_str) = fee_strs(fee, "None (exempt)");
 
@@ -56,8 +53,8 @@ pub fn PublicTxDetails(
                     <span class="info-value">{format!("{proof_len} bytes")}</span>
                 </div>
                 <div class="info-row">
-                    <span class="info-label">"Signatures:"</span>
-                    <span class="info-value">{signatures_count.to_string()}</span>
+                    <span class="info-label">"Witness Entries:"</span>
+                    <span class="info-value hash">{witness_entries_str}</span>
                 </div>
                 <div class="info-row">
                     <span class="info-label">"Fee Payer:"</span>
@@ -168,10 +165,7 @@ pub fn PrivacyPreservingTxDetails(
         }
     }
     let signer_nonces_str = signer_nonces(&nonces);
-    let WitnessSet {
-        signatures_and_public_keys: _,
-        proof,
-    } = witness_set;
+    let WitnessSet { entries: _, proof } = witness_set;
     let proof_len = proof.map_or(0, |p| p.0.len());
 
     view! {
@@ -304,6 +298,21 @@ fn fee_strs(fee: Option<FeeDeclaration>, none_label: &str) -> (String, String) {
             )
         },
     )
+}
+
+fn witness_entries(entries: &[WitnessEntry]) -> String {
+    entries
+        .iter()
+        .map(|entry| {
+            format!(
+                "{} (next: {:?} {})",
+                hex::encode(&entry.auth_data),
+                entry.next.key_type,
+                hex::encode(entry.next.key_commitment)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 fn signer_nonces(nonces: &[(AccountId, u128)]) -> String {
