@@ -383,9 +383,9 @@ impl State {
     }
 }
 
-/// Presents a private account under a fresh random alias for each message or grant, except the fee
-/// payer's native actor, under the alias its refund is bound to, and a grant over a mentioned actor
-/// with openings, under the alias its mention names.
+/// Presents a private account under a fresh random alias for each message or grant, except a grant
+/// over a mentioned actor with openings, under the alias its mention names, and otherwise the fee
+/// payer's native actor, under the alias its refund is bound to.
 pub struct WalletPresenter {
     private: HashSet<AccountId>,
     fee_alias: Option<(AccountId, [u8; 32])>,
@@ -394,13 +394,13 @@ pub struct WalletPresenter {
 
 impl Presenter for WalletPresenter {
     fn present(&mut self, presenting: Presenting, actor: Actor) -> SenderPresentation {
-        if let Some((payer, opening)) = self.fee_alias
-            && actor == Actor::native_balance(payer)
+        if presenting == Presenting::Grant
+            && let Some(&opening) = self.mention_openings.get(&actor)
         {
             return SenderPresentation::Blinded(opening);
         }
-        if presenting == Presenting::Grant
-            && let Some(&opening) = self.mention_openings.get(&actor)
+        if let Some((payer, opening)) = self.fee_alias
+            && actor == Actor::native_balance(payer)
         {
             return SenderPresentation::Blinded(opening);
         }
