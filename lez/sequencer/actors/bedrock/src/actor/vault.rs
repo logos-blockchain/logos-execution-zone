@@ -205,9 +205,10 @@ impl VaultStep {
                 .payouts
                 .iter()
                 .zip(kept_notes..)
+                // The vault lets a payout stake under its payee's key alone.
                 .map(|((value, public_key), index)| UserOutput {
                     public_key: *public_key,
-                    stake_public_key: ZkPublicKey::zero(),
+                    stake_public_key: *public_key,
                     value: *value,
                     nonce: nonce(index, *value, public_key),
                 })
@@ -459,8 +460,9 @@ mod tests {
                 spec.outputs
                     .iter()
                     .zip(program_notes.len()..)
-                    .map(|(output, at)| {
-                        Note::new(
+                    .map(|(output, at)| Note {
+                        stake_public_key: output.stake_public_key,
+                        ..Note::new(
                             output.value,
                             output.nonce.unwrap_or_else(|| {
                                 derive_program_output_nonce(
