@@ -2154,9 +2154,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         if named_payer.is_none()
             && let Some(signer) = public_signer()
         {
-            let fee_floor = self
-                .reserve_pricing(&quote, cycles, wire_bytes)
-                .fee_at_head;
+            let fee_floor = self.reserve_pricing(&quote, cycles, wire_bytes).fee_at_head;
             let short = if public_part_can_fail {
                 note < fee_floor
             } else {

@@ -621,6 +621,7 @@ pub async fn fund_private_accounts(
 ) -> Result<()> {
     let funder_id = public_account_id(&initial_public_accounts[config::PRIVATE_FUNDER_INDEX].0);
 
+    let mut mispriced = Vec::new();
     for (index, private_account) in initial_private_accounts.iter().enumerate() {
         let before = wallet
             .get_account_balance(funder_id)
@@ -667,12 +668,17 @@ pub async fn fund_private_accounts(
             .saturating_sub(after)
             .saturating_sub(private_account.balance);
         if charged != config::shield_fee_at(index) {
-            bail!(
-                "Funding shield {index} charged {charged}, not the pinned {}; re-pin \
-                 `config::shield_fee_at`",
+            mispriced.push(format!(
+                "shield {index} charged {charged}, not the pinned {}",
                 config::shield_fee_at(index)
-            );
+            ));
         }
+    }
+    if !mispriced.is_empty() {
+        bail!(
+            "Re-pin `config::FIRST_SHIELD_FEE` (shield 0) and `config::SHIELD_FEE` (the rest): {}",
+            mispriced.join("; ")
+        );
     }
 
     Ok(())
