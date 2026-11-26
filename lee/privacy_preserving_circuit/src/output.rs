@@ -586,12 +586,14 @@ mod tests {
 
     #[test]
     fn the_fee_fallback_and_recovery_follow_the_payers_action_through_the_output() {
-        // The payer is not the first witness, and padding reorders the actions.
-        let (other, payer) = (Owner::new(4), Owner::new(3));
+        // The payer is neither the first nor the last witness, each of which could cover the
+        // fee, and padding reorders the actions.
+        let (other, payer, last) = (Owner::new(4), Owner::new(3), Owner::new(5));
         let account = Account::funded(100);
         let witnesses = [
             other.update_witness(Account::funded(50)),
             payer.update_witness(account.clone()),
+            last.update_witness(Account::funded(50)),
         ];
         let inbox = AccountId::new([8; 32]);
         let (_, key) = private_action(&witnesses[1], Account::funded(40).data, None);
@@ -611,6 +613,7 @@ mod tests {
                 private_accounts: [
                     (other.account_id(), Account::funded(50).data),
                     (payer.account_id(), Account::funded(40).data),
+                    (last.account_id(), Account::funded(50).data),
                 ]
                 .into(),
                 boundary: vec![fee_crossing(inbox, 30), BoundaryStep::EndPublicSubtree],
