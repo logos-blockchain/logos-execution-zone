@@ -87,7 +87,7 @@ fn privacy_garbage_proof_is_rejected() {
             public_root: None,
             private_actions: vec![PrivateAction {
                 nullifier: Nullifier::for_dummy(&[0; 32]),
-                root: [0; 32],
+                root: state.commitment_set_digest(),
                 commitment,
                 encrypted_post_state: EncryptedNote {
                     ciphertext: Ciphertext::from_inner(vec![]),

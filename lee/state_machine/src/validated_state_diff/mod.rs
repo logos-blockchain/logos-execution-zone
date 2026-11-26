@@ -390,20 +390,20 @@ impl ValidatedStateDiff {
             LeeError::OutOfValidityWindow
         );
 
-        // 4. Proof verification
+        // 4. Commitment freshness
+        state.check_commitments_are_new(&commitments)?;
+
+        // 5. Nullifier uniqueness
+        state.check_nullifiers_are_valid(&nullifiers)?;
+        state.check_recovery_bindings_are_new(&execution.recovery_bindings)?;
+
+        // 6. Proof verification, after the state lookups a replayed transaction fails
         check_privacy_preserving_circuit_proof_is_valid(
             state,
             &tx.witness_set.proof,
             &message.public_context,
             execution,
         )?;
-
-        // 5. Commitment freshness
-        state.check_commitments_are_new(&commitments)?;
-
-        // 6. Nullifier uniqueness
-        state.check_nullifiers_are_valid(&nullifiers)?;
-        state.check_recovery_bindings_are_new(&execution.recovery_bindings)?;
 
         // 7. Entry: the public part runs a public root; a privately received message is spent by
         // its private action alone.

@@ -602,12 +602,6 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         })
     }
 
-    /// Pays every in-proof fee from `fee_payer`, an owned private account, unless a send names
-    /// its own; `None` lets each send pick its payer.
-    pub fn set_private_fee_payer(&mut self, fee_payer: Option<AccountId>) {
-        self.fee_params.payer = fee_payer.map(AccountIdWithPrivacy::Private);
-    }
-
     /// Refunds every in-proof fee's surplus to `target`, a public account, instead of the payer's
     /// alias: for a transaction that already credits `target` publicly (a deshield), which then
     /// leaves nothing behind. Any other target links the transaction to it.
@@ -638,7 +632,8 @@ impl<C: WalletSequencerClient> WalletCore<C> {
     /// The private account to pay `reserve` when no mentioned private account is authorized and
     /// holds it: an owned regular private account holding it, outside the root call, else the
     /// first mentioned owned regular private account, which pays out of what the root credits it
-    /// (a shielding into a fresh account).
+    /// when nothing public can fail; otherwise a public signer declares the fee (a shielding into
+    /// a fresh account).
     fn auto_fee_payer(&self, mentions: &[AccountMention], reserve: u128) -> Option<AccountId> {
         let holds = |account: &Account| {
             account
@@ -2082,34 +2077,6 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             .filter_map(PendingMessage::native_credit)
             .sum();
         let balance = acc_manager.native_balance(payer).saturating_add(swept);
-        // A picked payer short of the fee pays out of what the root credits it; when the root
-        // credits it too little, a public signer declares the fee instead.
-        let fee_floor = self
-            .reserve_pricing(&quote, cycles, fee_core::market::PROOF_BYTES)
-            .fee_at_head;
-        if named_payer.is_none()
-            && balance < fee_floor
-            && let Some(signer) = public_signer()
-        {
-            let opening = account_manager::random_bytes();
-            let mut probe = input.clone();
-            probe
-                .recoveries
-                .push(acc_manager.fee_recovery(payer, opening)?);
-            probe.fee = Some(FeeTransfer {
-                payer,
-                recipient: fee_inbox,
-                amount: fee_floor,
-                refund_to: None,
-                tip: self.fee_params.tip,
-            });
-            if run_unproven(probe, acc_manager.presenter(Some((payer, opening))))
-                .await?
-                .is_err()
-            {
-                return send_publicly_paid(signer, input).await;
-            }
-        }
         let FeeParams { refund_to, tip, .. } = self.fee_params;
         if let Some(target) = refund_to
             && !acc_manager
@@ -2123,8 +2090,11 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             );
         }
         let opening = account_manager::random_bytes();
+        // Where the fee's recovery sits; a publicly paid transaction goes without it.
+        let mut fee_recovery_idx = None;
         // A refund to a public target is never published to the payer's alias.
         if refund_to.is_none() {
+            fee_recovery_idx = Some(input.recoveries.len());
             input
                 .recoveries
                 .push(acc_manager.fee_recovery(payer, opening)?);
@@ -2156,7 +2126,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         // The fee's amount is fixed-width, so an unproven run paying nothing measures the
         // transaction, its proof charged at a fixed size. Its payer covers that fee, so it carries
         // the fee fallback a payer whose note falls short of the reserve goes without.
-        let (wire_bytes, fallback_bytes) = {
+        let (wire_bytes, fallback_bytes, public_part_can_fail) = {
             let output =
                 run_unproven(priced(0), acc_manager.presenter(Some((payer, opening)))).await??;
             let proof = lee::privacy_preserving_transaction::circuit::Proof::from_inner(Vec::new());
@@ -2170,14 +2140,43 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 .map_or(0, |fallback| {
                     borsh::object_length(fallback).expect("a fee fallback serializes")
                 });
+            let tx = LeeTransaction::PrivacyPreserving(tx);
             (
-                LeeTransaction::PrivacyPreserving(tx)
-                    .charged_bytes()
-                    .expect("a transaction serializes"),
+                tx.charged_bytes().expect("a transaction serializes"),
                 u64::try_from(fallback).expect("a fee fallback's size fits u64"),
+                tx.public_part_can_fail(),
             )
         };
         let note = acc_manager.native_balance(payer);
+        // The sequencer refuses a public part that can fail without a fee fallback to pay for it,
+        // so there the reserve stays within the note, which keeps the fallback.
+        let reservable = if public_part_can_fail { note } else { balance };
+        // A payer short of the fee has a public signer declare it instead, unless it was named.
+        // Where the public part can fail the note alone must cover the fee, to keep its fallback;
+        // elsewhere the payer may pay out of what the root credits it.
+        if named_payer.is_none()
+            && let Some(signer) = public_signer()
+        {
+            let fee_floor = self.reserve_pricing(&quote, cycles, wire_bytes).fee_at_head;
+            let short = if public_part_can_fail {
+                note < fee_floor
+            } else {
+                balance < fee_floor
+                    && run_unproven(
+                        priced(fee_floor),
+                        acc_manager.presenter(Some((payer, opening))),
+                    )
+                    .await?
+                    .is_err()
+            };
+            if short {
+                let mut unpaid = input.clone();
+                if let Some(index) = fee_recovery_idx {
+                    unpaid.recoveries.remove(index);
+                }
+                return send_publicly_paid(signer, unpaid).await;
+            }
+        }
 
         // Base fees move between the quote and inclusion; a reserve the screen finds below the
         // head fee is priced again off a fresh quote and proven again.
@@ -2188,7 +2187,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 let pricing = self.reserve_pricing(&quote, cycles, bytes);
                 let reserve = pricing
                     .headroom_reserve
-                    .min(balance)
+                    .min(reservable)
                     .max(pricing.fee_at_head);
                 (pricing, reserve)
             };
@@ -2217,6 +2216,15 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             } else {
                 wire_bytes
             };
+            // The sequencer would refuse it; fail before the proof.
+            if public_part_can_fail && note < reserve {
+                return Err(ExecutionFailureKind::TransactionBuildError(
+                    lee::error::LeeError::InvalidInput(format!(
+                        "Fee payer {payer} holds {note}, short of the fee of {reserve}: fund it \
+                         first, or have a public signer pay the fee"
+                    )),
+                ));
+            }
             let fee = PrivateFee {
                 payer,
                 reserve,
