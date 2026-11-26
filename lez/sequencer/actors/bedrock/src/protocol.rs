@@ -19,9 +19,6 @@ use logos_blockchain_zone_sdk::{core::mantle::OpProof, sequencer::PreparedChanne
 pub use sequencer_stake_core::{ChannelParams, SequencerKey};
 use sharding_pool_actor::ShardingKey;
 
-/// What [`ReadChannel`] serves: a failed read is an `Err` item, not the stream's end.
-pub type ChannelReadStream = BoxStream<crate::Result<(ZoneMessage, Slot)>>;
-
 /// How the unfinalized message lineage moved across one update.
 #[derive(Debug, Clone)]
 pub enum ViewChange {
@@ -558,22 +555,6 @@ pub struct FilterFinallyAbsent {
 }
 
 impl ShardingKey for FilterFinallyAbsent {
-    type Key = ChannelId;
-
-    fn sharding_key(&self) -> Self::Key {
-        self.channel_id
-    }
-}
-
-/// Finalized channel messages from `after` (exclusive) up to LIB.
-#[derive(Debug, Clone)]
-pub struct ReadChannel {
-    pub channel_id: ChannelId,
-    /// Passing [`None`] will read from the channel's genesis.
-    pub after: Option<Slot>,
-}
-
-impl ShardingKey for ReadChannel {
     type Key = ChannelId;
 
     fn sharding_key(&self) -> Self::Key {

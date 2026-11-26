@@ -97,7 +97,7 @@ pub unsafe extern "C" fn wallet_ffi_transfer_public(
 
     let sent = block_on(transfer.transfer(
         AccountIdentity::Public(from_id),
-        AccountIdentity::Public(to_id),
+        AccountIdentity::PublicNoSign(to_id),
         amount,
         CreditDelivery::Automatic,
     ))

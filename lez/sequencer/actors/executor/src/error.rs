@@ -48,9 +48,6 @@ pub enum Error {
     #[error("The sequencer is not online, wait until bootstrap completes")]
     NotOnline,
 
-    #[error("One of the sequencer's background tasks has finished unexpectedly")]
-    BackgroundTaskFinishedUnexpectedly,
-
     #[error("The mempool is full")]
     MempoolIsFull,
 
@@ -75,12 +72,6 @@ pub enum Error {
     #[error("Slasher request failed")]
     SlasherRequestFailed(#[source] SendError<ErasedMessage, sequencer_slasher_actor::error::Error>),
 
-    #[error("Failed to read the cross-zone dead letter")]
-    CrossZoneDeadLettersUnavailable(#[source] anyhow::Error),
-
-    #[error("Failed to requeue the cross-zone dead letter")]
-    CrossZoneDeadLetterRequeueFailed(#[source] anyhow::Error),
-
     #[error("Failed to read the system_upgrader proposals")]
     SystemProposalsUnavailable(#[source] anyhow::Error),
 
@@ -89,6 +80,24 @@ pub enum Error {
 
     #[error("Incorrect fee")]
     IncorrectFee(#[source] anyhow::Error),
+
+    /// The transaction is malformed, so it is invalid whatever the head.
+    #[error("Invalid transaction")]
+    InvalidTransaction(#[source] lee::error::LeeError),
+
+    /// Against this node's head, a signer's nonce is below its account's, or a signer at its
+    /// account's nonce fails authentication.
+    #[error("Refused against the head state")]
+    RefusedAtHead(#[source] lee::error::LeeError),
+
+    /// A signer ahead of its account's nonce has no pending transaction before it in this node's
+    /// mempool, or fails against the key that transaction commits it to.
+    #[error("Not authenticated against a pending transaction")]
+    PendingAuthentication(#[source] lee::error::LeeError),
+
+    /// A slot the transaction claims is already pending, or a signer's account is at its limit.
+    #[error("Refused by the mempool")]
+    PendingSlot(#[source] anyhow::Error),
 
     /// A privacy-preserving transaction's reserve the head fee outgrew: priced again off a fresh
     /// quote, it may pass.
@@ -108,6 +117,13 @@ pub enum BedrockRequestError {
 impl Error {
     pub fn from_infallible_bedrock_error<M>(err: SendError<M, Infallible>) -> Self {
         Self::BedrockRequestFailed(BedrockRequestError::Infallible(err.erase_message()))
+    }
+
+    /// Whether the transaction can never be valid, whatever the node's head: fee and mempool
+    /// refusals depend on the head, and may pass elsewhere or later.
+    #[must_use]
+    pub const fn is_definitive(&self) -> bool {
+        matches!(self, Self::InvalidTransaction(_))
     }
 }
 

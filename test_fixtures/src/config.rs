@@ -1,16 +1,19 @@
-use std::{net::SocketAddr, num::NonZeroU32, path::PathBuf, time::Duration};
+use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use anyhow::{Context as _, Result};
 use indexer_service::{ChannelId, ClientConfig, EventFilterConfig, IndexerConfig};
 use key_protocol::key_management::{KeyChain, secret_holders::SeedHolder};
-use lee::{AccountId, PrivateKey, PublicAccountEvidence, PublicKey};
+use lee::{
+    AccountId, PublicAccountEvidence,
+    signature::{PublicAccountSecret, initial_key, public_account_id},
+};
 use logos_blockchain_zone_sdk::key_management_system_service::keys::{
     UnsecuredEd25519Key, ZkPublicKey,
 };
 use num_bigint::BigUint;
 use sequencer_core::config::{
-    BedrockConfig, ChannelParams, CrossZoneConfig, DepositRecipient, GenesisAction, GenesisConfig,
-    GossipConfig, SequencerConfig,
+    BedrockConfig, ChannelParams, DepositRecipient, GenesisAction, GenesisConfig, GossipConfig,
+    SequencerConfig,
 };
 use sequencer_genesis::sign_genesis_stake;
 use sequencer_stake_core::SequencerKey;
@@ -41,14 +44,17 @@ pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000_000_000, 20_0
 /// The charged bytes of the shield that funds a private account at setup, which genesis must
 /// price before any transaction exists; setup checks it against what the wallet measures.
 ///
-/// It is the fixed `PROOF_BYTES` (223,047) plus the rest of the serialized transaction (14,001),
+/// It is the fixed `PROOF_BYTES` (223,047) plus the rest of the serialized transaction (14,038),
 /// mostly its padded private slots.
-pub const SHIELD_BYTES: u64 = 237_048;
+pub const SHIELD_BYTES: u64 = 237_085;
+
+/// The funder's initial key, which its signature carries at nonce 0, so in the first shield only.
+const INITIAL_KEY_BYTES: u64 = 33;
 
 /// The public account for funding the private accounts' balances at genesis.
 pub(crate) const PRIVATE_FUNDER_INDEX: usize = 0;
 
-/// Key of the account holding the sequencer's genesis stake.
+/// Secret of the account holding the sequencer's genesis stake.
 pub const SEQUENCER_STAKE_KEY: [u8; 32] = [55; 32];
 
 /// Channel signing key of the test sequencer, staked in the prebuilt dump.
@@ -148,7 +154,6 @@ pub fn sequencer_config(
     bedrock_addr: SocketAddr,
     channel_id: ChannelId,
     genesis_transactions: Vec<GenesisAction>,
-    cross_zone: Option<CrossZoneConfig>,
     gossip: Option<GossipConfig>,
 ) -> Result<SequencerConfig> {
     let SequencerPartialConfig {
@@ -163,6 +168,7 @@ pub fn sequencer_config(
         home,
         max_num_tx_in_block,
         mempool_max_size,
+        mempool_max_per_account: sequencer_core::config::default_mempool_max_per_account(),
         block_create_timeout,
         retry_pending_blocks_timeout: Duration::from_secs(5),
         genesis: Some(GenesisConfig {
@@ -178,7 +184,6 @@ pub fn sequencer_config(
             stale_refund_slots: 0,
             backfill_batch_slots: sequencer_core::config::default_backfill_batch_slots(),
         },
-        cross_zone,
         metrics_listen_address: Some(SequencerConfig::DEFAULT_METRICS_LISTEN_ADDRESS),
         gossip,
         channel_signing_key_file: None,
@@ -188,16 +193,14 @@ pub fn sequencer_config(
 }
 
 #[must_use]
-pub fn default_public_accounts_for_wallet() -> Vec<(PrivateKey, u128)> {
-    let mut private_keys = DEFAULT_PUBLIC_ACCOUNT_SEEDS
+pub fn default_public_accounts_for_wallet() -> Vec<(PublicAccountSecret, u128)> {
+    let mut secrets = DEFAULT_PUBLIC_ACCOUNT_SEEDS
         .iter()
-        .map(|seed| PrivateKey::try_new(*seed).expect("Fixed public account seed must be valid"))
+        .map(|seed| PublicAccountSecret::new(*seed))
         .collect::<Vec<_>>();
-    private_keys.sort_unstable_by_key(|private_key| {
-        AccountId::from(&PublicKey::new_from_private_key(private_key))
-    });
+    secrets.sort_unstable_by_key(public_account_id);
 
-    private_keys
+    secrets
         .into_iter()
         .zip(INITIAL_PUBLIC_BALANCES_FOR_WALLET)
         .collect()
@@ -206,9 +209,8 @@ pub fn default_public_accounts_for_wallet() -> Vec<(PrivateKey, u128)> {
 /// The public account that funds the private accounts' balances.
 #[must_use]
 pub fn private_funder_account_id() -> AccountId {
-    let private_key = PrivateKey::try_new(PRIVATE_FUNDER_ACCOUNT_SEED)
-        .expect("Fixed private funder account seed must be valid");
-    AccountId::from(&PublicKey::new_from_private_key(&private_key))
+    let secret = PublicAccountSecret::new(PRIVATE_FUNDER_ACCOUNT_SEED);
+    public_account_id(&secret)
 }
 
 #[must_use]
@@ -265,19 +267,29 @@ pub fn private_fee(bytes: u64) -> u128 {
     )
 }
 
-/// The fee of the shield that funds a private account at setup.
+/// The fee of a shield that funds a private account at setup, after the first.
 #[must_use]
 pub fn shield_fee() -> u128 {
     private_fee(SHIELD_BYTES)
+}
+
+/// The fee of the `index`-th shield that funds a private account at setup.
+#[must_use]
+pub fn shield_fee_at(index: usize) -> u128 {
+    if index == 0 {
+        private_fee(SHIELD_BYTES.saturating_add(INITIAL_KEY_BYTES))
+    } else {
+        shield_fee()
+    }
 }
 
 /// What funding the private accounts costs the funder: every balance plus the fee of each
 /// shielding transaction, which the funder pays since the recipients hold nothing yet.
 #[must_use]
 pub fn private_funding_cost(private_accounts: &[InitialPrivateAccountForWallet]) -> u128 {
-    let fees = u128::try_from(private_accounts.len())
-        .expect("account count fits u128")
-        .checked_mul(shield_fee())
+    let fees = (0..private_accounts.len())
+        .map(shield_fee_at)
+        .try_fold(0_u128, u128::checked_add)
         .expect("private funding fees overflow");
     private_total(private_accounts)
         .checked_add(fees)
@@ -286,12 +298,12 @@ pub fn private_funding_cost(private_accounts: &[InitialPrivateAccountForWallet])
 
 #[must_use]
 pub fn genesis_from_accounts(
-    public_accounts: &[(PrivateKey, u128)],
+    public_accounts: &[(PublicAccountSecret, u128)],
     private_funding_cost: u128,
 ) -> Vec<GenesisAction> {
-    let mut balances: Vec<(PublicKey, u128)> = public_accounts
+    let mut balances: Vec<_> = public_accounts
         .iter()
-        .map(|(private_key, balance)| (PublicKey::new_from_private_key(private_key), *balance))
+        .map(|(secret, balance)| (initial_key(secret), *balance))
         .collect();
 
     let funder_balance = &mut balances[PRIVATE_FUNDER_INDEX].1;
@@ -301,8 +313,8 @@ pub fn genesis_from_accounts(
 
     balances
         .into_iter()
-        .map(|(public_key, balance)| GenesisAction::SupplyAccount {
-            recipient: DepositRecipient::Identified(PublicAccountEvidence::Key(public_key)),
+        .map(|(key, balance)| GenesisAction::SupplyAccount {
+            recipient: DepositRecipient::Identified(PublicAccountEvidence::Key(key)),
             balance: u64::try_from(balance).expect("genesis balance exceeds u64"),
         })
         .collect()
@@ -327,22 +339,15 @@ pub fn wallet_config(sequencer_addr: &SocketAddr) -> Result<WalletConfig> {
     })
 }
 
-pub fn indexer_config(
-    bedrock_addr: SocketAddr,
-    channel_id: ChannelId,
-    cross_zone: Option<CrossZoneConfig>,
-) -> Result<IndexerConfig> {
+pub fn indexer_config(bedrock_addr: SocketAddr, channel_id: ChannelId) -> Result<IndexerConfig> {
     Ok(IndexerConfig {
         consensus_info_polling_interval: Duration::from_secs(1),
-        cross_zone_accept_unverified: Vec::new(),
         bedrock_config: ClientConfig {
             addr: addr_to_url(UrlProtocol::Http, bedrock_addr)
                 .context("Failed to convert bedrock addr to URL")?,
             auth: None,
         },
         channel_id,
-        cross_zone,
-        peer_block_cache_window: NonZeroU32::new(1024).expect("1024 is nonzero"),
         backfill_batch_slots: indexer_service::default_backfill_batch_slots(),
         allow_chain_reset: false,
         event_filter: EventFilterConfig::Archival,
@@ -372,7 +377,7 @@ pub fn bedrock_channel_id() -> ChannelId {
 }
 
 /// A second zone's channel id, distinct from [`bedrock_channel_id`] so two zones
-/// settle independently on one shared Bedrock node in the cross-zone tests.
+/// settle independently on one shared Bedrock node in the multi-zone tests.
 #[must_use]
 pub fn bedrock_channel_id_b() -> ChannelId {
     let channel_id: [u8; 32] = [0_u8, 2]
@@ -404,10 +409,10 @@ fn founding_stake_owner_seed(index: usize) -> [u8; 32] {
     seed
 }
 
-/// Key owning sequencer `index`'s founding stake.
-pub fn founding_stake_owner_key(index: usize) -> Result<PrivateKey> {
-    PrivateKey::try_new(founding_stake_owner_seed(index))
-        .context("Failed to build the founding stake ownership key")
+/// Secret owning sequencer `index`'s founding stake.
+#[must_use]
+pub fn founding_stake_owner_secret(index: usize) -> PublicAccountSecret {
+    PublicAccountSecret::new(founding_stake_owner_seed(index))
 }
 
 /// Genesis entries staking every sequencer in `sequencer_signing_keys`, so the
@@ -427,11 +432,11 @@ pub fn genesis_sequencer_stakes(
             let public_key = signing_key.public_key();
             let sequencer_key = SequencerKey::new(public_key.to_bytes())
                 .context("Sequencer signing key is not a valid Ed25519 point")?;
-            let owner = founding_stake_owner_key(index)?;
+            let owner = founding_stake_owner_secret(index);
             Ok(GenesisAction::StakeSequencer {
                 sequencer_key,
-                ownership_public_key: PublicKey::new_from_private_key(&owner),
-                stake_signature: sign_genesis_stake(index, sequencer_key, &owner, minimum_stake),
+                ownership_id: public_account_id(&owner),
+                stake_entry: sign_genesis_stake(index, sequencer_key, &owner, minimum_stake),
             })
         })
         .collect()
@@ -464,26 +469,6 @@ pub const fn bedrock_funding_key_id() -> &'static str {
     BEDROCK_FUNDING_KEY_HEX
 }
 
-/// A source-only zone: programs registered, `InitConfig`s emitted, nobody
-/// watched and nowhere to lock to.
-#[must_use]
-pub const fn source_only_cross_zone() -> CrossZoneConfig {
-    CrossZoneConfig {
-        peers: Vec::new(),
-        lock_target_zones: Vec::new(),
-        source_authority: None,
-        source_governance: None,
-    }
-}
-
-#[must_use]
-pub fn source_only_cross_zone_locking_to(lock_target_zones: Vec<[u8; 32]>) -> CrossZoneConfig {
-    CrossZoneConfig {
-        lock_target_zones,
-        ..source_only_cross_zone()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -491,9 +476,7 @@ mod tests {
     #[test]
     fn private_funder_identity_matches_configured_index() {
         let public_accounts = default_public_accounts_for_wallet();
-        let configured_funder = AccountId::from(&PublicKey::new_from_private_key(
-            &public_accounts[PRIVATE_FUNDER_INDEX].0,
-        ));
+        let configured_funder = public_account_id(&public_accounts[PRIVATE_FUNDER_INDEX].0);
 
         assert_eq!(
             private_funder_account_id(),
@@ -511,19 +494,16 @@ mod tests {
         let funding_cost = private_funding_cost(&private_accounts);
         let genesis = genesis_from_accounts(&public_accounts, funding_cost);
 
-        let funder = AccountId::from(&PublicKey::new_from_private_key(
-            &public_accounts[PRIVATE_FUNDER_INDEX].0,
-        ));
+        let funder = public_account_id(&public_accounts[PRIVATE_FUNDER_INDEX].0);
         let supplied = |wanted: AccountId| {
             genesis.iter().find_map(|action| match action {
                 GenesisAction::SupplyAccount { recipient, balance }
-                    if recipient.account_id() == wanted =>
+                    if recipient.account_id() == Some(wanted) =>
                 {
                     Some(*balance)
                 }
                 GenesisAction::SupplyAccount { .. }
                 | GenesisAction::SupplyPrivateAccount { .. }
-                | GenesisAction::SupplyBridgeLockHolding { .. }
                 | GenesisAction::StakeSequencer { .. } => None,
             })
         };
@@ -562,7 +542,6 @@ mod tests {
             SocketAddr::from(([127, 0, 0, 1], 1234)),
             bedrock_channel_id(),
             Vec::new(),
-            None,
             None,
         )
         .expect("custom priority fee should produce a valid sequencer config");

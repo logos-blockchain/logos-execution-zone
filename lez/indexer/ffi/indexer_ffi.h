@@ -126,7 +126,7 @@ typedef struct FfiPublicMessage {
 typedef struct FfiPublicTransactionBody {
   FfiHashType hash;
   struct FfiPublicMessage message;
-  FfiSignaturePubKeyList witness_set;
+  FfiWitnessEntryList witness_set;
 } FfiPublicTransactionBody;
 
 /**
@@ -168,7 +168,7 @@ typedef FfiVecU8 FfiProof;
 typedef struct FfiPrivateTransactionBody {
   FfiHashType hash;
   struct FfiPrivacyPreservingMessage message;
-  FfiSignaturePubKeyList witness_set;
+  FfiWitnessEntryList witness_set;
   FfiProof proof;
 } FfiPrivateTransactionBody;
 
@@ -499,12 +499,9 @@ struct LastBlockIdResult query_last_block(const struct IndexerServiceFFI *indexe
  * Query the indexer's current sync status as a JSON C-string.
  *
  * The JSON schema is owned by `indexer_core` (`IndexerStatus`): an object with
- * `state` (`Starting`/`Syncing`/`CaughtUp`/`Error`/`Stalled`/`Halted`),
- * `indexed_block_id`, `last_error`, `stall_reason`, `cross_zone_halt`, and
- * `cross_zone_peers`. Each peer entry's `health` is one of
- * `Live`/`Lagging`/`Holed`/`Suspended`/`Halted`; treat a string you do not
- * know as not known healthy. Lets a client distinguish "still catching up"
- * from "something went wrong".
+ * `state` (`Starting`/`Syncing`/`CaughtUp`/`Error`/`Stalled`),
+ * `indexed_block_id`, `last_error` and `stall_reason`. Lets a client
+ * distinguish "still catching up" from "something went wrong".
  *
  * # Arguments
  *

@@ -43,7 +43,7 @@ fn emitter_transaction(script: Script) -> PublicTransaction {
         vec![emitter()],
         vec![Nonce(0)],
         script,
-        &[&test_public_account_keys_1().signing_key],
+        &[&test_public_account_keys_1()],
     )
 }
 

@@ -13,10 +13,9 @@ use sequencer_executor_actor::ExecutorActorTrait;
 use sequencer_gossip_actor::protocol::Publish;
 use sequencer_service_protocol::{
     Account, AccountId, Actor, Block, BlockId, ChannelId, Commitment, CommitmentPosition,
-    CommitmentSetDigest, CrossZoneDeadLetter, CrossZoneDeadLetterReport,
-    CrossZoneDeadLetterRequeue, EncryptedNote, FeeStateQuote, HashType, HexBytes, MembershipProof,
-    Nonce, PageLimit, ProgramId, PublicationsPage, SequencerPublicKey, SequencerStatus,
-    SystemProposal, SystemProposalApproval, SystemProposalReport, TransactionReceipt,
+    CommitmentSetDigest, EncryptedNote, FeeStateQuote, HashType, HexBytes, MembershipProof, Nonce,
+    PageLimit, ProgramId, PublicationsPage, SequencerPublicKey, SequencerStatus, SystemProposal,
+    SystemProposalApproval, SystemProposalReport, TransactionReceipt,
 };
 use tracing::debug;
 
@@ -44,7 +43,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         let tx_hash = tx.hash();
 
         let res = async move {
-            let authenticated_tx = tx.transaction_stateless_check().map_err(|err| {
+            let checked_tx = tx.transaction_stateless_check().map_err(|err| {
                 ErrorObjectOwned::owned(
                     ErrorCode::InvalidParams.code(),
                     err.to_string(),
@@ -52,11 +51,9 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
                 )
             })?;
 
-            // Sequencer-only programs (the cross-zone inbox) are injected by the
-            // watcher; a user must not invoke them top-level, or anyone could forge
-            // an inbound cross-zone delivery. Chained user calls are already rejected
-            // by the inbox guest's caller-is-none assertion.
-            if let Some((to, _)) = authenticated_tx.public_call()
+            // Sequencer-only programs are invoked by transactions the sequencer
+            // builds; a user must not invoke them top-level.
+            if let Some((to, _)) = checked_tx.public_call()
                 && sequencer_core::is_sequencer_only_program(to.program_account_id)
             {
                 return Err(ErrorObjectOwned::owned(
@@ -67,10 +64,10 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
                 ));
             }
 
-            Ok(authenticated_tx)
+            Ok(checked_tx)
         };
 
-        let authenticated_tx = res.await.inspect_err(|err| {
+        let checked_tx = res.await.inspect_err(|err| {
             sequencer_rpc_server_actor_metrics::increment_before_mempool_failed_transactions_total(
             );
             debug!(error = ?err, "Transaction failed before reaching mempool");
@@ -79,7 +76,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         self
             .executor_ref
             .ask(sequencer_executor_actor::protocol::Transaction {
-                transaction: authenticated_tx.clone(),
+                transaction: checked_tx.clone(),
                 origin: sequencer_executor_actor::protocol::TransactionOrigin::User,
             })
             .await
@@ -95,7 +92,7 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         // stalling the RPC response.
         if let Some(gossip) = &self.gossip
             && let Err(err) = gossip
-                .tell(Publish::Transaction(Box::new(authenticated_tx)))
+                .tell(Publish::Transaction(Box::new(checked_tx)))
                 .try_send()
         {
             tracing::warn!(error = %err, "Dropping local tx publish: gossip mailbox full or closed");
@@ -317,58 +314,6 @@ impl<E: ExecutorActorTrait> sequencer_service_rpc::RpcServer for Service<E> {
         })
     }
 
-    async fn get_cross_zone_dead_letters(
-        &self,
-    ) -> Result<CrossZoneDeadLetterReport, ErrorObjectOwned> {
-        let sequencer_executor_actor::protocol::GetCrossZoneDeadLettersReply {
-            total_retired,
-            retained,
-        } = self
-            .executor_ref
-            .ask(sequencer_executor_actor::protocol::GetCrossZoneDeadLetters)
-            .await
-            .map_err(map_executor_error)?;
-
-        Ok(CrossZoneDeadLetterReport {
-            total_retired,
-            retained: retained
-                .into_iter()
-                .map(|record| CrossZoneDeadLetter {
-                    message_key: HashType(record.message_key),
-                    src_zone: ChannelId(record.origin.src_zone),
-                    src_block_id: record.origin.src_block_id,
-                    src_tx_index: record.origin.src_tx_index,
-                    failed_attempts: record.failed_attempts,
-                    transaction_bytes: u32::try_from(record.transaction.len()).unwrap_or(u32::MAX),
-                })
-                .collect(),
-        })
-    }
-
-    async fn requeue_cross_zone_dead_letter(
-        &self,
-        message_key: HashType,
-    ) -> Result<CrossZoneDeadLetterRequeue, ErrorObjectOwned> {
-        use sequencer_executor_actor::protocol::DeadLetterRequeue;
-
-        let reply = self
-            .executor_ref
-            .ask(
-                sequencer_executor_actor::protocol::RequeueCrossZoneDeadLetter {
-                    message_key: message_key.0,
-                },
-            )
-            .await
-            .map_err(map_executor_error)?;
-
-        Ok(match reply.outcome {
-            DeadLetterRequeue::Requeued => CrossZoneDeadLetterRequeue::Requeued,
-            DeadLetterRequeue::AlreadyPending => CrossZoneDeadLetterRequeue::AlreadyPending,
-            DeadLetterRequeue::NotFound => CrossZoneDeadLetterRequeue::NotFound,
-            DeadLetterRequeue::NotRetained => CrossZoneDeadLetterRequeue::NotRetained,
-        })
-    }
-
     async fn get_system_proposals(&self) -> Result<SystemProposalReport, ErrorObjectOwned> {
         let sequencer_executor_actor::protocol::GetSystemProposalsReply {
             threshold,
@@ -465,7 +410,11 @@ fn map_executor_error<M>(
                 )
             }
             invalid @ (sequencer_executor_actor::error::Error::IncorrectFee(_)
-            | sequencer_executor_actor::error::Error::TransactionTooLarge { .. }) => {
+            | sequencer_executor_actor::error::Error::TransactionTooLarge { .. }
+            | sequencer_executor_actor::error::Error::InvalidTransaction(_)
+            | sequencer_executor_actor::error::Error::RefusedAtHead(_)
+            | sequencer_executor_actor::error::Error::PendingAuthentication(_)
+            | sequencer_executor_actor::error::Error::PendingSlot(_)) => {
                 // With its cause, which the sender is shown.
                 let message = std::error::Error::source(&invalid).map_or_else(
                     || invalid.to_string(),
@@ -483,13 +432,10 @@ fn map_executor_error<M>(
                 "Sequencer is not online yet, try again later".to_owned(),
                 None::<()>,
             ),
-            handle_err @ (sequencer_executor_actor::error::Error::BackgroundTaskFinishedUnexpectedly
-            | sequencer_executor_actor::error::Error::StorageRequestFailed(_)
+            handle_err @ (sequencer_executor_actor::error::Error::StorageRequestFailed(_)
             | sequencer_executor_actor::error::Error::BedrockActorStartFailed
             | sequencer_executor_actor::error::Error::BedrockRequestFailed(_)
             | sequencer_executor_actor::error::Error::SlasherRequestFailed(_)
-            | sequencer_executor_actor::error::Error::CrossZoneDeadLettersUnavailable(_)
-            | sequencer_executor_actor::error::Error::CrossZoneDeadLetterRequeueFailed(_)
             | sequencer_executor_actor::error::Error::SystemProposalsUnavailable(_)
             | sequencer_executor_actor::error::Error::SequencerStartFailed(_)
             | sequencer_executor_actor::error::Error::StoreAndChannelDivergence(_)
@@ -500,7 +446,9 @@ fn map_executor_error<M>(
             | sequencer_executor_actor::error::Error::ChannelWithoutBlocks(_)
             | sequencer_executor_actor::error::Error::UnsupportedChannelParams(_)
             | sequencer_executor_actor::error::Error::FundingKeyUnavailable(_)
-            | sequencer_executor_actor::error::Error::BlockReconstructionFailed { .. }
+            | sequencer_executor_actor::error::Error::BlockReconstructionFailed {
+                ..
+            }
             | sequencer_executor_actor::error::Error::SequencerStakeConfigNotFound) => {
                 internal_error(handle_err)
             }

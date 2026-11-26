@@ -123,13 +123,33 @@ pub struct GossipActor {
     local_peer_id: PeerId,
 }
 
-/// Submits a gossiped transaction to the node's admission door (fee screen +
-/// mempool push, the executor actor in production).
-///
-/// The verdict never affects mesh acceptance: admission is priced off the
-/// local head state, which drifts, so peers legitimately disagree.
+/// Submits a gossiped transaction to the node's admission door (fee screen,
+/// authentication and mempool push, the executor actor in production).
 pub type IngestSubmit =
-    Arc<dyn Fn(LeeTransaction) -> BoxFuture<'static, anyhow::Result<()>> + Send + Sync>;
+    Arc<dyn Fn(LeeTransaction) -> BoxFuture<'static, IngestVerdict> + Send + Sync>;
+
+/// The admission door's verdict on a gossiped transaction.
+#[derive(Debug)]
+pub enum IngestVerdict {
+    Admitted,
+    /// Refused off the local head state (fee, authentication, mempool room), which drifts, so
+    /// peers legitimately disagree: the transaction is still forwarded.
+    Refused(String),
+    /// Can never be valid, whatever the head: not forwarded, and its sender is penalized.
+    Invalid(String),
+}
+
+impl IngestVerdict {
+    /// The mesh acceptance to report, and whether the transaction is marked seen so a
+    /// rebroadcast is not submitted again.
+    const fn mesh_handling(&self) -> (gossipsub::MessageAcceptance, bool) {
+        match self {
+            Self::Admitted => (gossipsub::MessageAcceptance::Accept, true),
+            Self::Refused(_) => (gossipsub::MessageAcceptance::Accept, false),
+            Self::Invalid(_) => (gossipsub::MessageAcceptance::Reject, true),
+        }
+    }
+}
 
 /// Hands a gossiped `system_upgrader` approval to the node's approval pool (the executor actor in
 /// production), which checks it against the head's committee.
@@ -526,20 +546,31 @@ impl GossipActor {
                 if self.seen.contains(&hash) {
                     gossipsub::MessageAcceptance::Ignore
                 } else {
-                    // Through the admission door (fee screen + mempool push).
-                    // Advisory: the tx is forwarded either way, and a refused
-                    // one stays unseen so a rebroadcast can retry once e.g.
-                    // its payer is funded or the mempool has room.
-                    match (self.submit)(*tx).await {
-                        Ok(()) => {
-                            self.seen.insert(hash);
-                        }
-                        Err(reason) => {
+                    // Through the admission door (fee screen, authentication,
+                    // mempool push). A refusal is advisory: the tx is forwarded,
+                    // and stays unseen so a rebroadcast can retry once e.g. its
+                    // payer is funded or the mempool has room. An invalid tx is
+                    // neither forwarded nor checked again.
+                    let verdict = (self.submit)(*tx).await;
+                    match &verdict {
+                        IngestVerdict::Admitted => {}
+                        IngestVerdict::Refused(reason) => {
                             tracing::debug!(tx_hash = %hash, %reason, "Not admitting gossiped tx");
                         }
+                        IngestVerdict::Invalid(reason) => {
+                            tracing::debug!(
+                                tx_hash = %hash,
+                                %source,
+                                %reason,
+                                "Rejecting gossiped tx"
+                            );
+                        }
                     }
-
-                    gossipsub::MessageAcceptance::Accept
+                    let (acceptance, seen) = verdict.mesh_handling();
+                    if seen {
+                        self.seen.insert(hash);
+                    }
+                    acceptance
                 }
             }
         };

@@ -472,8 +472,6 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
             last_error: None,
             indexed_block_id,
             stall_reason: None,
-            cross_zone_halt: None,
-            cross_zone_peers: Vec::new(),
         })
     }
 
@@ -552,7 +550,7 @@ fn mock_public_tx(
             admission_evidence: vec![],
         },
         witness_set: WitnessSet {
-            signatures_and_public_keys: vec![],
+            entries: vec![],
             proof: None,
         },
     })
@@ -600,7 +598,7 @@ fn mock_privacy_preserving_tx(
             fee: None,
         },
         witness_set: WitnessSet {
-            signatures_and_public_keys: vec![],
+            entries: vec![],
             proof: Some(indexer_service_protocol::Proof(vec![0; 32])),
         },
     })

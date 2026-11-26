@@ -6,6 +6,7 @@ use lee_core::{
     MembershipProof, Nullifier, RecoveryBinding, Timestamp,
     account::{Account, AccountId, ActorState},
     program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramId, Publication, TransactionEvent},
+    signing_key::signature_program_id,
 };
 use program_loader_core::get_program_via;
 use rpds::{HashTrieMapSync, HashTrieSetSync, RedBlackTreeMapSync, RedBlackTreeSetSync};
@@ -252,7 +253,7 @@ impl V03State {
         diff: ValidatedStateDiff,
     ) -> Result<Vec<TransactionEvent>, LeeError> {
         let StateDiff {
-            signer_account_ids,
+            signers,
             public_diff,
             new_commitments,
             new_nullifiers,
@@ -290,10 +291,13 @@ impl V03State {
         for (account_id, account) in public_diff {
             self.public_state.insert_mut(account_id, account);
         }
-        for account_id in signer_account_ids {
-            self.get_account_by_id_mut(account_id)
-                .nonce
-                .public_account_nonce_increment();
+        // After `public_diff`, whose accounts carry their pre-transaction keys.
+        for (account_id, next) in signers {
+            let account = self.get_account_by_id_mut(account_id);
+            account.nonce.public_account_nonce_increment();
+            account
+                .data
+                .set_actor_state(signature_program_id(), next.encode());
         }
         let messages: Vec<Commitment> = published.iter().map(Publication::commitment).collect();
         let positions = self.private_state.0.append(&new_commitments, &messages);

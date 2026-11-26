@@ -57,7 +57,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
             check_startup_channel_params(&genesis.channel_params, &config)?;
         }
 
-        let chain = Self::restore_chain_state(&config, &storage_ref).await?;
+        let chain = Self::restore_chain_state(&storage_ref).await?;
         let get_channel_tip_slot = || async {
             bedrock_pool_ref
                 .ask(sequencer_bedrock_actor::protocol::GetChannelTipSlot { channel_id })
@@ -168,6 +168,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
         }
     }
 
+    pub const fn online_mut(&mut self) -> Result<&mut online::OnlineState<S, B>> {
+        if let Self::Online(online) = self {
+            Ok(online)
+        } else {
+            Err(Error::NotOnline)
+        }
+    }
+
     /// Modify internal state by value.
     ///
     /// In case of `f` failing or cancelling a [`Self::Error`] will be set as the current state.
@@ -200,20 +208,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
     /// Rebuilds the two-tier [`ChainState`]: the final tier from the persisted
     /// final snapshot (pre-genesis state when absent), the head by folding the
     /// persisted channel view over it.
-    async fn restore_chain_state(
-        config: &SequencerConfig,
-        storage_ref: &ActorRef<S>,
-    ) -> Result<ChainState> {
+    async fn restore_chain_state(storage_ref: &ActorRef<S>) -> Result<ChainState> {
         let final_snapshot = storage_ref
             .ask(sequencer_storage_actor::protocol::GetFinalSnapshot)
             .await?;
         let (final_state, final_tip) = match final_snapshot {
             Some((state, meta)) => (state, Some(Tip::from(meta))),
             // Nothing finalized yet: replay the whole stored chain.
-            None => (
-                sequencer_genesis::build_initial_state(config.cross_zone.is_some()),
-                None,
-            ),
+            None => (sequencer_genesis::build_initial_state(), None),
         };
 
         let mut chain = ChainState::from_final(final_state, final_tip);
@@ -246,8 +248,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
         {
             return Err(Error::StorageInconsistency(
                 "Persisted state does not match the replayed chain; \
-                 reset the store or restore the original config \
-                 (cross_zone presence included)"
+                 reset the store or restore the original config"
                     .to_owned(),
             ));
         }

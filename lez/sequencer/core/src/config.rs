@@ -8,7 +8,6 @@ use std::{
 use anyhow::{Context as _, Result, ensure};
 pub use bridge_core::DepositRecipient;
 use common::config::BasicAuth;
-pub use cross_zone::{CrossZoneConfig, CrossZonePeer, CrossZoneRoute};
 use humantime_serde;
 use logos_blockchain_zone_sdk::{
     core::mantle::ops::channel::ChannelId, key_management_system_service::keys::ZkPublicKey,
@@ -71,6 +70,9 @@ pub struct SequencerConfig {
     pub max_num_tx_in_block: usize,
     /// Mempool maximum size.
     pub mempool_max_size: usize,
+    /// Most pending transactions one account may have in the mempool, across its nonces.
+    #[serde(default = "default_mempool_max_per_account")]
+    pub mempool_max_per_account: usize,
     /// Interval in which blocks produced.
     #[serde(with = "humantime_serde")]
     pub block_create_timeout: Duration,
@@ -82,11 +84,6 @@ pub struct SequencerConfig {
     /// What creating the channel writes into genesis; only read when the channel does not exist.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub genesis: Option<GenesisConfig>,
-    /// Presence selects the genesis program set, must match the indexer's, and
-    /// cannot change on an existing chain. A source-only zone declares
-    /// `"cross_zone": {"lock_target_zones": []}`.
-    #[serde(default)]
-    pub cross_zone: Option<CrossZoneConfig>,
     /// Address the Prometheus metrics exporter binds to.
     #[serde(default = "default_metrics_listen_address")]
     pub metrics_listen_address: Option<SocketAddr>,
@@ -161,8 +158,8 @@ impl SequencerConfig {
     /// The genesis this config describes, or a placeholder with the default channel params when
     /// [`Self::genesis`] is absent.
     ///
-    /// When [`Self::genesis`] stakes no sequencer, `bootstrap_sequencer_key` is staked by the key
-    /// in `<home>/sequencer_stake_signing_key`, created on first use.
+    /// When [`Self::genesis`] stakes no sequencer, `bootstrap_sequencer_key` is staked by the
+    /// secret in `<home>/sequencer_stake_signing_key`, created on first use.
     pub fn genesis_spec(
         &self,
         bootstrap_sequencer_key: Option<sequencer_stake_core::SequencerKey>,
@@ -170,7 +167,6 @@ impl SequencerConfig {
         let mut spec = GenesisSpec {
             channel_id: *self.bedrock_config.channel_id.as_ref(),
             channel_params: default_channel_params(),
-            cross_zone: self.cross_zone.clone(),
             actions: Vec::new(),
         };
         let Some(genesis) = &self.genesis else {
@@ -182,13 +178,12 @@ impl SequencerConfig {
         if let Some(sequencer_key) = bootstrap_sequencer_key
             && !sequencer_genesis::stakes_any_sequencer(&spec.actions)
         {
-            let ownership_key = crate::load_or_create_stake_signing_key(
-                &self.home.join("sequencer_stake_signing_key"),
-            )
-            .context("Failed to load or create the stake signing key")?;
+            let secret =
+                crate::load_or_create_stake_secret(&self.home.join("sequencer_stake_signing_key"))
+                    .context("Failed to load or create the stake secret")?;
             spec.actions.push(sequencer_genesis::self_stake(
                 sequencer_key,
-                &ownership_key,
+                &secret,
                 genesis.channel_params.minimum_sequencer_stake,
             ));
         }
@@ -262,6 +257,11 @@ fn default_gossip_listen_addr() -> libp2p::Multiaddr {
     "/ip4/0.0.0.0/udp/0/quic-v1"
         .parse()
         .expect("hardcoded default gossip listen addr is a valid multiaddr")
+}
+
+#[must_use]
+pub const fn default_mempool_max_per_account() -> usize {
+    16
 }
 
 #[expect(clippy::unnecessary_wraps, reason = "Required by serde")]

@@ -1,7 +1,7 @@
 #![expect(clippy::shadow_unrelated, reason = "We don't care about it in tests")]
 
 use std::{
-    collections::{BTreeMap, BTreeSet, HashSet, VecDeque},
+    collections::{BTreeMap, BTreeSet, HashSet},
     pin::pin,
     sync::Arc,
     time::Duration,
@@ -17,10 +17,9 @@ use common::{
 use kameo::{actor::Spawn as _, supervision::RestartPolicy};
 use kameo_actors::{DeliveryStrategy, pubsub::PubSub};
 use lee::{
-    Account, AccountId, Actor, PrivateKey, PublicKey, PublicTransaction, RootCall,
-    TransactionEntry, V03State,
+    Account, AccountId, Actor, PublicTransaction, RootCall, TransactionEntry, V03State,
     program::Program,
-    test_utils::{TestPrivateKeys, init_witness, no_seal, signer_nonces},
+    test_utils::{TestPrivateKeys, TestSigner, init_witness, no_seal, signer_nonces, witness_for},
 };
 use lee_core::{GENESIS_BLOCK_ID, account::Nonce};
 use logos_blockchain_zone_sdk::{
@@ -46,7 +45,6 @@ use logos_blockchain_zone_sdk::{
     sequencer::DepositInfo,
 };
 use mempool::{MemPool, MemPoolHandle};
-use ping_core::{ReceiverMessage, ping_record_pda, receiver_config_account_id};
 use sequencer_bedrock_actor::{
     mock::{CannedChannel, MockBedrockActor, SharedChannel, mock_msg_of},
     protocol::{ChannelUpdate, LiveChannelConfig, PublishOutcome, ViewChange},
@@ -56,10 +54,8 @@ use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::{
     StorageActor,
     protocol::{
-        AddPendingCrossZoneDispatches, AtomicUpdate, CrossZoneMessageKey, DispatchOrigin, GetBlock,
-        GetChannelViewBytes, GetFinalSnapshot, GetFirstBlockId, GetLatestBlockMeta, GetLeeState,
-        GetPendingCrossZoneDispatches, GetPendingDepositEvents, PendingCrossZoneDispatchRecord,
-        PendingDepositEventRecord,
+        AtomicUpdate, GetBlock, GetChannelViewBytes, GetFinalSnapshot, GetFirstBlockId,
+        GetLatestBlockMeta, GetLeeState, GetPendingDepositEvents, PendingDepositEventRecord,
     },
 };
 use sharding_pool_actor::{RestartConfig, ShardingPoolActor};
@@ -68,18 +64,11 @@ use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_us
 use tokio::sync::Mutex;
 
 use crate::{
-    MAX_DISPATCHES_PER_BLOCK, RETIRE_DISPATCH_AFTER_FAILURES, SequencerCore, TransactionOrigin,
-    build_bridge_deposit_tx_from_event, build_finalize_unstake_tx, classify_settled_deliveries,
-    config::{
-        self, BedrockConfig, CrossZoneConfig, CrossZonePeer, CrossZoneRoute, SequencerConfig,
-    },
-    config_target, deposit_already_minted, dispatch_already_delivered, extract_cross_zone_dispatch,
-    extract_cross_zone_dispatch_key, is_sequencer_only_program, resubmittable_txs, round_robin,
+    SequencerCore, TransactionOrigin, build_bridge_deposit_tx_from_event,
+    build_finalize_unstake_tx,
+    config::{self, BedrockConfig, SequencerConfig},
+    config_target, deposit_already_minted, is_sequencer_only_program, resubmittable_txs,
 };
-
-/// The peer zone a cross-zone test receives from. Distinct from the test
-/// channel id (`[0; 32]`), which the inbox guest rejects as a source.
-const PEER_ZONE: [u8; 32] = [0xbe_u8; 32];
 
 /// The inscription a test slash names; only has to match the approvals.
 const TEST_INSCRIPTION: [u8; 32] = [0xA1; 32];
@@ -198,12 +187,7 @@ async fn start_sequencer_bare_on(
         .await
         .unwrap()
         .map_or_else(
-            || {
-                (
-                    sequencer_genesis::build_initial_state(config.cross_zone.is_some()),
-                    None,
-                )
-            },
+            || (sequencer_genesis::build_initial_state(), None),
             |(state, meta)| (state, Some(chain_state::Tip::from(meta))),
         );
     let mut chain = ChainState::from_final(final_state, final_tip);
@@ -325,15 +309,15 @@ fn empty_channel_update() -> ChannelUpdate {
 
 /// Key of the account holding a solo channel creator's genesis stake. Read
 /// from the same file genesis uses, which creates it on first read.
-fn bootstrap_stake_key(config: &SequencerConfig) -> PrivateKey {
-    crate::load_or_create_stake_signing_key(&config.home.join("sequencer_stake_signing_key"))
-        .expect("Failed to load or create the stake signing key")
+fn bootstrap_stake_key(config: &SequencerConfig) -> TestSigner {
+    TestSigner::from(
+        &crate::load_or_create_stake_secret(&config.home.join("sequencer_stake_signing_key"))
+            .expect("Failed to load or create the stake secret"),
+    )
 }
 
 fn bootstrap_stake_account_id(config: &SequencerConfig) -> AccountId {
-    AccountId::from(&PublicKey::new_from_private_key(&bootstrap_stake_key(
-        config,
-    )))
+    bootstrap_stake_key(config).account_id()
 }
 
 fn setup_sequencer_config() -> SequencerConfig {
@@ -344,6 +328,7 @@ fn setup_sequencer_config() -> SequencerConfig {
         home,
         max_num_tx_in_block: 10,
         mempool_max_size: 10000,
+        mempool_max_per_account: crate::config::default_mempool_max_per_account(),
         block_create_timeout: Duration::from_secs(1),
         bedrock_config: BedrockConfig {
             channel_id: ChannelId::from([0; 32]),
@@ -358,7 +343,6 @@ fn setup_sequencer_config() -> SequencerConfig {
             channel_params: config::default_channel_params(),
             actions: vec![],
         }),
-        cross_zone: None,
         metrics_listen_address: None,
         gossip: None,
         channel_signing_key_file: None,
@@ -368,23 +352,12 @@ fn setup_sequencer_config() -> SequencerConfig {
 }
 
 #[test]
-fn only_the_cross_zone_inbox_fee_and_system_upgrader_are_sequencer_only() {
-    assert!(is_sequencer_only_program(
-        programs::cross_zone_inbox_account_id()
-    ));
+fn only_the_fee_and_system_upgrader_are_sequencer_only() {
     assert!(is_sequencer_only_program(programs::fee_account_id()));
     assert!(is_sequencer_only_program(
         programs::system_upgrader_account_id()
     ));
-    assert!(!is_sequencer_only_program(
-        programs::cross_zone_outbox_account_id()
-    ));
-    assert!(!is_sequencer_only_program(
-        programs::wrapped_token_account_id()
-    ));
-    assert!(!is_sequencer_only_program(
-        programs::ping_sender_account_id()
-    ));
+    assert!(!is_sequencer_only_program(programs::bridge_account_id()));
     assert!(!is_sequencer_only_program(programs::clock_account_id()));
 }
 
@@ -462,12 +435,12 @@ fn assert_block_tail(block: &common::block::Block, user_txs: &[LeeTransaction]) 
     );
 }
 
-fn create_signing_key_for_account1() -> lee::PrivateKey {
-    initial_pub_accounts_private_keys()[0].pub_sign_key.clone()
+fn create_signing_key_for_account1() -> TestSigner {
+    TestSigner::from(&initial_pub_accounts_private_keys()[0].secret)
 }
 
-fn create_signing_key_for_account2() -> lee::PrivateKey {
-    initial_pub_accounts_private_keys()[1].pub_sign_key.clone()
+fn create_signing_key_for_account2() -> TestSigner {
+    TestSigner::from(&initial_pub_accounts_private_keys()[1].secret)
 }
 
 async fn common_setup() -> (
@@ -536,10 +509,10 @@ fn create_charged_bridge_deposit(
     recipient_id: AccountId,
     amount: bridge_core::BridgeAmount,
     payer_nonce: u128,
-    payer_key: &PrivateKey,
+    payer_key: &TestSigner,
 ) -> LeeTransaction {
     let bridge_program_id = programs::bridge_account_id();
-    let payer = AccountId::from(&PublicKey::new_from_private_key(payer_key));
+    let payer = payer_key.account_id();
     let receipt = Actor::new(
         bridge_core::deposit_receipt_account_id(bridge_program_id, op_id),
         bridge_program_id,
@@ -566,7 +539,7 @@ fn create_charged_bridge_deposit(
         )
         .expect("charged bridge deposit message builds")
     };
-    let witness = lee::public_transaction::WitnessSet::for_message(&message, &[payer_key]);
+    let witness = witness_for(&message, &[payer_key]);
     LeeTransaction::Public(PublicTransaction::new(message, witness))
 }
 
@@ -578,7 +551,7 @@ async fn a_charged_bridge_deposit_is_dropped_by_the_builder_bridge_guard() {
 
     let (mut sequencer, mempool_handle) = start_sequencer(config).await;
 
-    let payer_key = initial_pub_accounts_private_keys()[0].pub_sign_key.clone();
+    let payer_key = create_signing_key_for_account1();
     let recipient_id = initial_public_user_accounts()[1].account_id;
     let op_id = [0x5a_u8; 32];
     let forged = create_charged_bridge_deposit(op_id, recipient_id, 1, 0, &payer_key);
@@ -636,6 +609,7 @@ async fn a_charged_bridge_deposit_is_dropped_by_the_builder_bridge_guard() {
 async fn a_reverted_withdraw_releases_nothing_on_l1() {
     let (mut sequencer, mempool_handle) = common_setup().await;
     let payer = &initial_pub_accounts_private_keys()[0];
+    let payer_signer = TestSigner::from(&payer.secret);
     let root = Actor::new(payer.account_id, programs::bridge_account_id());
     let message = lee::public_transaction::Message::try_new_with_fees(
         root,
@@ -644,7 +618,7 @@ async fn a_reverted_withdraw_releases_nothing_on_l1() {
             Actor::native_balance(payer.account_id),
             Actor::native_balance(system_accounts::bridge_account_id()),
         ],
-        signer_nonces(&[&payer.pub_sign_key], vec![Nonce(0)]),
+        signer_nonces(&[&payer_signer], vec![Nonce(0)]),
         bridge_core::Message::Withdraw {
             amount: u64::MAX,
             bedrock_account_pk: [0; 32],
@@ -652,8 +626,7 @@ async fn a_reverted_withdraw_releases_nothing_on_l1() {
         common::test_utils::test_fee_declaration(payer.account_id),
     )
     .unwrap();
-    let witness_set =
-        lee::public_transaction::WitnessSet::for_message(&message, &[&payer.pub_sign_key]);
+    let witness_set = witness_for(&message, &[&payer_signer]);
     let withdraw = LeeTransaction::Public(PublicTransaction::new(message, witness_set));
     mempool_handle
         .push((TransactionOrigin::User, withdraw.clone()))
@@ -679,9 +652,7 @@ async fn an_exempt_public_bridge_deposit_is_dropped_by_the_builder_bridge_guard(
 
     let (mut sequencer, mempool_handle) = start_sequencer(config).await;
 
-    let recipient = DepositRecipient::Identified(lee::PublicAccountEvidence::Key(
-        PublicKey::new_from_private_key(&initial_pub_accounts_private_keys()[1].pub_sign_key),
-    ));
+    let recipient = DepositRecipient::Identified(create_signing_key_for_account2().evidence());
     let op_id = [0x7c_u8; 32];
     let forged = build_bridge_deposit_tx_from_event(&PendingDepositEventRecord {
         deposit_op_id: HashType(op_id),
@@ -720,508 +691,6 @@ async fn an_exempt_public_bridge_deposit_is_dropped_by_the_builder_bridge_guard(
     );
 }
 
-/// A config that receives `ping_receiver` messages from [`PEER_ZONE`], so
-/// `build_genesis_state` seeds the inbox config PDA and a delivery has an
-/// allowlist to pass.
-fn cross_zone_test_config() -> SequencerConfig {
-    SequencerConfig {
-        cross_zone: Some(CrossZoneConfig {
-            peers: vec![CrossZonePeer {
-                channel_id: PEER_ZONE,
-                allowed_routes: vec![CrossZoneRoute {
-                    src_account_id: programs::ping_sender_account_id(),
-                    target_account_id: programs::ping_receiver_account_id(),
-                    mint_cap: None,
-                }],
-                min_committee_size: 0,
-                genesis_hash: None,
-                emitters: vec![],
-            }],
-            lock_target_zones: Vec::new(),
-            source_authority: None,
-            source_governance: None,
-        }),
-        ..setup_sequencer_config()
-    }
-}
-
-/// A `ping_receiver::Record` message: the wire form an emitter on the peer
-/// zone puts in the message payload.
-fn ping_payload(payload: &[u8]) -> Vec<u8> {
-    borsh::to_vec(&ReceiverMessage::Record {
-        payload: payload.to_vec(),
-    })
-    .expect("ping message serializes")
-}
-
-/// The dispatch transaction for a message at index 0 of [`PEER_ZONE`] block
-/// `src_block_id`. Built through the same builder the watcher uses, so a change
-/// to the encoding shows up here rather than passing silently.
-fn dispatch_tx(src_block_id: u64, payload: Vec<u8>) -> LeeTransaction {
-    let receiver_id = programs::ping_receiver_account_id();
-    LeeTransaction::Public(cross_zone::build_dispatch_from_emission(
-        &cross_zone::EmissionSource {
-            src_zone: PEER_ZONE,
-            src_block_id,
-            src_block_hash: peer_block_hash(src_block_id),
-            src_tx_index: 0,
-            src_account_id: programs::ping_sender_account_id(),
-        },
-        receiver_id,
-        &[
-            Actor::new(receiver_config_account_id(receiver_id), receiver_id),
-            Actor::new(ping_record_pda(receiver_id), receiver_id),
-        ],
-        payload,
-    ))
-}
-
-/// A stand-in for the peer block's recomputed hash, distinct per block id. These
-/// records are seeded into the store, so no real block exists to hash.
-fn peer_block_hash(src_block_id: u64) -> [u8; 32] {
-    let mut hash = [0_u8; 32];
-    hash[..8].copy_from_slice(&src_block_id.to_le_bytes());
-    hash
-}
-
-/// The pending record the watcher would leave behind for that dispatch.
-fn dispatch_record(src_block_id: u64, payload: Vec<u8>) -> PendingCrossZoneDispatchRecord {
-    let tx = dispatch_tx(src_block_id, payload);
-    PendingCrossZoneDispatchRecord::recorded(
-        cross_zone_inbox_core::message_key(&PEER_ZONE, src_block_id, 0),
-        borsh::to_vec(&tx).expect("dispatch encodes"),
-    )
-}
-
-fn delivered_source_blocks(block: &Block) -> Vec<u64> {
-    block
-        .body
-        .transactions
-        .iter()
-        .filter_map(extract_cross_zone_dispatch)
-        .map(|message| message.src_block_id)
-        .collect()
-}
-
-/// The message keys of the deliveries a block carries.
-fn dispatches_in(block: &Block) -> Vec<CrossZoneMessageKey> {
-    block
-        .body
-        .transactions
-        .iter()
-        .filter_map(extract_cross_zone_dispatch_key)
-        .collect()
-}
-
-/// The pending dispatch records a sequencer still holds.
-async fn pending_dispatches(
-    sequencer: &SequencerCore<StorageActor, MockBedrockActor>,
-) -> Vec<PendingCrossZoneDispatchRecord> {
-    sequencer
-        .storage_ref
-        .ask(GetPendingCrossZoneDispatches)
-        .await
-        .expect("pending dispatches readable")
-}
-
-#[tokio::test]
-async fn recorded_dispatches_are_drained_from_the_store_on_production() {
-    let payload = b"hello-cross-zone".to_vec();
-    let record = dispatch_record(7, ping_payload(&payload));
-    let key = record.message_key;
-
-    let (mut sequencer, _mempool_handle) = start_sequencer(cross_zone_test_config()).await;
-    assert_eq!(
-        sequencer
-            .storage_ref
-            .ask(AddPendingCrossZoneDispatches {
-                dispatches: vec![record],
-            })
-            .await
-            .unwrap(),
-        1
-    );
-
-    // The delivery never goes through the mempool: the record is the queue, and
-    // production drains it. That is what makes the window between the watcher's
-    // durable read cursor and a block carrying the dispatch survivable, and
-    // what lets a committee-floor suspension hold new reads without holding
-    // deliveries already recorded: the watcher spawned here reads nothing (its
-    // node URL is a dummy) and only ever records to the store, never the
-    // mempool.
-    assert!(
-        sequencer.mempool.pop().is_none(),
-        "deliveries are drained from the store, never queued in the mempool"
-    );
-
-    let block_id = sequencer.run_production_turn().await.unwrap();
-    let block = sequencer
-        .storage_ref
-        .ask(GetBlock { block_id })
-        .await
-        .unwrap()
-        .expect("produced block is stored");
-    assert_eq!(
-        dispatches_in(&block),
-        vec![key],
-        "the drained delivery should be included in the produced block"
-    );
-
-    let ping_receiver_program_id = programs::ping_receiver_account_id();
-    let record_id = ping_record_pda(ping_receiver_program_id);
-    assert_eq!(
-        sequencer
-            .with_state(|state| state
-                .get_account_by_id(record_id)
-                .data
-                .actor_state(ping_receiver_program_id)
-                .clone()
-                .into_inner())
-            .await,
-        payload,
-        "the dispatch must reach its target program, not just sit in the block"
-    );
-
-    // The record stays until the delivery finalizes; re-delivery is prevented by
-    // the inbox seen-set now in head state, not by any marker on the record.
-    assert_eq!(
-        pending_dispatches(&sequencer)
-            .await
-            .iter()
-            .map(|record| record.message_key)
-            .collect::<Vec<_>>(),
-        vec![key],
-        "the record remains until the delivery becomes irreversible"
-    );
-}
-
-/// Only the watcher's injected `Dispatch` may deliver: the same delivery signed
-/// and paid for by a user is rejected, so no block may carry it.
-#[tokio::test]
-async fn settlement_rejects_a_dispatch_a_user_signed() {
-    let (sequencer, _mempool_handle) = start_sequencer(cross_zone_test_config()).await;
-    let state = sequencer.with_state(Clone::clone).await;
-    let opening = chain_state::apply::opening_fee_state(&state);
-
-    let injected = dispatch_tx(7, ping_payload(b"forged"));
-    let LeeTransaction::Public(public) = &injected else {
-        unreachable!("a dispatch is a public transaction")
-    };
-    let lee::RootCall {
-        to,
-        message: dispatch,
-    } = &public.message().execution.root;
-    let payer = initial_public_user_accounts()[0].account_id;
-    let message = lee::public_transaction::Message {
-        admission_evidence: public.message().admission_evidence.clone(),
-        ..lee::public_transaction::Message::try_new_with_fees(
-            *to,
-            public.message().public_context.actors.clone(),
-            BTreeMap::from([(payer, state.get_account_by_id(payer).nonce)]),
-            borsh::from_slice::<cross_zone_inbox_core::Message>(dispatch)
-                .expect("a dispatch message decodes"),
-            common::test_utils::test_fee_declaration(payer),
-        )
-        .unwrap()
-    };
-    let witness_set = lee::public_transaction::WitnessSet::for_message(
-        &message,
-        &[&create_signing_key_for_account1()],
-    );
-    let signed = LeeTransaction::Public(PublicTransaction::new(message, witness_set));
-
-    let settle = |tx: &LeeTransaction| {
-        chain_state::apply::settle_transaction(
-            tx,
-            &mut state.clone(),
-            &opening,
-            2,
-            0,
-            0,
-            &mut fee_core::BlockFeeSummary::default(),
-        )
-    };
-    settle(&injected).expect("the injected dispatch delivers");
-    let err = settle(&signed).expect_err("a user-signed dispatch must be rejected");
-    assert!(
-        matches!(
-            err,
-            chain_state::BlockIngestError::RestrictedAccountModification { .. }
-        ),
-        "expected RestrictedAccountModification, got {err:?}"
-    );
-}
-
-#[tokio::test]
-async fn a_delivered_dispatch_is_skipped_on_the_next_turn() {
-    // The seen-set is what replaces the submitted mark: the drain asks the state
-    // it is building on whether the inbox has already taken this message, so a
-    // record that outlives its delivery costs one skipped drain, not a replay.
-    let record = dispatch_record(11, ping_payload(b"once"));
-    let key = record.message_key;
-
-    let (mut sequencer, _mempool_handle) = start_sequencer(cross_zone_test_config()).await;
-    sequencer
-        .storage_ref
-        .ask(AddPendingCrossZoneDispatches {
-            dispatches: vec![record],
-        })
-        .await
-        .unwrap();
-
-    let first = sequencer.run_production_turn().await.unwrap();
-    let second = sequencer.run_production_turn().await.unwrap();
-
-    let delivered_in = async |block_id: u64| {
-        dispatches_in(
-            &sequencer
-                .storage_ref
-                .ask(GetBlock { block_id })
-                .await
-                .unwrap()
-                .expect("produced block is stored"),
-        )
-    };
-    assert_eq!(delivered_in(first).await, vec![key]);
-    assert!(
-        delivered_in(second).await.is_empty(),
-        "the inbox seen-set must keep the drain from re-delivering"
-    );
-
-    let message = extract_cross_zone_dispatch(&dispatch_tx(11, ping_payload(b"once")))
-        .expect("the dispatch carries a cross-zone message");
-    assert!(
-        sequencer
-            .with_state(|state| dispatch_already_delivered(state, &message))
-            .await,
-        "the seen shard in head state is what the skip reads"
-    );
-}
-
-#[tokio::test]
-async fn a_dispatch_that_never_executes_is_given_up_on_after_repeated_failures() {
-    // A payload that is not `u32`-aligned: the inbox guest rejects it outright,
-    // so this is a delivery that can never execute however often it is retried.
-    // Its content is chosen on the peer zone and validated by nobody in between,
-    // so without a give-up policy it would fail on every block for ever.
-    let record = dispatch_record(13, b"odd".to_vec());
-
-    let (mut sequencer, _mempool_handle) = start_sequencer(cross_zone_test_config()).await;
-    sequencer
-        .storage_ref
-        .ask(AddPendingCrossZoneDispatches {
-            dispatches: vec![record],
-        })
-        .await
-        .unwrap();
-
-    for attempt in 1..RETIRE_DISPATCH_AFTER_FAILURES {
-        let block_id = sequencer.run_production_turn().await.unwrap();
-        let block = sequencer
-            .storage_ref
-            .ask(GetBlock { block_id })
-            .await
-            .unwrap()
-            .expect("produced block is stored");
-        assert!(
-            dispatches_in(&block).is_empty(),
-            "a dispatch that fails to execute must not reach the block"
-        );
-
-        let records = pending_dispatches(&sequencer).await;
-        assert_eq!(records.len(), 1);
-        assert_eq!(
-            records[0].failed_attempts, attempt,
-            "the counter advances once per block, not once per process start"
-        );
-    }
-
-    // The attempt at the limit gives up on it, which takes the record out of the
-    // pending list. Anything else leaves an entry no later block can ever
-    // remove, which is how a peer that can make deliveries fail would grow this
-    // list without bound.
-    sequencer.run_production_turn().await.unwrap();
-    assert!(
-        pending_dispatches(&sequencer).await.is_empty(),
-        "giving up on a delivery must take its record out of the pending list"
-    );
-
-    // The dead letter is the only record that this happened, and the origin is
-    // what identifies which message stopped being attempted.
-    let (dead_letter_count, dead_letters) = sequencer.cross_zone_dead_letters().await.unwrap();
-    assert_eq!(dead_letters.len(), 1);
-    assert_eq!(
-        dead_letters[0].origin,
-        DispatchOrigin {
-            src_zone: PEER_ZONE,
-            src_block_id: 13,
-            src_tx_index: 0,
-        }
-    );
-    assert_eq!(
-        dead_letters[0].message_key,
-        cross_zone_inbox_core::message_key(&PEER_ZONE, 13, 0)
-    );
-    assert!(!dead_letters[0].transaction.is_empty());
-    assert_eq!(
-        dead_letters[0].failed_attempts,
-        RETIRE_DISPATCH_AFTER_FAILURES
-    );
-    assert_eq!(dead_letter_count, 1);
-
-    // The same view the RPC serves, so an operator sees what the store holds.
-    let (total_retired, retained) = sequencer.cross_zone_dead_letters().await.unwrap();
-    assert_eq!(total_retired, 1);
-    assert_eq!(retained, dead_letters);
-
-    // And nothing re-feeds it, so it stops costing a guest execution per block.
-    let block_id = sequencer.run_production_turn().await.unwrap();
-    let block = sequencer
-        .storage_ref
-        .ask(GetBlock { block_id })
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(dispatches_in(&block).is_empty());
-    assert!(pending_dispatches(&sequencer).await.is_empty());
-}
-
-#[tokio::test]
-async fn a_redelivered_record_is_dropped_once_its_delivery_is_irreversible() {
-    // The watcher persists its floor only at slot boundaries, so a crash inside
-    // a slot makes the next run re-read it and re-record deliveries that have
-    // already settled. Their keys are in the inbox seen-set for good, so no
-    // future block will ever carry them and the settlement path cannot reach
-    // them. The drain dropping them is the only thing that does.
-    let record = dispatch_record(29, ping_payload(b"again"));
-    let key = record.message_key;
-
-    let (mut sequencer, _mempool_handle) = start_sequencer(cross_zone_test_config()).await;
-    sequencer
-        .storage_ref
-        .ask(AddPendingCrossZoneDispatches {
-            dispatches: vec![record.clone()],
-        })
-        .await
-        .unwrap();
-
-    let block_id = sequencer.run_production_turn().await.unwrap();
-    let delivery_block = sequencer
-        .storage_ref
-        .ask(GetBlock { block_id })
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(dispatches_in(&delivery_block), vec![key]);
-
-    sequencer
-        .on_channel_update(&ChannelUpdate {
-            finalized: vec![finalized_as_held(&sequencer.chain(), &delivery_block).await],
-            ..empty_channel_update()
-        })
-        .await;
-    assert!(pending_dispatches(&sequencer).await.is_empty());
-
-    // The watcher re-reads the slot and records it again.
-    sequencer
-        .storage_ref
-        .ask(AddPendingCrossZoneDispatches {
-            dispatches: vec![record],
-        })
-        .await
-        .unwrap();
-    assert_eq!(pending_dispatches(&sequencer).await.len(), 1);
-
-    let block_id = sequencer.run_production_turn().await.unwrap();
-    let block = sequencer
-        .storage_ref
-        .ask(GetBlock { block_id })
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(
-        dispatches_in(&block).is_empty(),
-        "the delivery is already on the chain, so it must not be delivered again"
-    );
-    assert!(
-        pending_dispatches(&sequencer).await.is_empty(),
-        "a record whose delivery is already irreversible must be dropped, not kept for ever"
-    );
-}
-
-#[tokio::test]
-async fn a_delivery_still_reversible_keeps_its_record() {
-    // The counterpart to the test above, and the reason the drain checks two
-    // states rather than one. In head but not yet final means the delivery can
-    // still orphan, so skipping it is right but dropping its record would lose
-    // the delivery when it does.
-    let record = dispatch_record(31, ping_payload(b"pending"));
-    let key = record.message_key;
-
-    let (mut sequencer, _mempool_handle) = start_sequencer(cross_zone_test_config()).await;
-    sequencer
-        .storage_ref
-        .ask(AddPendingCrossZoneDispatches {
-            dispatches: vec![record],
-        })
-        .await
-        .unwrap();
-
-    sequencer.run_production_turn().await.unwrap();
-    sequencer.run_production_turn().await.unwrap();
-
-    assert_eq!(
-        pending_dispatches(&sequencer)
-            .await
-            .iter()
-            .map(|record| record.message_key)
-            .collect::<Vec<_>>(),
-        vec![key],
-        "nothing has finalized, so the record must survive in case the block orphans"
-    );
-}
-
-#[test]
-fn a_settled_delivery_that_is_not_the_one_we_recorded_is_reported() {
-    // The message key covers (src_zone, src_block_id, src_tx_index) and nothing
-    // about the payload, and so does the inbox's own replay check. So a peer's
-    // sequencer can publish a delivery under a key we hold with a payload we
-    // never saw, and it settles our correct record along with it. The indexer
-    // catches the forgery and halts; this record is the last local copy of what
-    // we believed, so the mismatch has to be reported before it is dropped.
-    let honest = dispatch_record(53, ping_payload(b"honest"));
-    let key = honest.message_key;
-    let forged = dispatch_tx(53, ping_payload(b"forged"));
-    assert_eq!(
-        extract_cross_zone_dispatch_key(&forged),
-        Some(key),
-        "the forged delivery must share the key, or it proves nothing"
-    );
-
-    let block = common::test_utils::produce_dummy_block(2, None, vec![forged]);
-    let (keys, mismatched) = classify_settled_deliveries(std::slice::from_ref(&honest), &block);
-    assert_eq!(
-        keys,
-        HashSet::from([key]),
-        "the record is settled either way"
-    );
-    assert_eq!(
-        mismatched,
-        vec![key],
-        "a delivery that differs from the one recorded under that key must be reported"
-    );
-
-    // The honest case must stay quiet, or the report is noise.
-    let honest_block = common::test_utils::produce_dummy_block(
-        2,
-        None,
-        vec![dispatch_tx(53, ping_payload(b"honest"))],
-    );
-    let (keys, mismatched) = classify_settled_deliveries(&[honest], &honest_block);
-    assert_eq!(keys, HashSet::from([key]));
-    assert!(mismatched.is_empty());
-}
-
 #[tokio::test]
 async fn a_mempool_transaction_too_large_for_any_block_is_dropped() {
     // Pushed straight into the mempool, past the admission check that would refuse it.
@@ -1234,9 +703,8 @@ async fn a_mempool_transaction_too_large_for_any_block_is_dropped() {
         .max_block_size = 4 * 1024;
     let (mut sequencer, mempool_handle) = start_sequencer(config).await;
 
-    let segment_key = lee::PrivateKey::try_new([212; 32]).unwrap();
     let segment = Actor::new(
-        AccountId::from(&lee::PublicKey::new_from_private_key(&segment_key)),
+        TestSigner::new(212).account_id(),
         lee_core::program::PROGRAM_LOADER_ACCOUNT_ID,
     );
     let message = lee::public_transaction::Message::try_new(
@@ -1276,121 +744,6 @@ async fn a_mempool_transaction_too_large_for_any_block_is_dropped() {
         .unwrap();
     assert!(block.body.transactions.contains(&user_tx));
     assert!(!block.body.transactions.contains(&oversized));
-}
-
-#[tokio::test]
-async fn a_delivery_too_large_for_any_block_does_not_stall_production() {
-    // A store-drained transaction is at the head of the queue every turn, so one
-    // that cannot fit in any block would defer itself for ever and, because the
-    // deferral breaks the loop, stop production ever reaching the mempool behind
-    // it. The peer chooses the payload, so this is theirs to trigger.
-    let record = dispatch_record(41, ping_payload(&[7_u8; 8192]));
-
-    let mut config = cross_zone_test_config();
-    config
-        .genesis
-        .as_mut()
-        .unwrap()
-        .channel_params
-        .max_block_size = 4 * 1024;
-    let (mut sequencer, mempool_handle) = start_sequencer(config).await;
-    sequencer
-        .storage_ref
-        .ask(AddPendingCrossZoneDispatches {
-            dispatches: vec![record],
-        })
-        .await
-        .unwrap();
-
-    let user_tx = common::test_utils::create_transaction_native_token_transfer(
-        initial_public_user_accounts()[0].account_id,
-        0,
-        initial_public_user_accounts()[1].account_id,
-        10,
-        &create_signing_key_for_account1(),
-    );
-    mempool_handle
-        .push((TransactionOrigin::User, user_tx.clone()))
-        .await
-        .unwrap();
-
-    // Production must get past it to the mempool in the very first block.
-    let block_id = sequencer.run_production_turn().await.unwrap();
-    let block = sequencer
-        .storage_ref
-        .ask(GetBlock { block_id })
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(
-        block.body.transactions.contains(&user_tx),
-        "an oversized drained delivery must not stop production reaching the mempool"
-    );
-    assert!(dispatches_in(&block).is_empty());
-
-    // And it is given up on rather than retried for ever.
-    for _ in 1..RETIRE_DISPATCH_AFTER_FAILURES {
-        sequencer.run_production_turn().await.unwrap();
-    }
-    assert!(
-        pending_dispatches(&sequencer).await.is_empty(),
-        "a delivery that fits in no block must be given up on"
-    );
-}
-
-#[tokio::test]
-async fn a_delivery_backlog_is_spread_across_blocks() {
-    // Each delivery costs a guest execution and peers decide how many queue up,
-    // so an unbounded drain would let a backlog decide how long a block takes to
-    // build and leave no room for user work, since store-drained transactions
-    // are taken before the mempool.
-    let backlog = MAX_DISPATCHES_PER_BLOCK + 3;
-    let records: Vec<_> = (0..backlog)
-        .map(|index| {
-            let src_block_id = 100 + u64::try_from(index).expect("test index fits");
-            dispatch_record(src_block_id, ping_payload(b"backlog"))
-        })
-        .collect();
-
-    let mut config = cross_zone_test_config();
-    config.max_num_tx_in_block = backlog + 10;
-    let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
-    sequencer
-        .storage_ref
-        .ask(AddPendingCrossZoneDispatches {
-            dispatches: records,
-        })
-        .await
-        .unwrap();
-
-    let block_id = sequencer.run_production_turn().await.unwrap();
-    let block = sequencer
-        .storage_ref
-        .ask(GetBlock { block_id })
-        .await
-        .unwrap()
-        .unwrap();
-    let cap: u64 = MAX_DISPATCHES_PER_BLOCK
-        .try_into()
-        .expect("cap fits in u64");
-    assert_eq!(
-        delivered_source_blocks(&block),
-        (100..100 + cap).collect::<Vec<_>>(),
-        "one block carries at most the cap, oldest emission first"
-    );
-
-    // Deferred, not dropped: the rest go in the next block.
-    let block_id = sequencer.run_production_turn().await.unwrap();
-    let block = sequencer
-        .storage_ref
-        .ask(GetBlock { block_id })
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        delivered_source_blocks(&block),
-        (100 + cap..=118).collect::<Vec<_>>()
-    );
 }
 
 #[tokio::test]
@@ -2022,10 +1375,11 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     // header.
     // A funded genesis account signs and pays both deployment fees.
     let payer = &initial_pub_accounts_private_keys()[0];
-    let segment_key = lee::PrivateKey::try_new([210; 32]).unwrap();
-    let segment_id = AccountId::from(&lee::PublicKey::new_from_private_key(&segment_key));
-    let header_key = lee::PrivateKey::try_new([211; 32]).unwrap();
-    let clock_reader_id = AccountId::from(&lee::PublicKey::new_from_private_key(&header_key));
+    let payer_signer = TestSigner::from(&payer.secret);
+    let segment_key = TestSigner::new(210);
+    let segment_id = segment_key.account_id();
+    let header_key = TestSigner::new(211);
+    let clock_reader_id = header_key.account_id();
 
     // Segments only ever hold `user_elf`.
     let user_elf = clock_reader.user_elf().expect("valid ProgramBinary");
@@ -2034,7 +1388,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
         segment,
         vec![segment],
         signer_nonces(
-            &[&segment_key, &payer.pub_sign_key],
+            &[&segment_key, &payer_signer],
             vec![lee_core::account::Nonce(0), lee_core::account::Nonce(0)],
         ),
         program_loader_core::Message::WriteSegment {
@@ -2044,10 +1398,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
         common::test_utils::test_fee_declaration(payer.account_id),
     )
     .expect("WriteSegment message should always be serializable");
-    let segment_witness_set = lee::public_transaction::WitnessSet::for_message(
-        &segment_message,
-        &[&segment_key, &payer.pub_sign_key],
-    );
+    let segment_witness_set = witness_for(&segment_message, &[&segment_key, &payer_signer]);
     let segment_tx = LeeTransaction::Public(lee::PublicTransaction::new(
         segment_message,
         segment_witness_set,
@@ -2066,7 +1417,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
         header,
         vec![header],
         signer_nonces(
-            &[&header_key, &payer.pub_sign_key],
+            &[&header_key, &payer_signer],
             vec![lee_core::account::Nonce(0), lee_core::account::Nonce(1)],
         ),
         program_loader_core::Message::CreateHeader {
@@ -2076,10 +1427,7 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
         common::test_utils::test_fee_declaration(payer.account_id),
     )
     .expect("CreateHeader message should always be serializable");
-    let header_witness_set = lee::public_transaction::WitnessSet::for_message(
-        &header_message,
-        &[&header_key, &payer.pub_sign_key],
-    );
+    let header_witness_set = witness_for(&header_message, &[&header_key, &payer_signer]);
     let deploy_tx = LeeTransaction::Public(lee::PublicTransaction::new(
         header_message,
         header_witness_set,
@@ -2097,13 +1445,12 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
         let message = lee::public_transaction::Message::try_new_with_fees(
             caller,
             vec![caller, clock],
-            signer_nonces(&[&payer.pub_sign_key], vec![lee_core::account::Nonce(2)]),
+            signer_nonces(&[&payer_signer], vec![lee_core::account::Nonce(2)]),
             clock_message,
             common::test_utils::test_fee_declaration(payer.account_id),
         )
         .expect("Clock message should always be serializable");
-        let witness_set =
-            lee::public_transaction::WitnessSet::for_message(&message, &[&payer.pub_sign_key]);
+        let witness_set = witness_for(&message, &[&payer_signer]);
         LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
     };
 
@@ -2197,7 +1544,7 @@ fn state_with_clock_and_program(program: Program, clock_timestamp: u64) -> V03St
 
 fn time_locked_transfer_transaction(
     from: AccountId,
-    from_key: &PrivateKey,
+    from_key: &TestSigner,
     from_nonce: u128,
     to: AccountId,
     amount: u128,
@@ -2216,7 +1563,7 @@ fn time_locked_transfer_transaction(
         (amount, deadline, to),
     )
     .unwrap();
-    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[from_key]);
+    let witness_set = witness_for(&message, &[from_key]);
     PublicTransaction::new(message, witness_set)
 }
 
@@ -2227,8 +1574,8 @@ fn time_locked_transfer_succeeds_when_deadline_has_passed() {
         state_with_clock_and_program(test_programs::time_locked_transfer(), clock_timestamp);
 
     let recipient_id = AccountId::new([42; 32]);
-    let key1 = PrivateKey::try_new([1; 32]).unwrap();
-    let sender_id = AccountId::from(&PublicKey::new_from_private_key(&key1));
+    let key1 = TestSigner::new(1);
+    let sender_id = key1.account_id();
     state.force_insert_account(sender_id, Account::funded(100));
     state.force_insert_account(recipient_id, Account::default());
 
@@ -2268,8 +1615,8 @@ fn time_locked_transfer_fails_when_deadline_is_in_the_future() {
         state_with_clock_and_program(test_programs::time_locked_transfer(), clock_timestamp);
 
     let recipient_id = AccountId::new([42; 32]);
-    let key1 = PrivateKey::try_new([1; 32]).unwrap();
-    let sender_id = AccountId::from(&PublicKey::new_from_private_key(&key1));
+    let key1 = TestSigner::new(1);
+    let sender_id = key1.account_id();
     state.force_insert_account(sender_id, Account::funded(100));
     state.force_insert_account(recipient_id, Account::default());
 
@@ -2382,7 +1729,7 @@ fn cooldown_transaction(state_id: AccountId) -> PublicTransaction {
         (),
     )
     .unwrap();
-    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[]);
+    let witness_set = witness_for(&message, &[]);
     PublicTransaction::new(message, witness_set)
 }
 
@@ -2473,11 +1820,7 @@ fn resubmittable_txs_drops_clock_and_bridge_deposits() {
         source_tx_hash: HashType([7; 32]),
         amount: 1,
         metadata: borsh::to_vec(&DepositMetadata {
-            recipient: DepositRecipient::Identified(lee::PublicAccountEvidence::Key(
-                PublicKey::new_from_private_key(
-                    &initial_pub_accounts_private_keys()[0].pub_sign_key,
-                ),
-            )),
+            recipient: DepositRecipient::Identified(create_signing_key_for_account1().evidence()),
         })
         .unwrap(),
     })
@@ -2801,9 +2144,7 @@ async fn follow_update_records_deposits_for_the_production_drain() {
     let config = setup_sequencer_config();
     let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
 
-    let recipient = DepositRecipient::Identified(lee::PublicAccountEvidence::Key(
-        PublicKey::new_from_private_key(&initial_pub_accounts_private_keys()[0].pub_sign_key),
-    ));
+    let recipient = DepositRecipient::Identified(create_signing_key_for_account1().evidence());
     let metadata = borsh::to_vec(&DepositMetadata { recipient }).unwrap();
     let deposit = DepositInfo {
         op_id: [21; 32],
@@ -2834,9 +2175,7 @@ async fn follow_update_records_deposits_for_the_production_drain() {
 /// A deposit of `amount` to the first test account, its value re-created as
 /// the channel notes `notes`.
 fn deposit_info(op_id: [u8; 32], amount: u64, notes: &[NoteId]) -> DepositInfo {
-    let recipient = DepositRecipient::Identified(lee::PublicAccountEvidence::Key(
-        PublicKey::new_from_private_key(&initial_pub_accounts_private_keys()[0].pub_sign_key),
-    ));
+    let recipient = DepositRecipient::Identified(create_signing_key_for_account1().evidence());
     let metadata = borsh::to_vec(&DepositMetadata { recipient }).unwrap();
     let notes: Vec<DepositNote> = notes
         .iter()
@@ -3879,97 +3218,6 @@ async fn follow_finalized_own_block_moves_final_tier_and_marks_store() {
 }
 
 #[tokio::test]
-async fn follow_finalized_delivery_drops_its_pending_record() {
-    // The record exists to bridge the gap between the watcher's durable read
-    // cursor and a block that carries the delivery. Once that block is
-    // irreversible the delivery cannot be lost any more, so the record is owed
-    // nothing and goes with the same update that made the block irreversible.
-    let record = dispatch_record(17, ping_payload(b"settled"));
-    let key = record.message_key;
-
-    let (mut sequencer, _mempool_handle) = start_sequencer(cross_zone_test_config()).await;
-    sequencer
-        .storage_ref
-        .ask(AddPendingCrossZoneDispatches {
-            dispatches: vec![record],
-        })
-        .await
-        .unwrap();
-
-    let block_id = sequencer.run_production_turn().await.unwrap();
-    let delivery_block = block_at(&sequencer, block_id).await.unwrap();
-    assert_eq!(dispatches_in(&delivery_block), vec![key]);
-    assert_eq!(
-        pending_dispatches(&sequencer).await.len(),
-        1,
-        "including the delivery is not enough to settle its record"
-    );
-
-    let finalized = finalized_as_held(&sequencer.chain(), &delivery_block).await;
-    sequencer
-        .on_channel_update(&ChannelUpdate {
-            finalized: vec![finalized],
-            ..empty_channel_update()
-        })
-        .await;
-
-    assert!(
-        pending_dispatches(&sequencer).await.is_empty(),
-        "a delivery in an irreversible block settles its record"
-    );
-}
-
-#[tokio::test]
-async fn a_parked_finalized_block_does_not_drop_a_dispatch_record() {
-    // Keyed by message key, not by height: a finalized block the final tier
-    // parks never became irreversible, so nothing it happens to sit above may
-    // settle a record. Dropping one here would lose the delivery for good, since
-    // the watcher's floor has already moved past the peer block it came from.
-    let record = dispatch_record(19, ping_payload(b"parked"));
-    let key = record.message_key;
-    let delivery = dispatch_tx(19, ping_payload(b"parked"));
-
-    let (mut sequencer, mempool_handle) = start_sequencer(cross_zone_test_config()).await;
-    sequencer
-        .storage_ref
-        .ask(AddPendingCrossZoneDispatches {
-            dispatches: vec![record],
-        })
-        .await
-        .unwrap();
-
-    let tx = common::test_utils::produce_dummy_empty_transaction();
-    mempool_handle
-        .push((TransactionOrigin::User, tx))
-        .await
-        .unwrap();
-    sequencer.run_production_turn().await.unwrap();
-
-    // A skip-ahead block carrying the same delivery: it links to nothing we
-    // hold, so the final tier parks it instead of applying it.
-    let parked =
-        common::test_utils::produce_dummy_block(9, Some(HashType([44; 32])), vec![delivery]);
-    let finalized = entry_of(&parked, MsgId::from([44; 32]));
-
-    sequencer
-        .on_channel_update(&ChannelUpdate {
-            finalized: vec![finalized],
-            ..empty_channel_update()
-        })
-        .await;
-
-    assert_eq!(
-        pending_dispatches(&sequencer)
-            .await
-            .iter()
-            .map(|record| record.message_key)
-            .collect::<Vec<_>>(),
-        vec![key],
-        "a parked finalized block must not drop its delivery's record"
-    );
-}
-
-#[tokio::test]
 async fn follow_finalized_backfill_block_is_applied_and_marked_finalized() {
     let config = setup_sequencer_config();
     let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
@@ -4332,9 +3580,7 @@ async fn a_foreign_block_below_the_final_tip_settles_no_deposit_record() {
         })
         .await;
 
-    let recipient = DepositRecipient::Identified(lee::PublicAccountEvidence::Key(
-        PublicKey::new_from_private_key(&initial_pub_accounts_private_keys()[0].pub_sign_key),
-    ));
+    let recipient = DepositRecipient::Identified(create_signing_key_for_account1().evidence());
     let metadata = borsh::to_vec(&DepositMetadata { recipient }).unwrap();
     let deposit = DepositInfo {
         op_id: [21; 32],
@@ -4524,10 +3770,10 @@ async fn a_restart_without_a_view_follows_the_channel_from_the_final_tier() {
 /// record correctly.
 #[test]
 fn diag_sequencer_stake_writes_the_ownership_account_record() {
-    let funding_key = PrivateKey::try_new([21; 32]).unwrap();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
-    let ownership_key = PrivateKey::try_new([22; 32]).unwrap();
-    let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
+    let funding_key = TestSigner::new(21);
+    let funding_id = funding_key.account_id();
+    let ownership_key = TestSigner::new(22);
+    let ownership_id = ownership_key.account_id();
 
     let amount: u128 = 5_000_000;
     let sequencer_key = test_sequencer_key(0x42);
@@ -4578,8 +3824,7 @@ fn diag_sequencer_stake_writes_the_ownership_account_record() {
         )
         .unwrap()
     };
-    let witness_set =
-        lee::public_transaction::WitnessSet::for_message(&message, &[&funding_key, &ownership_key]);
+    let witness_set = witness_for(&message, &[&funding_key, &ownership_key]);
     let tx = PublicTransaction::new(message, witness_set);
 
     state
@@ -4620,8 +3865,8 @@ fn diag_sequencer_stake_writes_the_ownership_account_record() {
 /// `state`.
 fn stake_transaction(
     state: &V03State,
-    funding: (AccountId, &PrivateKey),
-    ownership: (AccountId, &PrivateKey),
+    funding: (AccountId, &TestSigner),
+    ownership: (AccountId, &TestSigner),
     sequencer_key: sequencer_stake_core::SequencerKey,
     amount: u128,
 ) -> PublicTransaction {
@@ -4663,8 +3908,7 @@ fn stake_transaction(
         )
         .unwrap()
     };
-    let witness_set =
-        lee::public_transaction::WitnessSet::for_message(&message, &[funding_key, ownership_key]);
+    let witness_set = witness_for(&message, &[funding_key, ownership_key]);
     PublicTransaction::new(message, witness_set)
 }
 
@@ -4717,7 +3961,7 @@ fn stake_test_state(funding_id: AccountId, funding_balance: u128) -> V03State {
 /// Builds an `UnstakeRequest` against `ownership`.
 fn unstake_request_transaction(
     state: &V03State,
-    ownership: (AccountId, &PrivateKey),
+    ownership: (AccountId, &TestSigner),
     sequencer_key: sequencer_stake_core::SequencerKey,
     amount: u128,
     destination: AccountId,
@@ -4742,7 +3986,7 @@ fn unstake_request_transaction(
         },
     )
     .unwrap();
-    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[ownership_key]);
+    let witness_set = witness_for(&message, &[ownership_key]);
     PublicTransaction::new(message, witness_set)
 }
 
@@ -4781,10 +4025,10 @@ fn signed_destination(state: &mut V03State, seed: u8) -> AccountId {
 /// the balance rather than the tracked stake must be rejected.
 #[test]
 fn an_unstake_request_cannot_exceed_the_tracked_stake() {
-    let funding_key = PrivateKey::try_new([31; 32]).unwrap();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
-    let ownership_key = PrivateKey::try_new([32; 32]).unwrap();
-    let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
+    let funding_key = TestSigner::new(31);
+    let funding_id = funding_key.account_id();
+    let ownership_key = TestSigner::new(32);
+    let ownership_id = ownership_key.account_id();
 
     let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
     let donation = 1;
@@ -4817,7 +4061,7 @@ fn an_unstake_request_cannot_exceed_the_tracked_stake() {
         },
     )
     .unwrap();
-    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&funding_key]);
+    let witness_set = witness_for(&message, &[&funding_key]);
     state
         .transition_from_public_transaction(&PublicTransaction::new(message, witness_set), 2, 0)
         .expect("donation should succeed");
@@ -4859,12 +4103,12 @@ fn an_unstake_request_cannot_exceed_the_tracked_stake() {
 
 #[test]
 fn dust_credited_before_a_stake_neither_blocks_nor_inflates_it() {
-    let funding_key = PrivateKey::try_new([71; 32]).unwrap();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
-    let ownership_key = PrivateKey::try_new([72; 32]).unwrap();
-    let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
-    let griefer_key = PrivateKey::try_new([73; 32]).unwrap();
-    let griefer_id = AccountId::from(&PublicKey::new_from_private_key(&griefer_key));
+    let funding_key = TestSigner::new(71);
+    let funding_id = funding_key.account_id();
+    let ownership_key = TestSigner::new(72);
+    let ownership_id = ownership_key.account_id();
+    let griefer_key = TestSigner::new(73);
+    let griefer_id = griefer_key.account_id();
 
     let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
     let dust = 1;
@@ -4899,7 +4143,7 @@ fn dust_credited_before_a_stake_neither_blocks_nor_inflates_it() {
         admission_evidence: vec![stake_funds_evidence(&ownership_id)],
         ..message
     };
-    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&griefer_key]);
+    let witness_set = witness_for(&message, &[&griefer_key]);
     state
         .transition_from_public_transaction(&PublicTransaction::new(message, witness_set), 1, 0)
         .expect("anyone can credit the funds account");
@@ -4934,10 +4178,10 @@ fn dust_credited_before_a_stake_neither_blocks_nor_inflates_it() {
 
 #[test]
 fn a_stake_whose_funding_fails_records_nothing() {
-    let funding_key = PrivateKey::try_new([74; 32]).unwrap();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
-    let ownership_key = PrivateKey::try_new([75; 32]).unwrap();
-    let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
+    let funding_key = TestSigner::new(74);
+    let funding_id = funding_key.account_id();
+    let ownership_key = TestSigner::new(75);
+    let ownership_id = ownership_key.account_id();
 
     let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
     let sequencer_key = test_sequencer_key(0x48);
@@ -4989,10 +4233,10 @@ fn a_stake_whose_funding_fails_records_nothing() {
 
 #[test]
 fn a_top_up_is_rejected_while_an_unstake_request_is_pending() {
-    let funding_key = PrivateKey::try_new([33; 32]).unwrap();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
-    let ownership_key = PrivateKey::try_new([34; 32]).unwrap();
-    let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
+    let funding_key = TestSigner::new(33);
+    let funding_id = funding_key.account_id();
+    let ownership_key = TestSigner::new(34);
+    let ownership_id = ownership_key.account_id();
 
     let minimum = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
     let sequencer_key = test_sequencer_key(0x44);
@@ -5037,10 +4281,10 @@ fn a_top_up_is_rejected_while_an_unstake_request_is_pending() {
 /// ownership account can stake again against it.
 #[test]
 fn a_fully_exited_ownership_account_can_stake_again() {
-    let funding_key = PrivateKey::try_new([21; 32]).unwrap();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
-    let ownership_key = PrivateKey::try_new([22; 32]).unwrap();
-    let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
+    let funding_key = TestSigner::new(21);
+    let funding_id = funding_key.account_id();
+    let ownership_key = TestSigner::new(22);
+    let ownership_id = ownership_key.account_id();
 
     let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
     let sequencer_key = test_sequencer_key(0x42);
@@ -5097,7 +4341,7 @@ fn a_fully_exited_ownership_account_can_stake_again() {
         },
     )
     .unwrap();
-    let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&ownership_key]);
+    let witness_set = witness_for(&message, &[&ownership_key]);
     state
         .transition_from_public_transaction(&PublicTransaction::new(message, witness_set), 2, 0)
         .expect("UnstakeRequest should succeed");
@@ -5234,9 +4478,7 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
     );
 
     let stake_id = bootstrap_stake_account_id(&config);
-    let destination = AccountId::from(&PublicKey::new_from_private_key(
-        &PrivateKey::try_new([56; 32]).unwrap(),
-    ));
+    let destination = TestSigner::new(56).account_id();
 
     let sequencer_stake_program_id = programs::sequencer_stake_account_id();
     let ownership = Actor::new(stake_id, sequencer_stake_program_id);
@@ -5258,10 +4500,7 @@ fn the_bootstrap_sequencer_can_request_an_unstake_of_its_genesis_stake() {
         },
     )
     .unwrap();
-    let witness_set = lee::public_transaction::WitnessSet::for_message(
-        &message,
-        &[&bootstrap_stake_key(&config)],
-    );
+    let witness_set = witness_for(&message, &[&bootstrap_stake_key(&config)]);
     let tx = PublicTransaction::new(message, witness_set);
 
     state
@@ -5288,12 +4527,12 @@ fn slashable_state(
     V03State,
     sequencer_stake_core::SequencerKey,
     AccountId,
-    PrivateKey,
+    TestSigner,
 ) {
-    let funding_key = PrivateKey::try_new([41; 32]).unwrap();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
-    let ownership_key = PrivateKey::try_new([42; 32]).unwrap();
-    let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
+    let funding_key = TestSigner::new(41);
+    let funding_id = funding_key.account_id();
+    let ownership_key = TestSigner::new(42);
+    let ownership_id = ownership_key.account_id();
     let sequencer_key = test_sequencer_key(0x44);
 
     // Two peers alongside the offender: no single key can clear the threshold,
@@ -5517,10 +4756,10 @@ fn a_finalize_unstake_releases_from_funds_carrying_a_stranger_actor_state() {
 
 #[test]
 fn a_top_up_must_add_at_least_the_minimum() {
-    let funding_key = PrivateKey::try_new([35; 32]).unwrap();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
-    let ownership_key = PrivateKey::try_new([36; 32]).unwrap();
-    let ownership_id = AccountId::from(&PublicKey::new_from_private_key(&ownership_key));
+    let funding_key = TestSigner::new(35);
+    let funding_id = funding_key.account_id();
+    let ownership_key = TestSigner::new(36);
+    let ownership_id = ownership_key.account_id();
     let minimum = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
     let sequencer_key = test_sequencer_key(0x47);
 
@@ -5626,13 +4865,13 @@ fn balance_of(state: &V03State, account_id: AccountId) -> u128 {
 
 fn restake(
     state: &mut V03State,
-    ownership: (AccountId, &PrivateKey),
+    ownership: (AccountId, &TestSigner),
     sequencer_key: sequencer_stake_core::SequencerKey,
     amount: u128,
     block_id: u64,
 ) {
-    let funding_key = PrivateKey::try_new([43; 32]).unwrap();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
+    let funding_key = TestSigner::new(43);
+    let funding_id = funding_key.account_id();
     state.force_insert_account(funding_id, Account::funded(amount));
     let stake = stake_transaction(
         state,
@@ -5971,7 +5210,7 @@ fn a_privately_owned_and_funded_stake_is_slashed_without_its_owners_witness() {
     );
     // Nothing the owner holds is read or signed.
     assert!(!slash.affected_public_account_ids().contains(&ownership_id));
-    assert!(slash.witness_set().signatures_and_public_keys().is_empty());
+    assert!(slash.witness_set().entries().is_empty());
     state
         .transition_from_public_transaction(&slash, 4, 0)
         .expect("the peers' approvals alone should slash a private stake");
@@ -6266,8 +5505,8 @@ async fn a_slash_lands_over_a_pending_partial_unstake() {
     let amount = 2 * system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
     let offender = test_sequencer_key(0x44);
     let (offender_id, offender_key) = committee_ownership(0x44);
-    let funding_key = PrivateKey::try_new([41; 32]).unwrap();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
+    let funding_key = TestSigner::new(41);
+    let funding_id = funding_key.account_id();
 
     let config = {
         let chain = sequencer.chain();
@@ -6374,8 +5613,8 @@ async fn sequencer_with_a_full_exit(
 async fn set_up_a_full_exit(sequencer: &SequencerCore<StorageActor, MockBedrockActor>, seed: u8) {
     let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
     let (ownership_id, ownership_key) = committee_ownership(seed);
-    let funding_key = PrivateKey::try_new([41; 32]).unwrap();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
+    let funding_key = TestSigner::new(41);
+    let funding_id = funding_key.account_id();
     {
         let chain = sequencer.chain();
         let mut chain = chain.lock().await;
@@ -6417,6 +5656,66 @@ async fn a_full_exit_is_left_out_until_its_removal_is_final() {
     assert!(
         !chain_state::full_stake_releases::finalize_unstake_keys(&built.block)
             .contains(&test_sequencer_key(0x46))
+    );
+}
+
+#[tokio::test]
+async fn a_left_out_stake_release_frees_its_signers_pending_slots() {
+    let channel = CannedChannel {
+        pending_removals: [test_sequencer_key(0x46)].into(),
+        ..CannedChannel::empty()
+    };
+    let (mut sequencer, mempool_handle) = sequencer_with_a_full_exit(channel, 0x46).await;
+    let payer = &initial_pub_accounts_private_keys()[0];
+    let payer_signer = TestSigner::from(&payer.secret);
+    let (ownership_id, _) = committee_ownership(0x46);
+    // A user's FinalizeUnstake before the removal is final, paid by a signer: it holds the payer's
+    // slot at nonce 0 and is left out at build.
+    let config = Actor::new(
+        system_accounts::sequencer_stake_config_account_id(),
+        programs::sequencer_stake_account_id(),
+    );
+    let message = lee::public_transaction::Message::try_new_with_fees(
+        config,
+        vec![
+            config,
+            Actor::native_balance(system_accounts::stake_funds_account_id(&ownership_id)),
+            Actor::native_balance(ownership_id),
+            Actor::native_balance(payer.account_id),
+        ],
+        signer_nonces(&[&payer_signer], vec![Nonce(0)]),
+        sequencer_stake_core::Message::FinalizeUnstake {
+            sequencer_key: test_sequencer_key(0x46),
+        },
+        common::test_utils::test_fee_declaration(payer.account_id),
+    )
+    .unwrap();
+    let witness_set = witness_for(&message, &[&payer_signer]);
+    let early = LeeTransaction::Public(PublicTransaction::new(message, witness_set));
+    assert_eq!(
+        sequencer.admit(&early).await.unwrap(),
+        crate::pending::Admission::New
+    );
+    mempool_handle
+        .push((TransactionOrigin::User, early.clone()))
+        .await
+        .unwrap();
+    sequencer.record_pending(&early);
+
+    let built = sequencer.build_block_from_mempool().await.unwrap();
+
+    assert!(!built.block.body.transactions.contains(&early));
+    let retry = common::test_utils::create_transaction_native_token_transfer(
+        payer.account_id,
+        0,
+        initial_pub_accounts_private_keys()[1].account_id,
+        1,
+        &payer_signer,
+    );
+    assert_eq!(
+        sequencer.admit(&retry).await.unwrap(),
+        crate::pending::Admission::New,
+        "the left-out transaction's slot is free again"
     );
 }
 
@@ -6519,8 +5818,8 @@ async fn a_slash_of_a_fully_pending_stake_is_not_a_release() {
     let amount = 2 * system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
     let offender = test_sequencer_key(0x44);
     let (offender_id, offender_key) = committee_ownership(0x44);
-    let funding_key = PrivateKey::try_new([41; 32]).unwrap();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
+    let funding_key = TestSigner::new(41);
+    let funding_id = funding_key.account_id();
 
     let config = {
         let chain = sequencer.chain();
@@ -6601,15 +5900,15 @@ async fn a_slash_of_a_fully_pending_stake_is_not_a_release() {
 }
 
 /// The account backing `seed`'s stake, and the key that owns it.
-fn committee_ownership(seed: u8) -> (AccountId, PrivateKey) {
-    let key = PrivateKey::try_new([seed.wrapping_add(0x50); 32]).unwrap();
-    (AccountId::from(&PublicKey::new_from_private_key(&key)), key)
+fn committee_ownership(seed: u8) -> (AccountId, TestSigner) {
+    let key = TestSigner::new(seed.wrapping_add(0x50));
+    (key.account_id(), key)
 }
 
 /// A state staking one sequencer per seed, the first of which is the offender.
 fn committee_state(seeds: &[u8], amount: u128) -> V03State {
-    let funding_key = PrivateKey::try_new([41; 32]).unwrap();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_key));
+    let funding_key = TestSigner::new(41);
+    let funding_id = funding_key.account_id();
     let mut state = stake_test_state(
         funding_id,
         amount.saturating_mul(u128::try_from(seeds.len()).expect("committee fits a u128")),
@@ -6849,85 +6148,6 @@ fn a_slash_without_enough_approvals_is_rejected() {
     );
 }
 
-/// The route struct refuses unknown keys, so a misspelled `mint_cap` in an
-/// operator config fails startup instead of silently seeding uncapped.
-#[test]
-fn a_misspelled_mint_cap_key_fails_route_parse() {
-    let route = serde_json::from_value::<CrossZoneRoute>(serde_json::json!({
-        "src_program_id": [0, 0, 0, 0, 0, 0, 0, 1],
-        "target_program_id": [0, 0, 0, 0, 0, 0, 0, 2],
-        "mintcap": 1_000,
-    }));
-    assert!(route.is_err(), "an unknown key must fail the parse");
-}
-
-/// Gating is atomic: no `cross_zone`, no cross-zone genesis transaction;
-/// empty-peers carries exactly the four `InitConfig`s, in order.
-#[test]
-fn genesis_cross_zone_transactions_follow_the_declaration() {
-    let cross_zone_ids: [AccountId; 6] = [
-        programs::cross_zone_inbox_account_id(),
-        programs::cross_zone_outbox_account_id(),
-        programs::ping_sender_account_id(),
-        programs::ping_receiver_account_id(),
-        programs::bridge_lock_account_id(),
-        programs::wrapped_token_account_id(),
-    ];
-    let tx_program = |tx: &LeeTransaction| match tx {
-        LeeTransaction::Public(public) => public.message().execution.root.to.program_account_id,
-        LeeTransaction::PrivacyPreserving(_) => {
-            unreachable!("genesis holds only public transactions")
-        }
-    };
-
-    let temp_dir = tempdir().unwrap();
-    let mut config = setup_sequencer_config();
-    config.home = temp_dir.path().to_path_buf();
-    let key = test_bootstrap_sequencer_key(&config);
-    let (state, txs, _) =
-        sequencer_genesis::build_genesis_state(&config.genesis_spec(Some(key)).unwrap());
-    assert!(
-        !txs.iter()
-            .any(|tx| cross_zone_ids.contains(&tx_program(tx))),
-        "a configless genesis must carry no cross-zone transaction"
-    );
-    for account_id in cross_zone_ids {
-        assert!(state.get_builtin_program(account_id).is_none());
-    }
-
-    let temp_dir = tempdir().unwrap();
-    let mut config = setup_sequencer_config();
-    config.home = temp_dir.path().to_path_buf();
-    config.cross_zone = Some(config::CrossZoneConfig {
-        peers: Vec::new(),
-        lock_target_zones: Vec::new(),
-        source_authority: None,
-        source_governance: None,
-    });
-    let key = test_bootstrap_sequencer_key(&config);
-    let (state, txs, _) =
-        sequencer_genesis::build_genesis_state(&config.genesis_spec(Some(key)).unwrap());
-    let cross_zone_txs: Vec<_> = txs
-        .iter()
-        .map(tx_program)
-        .filter(|id| cross_zone_ids.contains(id))
-        .collect();
-    assert_eq!(
-        cross_zone_txs,
-        vec![
-            programs::wrapped_token_account_id(),
-            programs::ping_sender_account_id(),
-            programs::ping_receiver_account_id(),
-            programs::bridge_lock_account_id(),
-            programs::cross_zone_inbox_account_id(),
-        ],
-        "the four InitConfigs then the inbox config, in the fixed order"
-    );
-    for account_id in cross_zone_ids {
-        assert!(state.get_builtin_program(account_id).is_some());
-    }
-}
-
 /// Whether the slasher has recorded any offence.
 async fn slash_recorded(sequencer: &SequencerCore<StorageActor, MockBedrockActor>) -> bool {
     sequencer
@@ -7085,7 +6305,7 @@ fn a_genesis_stake_carries_the_evidence_of_the_funds_it_credits() {
             &*message.admission_evidence,
             [evidence @ lee::PublicAccountEvidence::Pda { program, .. }]
                 if *program == programs::sequencer_stake_account_id()
-                    && evidence.account_id() == funds.account_id
+                    && evidence.account_id() == Some(funds.account_id)
         ),
         "{:?}",
         message.admission_evidence
@@ -7094,10 +6314,9 @@ fn a_genesis_stake_carries_the_evidence_of_the_funds_it_credits() {
 
 #[test]
 fn a_bridge_deposit_carries_its_receipts_and_its_recipients_evidence() {
-    let key = PublicKey::new_from_private_key(&PrivateKey::try_new([3; 32]).unwrap());
     let op_id = [0x7d; 32];
     for recipient in [
-        DepositRecipient::Identified(lee::PublicAccountEvidence::Key(key)),
+        DepositRecipient::Identified(TestSigner::new(3).evidence()),
         DepositRecipient::Identified(lee::PublicAccountEvidence::Pda {
             program: AccountId::new([4; 32]),
             seed: lee_core::program::PdaSeed::new([6; 32]),
@@ -7132,7 +6351,7 @@ fn a_bridge_deposit_carries_its_receipts_and_its_recipients_evidence() {
                     .iter()
                     .map(lee::PublicAccountEvidence::account_id)
                     .collect::<Vec<_>>(),
-                [receipt, recipient.account_id()],
+                [Some(receipt), recipient.account_id()],
                 "{recipient:?}"
             );
         }
@@ -7147,10 +6366,10 @@ fn a_bridge_deposit_credits_a_recipient_absent_from_public_state() {
             .genesis_spec(Some(test_bootstrap_sequencer_key(&config)))
             .unwrap(),
     );
-    let recipient = DepositRecipient::Identified(lee::PublicAccountEvidence::Key(
-        PublicKey::new_from_private_key(&PrivateKey::try_new([3; 32]).unwrap()),
-    ));
-    let recipient_id = recipient.account_id();
+    let recipient = DepositRecipient::Identified(TestSigner::new(3).evidence());
+    let recipient_id = recipient
+        .account_id()
+        .expect("a key's evidence names its account");
     assert!(state.get_account_by_id_ref(recipient_id).is_none());
 
     let op_id = [0x7e; 32];
@@ -7165,7 +6384,7 @@ fn a_bridge_deposit_credits_a_recipient_absent_from_public_state() {
     else {
         panic!("a bridge deposit is a public transaction");
     };
-    assert!(deposit.witness_set.signatures_and_public_keys().is_empty());
+    assert!(deposit.witness_set.entries().is_empty());
     assert!(deposit.message.nonces.is_empty());
     assert!(
         !deposit
@@ -7193,7 +6412,7 @@ fn a_bridge_deposit_credits_a_recipient_absent_from_public_state() {
 #[test]
 fn a_deposit_recipient_reads_only_as_key_or_pda_evidence() {
     let account_id = AccountId::new([4; 32]);
-    let key = PublicKey::new_from_private_key(&PrivateKey::try_new([3; 32]).unwrap());
+    let key = lee::signature::initial_key(&lee::signature::PublicAccountSecret::new([3; 32]));
     let seed: [u8; 32] = [6; 32];
     assert!(
         serde_json::from_value::<DepositRecipient>(
@@ -7226,7 +6445,7 @@ fn a_deposit_recipient_reads_only_as_key_or_pda_evidence() {
 
 #[test]
 fn a_genesis_supply_names_its_recipient_in_the_deposit_form() {
-    let key = PublicKey::new_from_private_key(&PrivateKey::try_new([3; 32]).unwrap());
+    let key = lee::signature::initial_key(&lee::signature::PublicAccountSecret::new([3; 32]));
 
     let action: config::GenesisAction = serde_json::from_value(serde_json::json!({
         "supply_account": {
@@ -7298,7 +6517,7 @@ fn state_with_clock_upgrade_due_at(activation_height: lee_core::BlockId) -> lee:
     use lee_core::program::SYSTEM_UPGRADER_ACCOUNT_ID;
     use system_upgrader_core::{Registry, ScheduledUpgrade, registry_account_id};
 
-    let genesis = testnet_initial_state::initial_state(false);
+    let genesis = testnet_initial_state::initial_state();
     let mut registry = common::system_upgrades::registry(&genesis).unwrap();
     registry.programs.insert(
         programs::CLOCK_NAME,
@@ -7563,39 +6782,240 @@ async fn an_approved_change_has_room_in_a_full_block() {
     );
 }
 
-#[test]
-fn dispatch_slots_are_shared_round_robin_across_peers() {
-    let queues: BTreeMap<Option<[u8; 32]>, VecDeque<&str>> = BTreeMap::from([
-        (Some([1; 32]), VecDeque::from(["a0", "a1", "a2", "a3"])),
-        (Some([2; 32]), VecDeque::from(["b0", "b1"])),
-        (None, VecDeque::from(["n0"])),
-    ]);
-
-    let taken = round_robin(queues, 6);
-
-    assert_eq!(taken, VecDeque::from(["n0", "a0", "b0", "a1", "b1", "a2"]));
-
-    let one_queue: BTreeMap<u8, VecDeque<u8>> = BTreeMap::from([(1, VecDeque::from([7, 8, 9]))]);
+#[tokio::test]
+async fn a_transaction_dropped_at_build_time_frees_its_nonce() {
+    let (mut sequencer, mempool_handle) = common_setup().await;
+    let accounts = initial_pub_accounts_private_keys();
+    let signer = TestSigner::from(&accounts[0].secret);
+    let transfer_at = |nonce, amount| {
+        common::test_utils::create_transaction_native_token_transfer(
+            accounts[0].account_id,
+            nonce,
+            accounts[1].account_id,
+            amount,
+            &signer,
+        )
+    };
+    // Nonce 0 is pending but never reaches the mempool, so nonce 1, authenticated against it, is
+    // never applicable and is dropped at build.
+    let pending = transfer_at(0, 1);
     assert_eq!(
-        round_robin(one_queue, 2),
-        VecDeque::from([7, 8]),
-        "the cap still binds a single queue"
+        sequencer.admit(&pending).await.unwrap(),
+        crate::pending::Admission::New
+    );
+    sequencer.record_pending(&pending);
+    let first = transfer_at(1, 1);
+    assert_eq!(
+        sequencer.admit(&first).await.unwrap(),
+        crate::pending::Admission::New
+    );
+    mempool_handle
+        .push((TransactionOrigin::User, first.clone()))
+        .await
+        .unwrap();
+    sequencer.record_pending(&first);
+
+    assert!(matches!(
+        sequencer.admit(&transfer_at(1, 2)).await,
+        Err(crate::AdmissionError::Pending(
+            crate::pending::PendingRefusal::NoncePending { .. }
+        ))
+    ));
+
+    sequencer.build_block_from_mempool().await.unwrap();
+    assert_eq!(
+        sequencer.admit(&transfer_at(1, 2)).await.unwrap(),
+        crate::pending::Admission::New
     );
 }
 
-#[test]
-fn a_peer_genesis_hash_round_trips_as_hex() {
-    let peer: CrossZonePeer = serde_json::from_str(
-        r#"{"channel_id":[2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2],
-            "allowed_routes":[],
-            "genesis_hash":"0202020202020202020202020202020202020202020202020202020202020202"}"#,
-    )
-    .expect("hex genesis hash parses");
+#[tokio::test]
+async fn an_orphaned_transaction_holds_its_nonce_again() {
+    let channel = CannedChannel::empty().share();
+    let (mut sequencer, mempool_handle) =
+        start_sequencer_on(setup_sequencer_config(), channel.clone()).await;
+    let accounts = initial_pub_accounts_private_keys();
+    let signer = TestSigner::from(&accounts[0].secret);
+    let transfer_at = |nonce, amount| {
+        common::test_utils::create_transaction_native_token_transfer(
+            accounts[0].account_id,
+            nonce,
+            accounts[1].account_id,
+            amount,
+            &signer,
+        )
+    };
+    let included = transfer_at(0, 1);
+    assert_eq!(
+        sequencer.admit(&included).await.unwrap(),
+        crate::pending::Admission::New
+    );
+    mempool_handle
+        .push((TransactionOrigin::User, included.clone()))
+        .await
+        .unwrap();
+    sequencer.record_pending(&included);
+    sequencer.run_production_turn().await.unwrap();
+    // The next build frees the slot the included transaction filled.
+    sequencer.run_production_turn().await.unwrap();
 
-    assert_eq!(peer.genesis_hash, Some(HashType([2; 32])));
+    reorg_to_genesis(&mut sequencer, &channel, CannedChannel::empty()).await;
+
+    assert!(matches!(
+        sequencer.admit(&transfer_at(0, 2)).await,
+        Err(crate::AdmissionError::Pending(
+            crate::pending::PendingRefusal::NoncePending { .. }
+        ))
+    ));
+    assert_eq!(
+        sequencer.admit(&transfer_at(1, 1)).await.unwrap(),
+        crate::pending::Admission::New,
+        "the next transaction is authenticated on top of the resubmitted one"
+    );
+}
+
+#[tokio::test]
+async fn an_orphaned_transaction_that_finds_the_mempool_full_frees_its_nonce() {
+    let channel = CannedChannel::empty().share();
+    let config = SequencerConfig {
+        mempool_max_size: 1,
+        ..setup_sequencer_config()
+    };
+    let (mut sequencer, mempool_handle) = start_sequencer_on(config, channel.clone()).await;
+    let accounts = initial_pub_accounts_private_keys();
+    let signer = TestSigner::from(&accounts[0].secret);
+    let transfer_at = |nonce, amount| {
+        common::test_utils::create_transaction_native_token_transfer(
+            accounts[0].account_id,
+            nonce,
+            accounts[1].account_id,
+            amount,
+            &signer,
+        )
+    };
+    let included = transfer_at(0, 1);
+    assert_eq!(
+        sequencer.admit(&included).await.unwrap(),
+        crate::pending::Admission::New
+    );
+    mempool_handle
+        .push((TransactionOrigin::User, included.clone()))
+        .await
+        .unwrap();
+    sequencer.record_pending(&included);
+    // Its slot is not pruned until the next build.
+    sequencer.run_production_turn().await.unwrap();
+
+    // Another account's transaction fills the mempool, so the orphan cannot go back.
+    let other = TestSigner::from(&accounts[1].secret);
+    let filler = common::test_utils::create_transaction_native_token_transfer(
+        accounts[1].account_id,
+        0,
+        accounts[0].account_id,
+        1,
+        &other,
+    );
+    mempool_handle
+        .push((TransactionOrigin::User, filler))
+        .await
+        .unwrap();
+    reorg_to_genesis(&mut sequencer, &channel, CannedChannel::empty()).await;
+
+    assert_eq!(
+        sequencer.admit(&transfer_at(0, 2)).await.unwrap(),
+        crate::pending::Admission::New,
+        "the dropped orphan frees its nonce"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_block_build_returns_its_transactions_to_the_mempool() {
+    let (mut sequencer, mempool_handle) = common_setup().await;
+    let accounts = initial_pub_accounts_private_keys();
+    let signer = TestSigner::from(&accounts[0].secret);
+    let tx = common::test_utils::create_transaction_native_token_transfer(
+        accounts[0].account_id,
+        0,
+        accounts[1].account_id,
+        1,
+        &signer,
+    );
+    assert_eq!(
+        sequencer.admit(&tx).await.unwrap(),
+        crate::pending::Admission::New
+    );
+    mempool_handle
+        .push((TransactionOrigin::User, tx.clone()))
+        .await
+        .unwrap();
+    sequencer.record_pending(&tx);
+
+    sequencer.fail_build = true;
+    assert!(sequencer.build_block_from_mempool().await.is_err());
+    sequencer.fail_build = false;
+
+    // Still pending, and still in the mempool for the next block.
+    assert_eq!(
+        sequencer.admit(&tx).await.unwrap(),
+        crate::pending::Admission::Duplicate
+    );
+    let built = sequencer.build_block_from_mempool().await.unwrap();
     assert!(
-        serde_json::to_string(&peer)
-            .expect("peer serializes")
-            .contains("\"0202020202020202020202020202020202020202020202020202020202020202\"")
+        built
+            .mempool_transactions
+            .iter()
+            .any(|(_, included)| included.hash() == tx.hash()),
+        "the next block includes the transaction"
+    );
+}
+
+#[tokio::test]
+async fn a_privacy_transaction_with_an_invalid_proof_takes_no_slot() {
+    let (mut sequencer, _mempool_handle) = common_setup().await;
+    let accounts = initial_pub_accounts_private_keys();
+    let signer = TestSigner::from(&accounts[0].secret);
+    let account_id = accounts[0].account_id;
+    // Signed by its funded payer, but with a proof that does not verify: the signatures do not
+    // cover it, so anyone could have swapped it in.
+    let message = lee::privacy_preserving_transaction::Message {
+        public_context: lee::PublicExecutionContext::new(vec![], [account_id]),
+        fee: Some(lee::FeeDeclaration::new(
+            account_id,
+            fee_core::market::PRIVATE_VERIFY_GAS,
+            0,
+            u128::MAX >> 1,
+        )),
+        nonces: BTreeMap::from([(account_id, lee_core::account::Nonce(0))]),
+        ..lee::privacy_preserving_transaction::Message::default()
+    };
+    let junk = LeeTransaction::PrivacyPreserving(lee::PrivacyPreservingTransaction::new(
+        message.clone(),
+        lee::test_utils::privacy_witness_for(
+            &message,
+            lee::privacy_preserving_transaction::circuit::Proof::from_inner(vec![1, 2, 3]),
+            &[&signer],
+        ),
+    ));
+
+    let refused = sequencer.admit(&junk).await;
+    if matches!(refused, Ok(crate::pending::Admission::New)) {
+        sequencer.record_pending(&junk);
+    }
+    assert!(
+        matches!(refused, Err(crate::AdmissionError::InvalidProof)),
+        "{refused:?}"
+    );
+
+    let transfer = common::test_utils::create_transaction_native_token_transfer(
+        account_id,
+        0,
+        accounts[1].account_id,
+        1,
+        &signer,
+    );
+    assert_eq!(
+        sequencer.admit(&transfer).await.unwrap(),
+        crate::pending::Admission::New,
+        "the signer's nonce is still free"
     );
 }

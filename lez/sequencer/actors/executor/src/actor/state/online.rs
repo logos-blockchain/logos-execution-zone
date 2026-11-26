@@ -33,8 +33,6 @@ pub struct OnlineState<S: StorageActorTrait, B: BedrockActorTrait> {
     mempool_handle: MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
     /// Whose turn it is to write: blocks are only produced in ours.
     turn: Turn,
-    // TODO: Remove this field
-    background_tasks: sequencer_core::task_group::TaskGroup,
 }
 
 impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
@@ -112,10 +110,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
             sequencer_executor_actor_metrics::increment_turns_to_write_total();
         }
         sequencer_executor_actor_metrics::record_turn_to_write(self.turn.is_ours());
-    }
-
-    pub const fn background_tasks(&self) -> &sequencer_core::task_group::TaskGroup {
-        &self.background_tasks
     }
 
     /// Starts producing on `chain`, whose last final config entry is `finalized_config`.
@@ -244,7 +238,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> OnlineState<S, B> {
         .map_err(Error::SequencerStartFailed)?;
 
         Ok(Self {
-            background_tasks: sequencer.background_task(),
             mempool_handle,
             turn: Turn::new(is_our_turn),
             sequencer,

@@ -55,7 +55,7 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
             to_account.key_chain.viewing_public_key.to_bytes(),
         )),
         to_keys: None,
-        to_pk: None,
+        to_initial_key: None,
         amount: 100,
     });
 

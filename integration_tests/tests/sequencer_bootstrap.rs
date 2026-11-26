@@ -12,7 +12,7 @@ use std::{path::Path, time::Duration};
 
 use anyhow::{Context as _, Result, bail};
 use indexer_service_rpc::RpcClient as _;
-use lee::{AccountId, PrivateKey, PublicAccountEvidence, PublicKey};
+use lee::{AccountId, signature::PublicAccountSecret, test_utils::TestSigner};
 use sequencer_core::config::{DepositRecipient, GenesisAction};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use test_fixtures::{
@@ -97,11 +97,13 @@ async fn wait_for_block_id(
 /// A `SupplyAccount` genesis action for a fresh account, returning the account
 /// id the funds land in, so tests can assert genesis state is present.
 fn supplied_account(balance: u64) -> (AccountId, GenesisAction) {
-    let recipient = DepositRecipient::Identified(PublicAccountEvidence::Key(
-        PublicKey::new_from_private_key(&PrivateKey::new_os_random()),
-    ));
+    let recipient = DepositRecipient::Identified(
+        TestSigner::from(&PublicAccountSecret::new_os_random()).evidence(),
+    );
     (
-        recipient.account_id(),
+        recipient
+            .account_id()
+            .expect("a key's evidence names its account"),
         GenesisAction::SupplyAccount { recipient, balance },
     )
 }
@@ -188,13 +190,10 @@ async fn empty_local_reconstructs_from_populated_bedrock() -> Result<()> {
     let (_bedrock, bedrock_addr) = setup_bedrock_node()
         .await
         .context("Failed to setup Bedrock")?;
-    let (indexer_handle, _indexer_dir) = setup_indexer(
-        bedrock_addr,
-        test_fixtures::config::bedrock_channel_id(),
-        None,
-    )
-    .await
-    .context("Failed to setup indexer")?;
+    let (indexer_handle, _indexer_dir) =
+        setup_indexer(bedrock_addr, test_fixtures::config::bedrock_channel_id())
+            .await
+            .context("Failed to setup indexer")?;
     let indexer_url = addr_to_url(UrlProtocol::Ws, indexer_handle.addr())
         .context("Failed to build indexer URL")?;
     let indexer = IndexerClient::new(&indexer_url)
@@ -356,13 +355,10 @@ async fn local_ahead_of_channel_resumes() -> Result<()> {
     let (_bedrock, bedrock_addr) = setup_bedrock_node()
         .await
         .context("Failed to setup Bedrock")?;
-    let (indexer_handle, _indexer_dir) = setup_indexer(
-        bedrock_addr,
-        test_fixtures::config::bedrock_channel_id(),
-        None,
-    )
-    .await
-    .context("Failed to setup indexer")?;
+    let (indexer_handle, _indexer_dir) =
+        setup_indexer(bedrock_addr, test_fixtures::config::bedrock_channel_id())
+            .await
+            .context("Failed to setup indexer")?;
     let indexer_url = addr_to_url(UrlProtocol::Ws, indexer_handle.addr())
         .context("Failed to build indexer URL")?;
     let indexer = IndexerClient::new(&indexer_url)
@@ -444,13 +440,10 @@ async fn local_behind_channel_reconstructs_forward() -> Result<()> {
     let (_bedrock, bedrock_addr) = setup_bedrock_node()
         .await
         .context("Failed to setup Bedrock")?;
-    let (indexer_handle, _indexer_dir) = setup_indexer(
-        bedrock_addr,
-        test_fixtures::config::bedrock_channel_id(),
-        None,
-    )
-    .await
-    .context("Failed to setup indexer")?;
+    let (indexer_handle, _indexer_dir) =
+        setup_indexer(bedrock_addr, test_fixtures::config::bedrock_channel_id())
+            .await
+            .context("Failed to setup indexer")?;
     let indexer_url = addr_to_url(UrlProtocol::Ws, indexer_handle.addr())
         .context("Failed to build indexer URL")?;
     let indexer = IndexerClient::new(&indexer_url)

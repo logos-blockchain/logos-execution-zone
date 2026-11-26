@@ -8,8 +8,8 @@ use std::{
 use anyhow::{Context as _, anyhow};
 use async_trait::async_trait;
 use common::HashType;
-use lee::{AccountId, PrivateKey, PublicKey, program::Program};
-use lee_core::program::MessageData;
+use lee::{AccountId, program::Program, signature::PublicAccountSecret};
+use lee_core::{program::MessageData, signing_key::SigningKeyState};
 use logos_blockchain_zone_sdk::{
     testing_framework_app::{AppDeployment, AppHostEnv, DeployContext},
     testing_framework_core::scenario::DynError,
@@ -58,9 +58,9 @@ enum WalletRequest {
         account_id: AccountId,
         response: oneshot::Sender<Result<Option<lee_core::Commitment>, String>>,
     },
-    PublicAccountSigningKey {
+    PublicAccountInitialKey {
         account_id: AccountId,
-        response: oneshot::Sender<Result<Option<PublicKey>, String>>,
+        response: oneshot::Sender<Result<Option<SigningKeyState>, String>>,
     },
     FirstPublicAccount {
         response: oneshot::Sender<Result<Option<AccountId>, String>>,
@@ -185,15 +185,13 @@ impl WalletActor {
                                     .get_private_account_commitment(account_id);
                                 let _unused = response.send(Ok(commitment));
                             }
-                            WalletRequest::PublicAccountSigningKey {
+                            WalletRequest::PublicAccountInitialKey {
                                 account_id,
                                 response,
                             } => {
-                                let public_key = components
-                                    .wallet
-                                    .get_account_public_signing_key(account_id)
-                                    .map(PublicKey::new_from_private_key);
-                                let _unused = response.send(Ok(public_key));
+                                let initial_key =
+                                    components.wallet.get_account_initial_key(account_id);
+                                let _unused = response.send(Ok(initial_key));
                             }
                             WalletRequest::FirstPublicAccount { response } => {
                                 let account = components
@@ -223,7 +221,7 @@ impl WalletActor {
                                         to_npk: None,
                                         to_vpk: None,
                                         to_keys: None,
-                                        to_pk: None,
+                                        to_initial_key: None,
                                         amount,
                                     }),
                                 )
@@ -282,7 +280,7 @@ impl WalletActor {
                                         to_npk: None,
                                         to_vpk: None,
                                         to_keys: None,
-                                        to_pk: None,
+                                        to_initial_key: None,
                                         amount,
                                     }),
                                 )
@@ -389,7 +387,7 @@ impl WalletActor {
                                         to_npk: None,
                                         to_vpk: None,
                                         to_keys: None,
-                                        to_pk: None,
+                                        to_initial_key: None,
                                         amount,
                                     }),
                                 )
@@ -570,12 +568,12 @@ impl LezRuntime {
         .await
     }
 
-    /// Returns the public signing key for an imported public account.
-    pub async fn public_account_signing_key(
+    /// Returns the initial key of a held public account.
+    pub async fn public_account_initial_key(
         &self,
         account_id: AccountId,
-    ) -> Result<Option<PublicKey>, DynError> {
-        self.request(|response| WalletRequest::PublicAccountSigningKey {
+    ) -> Result<Option<SigningKeyState>, DynError> {
+        self.request(|response| WalletRequest::PublicAccountInitialKey {
             account_id,
             response,
         })
@@ -796,7 +794,7 @@ impl LezRuntime {
 #[derive(Clone)]
 pub struct WalletApp {
     sequencer_addr: SocketAddr,
-    public_accounts: Vec<(PrivateKey, u128)>,
+    public_accounts: Vec<(PublicAccountSecret, u128)>,
     private_accounts: Vec<InitialPrivateAccountForWallet>,
     state_dir: Option<PathBuf>,
     initialize_private_accounts: bool,

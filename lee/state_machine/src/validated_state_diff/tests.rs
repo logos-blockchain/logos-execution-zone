@@ -4,13 +4,15 @@ use lee_core::{
     account::{AccountId, Actor, Nonce},
     execution_state::ExecutionError,
     program::SyncMessage,
+    signing_key::signature_program_id,
 };
 use test_guest_core::Script;
 
 use crate::{
-    PrivateKey, PublicKey, V03State,
+    V03State,
     error::{InvalidProgramBehaviorError, LeeError},
     state::tests::{public_tx, scripted_id, transfer},
+    test_utils::TestSigner,
     validated_state_diff::ValidatedStateDiff,
 };
 
@@ -21,10 +23,10 @@ fn public_diff_reflects_a_successful_transfer() {
     // A successful native transfer must record the debited sender in
     // `public_diff()`.  Catches the mutation that replaces `public_diff` with
     // `HashMap::new()` (which would hide every account change).
-    let from_key = PrivateKey::try_new([1_u8; 32]).unwrap();
-    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
-    let to_key = PrivateKey::try_new([2_u8; 32]).unwrap();
-    let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
+    let from_key = TestSigner::new(1);
+    let from = from_key.account_id();
+    let to_key = TestSigner::new(2);
+    let to = to_key.account_id();
 
     let state = V03State::new().with_public_account_balances([(from, 100)]);
     let tx = public_tx(
@@ -64,9 +66,8 @@ fn privacy_garbage_proof_is_rejected() {
 
     use crate::{
         PrivacyPreservingTransaction,
-        privacy_preserving_transaction::{
-            circuit::Proof, message::Message, witness_set::WitnessSet,
-        },
+        privacy_preserving_transaction::{circuit::Proof, message::Message},
+        test_utils::privacy_witness_for,
     };
 
     let state = V03State::new();
@@ -75,9 +76,7 @@ fn privacy_garbage_proof_is_rejected() {
     // commitment satisfies the non-empty requirement, no signers makes the
     // nonce/signature checks vacuously true, and unbounded validity windows are valid
     // for any block/timestamp.
-    let account_id = AccountId::from(&PublicKey::new_from_private_key(
-        &PrivateKey::try_new([1_u8; 32]).unwrap(),
-    ));
+    let account_id = TestSigner::new(1).account_id();
     let commitment = Commitment::new(&account_id, &Account::default());
     let message = Message {
         public_context: PublicExecutionContext::default(),
@@ -106,7 +105,7 @@ fn privacy_garbage_proof_is_rejected() {
 
     // Garbage proof bytes: not a valid borsh-encoded `InnerReceipt`.
     let garbage_proof = Proof::from_inner(vec![0xff_u8; 64]);
-    let witness_set = WitnessSet::for_message(&message, garbage_proof, &[]);
+    let witness_set = privacy_witness_for(&message, garbage_proof, &[]);
     let tx = PrivacyPreservingTransaction::new(message, witness_set);
 
     let result = ValidatedStateDiff::from_privacy_preserving_transaction(&tx, &state, 1, 0);
@@ -118,15 +117,15 @@ fn privacy_garbage_proof_is_rejected() {
     }
 }
 
-fn signer() -> (PrivateKey, AccountId) {
-    let key = PrivateKey::try_new([1_u8; 32]).unwrap();
-    let account_id = AccountId::from(&PublicKey::new_from_private_key(&key));
+fn signer() -> (TestSigner, AccountId) {
+    let key = TestSigner::new(1);
+    let account_id = key.account_id();
     (key, account_id)
 }
 
 fn metering_write_fixture() -> (V03State, crate::PublicTransaction) {
     let (from_key, from) = signer();
-    let to_key = PrivateKey::try_new([2_u8; 32]).unwrap();
+    let to_key = TestSigner::new(2);
 
     let state = V03State::new()
         .with_public_account_balances([(from, 100)])
@@ -337,10 +336,8 @@ fn a_sent_transitions_nonzero_exit_adds_its_cycles_to_its_senders() {
 #[test]
 fn metered_revert_reports_cycles_and_yields_a_nonce_only_diff() {
     let (mut state, tx) = metering_write_fixture();
-    let (_, from) = signer();
-    let to = AccountId::from(&PublicKey::new_from_private_key(
-        &PrivateKey::try_new([2_u8; 32]).unwrap(),
-    ));
+    let (from_key, from) = signer();
+    let to = TestSigner::new(2).account_id();
     let from_before = state.get_account_by_id(from);
 
     // A budget too small to finish the write: the action runs out of gas.
@@ -352,7 +349,8 @@ fn metered_revert_reports_cycles_and_yields_a_nonce_only_diff() {
     );
 
     // The revert is buried as a successful return: the diff carries no effects,
-    // only the signers' nonce advances, so the charged tx cannot be replayed.
+    // only the signers' nonce advances and key rotations, so the charged tx cannot
+    // be replayed.
     let diff = result.expect("a reverted action still yields an applicable diff");
     assert!(
         diff.public_diff().is_empty(),
@@ -363,7 +361,10 @@ fn metered_revert_reports_cycles_and_yields_a_nonce_only_diff() {
         .expect("the validated diff applies");
     assert_eq!(
         state.get_account_by_id(from).data,
-        from_before.data,
+        from_before.data.with_actor_state(
+            signature_program_id(),
+            from_key.key_state(Nonce(1)).encode()
+        ),
         "the write was reverted"
     );
     assert_eq!(state.get_account_by_id(from).nonce.0, 1);
@@ -466,11 +467,8 @@ fn loader_write_fixture(next_len: usize) -> (V03State, crate::PublicTransaction,
             .with_actor_state(PROGRAM_LOADER_ACCOUNT_ID, ActorState::from(next_state)),
     )]);
 
-    let key = PrivateKey::try_new([3; 32]).unwrap();
-    let target = Actor::new(
-        AccountId::from(&PublicKey::new_from_private_key(&key)),
-        PROGRAM_LOADER_ACCOUNT_ID,
-    );
+    let key = TestSigner::new(3);
+    let target = Actor::new(key.account_id(), PROGRAM_LOADER_ACCOUNT_ID);
     let tx = public_tx(
         target,
         vec![target],

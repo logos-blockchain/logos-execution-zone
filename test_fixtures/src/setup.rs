@@ -9,7 +9,7 @@ use std::{
 
 use anyhow::{Context as _, Result, bail};
 use indexer_service::{ChannelId, IndexerHandle};
-use lee::{AccountId, PrivateKey, PublicKey};
+use lee::signature::{PublicAccountSecret, public_account_id};
 use logos_blockchain_zone_sdk::key_management_system_service::keys::UnsecuredEd25519Key;
 use sequencer_service::{GenesisAction, SequencerConfig, SequencerHandle};
 use sequencer_service_protocol::SequencerStatus;
@@ -43,7 +43,6 @@ pub struct SequencerSetup {
     bedrock_addr: SocketAddr,
     channel_id: ChannelId,
     genesis_transactions: Option<Vec<GenesisAction>>,
-    cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
     channel_signing_key: Option<UnsecuredEd25519Key>,
     gossip: Option<sequencer_core::config::GossipConfig>,
     joining: bool,
@@ -57,7 +56,6 @@ impl SequencerSetup {
             bedrock_addr,
             channel_id: config::bedrock_channel_id(),
             genesis_transactions: None,
-            cross_zone: None,
             channel_signing_key: None,
             gossip: None,
             joining: false,
@@ -69,14 +67,6 @@ impl SequencerSetup {
     #[must_use]
     pub const fn with_channel_id(mut self, channel_id: ChannelId) -> Self {
         self.channel_id = channel_id;
-        self
-    }
-
-    /// Set the cross-zone configuration to use for the sequencer.
-    /// If not set, the sequencer will be configured to run in single-zone mode.
-    #[must_use]
-    pub fn with_cross_zone(mut self, cross_zone: sequencer_core::config::CrossZoneConfig) -> Self {
-        self.cross_zone = Some(cross_zone);
         self
     }
 
@@ -159,7 +149,6 @@ impl SequencerSetup {
             bedrock_addr,
             channel_id,
             genesis_transactions,
-            cross_zone,
             channel_signing_key,
             gossip,
             joining,
@@ -215,7 +204,6 @@ impl SequencerSetup {
             bedrock_addr,
             channel_id,
             genesis_transactions,
-            cross_zone,
             gossip,
         )
         .context("Failed to create Sequencer config")?;
@@ -520,18 +508,11 @@ pub async fn setup_bedrock_node_with_settings(
 pub async fn setup_indexer(
     bedrock_addr: SocketAddr,
     channel_id: ChannelId,
-    cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
 ) -> Result<(IndexerHandle, TempDir)> {
     let temp_indexer_dir =
         tempfile::tempdir().context("Failed to create temp dir for indexer home")?;
 
-    let handle = setup_indexer_at(
-        bedrock_addr,
-        channel_id,
-        cross_zone,
-        temp_indexer_dir.path(),
-    )
-    .await?;
+    let handle = setup_indexer_at(bedrock_addr, channel_id, temp_indexer_dir.path()).await?;
 
     Ok((handle, temp_indexer_dir))
 }
@@ -540,14 +521,13 @@ pub async fn setup_indexer(
 pub async fn setup_indexer_at(
     bedrock_addr: SocketAddr,
     channel_id: ChannelId,
-    cross_zone: Option<sequencer_core::config::CrossZoneConfig>,
     home: &Path,
 ) -> Result<IndexerHandle> {
     std::fs::create_dir_all(home).context("Failed to create indexer home")?;
 
     debug!(home = %home.display(), "Using indexer home");
 
-    let indexer_config = config::indexer_config(bedrock_addr, channel_id, cross_zone)
+    let indexer_config = config::indexer_config(bedrock_addr, channel_id)
         .context("Failed to create Indexer config")?;
 
     indexer_service::run_server(
@@ -562,7 +542,7 @@ pub async fn setup_indexer_at(
 
 pub fn setup_wallet(
     sequencer_addr: &SocketAddr,
-    initial_public_accounts: &[(PrivateKey, u128)],
+    initial_public_accounts: &[(PublicAccountSecret, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
     config_overrides: WalletConfigOverrides,
 ) -> Result<(WalletCore<SequencerClient>, TempDir, String)> {
@@ -582,7 +562,7 @@ pub fn setup_wallet(
 /// Set up the wallet in an explicit home directory owned by the caller.
 pub fn setup_wallet_at(
     sequencer_addr: &SocketAddr,
-    initial_public_accounts: &[(PrivateKey, u128)],
+    initial_public_accounts: &[(PublicAccountSecret, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
     config_overrides: WalletConfigOverrides,
     home: &Path,
@@ -607,11 +587,11 @@ pub fn setup_wallet_at(
     )
     .context("Failed to init wallet")?;
 
-    for (private_key, _balance) in initial_public_accounts {
+    for (secret, _balance) in initial_public_accounts {
         wallet
             .storage_mut()
             .key_chain_mut()
-            .add_imported_public_account(private_key.clone());
+            .add_imported_public_account(secret.clone());
     }
 
     for private_account in initial_private_accounts {
@@ -635,14 +615,12 @@ pub fn setup_wallet_at(
 /// Funds each of the wallet's private accounts from one of its public accounts.
 pub async fn fund_private_accounts(
     wallet: &mut WalletCore<SequencerClient>,
-    initial_public_accounts: &[(PrivateKey, u128)],
+    initial_public_accounts: &[(PublicAccountSecret, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
 ) -> Result<()> {
-    let funder_id = AccountId::from(&PublicKey::new_from_private_key(
-        &initial_public_accounts[config::PRIVATE_FUNDER_INDEX].0,
-    ));
+    let funder_id = public_account_id(&initial_public_accounts[config::PRIVATE_FUNDER_INDEX].0);
 
-    for private_account in initial_private_accounts {
+    for (index, private_account) in initial_private_accounts.iter().enumerate() {
         // The recipient pays the shielding's in-proof fee out of what it receives, so it is
         // shielded the fee on top of its balance.
         wallet.set_private_fee_payer(Some(private_account.account_id()));
@@ -654,10 +632,10 @@ pub async fn fund_private_accounts(
                 to_npk: None,
                 to_vpk: None,
                 to_keys: None,
-                to_pk: None,
+                to_initial_key: None,
                 amount: private_account
                     .balance
-                    .checked_add(config::shield_fee())
+                    .checked_add(config::shield_fee_at(index))
                     .expect("private funding overflow"),
             }),
         )
@@ -673,7 +651,7 @@ pub async fn fund_private_accounts(
         let Some(wallet::DeclaredFee::Private(fee)) = wallet.take_declared_fee() else {
             bail!("The funding shield declared no private fee");
         };
-        if fee.reserve != config::shield_fee() {
+        if fee.reserve != config::shield_fee_at(index) {
             let bytes = fee
                 .reserve
                 .saturating_sub(config::private_fee(0))
@@ -682,7 +660,7 @@ pub async fn fund_private_accounts(
                 "The funding shield paid {}, not the {} its pinned size prices; re-pin \
                  `config::SHIELD_BYTES` to {bytes:?}",
                 fee.reserve,
-                config::shield_fee()
+                config::shield_fee_at(index)
             );
         }
 

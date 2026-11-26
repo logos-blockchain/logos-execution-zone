@@ -8,11 +8,11 @@ use common::{HashType, transaction::LeeTransaction};
 use futures::FutureExt as _;
 use indexer_service::{ChannelId, IndexerHandle};
 use kameo::actor::{ActorRef, Spawn as _};
-use lee::{AccountId, PrivacyPreservingTransaction, PrivateKey};
+use lee::{AccountId, PrivacyPreservingTransaction, signature::PublicAccountSecret};
 use lee_core::Commitment;
 use logos_blockchain_zone_sdk::key_management_system_service::keys::UnsecuredEd25519Key;
 use sequencer_core::config::GenesisAction;
-use sequencer_service::{CrossZoneConfig, GossipConfig, SequencerHandle};
+use sequencer_service::{GossipConfig, SequencerHandle};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use sequencer_storage_actor::mock::MockStorageActor;
 use serde::Serialize;
@@ -512,7 +512,6 @@ pub struct ZoneTestContextBuilder {
     wallet_config_overrides: WalletConfigOverrides,
     from_scratch: bool,
     mn_config: MultiNodeTestContextConfig,
-    cross_zone_config: Option<CrossZoneConfig>,
 }
 
 impl ZoneTestContextBuilder {
@@ -528,9 +527,6 @@ impl ZoneTestContextBuilder {
             wallet_config_overrides: WalletConfigOverrides::default(),
             from_scratch: false,
             mn_config,
-            // There is no point providing cross zone config here, it is easier to provide it from
-            // builder pattern.
-            cross_zone_config: None,
         }
     }
 
@@ -617,14 +613,6 @@ impl ZoneTestContextBuilder {
         self
     }
 
-    /// Set the cross zone config to apply when initializing the zone.
-    /// If not set, the zone will be initialized with default one.
-    #[must_use]
-    pub fn with_cross_zone(mut self, cross_zone_config: Option<CrossZoneConfig>) -> Self {
-        self.cross_zone_config = cross_zone_config;
-        self
-    }
-
     pub async fn build(self, bedrock_addr: SocketAddr) -> Result<TestContextZone> {
         Box::pin(self.build_inner(bedrock_addr)).await
     }
@@ -640,7 +628,6 @@ impl ZoneTestContextBuilder {
             wallet_config_overrides,
             from_scratch,
             mn_config,
-            cross_zone_config,
         } = self;
 
         debug!("Test context setup");
@@ -678,13 +665,10 @@ impl ZoneTestContextBuilder {
                 == config::SequencerPartialConfig::default().channel_params;
 
         let indexer_components = if enable_indexer {
-            let (indexer_handle, temp_indexer_dir) = setup_indexer(
-                bedrock_addr,
-                mn_config.bedrock_channel,
-                cross_zone_config.clone(),
-            )
-            .await
-            .context("Failed to setup Indexer")?;
+            let (indexer_handle, temp_indexer_dir) =
+                setup_indexer(bedrock_addr, mn_config.bedrock_channel)
+                    .await
+                    .context("Failed to setup Indexer")?;
             let indexer_client = setup::indexer_client(indexer_handle.addr())
                 .await
                 .context("Failed to create indexer client")?;
@@ -721,7 +705,6 @@ impl ZoneTestContextBuilder {
             genesis_transactions.clone(),
             UnsecuredEd25519Key::from_bytes(&config::CHANNEL_SIGNING_KEY),
             mn_config.bedrock_channel,
-            cross_zone_config.clone(),
             leader_gossip,
         )
         .await?;
@@ -765,7 +748,6 @@ impl ZoneTestContextBuilder {
                 genesis_transactions.clone(),
                 sequencer_key,
                 mn_config.bedrock_channel,
-                cross_zone_config.clone(),
                 follower_gossip.clone(),
             )
             .await?;
@@ -1180,12 +1162,11 @@ async fn build_sequencer_components(
     bedrock_addr: SocketAddr,
     enable_wallet: bool,
     use_prebuilt: bool,
-    initial_public_accounts: &[(PrivateKey, u128)],
+    initial_public_accounts: &[(PublicAccountSecret, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
     genesis_transactions: Option<Vec<GenesisAction>>,
     sequencer_key: UnsecuredEd25519Key,
     bedrock_channel_id: ChannelId,
-    cross_zone_config: Option<CrossZoneConfig>,
     gossip: Option<GossipConfig>,
 ) -> Result<(SocketAddr, SequencerComponents)> {
     let mut sequencer_setup = SequencerSetup::new(partial_config, bedrock_addr);
@@ -1217,9 +1198,6 @@ async fn build_sequencer_components(
             .with_channel_signing_key(sequencer_key);
     }
     sequencer_setup = sequencer_setup.with_channel_id(bedrock_channel_id);
-    if let Some(cross_zone_config) = cross_zone_config.clone() {
-        sequencer_setup = sequencer_setup.with_cross_zone(cross_zone_config);
-    }
     if let Some(gossip) = gossip {
         sequencer_setup = sequencer_setup.with_gossip(gossip);
     }
