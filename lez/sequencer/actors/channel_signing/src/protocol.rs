@@ -7,7 +7,7 @@ use logos_blockchain_zone_sdk::{
         events::DepositNote,
         mantle::{
             ops::channel::{ChannelKeyIndex, MsgId},
-            transactions::Ops,
+            transactions::{Ops, TxDecodeContext},
         },
         proofs::channel_multi_sig_proof::{IndexedSignature, IndexedSignatures},
     },
@@ -180,7 +180,7 @@ impl Wire {
                 tx: Box::new(
                     <Ops as logos_blockchain_zone_sdk::binary_codec::canonical::BinaryDecode>::decode_all(
                         payload,
-                        &u32::MAX,
+                        &TxDecodeContext::UNBOUNDED,
                     )
                     .ok()?,
                 ),
