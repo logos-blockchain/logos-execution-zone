@@ -370,8 +370,8 @@ mod tests {
                 refund_to: None,
                 tip: 0,
                 fallback: Some(lee_core::FeeFallback {
-                    action: lee_core::PrivateAction::default(),
                     boundary: message.execution.boundary.clone(),
+                    ..lee_core::FeeFallback::default()
                 }),
             });
             message
