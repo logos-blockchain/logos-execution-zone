@@ -4,10 +4,11 @@ use key_protocol::key_management::{
     KeyChain, key_tree::chain_index::ChainIndex, secret_holders::SecretSpendingKey,
 };
 use lee::{
-    Account, AccountId, PrivateKey, PublicKey, Recipient, RecoveryBinding, V03State,
+    Account, AccountId, Recipient, RecoveryBinding, V03State,
     program::Program,
+    signature::{PublicAccountSecret, public_account_id},
 };
-use lee_core::{PrivateAccountKind, program::SystemProgramName};
+use lee_core::PrivateAccountKind;
 use serde::{Deserialize, Serialize};
 
 const PRIVATE_KEY_PUB_ACC_A: [u8; 32] = [
@@ -44,7 +45,7 @@ pub struct PublicAccountPublicInitialData {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PublicAccountPrivateInitialData {
     pub account_id: lee::AccountId,
-    pub pub_sign_key: lee::PrivateKey,
+    pub secret: PublicAccountSecret,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,18 +76,18 @@ impl PrivateAccountPrivateInitialData {
 
 #[must_use]
 pub fn initial_pub_accounts_private_keys() -> Vec<PublicAccountPrivateInitialData> {
-    let acc1_pub_sign_key = PrivateKey::try_new(PRIVATE_KEY_PUB_ACC_A).unwrap();
+    let acc1_secret = PublicAccountSecret::new(PRIVATE_KEY_PUB_ACC_A);
 
-    let acc2_pub_sign_key = PrivateKey::try_new(PRIVATE_KEY_PUB_ACC_B).unwrap();
+    let acc2_secret = PublicAccountSecret::new(PRIVATE_KEY_PUB_ACC_B);
 
     vec![
         PublicAccountPrivateInitialData {
-            account_id: AccountId::from(&PublicKey::new_from_private_key(&acc1_pub_sign_key)),
-            pub_sign_key: acc1_pub_sign_key,
+            account_id: public_account_id(&acc1_secret),
+            secret: acc1_secret,
         },
         PublicAccountPrivateInitialData {
-            account_id: AccountId::from(&PublicKey::new_from_private_key(&acc2_pub_sign_key)),
-            pub_sign_key: acc2_pub_sign_key,
+            account_id: public_account_id(&acc2_secret),
+            secret: acc2_secret,
         },
     ]
 }
@@ -194,15 +195,10 @@ fn protocol_upgradable_programs() -> Vec<(AccountId, Program)> {
     )]
 }
 
-/// System programs, owned by `system_upgrader` and upgradable through it, by name.
-fn system_upgradable_programs() -> Vec<(SystemProgramName, Program)> {
-    programs::builtin_core_programs().to_vec()
-}
-
 /// `system_upgrader`'s registry: the upgradable system programs, none with an upgrade pending.
 fn system_registry() -> (AccountId, Account) {
     let registry = system_upgrader_core::Registry {
-        programs: system_upgradable_programs()
+        programs: programs::builtin_core_programs()
             .into_iter()
             .map(|(name, _)| (name, None))
             .collect(),
@@ -228,7 +224,7 @@ pub fn initial_state() -> V03State {
                 .into_iter()
                 .map(|(account_id, program)| (account_id, program, true))
                 .chain(
-                    system_upgradable_programs()
+                    programs::builtin_core_programs()
                         .into_iter()
                         .map(|(name, program)| {
                             (AccountId::from_system_program_name(&name), program, false)
@@ -267,8 +263,8 @@ mod tests {
         66, 136, 209, 158, 243, 254, 168, 14, 19, 222, 8, 97,
     ];
 
-    const PUB_ACC_A_TEXT_ADDR: &str = "6iArKUXxhUJqS7kCaPNhwMWt3ro71PDyBj7jwAyE2VQV";
-    const PUB_ACC_B_TEXT_ADDR: &str = "7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo";
+    const PUB_ACC_A_TEXT_ADDR: &str = "7VDm7YRPvimbZgCzuFqCGf6RwPsTV3XY5W9DzT71oain";
+    const PUB_ACC_B_TEXT_ADDR: &str = "6AtC7ekAeMXh9QgiBoUnsb69SVEnCy9DMhCy4nmJDbkh";
 
     const PRIV_ACC_A_TEXT_ADDR: &str = "44KVvzvh2ephQU9aR5snboGUXKgS1FnPYh1W4KZKwmhm";
     const PRIV_ACC_B_TEXT_ADDR: &str = "478hD6LXFTYu5gRRkWkCyXPRsWgCwAfRredoCUfxr5b9";

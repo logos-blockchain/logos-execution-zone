@@ -36,6 +36,7 @@ use lee::{
         circuit::{Dependency, ProgramCatalog, ProgramKind},
         message::Message,
     },
+    signature::INITIAL_KEY_TYPE,
 };
 use lee_core::{
     BlockId, Commitment, CommitmentPosition, CommitmentSetDigest, EphemeralSecretKey, FeeTransfer,
@@ -45,6 +46,7 @@ use lee_core::{
     execution_state::TransactionEntry,
     native_token::NATIVE_TOKEN_PROGRAM_ID,
     program::{MessageBody, MessageData, PROGRAM_LOADER_ACCOUNT_ID, Publication},
+    signing_key::{KeyType, SigningKeyState, signature_program_id},
 };
 /// The fee quote a [`WalletSequencerClient`] returns.
 pub use sequencer_service_rpc::FeeStateQuote;
@@ -67,6 +69,7 @@ mod account_manager;
 pub mod cli;
 pub mod config;
 mod fees;
+mod keycard_support;
 pub mod poller;
 pub mod program_facades;
 pub mod storage;
@@ -658,7 +661,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                     AccountIdentity::PrivateShared { .. } => true,
                     AccountIdentity::Public(_)
                     | AccountIdentity::PublicNoSign(_)
-                    | AccountIdentity::PublicForeign(_)
+                    | AccountIdentity::PublicForeign { .. }
                     | AccountIdentity::PublicPda { .. }
                     | AccountIdentity::PublicKeycard { .. }
                     | AccountIdentity::PrivateForeign { .. }
@@ -686,7 +689,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                     }
                     AccountIdentity::Public(_)
                     | AccountIdentity::PublicNoSign(_)
-                    | AccountIdentity::PublicForeign(_)
+                    | AccountIdentity::PublicForeign { .. }
                     | AccountIdentity::PublicPda { .. }
                     | AccountIdentity::PublicKeycard { .. }
                     | AccountIdentity::PrivateForeign { .. }
@@ -1265,12 +1268,28 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         Ok(self.sequencer_client.get_recovery_binding(address).await?)
     }
 
+    /// A held public account's initial key: what others name it by to pay it.
     #[must_use]
-    pub fn get_account_public_signing_key(
-        &self,
-        account_id: AccountId,
-    ) -> Option<&lee::PrivateKey> {
-        self.storage.key_chain().pub_account_signing_key(account_id)
+    pub fn get_account_initial_key(&self, account_id: AccountId) -> Option<SigningKeyState> {
+        self.storage.key_chain().pub_account_initial_key(account_id)
+    }
+
+    /// The type of a public account's current key: its stored key's, or the initial type for an
+    /// account that has not signed yet.
+    pub async fn current_key_type(&self, account_id: AccountId) -> Result<KeyType> {
+        let Some(account) = self
+            .get_account_view(Actor::new(account_id, signature_program_id()))
+            .await?
+        else {
+            return Ok(INITIAL_KEY_TYPE);
+        };
+        let stored = account.data.actor_state(signature_program_id());
+        if stored.is_empty() {
+            return Ok(INITIAL_KEY_TYPE);
+        }
+        Ok(SigningKeyState::decode(stored)
+            .context("The account's stored key does not decode")?
+            .key_type)
     }
 
     #[must_use]
@@ -1933,10 +1952,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                     lee::privacy_preserving_transaction::circuit::Proof::from_inner(Vec::new()),
                 ),
             );
-            let wire_bytes = signed_wire_bytes(
-                &LeeTransaction::PrivacyPreserving(unsigned),
-                acc_manager.signers().len(),
-            )?;
+            let wire_bytes = signed_wire_bytes(&LeeTransaction::PrivacyPreserving(unsigned))?;
             let verify_gas = fee_core::market::PRIVATE_VERIFY_GAS;
             let (exec_ceiling, stor_ceiling) = self.base_fee_ceilings(&quote);
             // Given cross messages the public part is unmeasured, so it gets what an in-proof
@@ -2022,16 +2038,12 @@ impl<C: WalletSequencerClient> WalletCore<C> {
 
             let (output, proof) = run_proven(input, acc_manager.presenter(None)).await??;
             let message = declared(fee, output);
-            let signatures_public_keys = acc_manager
-                .sign_message(message.hash())
-                .map_err(ExecutionFailureKind::SignError)?;
-            let tx = PrivacyPreservingTransaction::new(
-                message,
-                lee::privacy_preserving_transaction::witness_set::WitnessSet::from_raw_parts(
-                    signatures_public_keys,
-                    proof,
-                ),
+            let witness_set = lee::privacy_preserving_transaction::witness_set::WitnessSet::sign(
+                &message,
+                proof,
+                &acc_manager.signing_keys(&message.nonces),
             );
+            let tx = PrivacyPreservingTransaction::new(message, witness_set);
             let tx_hash = self
                 .sequencer_client
                 .send_transaction(LeeTransaction::PrivacyPreserving(tx))
@@ -2111,9 +2123,12 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             );
         }
         let opening = account_manager::random_bytes();
-        input
-            .recoveries
-            .push(acc_manager.fee_recovery(payer, opening)?);
+        // A refund to a public target is never published to the payer's alias.
+        if refund_to.is_none() {
+            input
+                .recoveries
+                .push(acc_manager.fee_recovery(payer, opening)?);
+        }
         let priced = |amount| {
             let mut priced = input.clone();
             priced.fee = Some(FeeTransfer {
@@ -2130,16 +2145,12 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 admission_evidence: acc_manager.admission_evidence(),
                 ..Message::from_circuit_output(acc_manager.public_account_nonces(), output)
             };
-            let signatures_public_keys = acc_manager
-                .sign_message(message.hash())
-                .map_err(ExecutionFailureKind::SignError)?;
-            Ok::<_, ExecutionFailureKind>(PrivacyPreservingTransaction::new(
-                message,
-                lee::privacy_preserving_transaction::witness_set::WitnessSet::from_raw_parts(
-                    signatures_public_keys,
-                    proof,
-                ),
-            ))
+            let witness_set = lee::privacy_preserving_transaction::witness_set::WitnessSet::sign(
+                &message,
+                proof,
+                &acc_manager.signing_keys(&message.nonces),
+            );
+            Ok::<_, ExecutionFailureKind>(PrivacyPreservingTransaction::new(message, witness_set))
         };
 
         // The fee's amount is fixed-width, so an unproven run paying nothing measures the
@@ -2547,16 +2558,28 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 ));
             }
             Some(payer) => {
-                let key = self.get_account_public_signing_key(payer).ok_or_else(|| {
-                    invalid_input("Fee payer's signing key is not held by this wallet")
-                })?;
+                let secret = self
+                    .storage
+                    .key_chain()
+                    .pub_account_secret(payer)
+                    .cloned()
+                    .ok_or_else(|| {
+                        invalid_input("Fee payer's signing key is not held by this wallet")
+                    })?;
                 let account = self
                     .get_account_view(Actor::native_balance(payer))
                     .await
                     .map_err(ExecutionFailureKind::SequencerError)?
                     .unwrap_or_default();
                 nonces.insert(payer, account.nonce);
-                (payer, Some(key))
+                let key_type = self
+                    .current_key_type(payer)
+                    .await
+                    .map_err(ExecutionFailureKind::SequencerError)?;
+                (
+                    payer,
+                    Some(account_manager::signer(&secret, account.nonce, key_type)),
+                )
             }
         };
 
@@ -2579,17 +2602,10 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             Some(lee::FeeDeclaration::new(payer, budget, tip, 0)),
             acc_manager.admission_evidence(),
         );
-        let signers = acc_manager
-            .signers()
-            .len()
-            .saturating_add(usize::from(co_signer.is_some()));
         // Measure if dry-run, or if either gas limit or max fee is unset;
         // pinning both fields skips the simulation and its revert check.
         let mut measured = if self.dry_run || gas_limit.is_none() || max_fee.is_none() {
-            Some(
-                self.measure_public(&message, signers, budget, &acc_manager)
-                    .await?,
-            )
+            Some(self.measure_public(&message, budget, &acc_manager).await?)
         } else {
             None
         };
@@ -2644,19 +2660,9 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         let fee = lee::FeeDeclaration::new(payer, gas_limit, tip, max_fee);
         message.fee = Some(fee);
 
-        let message_hash = message.hash();
-        let mut signatures_public_keys = acc_manager
-            .sign_message(message_hash)
-            .map_err(ExecutionFailureKind::SignError)?;
-        if let Some(key) = co_signer {
-            signatures_public_keys.push((
-                lee::Signature::new(key, &message_hash),
-                lee::PublicKey::new_from_private_key(key),
-            ));
-        }
-
-        let witness_set =
-            lee::public_transaction::WitnessSet::from_raw_parts(signatures_public_keys);
+        let mut signers = acc_manager.signing_keys(&message.nonces);
+        signers.extend(co_signer);
+        let witness_set = lee::public_transaction::WitnessSet::sign(&message, &signers);
 
         let tx = lee::public_transaction::PublicTransaction::new(message, witness_set);
         if self.dry_run
@@ -2703,12 +2709,11 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         Ok(tx_hash)
     }
 
-    /// Simulates `message`, to be signed by `signers`, within `budget` cycles against the
-    /// fetched states of its accounts, at the head fee state.
+    /// Simulates `message`, to be signed by the accounts in its `nonces`, within `budget` cycles
+    /// against the fetched states of its accounts, at the head fee state.
     async fn measure_public(
         &self,
         message: &lee::public_transaction::Message,
-        signers: usize,
         budget: u64,
         acc_manager: &account_manager::AccountManager,
     ) -> Result<PublicMeasure, ExecutionFailureKind> {
@@ -2761,7 +2766,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             message.clone(),
             lee::public_transaction::WitnessSet::from_raw_parts(Vec::new()),
         );
-        let wire_bytes = signed_wire_bytes(&LeeTransaction::Public(tx.clone()), signers)?;
+        let wire_bytes = signed_wire_bytes(&LeeTransaction::Public(tx.clone()))?;
         let run = PublicRun {
             tx,
             simulation,
@@ -3215,18 +3220,39 @@ pub const fn max_fee_for(gas_limit: u64) -> u128 {
 }
 
 /// The bytes settlement charges `unsigned` once `signers` sign it.
-fn signed_wire_bytes(
-    unsigned: &LeeTransaction,
-    signers: usize,
-) -> Result<u64, ExecutionFailureKind> {
-    let witness_bytes = size_of::<lee::Signature>().saturating_add(size_of::<lee::PublicKey>());
+fn signed_wire_bytes(unsigned: &LeeTransaction) -> Result<u64, ExecutionFailureKind> {
+    let nonces = match unsigned {
+        LeeTransaction::Public(tx) => &tx.message().nonces,
+        LeeTransaction::PrivacyPreserving(tx) => &tx.message().nonces,
+    };
+    // One Schnorr entry per signer in `nonces`, whose size does not depend on what it signs; at
+    // nonce 0 it also carries the account's initial key.
+    let key_state = lee_core::signing_key::SigningKeyState {
+        key_type: lee_core::signing_key::KeyType::Schnorr,
+        key_commitment: [0; 32],
+    };
+    let entry_bytes = borsh::object_length(&lee::public_transaction::WitnessEntry {
+        auth_data: vec![0; size_of::<lee::signature::SchnorrAuthData>()],
+        next: key_state,
+    })
+    .map_err(|err| ExecutionFailureKind::SignError(err.into()))?;
+    let initial_key_bytes = borsh::object_length(&key_state)
+        .map_err(|err| ExecutionFailureKind::SignError(err.into()))?;
+    let witness_bytes: usize = nonces
+        .values()
+        .map(|nonce| {
+            if *nonce == Nonce(0) {
+                entry_bytes.saturating_add(initial_key_bytes)
+            } else {
+                entry_bytes
+            }
+        })
+        .sum();
     let unsigned = unsigned
         .charged_bytes()
         .map_err(|err| ExecutionFailureKind::SignError(err.into()))?;
-    Ok(unsigned.saturating_add(
-        u64::try_from(signers.saturating_mul(witness_bytes))
-            .expect("the signatures' size fits u64"),
-    ))
+    Ok(unsigned
+        .saturating_add(u64::try_from(witness_bytes).expect("the witness entries' size fits u64")))
 }
 
 /// The nullifiers `block` spends: a reverted transaction's fee fallback alone, every private
@@ -3247,7 +3273,7 @@ fn spent_in(block: &Block) -> Vec<Nullifier> {
                 .as_ref()
                 .and_then(|fee| fee.fallback.as_ref());
             match (block.body.is_reverted(position), fallback) {
-                (true, Some(fallback)) => vec![fallback.action.nullifier],
+                (true, Some(fallback)) => vec![fallback.nullifier],
                 (true, None) => Vec::new(),
                 (false, _) => execution
                     .private_actions
@@ -3265,6 +3291,17 @@ fn decrypt_note(
     secret: &SharedSecretKey,
 ) -> Option<(lee_core::PrivateAccountKind, Account)> {
     lee_core::EncryptionScheme::decrypt(
+        &action.encrypted_post_state.ciphertext,
+        secret,
+        &action.nullifier,
+    )
+}
+
+fn decrypt_fee_fallback_note(
+    action: &lee_core::PrivateAction,
+    secret: &SharedSecretKey,
+) -> Option<(lee_core::PrivateAccountKind, Account)> {
+    lee_core::EncryptionScheme::decrypt_fee_fallback(
         &action.encrypted_post_state.ciphertext,
         secret,
         &action.nullifier,
@@ -3941,8 +3978,8 @@ mod tests {
 
     #[tokio::test]
     async fn an_unstake_request_is_refused_before_submission_only_for_an_unpayable_destination() {
-        let owner_key = lee::PrivateKey::try_new([3; 32]).unwrap();
-        let ownership = AccountId::from(&lee::PublicKey::new_from_private_key(&owner_key));
+        let owner_key = lee::signature::PublicAccountSecret::new([3; 32]);
+        let ownership = lee::test_utils::TestSigner::from(&owner_key).account_id();
         let public = AccountId::new([7; 32]);
         let bound = AccountId::new([8; 32]);
         let absent = AccountId::new([9; 32]);
@@ -4041,8 +4078,8 @@ mod tests {
         Arc<Mutex<Vec<LeeTransaction>>>,
         AccountId,
     ) {
-        let key = lee::PrivateKey::try_new([1; 32]).unwrap();
-        let sender = AccountId::from(&lee::PublicKey::new_from_private_key(&key));
+        let key = lee::signature::PublicAccountSecret::new([1; 32]);
+        let sender = lee::test_utils::TestSigner::from(&key).account_id();
         let submitted: Arc<Mutex<Vec<LeeTransaction>>> = Arc::default();
         let mut sequencer = RpcModule::new(Arc::clone(&submitted));
         sequencer
@@ -4504,7 +4541,7 @@ mod tests {
         key_chain
             .insert_private_account(regular, PrivateAccountKind::Regular, Account::funded(9))
             .unwrap();
-        key_chain.add_imported_public_account(lee::PrivateKey::try_new([3; 32]).unwrap());
+        key_chain.add_imported_public_account(lee::signature::PublicAccountSecret::new([3; 32]));
         wallet
             .storage
             .add_label(

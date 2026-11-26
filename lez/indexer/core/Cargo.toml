@@ -37,6 +37,8 @@ tokio.workspace = true
 hex.workspace = true
 
 [dev-dependencies]
+common = { workspace = true, features = ["test-utils"] }
+lee = { workspace = true, features = ["test-signer"] }
 tempfile.workspace = true
 test_guest_core.workspace = true
 test_programs.workspace = true

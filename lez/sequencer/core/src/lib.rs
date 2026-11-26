@@ -64,6 +64,7 @@ pub mod config;
 pub mod faults;
 pub mod fees;
 pub mod logging;
+pub mod pending;
 pub mod release_finality;
 pub mod system_approvals;
 
@@ -148,6 +149,19 @@ impl From<TransactionOrigin> for sequencer_core_metrics::TransactionOrigin {
     }
 }
 
+/// Why admission refused a transaction.
+#[derive(Debug, thiserror::Error)]
+pub enum AdmissionError {
+    #[error(transparent)]
+    Fee(#[from] fees::Error),
+    #[error(transparent)]
+    Authentication(#[from] lee::HeadAuthError),
+    #[error(transparent)]
+    Pending(#[from] pending::PendingRefusal),
+    #[error("Invalid privacy-preserving proof")]
+    InvalidProof,
+}
+
 pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
     // TODO: Remove in favor of `sequencer_config` field
     channel_id: ChannelId,
@@ -155,6 +169,8 @@ pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
     /// `on_follow` sink feeds adopted/orphaned/finalized peer blocks into it.
     chain: Arc<Mutex<ChainState>>,
     mempool: MemPool<(TransactionOrigin, LeeTransaction)>,
+    /// Which transaction holds each pending `(account, nonce)` slot.
+    pending: Box<pending::PendingIndex>,
     sequencer_config: SequencerConfig,
     /// Signs this node's approval of a slash.
     channel_signing_key: Ed25519Key,
@@ -169,6 +185,8 @@ pub struct SequencerCore<S: StorageActorTrait, B: BedrockActorTrait> {
     /// Deposits seen on L1 but not yet final, minted in a block pinned on
     /// their notes. In memory only: after a restart they mint once final.
     observed_deposits: Vec<DepositInfo>,
+    #[cfg(test)]
+    fail_build: bool,
     /// The update last published to the gossip mesh.
     stake_config: StakeConfigUpdate,
 
@@ -248,6 +266,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             channel_id,
             chain: Arc::new(Mutex::new(chain)),
             mempool,
+            pending: Box::new(pending::PendingIndex::new(config.mempool_max_per_account)),
             stake_config: StakeConfigUpdate::default(),
             storage_ref,
             bedrock_pool_ref,
@@ -260,6 +279,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             sequencer_config: config,
             system_approvals,
             observed_deposits: Vec::new(),
+            #[cfg(test)]
+            fail_build: false,
         };
         sequencer_core_metrics::record_mempool_max_size(
             sequencer.sequencer_config.mempool_max_size,
@@ -501,19 +522,24 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     ///
     /// TODO: a full mempool still drops the transaction; a durable resubmit
     /// queue is a follow-up.
-    fn resubmit_orphaned(&self, txs: Vec<LeeTransaction>) {
+    fn resubmit_orphaned(&mut self, txs: Vec<LeeTransaction>) {
         for tx in txs {
             let tx_hash = tx.hash();
-            if let Err(err) = self
+            match self
                 .mempool
                 .handle()
-                .try_push((TransactionOrigin::User, tx))
+                .try_push((TransactionOrigin::User, tx.clone()))
             {
-                warn!(
-                    %tx_hash,
-                    error = format_args!("{:#}", anyhow!(err)),
-                    "Dropping orphaned transaction on resubmit"
-                );
+                // Its slots may have been freed once it was included.
+                Ok(()) => self.record_pending(&tx),
+                Err(err) => {
+                    self.pending.remove(&tx);
+                    warn!(
+                        %tx_hash,
+                        error = format_args!("{:#}", anyhow!(err)),
+                        "Dropping orphaned transaction on resubmit"
+                    );
+                }
             }
         }
     }
@@ -1178,6 +1204,31 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     }
 
     async fn build_block_from_mempool(&mut self) -> Result<BlockWithMeta> {
+        let mut taken = Taken::default();
+        let built = self.build_block_from(&mut taken).await;
+        let Taken {
+            popped,
+            requeued,
+            included,
+        } = taken;
+        let included_hashes: HashSet<_> = included.iter().map(|(_, tx)| tx.hash()).collect();
+        for tx in popped {
+            let tx_hash = tx.hash();
+            if !included_hashes.contains(&tx_hash) && !requeued.contains(&tx_hash) {
+                self.pending.remove(&tx);
+            }
+        }
+        if built.is_err() {
+            // No block was built, so what it would have included goes back in front, still holding
+            // its slots.
+            for (origin, tx) in included.into_iter().rev() {
+                self.mempool.push_front((origin, tx));
+            }
+        }
+        built
+    }
+
+    async fn build_block_from(&mut self, taken: &mut Taken) -> Result<BlockWithMeta> {
         let now = Instant::now();
 
         // Build on the head: its tip is the parent, its state the validation
@@ -1204,6 +1255,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
             (prev, height, chain.head_state().clone(), parent)
         };
+
+        // Slots below the head nonce were filled by included transactions.
+        self.pending.prune(&working_state);
 
         // A Slash executes against the head config, so it is proposed from it.
         let slash_txs = match committee_discovery::read_config(&working_state) {
@@ -1328,7 +1382,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         // is not the same as a `Sequencer` origin: it says the transaction has a
         // record behind it and so needs no requeue, where the origin only says
         // it was not submitted by a user.
-        let mut mempool_transactions = Vec::new();
         // `system_upgrader` changes in the mempool, returned by a reorg, wait for the one slot
         // before the fee.
         let mut upgrade_candidates = Vec::new();
@@ -1341,6 +1394,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             .or_else(|| self.mempool.pop().map(|(origin, tx)| (origin, tx, false)))
         {
             let tx_hash = tx.hash();
+            if !from_store {
+                taken.popped.push(tx.clone());
+            }
 
             if common::system_upgrades::is_system_upgrader_tx(&tx) {
                 upgrade_candidates.push((origin, tx));
@@ -1424,6 +1480,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 // Anything drained from the store needs no requeue: its record
                 // stays there and is drained again on the next turn.
                 if !from_store {
+                    taken.requeued.insert(tx_hash);
                     self.mempool.push_front((origin, tx));
                 }
                 break;
@@ -1469,6 +1526,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 // Anything drained from the store needs no requeue: its record
                 // stays there and is drained again on the next turn.
                 if !from_store {
+                    taken.requeued.insert(tx_hash);
                     self.mempool.push_front((origin, tx));
                 }
                 break;
@@ -1530,7 +1588,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     before_tx_apply.elapsed(),
                 );
                 if !from_store {
-                    mempool_transactions.push((origin, tx.clone()));
+                    taken.included.push((origin, tx.clone()));
                 }
                 if let Some(notes) = pins.remove(&tx_hash) {
                     pinned_deposit_notes.extend(notes);
@@ -1552,6 +1610,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             }
         }
         for (origin, tx) in deferred_withdrawals.into_iter().rev() {
+            taken.requeued.insert(tx.hash());
             self.mempool.push_front((origin, tx));
         }
 
@@ -1600,6 +1659,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                     "system_upgrader transaction deferred: block is full"
                 );
                 if !matches!(origin, TransactionOrigin::Sequencer) {
+                    taken.requeued.insert(tx.hash());
                     self.mempool.push_front((origin, tx));
                 }
                 continue;
@@ -1617,7 +1677,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             ) {
                 receipts.push(receipt);
                 if !matches!(origin, TransactionOrigin::Sequencer) {
-                    mempool_transactions.push((origin, tx.clone()));
+                    taken.included.push((origin, tx.clone()));
                 }
                 valid_transactions.push(tx);
                 break;
@@ -1632,8 +1692,13 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         }
         for (origin, tx, _) in candidates {
             if !matches!(origin, TransactionOrigin::Sequencer) {
+                taken.requeued.insert(tx.hash());
                 self.mempool.push_front((origin, tx));
             }
+        }
+        #[cfg(test)]
+        if self.fail_build {
+            anyhow::bail!("Injected block build failure");
         }
         if let Err(err) = self.persist_system_approvals().await {
             warn!(
@@ -1688,7 +1753,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
             block,
             withdrawals,
             parent,
-            mempool_transactions,
+            mempool_transactions: taken.included.clone(),
             pinned_deposit_notes,
         })
     }
@@ -1697,6 +1762,38 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
     /// reuse `V03State`'s own API (accounts, nonces, proofs) with no whole-state copy.
     pub async fn with_state<R>(&self, f: impl FnOnce(&lee::V03State) -> R) -> R {
         f(self.chain.lock().await.head_state())
+    }
+
+    /// Admission against the head state and the mempool's pending slots: the fee screen, then
+    /// the signers' authentication (against pending keys ahead of the head), then the slots, and
+    /// a new privacy-preserving transaction's proof, which its signatures do not cover.
+    /// Admits nothing: [`Self::record_pending`] does, once the transaction is in the mempool.
+    pub async fn admit(
+        &mut self,
+        tx: &LeeTransaction,
+    ) -> Result<pending::Admission, AdmissionError> {
+        {
+            let chain = self.chain.lock().await;
+            let state = chain.head_state();
+            fees::screen(tx, state)?;
+            self.pending.prune_signers(tx, state);
+            let pending = &self.pending;
+            tx.authenticate_at_head(state, |account, nonce| pending.key_at(account, nonce))?;
+        }
+        let admission = self.pending.check(tx)?;
+        if admission == pending::Admission::New
+            && let LeeTransaction::PrivacyPreserving(tx) = tx
+            && !tx.has_valid_proof()
+        {
+            return Err(AdmissionError::InvalidProof);
+        }
+        Ok(admission)
+    }
+
+    /// Records the slots of a transaction now in the mempool.
+    pub fn record_pending(&mut self, tx: &LeeTransaction) {
+        self.pending.insert(tx);
+        sequencer_core_metrics::record_mempool_pending_slots(self.pending.len());
     }
 
     #[must_use]
@@ -1880,6 +1977,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
         Ok(())
     }
+}
+
+/// What a block build takes from the mempool: every transaction popped, those put back, and those
+/// the block includes.
+#[derive(Default)]
+struct Taken {
+    popped: Vec<LeeTransaction>,
+    requeued: HashSet<HashType>,
+    included: Vec<(TransactionOrigin, LeeTransaction)>,
 }
 
 struct BlockWithMeta {
@@ -2455,13 +2561,14 @@ pub fn load_or_create_signing_key(path: &Path) -> Result<Ed25519Key> {
     Ok(Ed25519Key::from_bytes(&load_or_create_key_bytes(path)?))
 }
 
-/// Load the key owning this sequencer's genesis stake, or generate one.
+/// Load the secret owning this sequencer's genesis stake, or generate one.
 ///
 /// Only read when a solo sequencer creates the channel: a configured founding
-/// set carries a signature instead, so the key never reaches the node.
-pub fn load_or_create_stake_signing_key(path: &Path) -> Result<lee::PrivateKey> {
-    let bytes = load_or_create_key_bytes(path)?;
-    lee::PrivateKey::try_new(bytes).context("stake signing key file holds an invalid private key")
+/// set carries a signed witness entry instead, so the secret never reaches the node.
+pub fn load_or_create_stake_secret(path: &Path) -> Result<lee::signature::PublicAccountSecret> {
+    Ok(lee::signature::PublicAccountSecret::new(
+        load_or_create_key_bytes(path)?,
+    ))
 }
 
 #[cfg(test)]

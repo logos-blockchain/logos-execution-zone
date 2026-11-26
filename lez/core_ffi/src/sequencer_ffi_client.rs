@@ -173,12 +173,12 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
 
         // TODO: Fix that code duplication, when `RpcServerActor` becomes real actor.
 
-        let authenticated_tx = tx
+        let checked_tx = tx
             .transaction_stateless_check()
             .map_err(anyhow::Error::from)
             .map_err(FfiSequencerClientError::ArgumentError)?;
 
-        if let Some((to, _)) = authenticated_tx.public_call()
+        if let Some((to, _)) = checked_tx.public_call()
             && sequencer_core::is_sequencer_only_program(to.program_account_id)
         {
             return Err(FfiSequencerClientError::ArgumentError(anyhow::anyhow!(
@@ -189,7 +189,7 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
         self.0
             .executor_ref()
             .ask(Transaction {
-                transaction: authenticated_tx.clone(),
+                transaction: checked_tx.clone(),
                 origin: TransactionOrigin::User,
             })
             .send()
@@ -197,7 +197,7 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
 
         if let Some(gossip_ref) = self.0.gossip_ref() {
             gossip_ref
-                .tell(Publish::Transaction(Box::new(authenticated_tx)))
+                .tell(Publish::Transaction(Box::new(checked_tx)))
                 .await?;
         }
 

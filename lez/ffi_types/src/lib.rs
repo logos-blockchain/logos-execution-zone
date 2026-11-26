@@ -11,7 +11,11 @@ use lee::{
 };
 use lee_core::{
     Commitment, EncryptedNote, FeeFallback, Nullifier, PrivateAction, ProvenFee, RecoveryBinding,
-    SealedMessage, account::Nonce, encryption::Ciphertext, program::PdaSeed,
+    SealedMessage,
+    account::Nonce,
+    encryption::Ciphertext,
+    program::PdaSeed,
+    signing_key::{KeyType, SigningKeyState},
 };
 
 /// 32-byte array type for `AccountId`, keys, hashes, etc.
@@ -209,7 +213,7 @@ pub type FfiNonceList = FfiVec<FfiNonceEntry>;
 
 pub type FfiMessageDataList = FfiVec<u8>;
 
-pub type FfiSignaturePubKeyList = FfiVec<FfiSignaturePubKeyEntry>;
+pub type FfiWitnessEntryList = FfiVec<FfiWitnessEntry>;
 
 pub type FfiBoundaryStepList = FfiVec<FfiBoundaryStep>;
 
@@ -362,7 +366,8 @@ pub enum FfiPublicAccountEvidenceKind {
 #[repr(C)]
 pub struct FfiPublicAccountEvidence {
     pub kind: FfiPublicAccountEvidenceKind,
-    pub key: FfiPublicKey,
+    /// The account's initial key, for `Key` evidence.
+    pub key: FfiSigningKeyState,
     pub program: FfiAccountId,
     pub seed: FfiBytes32,
 }
@@ -378,7 +383,7 @@ impl From<PublicAccountEvidence> for FfiPublicAccountEvidence {
             },
             PublicAccountEvidence::Pda { program, seed } => Self {
                 kind: FfiPublicAccountEvidenceKind::Pda,
-                key: FfiPublicKey::default(),
+                key: FfiSigningKeyState::default(),
                 program: program.into(),
                 seed: pda_seed_to_ffi(seed),
             },
@@ -391,7 +396,7 @@ impl TryFrom<FfiPublicAccountEvidence> for PublicAccountEvidence {
 
     fn try_from(value: FfiPublicAccountEvidence) -> Result<Self, Self::Error> {
         match value.kind {
-            FfiPublicAccountEvidenceKind::Key => PublicKey::try_new(value.key.data).map(Self::Key),
+            FfiPublicAccountEvidenceKind::Key => Ok(Self::Key(value.key.into())),
             FfiPublicAccountEvidenceKind::Pda => Ok(Self::Pda {
                 program: value.program.into(),
                 seed: ffi_to_pda_seed(value.seed),
@@ -706,7 +711,11 @@ pub struct FfiProvenFee {
     pub refund_to: FfiAccountId,
     pub tip: u64,
     pub has_fallback: bool,
-    pub fallback_action: FfiPrivateAction,
+    pub fallback_nullifier: FfiBytes32,
+    pub fallback_root: FfiBytes32,
+    pub fallback_commitment: FfiBytes32,
+    /// Under the ephemeral key of the private action spending `fallback_nullifier`.
+    pub fallback_ciphertext: FfiVecU8,
     pub fallback_boundary: FfiBoundaryStepList,
 }
 
@@ -716,16 +725,26 @@ impl From<Option<ProvenFee>> for FfiProvenFee {
             (fee.refund_to, fee.tip, fee.fallback)
         });
         let has_fallback = fallback.is_some();
-        let FeeFallback { action, boundary } = fallback.unwrap_or_else(|| FeeFallback {
-            action: PrivateAction::default(),
-            boundary: Vec::new(),
-        });
+        let FeeFallback {
+            nullifier,
+            root,
+            commitment,
+            ciphertext,
+            boundary,
+        } = fallback.unwrap_or_default();
         Self {
             has_refund_to: refund_to.is_some(),
             refund_to: refund_to.unwrap_or_default().into(),
             tip,
             has_fallback,
-            fallback_action: action.into(),
+            fallback_nullifier: FfiBytes32 {
+                data: nullifier.to_byte_array(),
+            },
+            fallback_root: FfiBytes32 { data: root },
+            fallback_commitment: FfiBytes32 {
+                data: commitment.to_byte_array(),
+            },
+            fallback_ciphertext: ciphertext.into_inner().into(),
             fallback_boundary: boundary
                 .into_iter()
                 .map(Into::into)
@@ -786,17 +805,105 @@ impl From<EncryptedNote> for FfiEncryptedAccountData {
     }
 }
 
+/// A signing key's type.
 #[repr(C)]
-pub struct FfiSignaturePubKeyEntry {
-    pub signature: FfiSignature,
-    pub public_key: FfiPublicKey,
+#[derive(Clone, Copy, Default)]
+pub enum FfiKeyType {
+    #[default]
+    Schnorr = 0,
 }
 
-impl From<(Signature, PublicKey)> for FfiSignaturePubKeyEntry {
-    fn from(value: (Signature, PublicKey)) -> Self {
+/// A signing key's type and 32-byte commitment.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FfiSigningKeyState {
+    pub key_type: FfiKeyType,
+    pub key_commitment: FfiBytes32,
+}
+
+impl From<SigningKeyState> for FfiSigningKeyState {
+    fn from(value: SigningKeyState) -> Self {
         Self {
-            signature: value.0.into(),
-            public_key: value.1.into(),
+            key_type: match value.key_type {
+                KeyType::Schnorr => FfiKeyType::Schnorr,
+            },
+            key_commitment: FfiBytes32::from_bytes(value.key_commitment),
+        }
+    }
+}
+
+impl From<protocol::SigningKeyState> for FfiSigningKeyState {
+    fn from(value: protocol::SigningKeyState) -> Self {
+        SigningKeyState::from(value).into()
+    }
+}
+
+impl From<FfiSigningKeyState> for protocol::SigningKeyState {
+    fn from(value: FfiSigningKeyState) -> Self {
+        SigningKeyState::from(value).into()
+    }
+}
+
+impl From<FfiSigningKeyState> for SigningKeyState {
+    fn from(value: FfiSigningKeyState) -> Self {
+        Self {
+            key_type: match value.key_type {
+                FfiKeyType::Schnorr => KeyType::Schnorr,
+            },
+            key_commitment: value.key_commitment.data,
+        }
+    }
+}
+
+/// One signer's authentication data, and the key it rotates to.
+#[repr(C)]
+pub struct FfiWitnessEntry {
+    pub auth_data: FfiVecU8,
+    pub next: FfiSigningKeyState,
+}
+
+impl From<protocol::WitnessEntry> for FfiWitnessEntry {
+    fn from(value: protocol::WitnessEntry) -> Self {
+        let protocol::WitnessEntry {
+            auth_data,
+            next:
+                protocol::SigningKeyState {
+                    key_type,
+                    key_commitment,
+                },
+        } = value;
+
+        Self {
+            auth_data: auth_data.into(),
+            next: FfiSigningKeyState {
+                key_type: match key_type {
+                    protocol::KeyType::Schnorr => FfiKeyType::Schnorr,
+                },
+                key_commitment: FfiBytes32::from_bytes(key_commitment),
+            },
+        }
+    }
+}
+
+impl From<FfiWitnessEntry> for protocol::WitnessEntry {
+    fn from(value: FfiWitnessEntry) -> Self {
+        let FfiWitnessEntry {
+            auth_data,
+            next:
+                FfiSigningKeyState {
+                    key_type,
+                    key_commitment,
+                },
+        } = value;
+
+        Self {
+            auth_data: auth_data.into(),
+            next: protocol::SigningKeyState {
+                key_type: match key_type {
+                    FfiKeyType::Schnorr => protocol::KeyType::Schnorr,
+                },
+                key_commitment: key_commitment.data,
+            },
         }
     }
 }
@@ -810,11 +917,17 @@ pub fn proven_fee_from_ffi(has_fee: bool, fee: FfiProvenFee) -> Option<ProvenFee
         refund_to,
         tip,
         has_fallback,
-        fallback_action,
+        fallback_nullifier,
+        fallback_root,
+        fallback_commitment,
+        fallback_ciphertext,
         fallback_boundary,
     } = fee;
     let fallback = FeeFallback {
-        action: fallback_action.into(),
+        nullifier: Nullifier::from_byte_array(fallback_nullifier.data),
+        root: fallback_root.data,
+        commitment: Commitment::from_byte_array(fallback_commitment.data),
+        ciphertext: Ciphertext::from_inner(fallback_ciphertext.into()),
         boundary: Vec::from(fallback_boundary)
             .into_iter()
             .map(BoundaryStep::from)
@@ -1004,7 +1117,7 @@ mod tests {
             tip: 1,
             max_fee: 42,
         };
-        let signer = lee::PrivateKey::try_new([1; 32]).expect("valid key");
+        let signer = lee::signature::PublicAccountSecret::new([1; 32]);
 
         assert_eq!(
             roundtrip::<FfiPublicExecutionContext, _>(public_context.clone()),
@@ -1015,7 +1128,7 @@ mod tests {
         assert_eq!(roundtrip::<FfiRootCall, _>(root.clone()), root);
         assert_eq!(roundtrip::<FfiFeeDeclaration, _>(fee), fee);
         for evidence in [
-            PublicAccountEvidence::Key(PublicKey::new_from_private_key(&signer)),
+            PublicAccountEvidence::Key(lee::signature::initial_key(&signer)),
             PublicAccountEvidence::Pda {
                 program: account_id(19),
                 seed: PdaSeed::new([20; 32]),

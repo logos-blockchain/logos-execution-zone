@@ -128,11 +128,9 @@ mod tests {
         let nullifier_public_key = utxo_secret_key_holder.generate_nullifier_public_key();
         let viewing_public_key = utxo_secret_key_holder.generate_viewing_public_key();
 
-        let pub_account_signing_key = lee::PrivateKey::new_os_random();
-
-        let public_key = lee::PublicKey::new_from_private_key(&pub_account_signing_key);
-
-        let account = lee::AccountId::from(&public_key);
+        let account = lee::signature::public_account_id(
+            &lee::signature::PublicAccountSecret::new_os_random(),
+        );
 
         println!("======Prerequisites======");
         println!();

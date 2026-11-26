@@ -45,7 +45,6 @@ members = [
   "lez/explorer_service",
   "lez/testnet_initial_state",
   "lez/indexer/ffi",
-  "lez/keycard_wallet",
   "lez/mempool",
   "lez/wallet",
   "lez/common",
@@ -78,6 +77,7 @@ members = [
   "tools/dashboard_gen",
   "tools/devnet_configs",
 ]
+exclude = ["lez/keycard_wallet"]
 
 [workspace.dependencies]
 lee = { path = "lee/state_machine" }
@@ -264,6 +264,13 @@ enum-iterator = "2.3.0"
 cbindgen = "0.29"
 glob = "0.3.4"
 
+# The guests are built with this profile, and every cycle they run is proven.
+# LTO: link-time optimization at "fat" level
+# 1 codegen unit: no splitting, code is optimized wholely
+[profile.release]
+lto = "fat"
+codegen-units = 1
+
 # Profile for leptos WASM release builds
 [profile.wasm-release]
 inherits = "release"
@@ -294,6 +301,7 @@ debug = "line-tables-only"
 
 [workspace.lints.rust]
 warnings = "deny"
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(keycard)"] }
 
 [workspace.lints]
 clippy.all = { level = "deny", priority = -1 }

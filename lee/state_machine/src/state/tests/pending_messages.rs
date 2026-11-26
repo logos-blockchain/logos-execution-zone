@@ -59,12 +59,12 @@ fn sender() -> Actor {
     Actor::new(test_public_account_keys_1().account_id(), scripted_id())
 }
 
-fn receiver_pk() -> PublicKey {
-    PublicKey::new_from_private_key(&PrivateKey::try_new([7; 32]).unwrap())
+fn receiver_signer() -> TestSigner {
+    TestSigner::new(7)
 }
 
 fn receiver() -> Actor {
-    Actor::new(AccountId::from(&receiver_pk()), scripted_id())
+    Actor::new(receiver_signer().account_id(), scripted_id())
 }
 
 fn received() -> Script {
@@ -81,7 +81,7 @@ fn publishing(script: Script) -> PublicTransaction {
     let message =
         public_transaction::Message::try_new(sender(), vec![sender()], BTreeMap::new(), script)
             .unwrap();
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+    let witness_set = witness_for(&message, &[]);
     PublicTransaction::new(message, witness_set)
 }
 
@@ -368,7 +368,7 @@ fn delivering(
     script: Script,
     admission_evidence: Vec<PublicAccountEvidence>,
     nonces: Vec<Nonce>,
-    signers: &[&PrivateKey],
+    signers: &[&TestSigner],
 ) -> PublicTransaction {
     let message = public_transaction::Message {
         admission_evidence,
@@ -380,7 +380,7 @@ fn delivering(
         )
         .unwrap()
     };
-    let witness_set = public_transaction::WitnessSet::for_message(&message, signers);
+    let witness_set = witness_for(&message, signers);
     PublicTransaction::new(message, witness_set)
 }
 
@@ -388,7 +388,7 @@ fn promoting(
     to: Actor,
     admission_evidence: Vec<PublicAccountEvidence>,
     nonces: Vec<Nonce>,
-    signers: &[&PrivateKey],
+    signers: &[&TestSigner],
 ) -> PublicTransaction {
     delivering(
         to,
@@ -400,7 +400,7 @@ fn promoting(
 }
 
 fn signing_receiver(state: &mut V03State, block_id: BlockId) {
-    let key = PrivateKey::try_new([7; 32]).unwrap();
+    let key = TestSigner::new(7);
     let nonce = state.get_account_by_id(receiver().account_id).nonce;
     state
         .transition_from_public_transaction(
@@ -419,7 +419,7 @@ fn signing_receiver(state: &mut V03State, block_id: BlockId) {
 
 #[test]
 fn an_async_message_to_a_declared_public_actor_runs_at_once_for_every_kind_of_admitted_receiver() {
-    let key = PrivateKey::try_new([7; 32]).unwrap();
+    let key = TestSigner::new(7);
     let seed = PdaSeed::new([42; 32]);
     let pda = Actor::new(
         AccountId::for_public_pda(&scripted_id(), &seed),
@@ -440,12 +440,7 @@ fn an_async_message_to_a_declared_public_actor_runs_at_once_for_every_kind_of_ad
         (
             "key evidence",
             empty.clone(),
-            promoting(
-                receiver(),
-                vec![PublicAccountEvidence::Key(receiver_pk())],
-                vec![],
-                &[],
-            ),
+            promoting(receiver(), vec![receiver_signer().evidence()], vec![], &[]),
             receiver(),
         ),
         (
@@ -497,10 +492,7 @@ fn an_async_message_to_a_declared_public_actor_runs_at_once_for_every_kind_of_ad
 fn an_async_message_to_a_declared_receiver_without_evidence_changes_nothing() {
     for (to, admission_evidence) in [
         (receiver(), vec![]),
-        (
-            private_actor(),
-            vec![PublicAccountEvidence::Key(receiver_pk())],
-        ),
+        (private_actor(), vec![receiver_signer().evidence()]),
     ] {
         let mut state = V03State::new()
             .with_test_programs()
@@ -534,19 +526,11 @@ fn a_call_to_an_absent_public_account_needs_evidence_deriving_it() {
         AccountId::for_public_pda(&scripted_id(), &seed),
         scripted_id(),
     );
-    let stranger = PublicKey::new_from_private_key(&PrivateKey::try_new([8; 32]).unwrap());
+    let stranger = TestSigner::new(8);
     for (to, admission_evidence, admitted) in [
         (receiver(), vec![], false),
-        (
-            receiver(),
-            vec![PublicAccountEvidence::Key(receiver_pk())],
-            true,
-        ),
-        (
-            receiver(),
-            vec![PublicAccountEvidence::Key(stranger)],
-            false,
-        ),
+        (receiver(), vec![receiver_signer().evidence()], true),
+        (receiver(), vec![stranger.evidence()], false),
         (
             pda,
             vec![PublicAccountEvidence::Pda {
@@ -612,11 +596,7 @@ fn an_account_its_first_empty_run_registers_is_reached_later_without_evidence() 
     };
 
     state
-        .transition_from_public_transaction(
-            &reach(vec![PublicAccountEvidence::Key(receiver_pk())]),
-            1,
-            0,
-        )
+        .transition_from_public_transaction(&reach(vec![receiver_signer().evidence()]), 1, 0)
         .unwrap();
     let registered = state.get_account_by_id_ref(receiver().account_id).cloned();
     state
@@ -628,7 +608,7 @@ fn an_account_its_first_empty_run_registers_is_reached_later_without_evidence() 
 
 #[test]
 fn admission_evidence_admits_an_absent_account_without_authorizing_it() {
-    let key = PrivateKey::try_new([7; 32]).unwrap();
+    let key = TestSigner::new(7);
     let spend = Script::default().send_sync(receiver(), &Script::default().authorized());
     let mut state = sender_present();
     let before = state.clone();
@@ -637,7 +617,7 @@ fn admission_evidence_admits_an_absent_account_without_authorizing_it() {
         &delivering(
             receiver(),
             spend.clone(),
-            vec![PublicAccountEvidence::Key(receiver_pk())],
+            vec![receiver_signer().evidence()],
             vec![],
             &[],
         ),
@@ -1248,7 +1228,7 @@ fn a_call_to_a_private_account_or_its_alias_declared_public_is_refused() {
             &delivering(
                 to,
                 Script::default().send_sync(to, &Script::write(b"called".to_vec())),
-                vec![PublicAccountEvidence::Key(receiver_pk())],
+                vec![receiver_signer().evidence()],
                 vec![],
                 &[],
             ),

@@ -30,3 +30,6 @@ logos-blockchain-zone-sdk.workspace = true
 
 [dev-dependencies]
 lee = { workspace = true, features = ["test-utils"] }
+
+[features]
+test-utils = ["lee/test-signer"]

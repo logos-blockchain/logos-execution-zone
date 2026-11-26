@@ -13,12 +13,9 @@ use std::{
 use anyhow::Result;
 use common::HashType;
 use core_ffi::{
-    error,
-    primitives::types::{
-        FfiAccountId, FfiBytes32, FfiPrivateAccountKeys, FfiPublicAccountKey, account::FfiAccount,
-    },
-    sequencer::SequencerServiceFFI,
-    wallet::{
+    error, primitives::types::{
+        FfiAccountId, FfiBytes32, FfiPrivateAccountKeys, FfiSigningKeyState, account::FfiAccount,
+    }, sequencer::SequencerServiceFFI, wallet::{
         FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiAccountMention,
         FfiPendingMessageList, FfiTransferResult, WalletHandle,
         fees::{FfiFeeParams, FfiFeeState},
@@ -106,10 +103,10 @@ unsafe extern "C" {
 
     pub fn wallet_ffi_free_account_data(account: *mut FfiAccount);
 
-    pub fn wallet_ffi_get_public_account_key(
+    pub fn wallet_ffi_get_public_account_initial_key(
         handle: *mut WalletHandle,
         account_id: *const FfiBytes32,
-        out_public_key: *mut FfiPublicAccountKey,
+        out_initial_key: *mut FfiSigningKeyState,
     ) -> error::FfiOperationError;
 
     pub fn wallet_ffi_get_private_account_keys(
@@ -434,8 +431,8 @@ pub fn new_wallet_ffi_with_test_context_config(
     let source_key_chain = source_wallet.storage().key_chain();
 
     for (account_id, _chain_index) in source_key_chain.public_account_ids() {
-        let private_key_hex = source_wallet
-            .get_account_public_signing_key(account_id)
+        let private_key_hex = source_key_chain
+            .pub_account_secret(account_id)
             .unwrap()
             .to_string();
         let private_key_hex = CString::new(private_key_hex)?;

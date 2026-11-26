@@ -126,7 +126,7 @@ typedef struct FfiPublicMessage {
 typedef struct FfiPublicTransactionBody {
   FfiHashType hash;
   struct FfiPublicMessage message;
-  FfiSignaturePubKeyList witness_set;
+  FfiWitnessEntryList witness_set;
 } FfiPublicTransactionBody;
 
 /**
@@ -138,7 +138,13 @@ typedef struct FfiProvenFee {
   FfiAccountId refund_to;
   uint64_t tip;
   bool has_fallback;
-  FfiPrivateAction fallback_action;
+  FfiBytes32 fallback_nullifier;
+  FfiBytes32 fallback_root;
+  FfiBytes32 fallback_commitment;
+  /**
+   * Under the ephemeral key of the private action spending `fallback_nullifier`.
+   */
+  FfiVecU8 fallback_ciphertext;
   FfiBoundaryStepList fallback_boundary;
 } FfiProvenFee;
 
@@ -168,7 +174,7 @@ typedef FfiVecU8 FfiProof;
 typedef struct FfiPrivateTransactionBody {
   FfiHashType hash;
   struct FfiPrivacyPreservingMessage message;
-  FfiSignaturePubKeyList witness_set;
+  FfiWitnessEntryList witness_set;
   FfiProof proof;
 } FfiPrivateTransactionBody;
 
