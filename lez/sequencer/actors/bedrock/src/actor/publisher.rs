@@ -84,6 +84,9 @@ pub struct Publisher {
     broker_ref: ActorRef<Broker<ChannelEvent>>,
     /// Events zone-sdk raised while a publish waited on the node, in order.
     backlog: VecDeque<Event>,
+    /// The checkpoint of the last publish and the events at the front of the backlog raised
+    /// before it.
+    overtaken: Option<(SequencerCheckpoint, usize)>,
     /// Whether this publisher has registered the vault program.
     vault_registered: bool,
 }
@@ -157,6 +160,7 @@ impl Publisher {
             replayed_up_to,
             broker_ref,
             backlog: VecDeque::new(),
+            overtaken: None,
             vault_registered: false,
         };
 
@@ -165,23 +169,36 @@ impl Publisher {
         // way report the channel up to its tip, so they are published as well.
         while !publisher.sequencer.is_ready() {
             let event = publisher.sequencer.next_event().await;
-            publisher.on_event(event, config_index).await?;
+            publisher.on_event(event, None, config_index).await?;
         }
 
         Ok((publisher, seq))
     }
 
-    /// The next zone-sdk event. Cancel safe, unlike [`Self::on_event`].
-    pub async fn next_event(&mut self) -> Event {
+    /// The next zone-sdk event, with the checkpoint of the publish that overtook it, if one did.
+    /// Cancel safe, unlike [`Self::on_event`].
+    pub async fn next_event(&mut self) -> (Event, Option<SequencerCheckpoint>) {
         if let Some(event) = self.backlog.pop_front() {
-            return event;
+            let overtaken_by = self.overtaken.take().map(|(checkpoint, left)| {
+                if let Some(left @ 1..) = left.checked_sub(1) {
+                    self.overtaken = Some((checkpoint.clone(), left));
+                }
+                checkpoint
+            });
+            return (event, overtaken_by);
         }
-        self.sequencer.next_event().await
+        (self.sequencer.next_event().await, None)
     }
 
     /// Publishes what `event` reports to the broker, after adding the configs it reports final to
-    /// `config_index`.
-    pub async fn on_event(&mut self, event: Event, config_index: &mut ConfigIndex) -> Result<()> {
+    /// `config_index`. An event a publish overtook goes out under that publish's checkpoint, so
+    /// the consumer's never moves back behind what it published.
+    pub async fn on_event(
+        &mut self,
+        event: Event,
+        overtaken_by: Option<SequencerCheckpoint>,
+        config_index: &mut ConfigIndex,
+    ) -> Result<()> {
         match event {
             Event::BlocksProcessed {
                 checkpoint,
@@ -203,8 +220,12 @@ impl Publisher {
                     })
                 });
                 config_index.extend_final(config_keys, checkpoint.lib_slot.into_inner());
-                self.on_blocks_processed(checkpoint, channel_update, finalized)
-                    .await?;
+                self.on_blocks_processed(
+                    overtaken_by.unwrap_or(checkpoint),
+                    channel_update,
+                    finalized,
+                )
+                .await?;
                 self.publish_live_config().await
             }
             Event::TurnNotification { notification } => {
@@ -472,12 +493,11 @@ impl Publisher {
                 .await
                 .map_err(|err| Error::SubmitSignedTransactionFailed(err.into()))?;
 
-            Ok(PublishOutcome {
-                this_msg: result.tx.inscription().this_msg,
-                parent: result.tx.inscription().parent_msg,
+            Ok(self.published(
+                result.tx.inscription().this_msg,
+                result.tx.inscription().parent_msg,
                 checkpoint,
-                seq: self.next_seq(),
-            })
+            ))
         };
         if published.is_ok() {
             info!(
@@ -544,12 +564,11 @@ impl Publisher {
             .await
             .map_err(|err| Error::SubmitSignedTransactionFailed(err.into()))?;
 
-        Ok(PublishOutcome {
-            this_msg: result.tx.inscription().this_msg,
-            parent: result.tx.inscription().parent_msg,
+        Ok(self.published(
+            result.tx.inscription().this_msg,
+            result.tx.inscription().parent_msg,
             checkpoint,
-            seq: self.next_seq(),
-        })
+        ))
     }
 
     fn submit_tx(
@@ -567,12 +586,25 @@ impl Publisher {
             .submit_signed_tx(tx, msg_id)
             .map_err(|err| Error::SubmitSignedTransactionFailed(err.into()))?;
 
-        Ok(PublishOutcome {
-            this_msg: result.tx.inscription().this_msg,
+        Ok(self.published(result.tx.inscription().this_msg, parent, checkpoint))
+    }
+
+    /// The outcome of a publish that left zone-sdk at `checkpoint`: every event still queued was
+    /// raised before it.
+    fn published(
+        &mut self,
+        this_msg: MsgId,
+        parent: MsgId,
+        checkpoint: SequencerCheckpoint,
+    ) -> PublishOutcome {
+        self.overtaken =
+            (!self.backlog.is_empty()).then(|| (checkpoint.clone(), self.backlog.len()));
+        PublishOutcome {
+            this_msg,
             parent,
             checkpoint,
             seq: self.next_seq(),
-        })
+        }
     }
 
     /// Refuses a publish built on a channel sequence other than the current one.
@@ -776,18 +808,25 @@ impl Publisher {
         }
     }
 
-    /// Refuses a publish when the channel moved while the node funded it. The queued events
-    /// reach the consumer after the publish would, with checkpoints taken before it, so the
-    /// block has to be rebuilt on the view they leave.
+    /// Refuses a publish when the channel's view moved while it was funded or proven: the block
+    /// has to be rebuilt on the view the queued events leave. Events that only finalize what the
+    /// view already holds leave the block where it was built.
     fn check_backlog(&self, expected_seq: Option<ChannelSeq>) -> Result<()> {
+        let view_moved = self.backlog.iter().any(|event| {
+            matches!(
+                event,
+                Event::BlocksProcessed { channel_update, .. }
+                    if !matches!(channel_update, SdkChannelUpdate::Extension { adopted } if adopted.is_empty())
+            )
+        });
+        if !view_moved {
+            return Ok(());
+        }
         let current = self
             .backlog
             .iter()
             .filter(|event| self.moves_channel(event))
             .fold(self.seq, |seq, _| seq.next());
-        if current == self.seq {
-            return Ok(());
-        }
         Err(Error::ChannelMoved {
             provided: expected_seq.unwrap_or(self.seq),
             current,

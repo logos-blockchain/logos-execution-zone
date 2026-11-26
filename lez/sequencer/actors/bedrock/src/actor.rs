@@ -201,12 +201,12 @@ impl<S: StorageActorTrait> Actor for BedrockActor<S> {
                     let span = info_span!("bedrock_event", otel.name = item.span_name());
                     self.node_stream.as_mut().expect("Channel is followed").on_item(item).instrument(span).await?;
                 }
-                Some(event) = OptionFuture::from(self.publisher.as_mut().map(publisher::Publisher::next_event)) => {
+                Some((event, overtaken_by)) = OptionFuture::from(self.publisher.as_mut().map(publisher::Publisher::next_event)) => {
                     let span = info_span!("bedrock_event", otel.name = publisher::span_name(&event));
                     self.publisher
                         .as_mut()
                         .expect("Publisher is initialized")
-                        .on_event(event, &mut self.config_index)
+                        .on_event(event, overtaken_by, &mut self.config_index)
                         .instrument(span)
                         .await?;
                     self.store_config_index().await;
