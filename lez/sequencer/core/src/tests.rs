@@ -6884,24 +6884,37 @@ async fn an_approved_change_has_room_in_a_full_block() {
 async fn a_transaction_dropped_at_build_time_frees_its_nonce() {
     let mut sequencer = common_setup().await;
     let accounts = initial_pub_accounts_private_keys();
-    let transfer_at = |nonce, amount, signer: &TestSigner| {
+    let signer = TestSigner::from(&accounts[0].secret);
+    let transfer_at = |nonce, amount| {
         common::test_utils::create_transaction_native_token_transfer(
             accounts[0].account_id,
             nonce,
             accounts[1].account_id,
             amount,
-            signer,
+            &signer,
         )
     };
-    let signer = TestSigner::from(&accounts[0].secret);
-    // Signed by the wrong key, so it fails at build; inserted past admission, which refuses it.
-    let forged = transfer_at(0, 1, &TestSigner::from(&accounts[1].secret));
+    // A bad signature fails at build; inserted past admission, which would refuse it.
+    let LeeTransaction::Public(tx) = transfer_at(0, 1) else {
+        unreachable!("a transfer is public");
+    };
+    let mut entries = tx.witness_set().clone().into_raw_parts();
+    let auth_data = &mut entries[0].auth_data;
+    let last_signature_byte = auth_data
+        .len()
+        .checked_sub(33)
+        .expect("an entry ends with a signature and a 32-byte key");
+    auth_data[last_signature_byte] ^= 1;
+    let forged = LeeTransaction::Public(PublicTransaction::new(
+        tx.message().clone(),
+        lee::public_transaction::WitnessSet::from_raw_parts(entries),
+    ));
     sequencer
         .mempool
         .insert((TransactionOrigin::User, forged))
         .unwrap();
     assert!(matches!(
-        sequencer.admit(&transfer_at(0, 2, &signer)).await,
+        sequencer.admit(&transfer_at(0, 2)).await,
         Err(crate::AdmissionError::Pending(
             crate::pending::PendingRefusal::NoncePending { .. }
         ))
@@ -6909,7 +6922,7 @@ async fn a_transaction_dropped_at_build_time_frees_its_nonce() {
 
     sequencer.build_block_from_mempool().await.unwrap();
     assert_eq!(
-        sequencer.admit(&transfer_at(0, 2, &signer)).await.unwrap(),
+        sequencer.admit(&transfer_at(0, 2)).await.unwrap(),
         crate::pending::Admission::New
     );
 }
