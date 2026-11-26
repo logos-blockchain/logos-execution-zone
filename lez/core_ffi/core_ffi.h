@@ -2229,7 +2229,7 @@ enum FfiOperationError wallet_ffi_poll_transaction_status(struct WalletHandle *h
 void wallet_ffi_free_transaction_result(struct FfiTransactionResult *result);
 
 /**
- * Create new shared account at given label.
+ * Create new group at given label.
  *
  * # Parameters
  * - `handle`: Valid wallet handle,
@@ -2242,12 +2242,14 @@ void wallet_ffi_free_transaction_result(struct FfiTransactionResult *result);
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
  * - `label` must be a valid C string.
  */
-enum FfiOperationError wallet_ffi_create_new_shared_account(struct WalletHandle *handle,
-                                                            const char *label_c);
+enum FfiOperationError wallet_ffi_create_new_group(struct WalletHandle *handle,
+                                                   const char *label_c);
 
 /**
  * Create unique wallet sealing key for shared accounts. Mandatory operation for shared accounts
  * usage.
+ *
+ * Returns sealing public key, encoded with hex.
  *
  * # Parameters
  * - `handle`: Valid wallet handle.
@@ -2258,12 +2260,45 @@ enum FfiOperationError wallet_ffi_create_new_shared_account(struct WalletHandle 
  *
  * # Safety
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`.
+ * - `out_sealing_public_key` must be a valid pointer into C-compatible string.
  */
 enum FfiOperationError wallet_ffi_create_sealing_key(struct WalletHandle *handle,
                                                      char **out_sealing_public_key);
 
 /**
+ * Create a new private shared account.
+ *
+ * Returns the account id address and account keys.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ * - `group_label`: Label of an underlying group
+ * - `derivation_id`: derivation id of an account
+ * - `out_account_id`: output pointer for account id data
+ * - `out_keys`: Output pointer for the key data (npk + vpk)
+ *
+ * # Returns
+ * - `Success` on successful creation
+ * - Error code on failure
+ *
+ * # Memory
+ * The keys structure must be freed with `wallet_ffi_free_private_account_keys()`.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `out_account_id` must be a valid pointer to a `FfiAccountId` struct
+ * - `out_keys` must be a valid pointer to a `FfiPrivateAccountKeys` struct
+ */
+enum FfiOperationError wallet_ffi_create_private_shared_account(struct WalletHandle *handle,
+                                                                const char *group_label,
+                                                                struct FfiBytes32 derivation_id,
+                                                                FfiAccountId *out_account_id,
+                                                                struct FfiPrivateAccountKeys *out_keys);
+
+/**
  * Invite user into shared account by its sealing public key.
+ *
+ * Returns hex-encoded sealed message.
  *
  * # Parameters
  * - `handle`: Valid wallet handle.
