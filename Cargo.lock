@@ -11555,7 +11555,6 @@ dependencies = [
  "clock_core",
  "common",
  "fee_core",
- "futures",
  "hex",
  "humantime-serde",
  "kameo",
