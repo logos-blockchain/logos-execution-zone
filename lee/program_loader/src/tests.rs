@@ -59,7 +59,7 @@ fn input(
     ReceiveInput {
         receiver,
         from: None,
-        is_authorized,
+        grants: is_authorized.then_some(receiver).into_iter().collect(),
         pre_state,
         message: borsh::to_vec(message).expect("borsh serialization is infallible"),
     }

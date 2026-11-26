@@ -317,13 +317,21 @@ typedef struct FfiActor {
   FfiAccountId program_account_id;
 } FfiActor;
 
-typedef struct FfiVec_FfiActor {
-  struct FfiActor *entries;
+/**
+ * A declared public actor and whether the transaction's signatures authorize it.
+ */
+typedef struct FfiDeclaredActor {
+  struct FfiActor actor;
+  bool signer;
+} FfiDeclaredActor;
+
+typedef struct FfiVec_FfiDeclaredActor {
+  struct FfiDeclaredActor *entries;
   uintptr_t len;
   uintptr_t capacity;
-} FfiVec_FfiActor;
+} FfiVec_FfiDeclaredActor;
 
-typedef struct FfiVec_FfiActor FfiActorList;
+typedef struct FfiVec_FfiDeclaredActor FfiDeclaredActorList;
 
 typedef struct FfiVec_FfiAccountId {
   FfiAccountId *entries;
@@ -341,10 +349,19 @@ typedef struct FfiVec_u64 {
 
 typedef struct FfiVec_u64 FfiPromotionList;
 
+typedef struct FfiVec_FfiActor {
+  struct FfiActor *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiActor;
+
+typedef struct FfiVec_FfiActor FfiActorList;
+
 typedef struct FfiPublicExecutionContext {
-  FfiActorList actors;
+  FfiDeclaredActorList actors;
   FfiAccountIdList authorized_accounts;
   FfiPromotionList promotions;
+  FfiActorList private_signers;
 } FfiPublicExecutionContext;
 
 typedef struct FfiVec_u8 FfiMessageDataList;
@@ -456,8 +473,7 @@ typedef struct FfiDelivery {
   struct FfiActor from;
   struct FfiActor to;
   FfiMessageDataList message;
-  FfiAccountIdList inherited_authorizations;
-  bool inherits_entry_authorizations;
+  FfiActorList grants;
   FfiPdaSeedList pda_seeds;
 } FfiDelivery;
 
@@ -1115,8 +1131,10 @@ typedef struct FfiAccountIdentity {
 } FfiAccountIdentity;
 
 /**
- * An account identity with the program actor state it selects, whether the account authorizes,
- * and the openings of the blinded addresses it is reached at.
+ * An account identity with the program actor state it selects, whether it authorizes, and the
+ * openings of the blinded addresses it is reached at.
+ *
+ * `authorizes` covers that actor alone, for a public account and a private one alike.
  *
  * `address_openings` must point to `address_openings_size` openings, or be null if that is 0.
  */
@@ -2748,9 +2766,9 @@ enum FfiOperationError wallet_ffi_receive_pending_message(struct WalletHandle *h
  * Receive a pending message as `wallet_ffi_receive_pending_message` does, beside the accounts,
  * programs, async delivery and predicted cross messages a transaction takes.
  *
- * The recipient takes part unauthorized unless `account_mentions` declares its account.
- * Authorization is per account: a mention authorizing the recipient's account authorizes the
- * published message too. Each declared program missing from `programs` runs from its deployment.
+ * The recipient takes part as `account_mentions` declares its account. The published message
+ * carries no grant, so a mention authorizing the recipient authorizes nothing it asks. Each
+ * declared program missing from `programs` runs from its deployment.
  *
  * # Parameters
  * - `handle`: Valid wallet handle

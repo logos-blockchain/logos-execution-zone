@@ -4,7 +4,8 @@ use std::collections::BTreeMap;
 
 use bridge_core::BridgeAmount;
 use lee::{
-    AccountId, Actor, PublicAccountEvidence, PublicTransaction, public_transaction::Message,
+    AccountId, Actor, Authority, PublicAccountEvidence, PublicTransaction,
+    public_transaction::Message,
 };
 
 /// Whom a bridge deposit credits.
@@ -83,10 +84,18 @@ fn receipt_actor(op_id: [u8; 32]) -> Actor {
 
 /// The receipt, then the bridge custody and the public recipient the deposit's transfer moves
 /// balance between. A private recipient is not declared: its credit is published to it.
-fn deposit_actors(receipt: Actor, credited: &Credited<'_>, recipient_id: AccountId) -> Vec<Actor> {
+fn deposit_actors(
+    receipt: Actor,
+    credited: &Credited<'_>,
+    recipient_id: AccountId,
+) -> Vec<(Actor, Authority)> {
     let custody = Actor::native_balance(system_accounts::bridge_account_id());
     match credited {
-        Credited::Public(_) => vec![receipt, custody, Actor::native_balance(recipient_id)],
-        Credited::Private(_) => vec![receipt, custody],
+        Credited::Public(_) => vec![
+            (receipt, Authority::None),
+            (custody, Authority::None),
+            (Actor::native_balance(recipient_id), Authority::None),
+        ],
+        Credited::Private(_) => vec![(receipt, Authority::None), (custody, Authority::None)],
     }
 }

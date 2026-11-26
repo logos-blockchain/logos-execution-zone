@@ -41,18 +41,27 @@ impl TransactionEntry<MessageBody> {
     }
 }
 
+/// Whether the transaction's signatures authorize a declared public actor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum Authority {
+    None,
+    Signer,
+}
+
 /// The public context representation of the private transaction part proof.
 #[derive(Clone, Default, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 pub struct PublicExecutionContext {
-    pub actors: BTreeSet<Actor>,
+    pub actors: BTreeMap<Actor, Authority>,
     pub authorized_accounts: BTreeSet<AccountId>,
     pub promotions: BTreeSet<u64>,
+    /// Presented private actors whose grants a public root holds.
+    pub private_signers: BTreeSet<Actor>,
 }
 
 impl PublicExecutionContext {
     pub fn new(
-        actors: impl IntoIterator<Item = Actor>,
+        actors: impl IntoIterator<Item = (Actor, Authority)>,
         authorized_accounts: impl IntoIterator<Item = AccountId>,
     ) -> Self {
         Self {
@@ -64,7 +73,7 @@ impl PublicExecutionContext {
 
     #[must_use]
     pub fn runs_publicly(&self, actor: Actor) -> bool {
-        self.actors.contains(&actor)
+        self.actors.contains_key(&actor)
     }
 }
 
@@ -122,8 +131,7 @@ pub struct PrivatePartOutcome {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 pub struct Delivery<S> {
     pub envelope: MessageEnvelope<S>,
-    pub inherited_authorizations: BTreeSet<AccountId>,
-    pub inherits_entry_authorizations: bool,
+    pub grants: BTreeSet<Actor>,
     pub pda_seeds: BTreeSet<PdaSeed>,
 }
 
@@ -163,6 +171,11 @@ pub trait ExecutionEnvironment {
     /// Returns [`ExecutionError::MissingSenderPresentation`] by default.
     fn present(&mut self, sender: Actor) -> Result<SenderPresentation, Self::Error> {
         Err(ExecutionError::MissingSenderPresentation { sender }.into())
+    }
+
+    /// Presents `grant` as a sender by default.
+    fn present_grant(&mut self, grant: Actor) -> Result<SenderPresentation, Self::Error> {
+        self.present(grant)
     }
 
     /// Admits no account by default.
@@ -265,6 +278,12 @@ pub enum ExecutionError {
     #[error("No predicted cross messages were supplied for public segment {index}")]
     MissingPredictedCrossMessages { index: usize },
 
+    #[error("Private signer {actor:?} is not an actor its account's authorized witness marks")]
+    UnmarkedPrivateSigner { actor: Actor },
+
+    #[error("A sync message attaches a grant over {actor:?} that its sender does not hold")]
+    UnheldGrant { actor: Actor },
+
     #[error(
         "Predicted cross messages were supplied for public segments the execution never entered"
     )]
@@ -290,7 +309,6 @@ pub enum ExecutionError {
 
 enum AccountEntry {
     Public {
-        is_authorized: bool,
         loaded: BTreeMap<AccountId, ActorState>,
     },
     Private {
@@ -366,8 +384,7 @@ impl<S> Delivery<S> {
                 to: self.envelope.to,
                 message: self.envelope.message.clone(),
             },
-            inherited_authorizations: self.inherited_authorizations.clone(),
-            inherits_entry_authorizations: self.inherits_entry_authorizations,
+            grants: self.grants.clone(),
             pda_seeds: self.pda_seeds.clone(),
         }
     }
@@ -377,8 +394,7 @@ impl Delivery<Sender> {
     const fn entry(envelope: MessageEnvelope<Sender>) -> Self {
         Self {
             envelope,
-            inherited_authorizations: BTreeSet::new(),
-            inherits_entry_authorizations: true,
+            grants: BTreeSet::new(),
             pda_seeds: BTreeSet::new(),
         }
     }
@@ -387,8 +403,7 @@ impl Delivery<Sender> {
         from: Actor,
         to: Actor,
         message: MessageData,
-        inherited_authorizations: BTreeSet<AccountId>,
-        inherits_entry_authorizations: bool,
+        grants: BTreeSet<Actor>,
         pda_seeds: BTreeSet<PdaSeed>,
     ) -> Self {
         Self {
@@ -397,8 +412,7 @@ impl Delivery<Sender> {
                 to,
                 message,
             },
-            inherited_authorizations,
-            inherits_entry_authorizations,
+            grants,
             pda_seeds,
         }
     }
@@ -711,13 +725,9 @@ impl Mode for WholeMode {
 }
 
 impl PrivateMode {
-    // Each cross message still inheriting its entry's authorizations re-enters with the private
-    // grants withheld from the public call it answers; a predicted grant over a private account is
-    // never authority.
     fn deliver_predicted_cross_messages(
         &mut self,
         executor: &mut Executor<'_, Self>,
-        withheld: &BTreeSet<AccountId>,
     ) -> Result<(), ExecutionError> {
         let index = self.next_public_segment;
         let cross_messages = self
@@ -733,13 +743,11 @@ impl PrivateMode {
             // A prediction is a public call into the private part. Aimed at a public actor it
             // would be recorded as a proven call and replayed publicly unchecked.
             executor.require_private(cross_message.envelope.to)?;
-            let mut delivery = executor.disclose(cross_message, Sender::Call(sender));
-            if delivery.inherits_entry_authorizations {
-                delivery.inherited_authorizations.extend(withheld);
-            }
-            executor
-                .work_stack
-                .push(WorkItem::Deliver(Box::new(delivery)));
+            // Its grants are published on the boundary, where settlement checks that the public
+            // sender held each.
+            executor.work_stack.push(WorkItem::Deliver(Box::new(
+                cross_message.with_from(Sender::Call(sender)),
+            )));
         }
         Ok(())
     }
@@ -764,7 +772,7 @@ impl Mode for PrivateMode {
         &mut self,
         executor: &mut Executor<'_, Self>,
     ) -> Result<(), ExecutionError> {
-        self.deliver_predicted_cross_messages(executor, &BTreeSet::new())
+        self.deliver_predicted_cross_messages(executor)
     }
 
     fn deliver_to_public<E: ExecutionEnvironment>(
@@ -778,19 +786,12 @@ impl Mode for PrivateMode {
             .from
             .actor()
             .expect("only a call from a private transition crosses into public execution");
-        self.boundary.push(BoundaryStep::PrivateToPublic(
-            executor.disclose(&delivery, sender),
-        ));
+        self.boundary
+            .push(BoundaryStep::PrivateToPublic(delivery.with_from(sender)));
         executor
             .work_stack
             .push(WorkItem::Resume(PrivateContinuation::EndPublicSubtree));
-        let withheld = delivery
-            .inherited_authorizations
-            .iter()
-            .copied()
-            .filter(|account_id| executor.is_private(account_id))
-            .collect();
-        Ok(self.deliver_predicted_cross_messages(executor, &withheld)?)
+        Ok(self.deliver_predicted_cross_messages(executor)?)
     }
 
     fn deliver_to_private<E: ExecutionEnvironment>(
@@ -930,7 +931,7 @@ impl Mode for PublicMode {
         let Some(BoundaryStep::PublicToPrivate(predicted)) = self.boundary.get(index) else {
             return Err(ExecutionError::BoundaryMismatch { index }.into());
         };
-        // The live grants are the disclosed part of the authority the proven transition ran under.
+        // The live grants are what the proven transition received.
         let live = delivery
             .envelope
             .from
@@ -1017,7 +1018,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
                 )
             })
             .collect();
-        for actor in &public_context.actors {
+        for actor in public_context.actors.keys() {
             let account_id = actor.account_id;
             if witness_index.contains_key(&account_id) {
                 return Err(ExecutionError::PublicAndPrivate { account_id });
@@ -1025,7 +1026,6 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
             accounts
                 .entry(account_id)
                 .or_insert_with(|| AccountEntry::Public {
-                    is_authorized: public_context.authorized_accounts.contains(&account_id),
                     loaded: BTreeMap::new(),
                 });
         }
@@ -1036,7 +1036,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
             .find(|account_id| {
                 public_context
                     .actors
-                    .iter()
+                    .keys()
                     .any(|actor| actor.account_id == *account_id)
             })
         {
@@ -1063,6 +1063,16 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         for (alias, account_id) in openings {
             executor.register_alias(alias, account_id)?;
         }
+        // Settlement takes the proof's word for them.
+        if M::executes_transaction_root(false)
+            && let Some(&actor) = executor
+                .public_context
+                .private_signers
+                .iter()
+                .find(|&&actor| !executor.is_private_signer(executor.resolve(actor)))
+        {
+            return Err(ExecutionError::UnmarkedPrivateSigner { actor });
+        }
         // Entry order in the modes executing private roots: claims -> root -> fee transfer.
         // The fee transfer waits for the root's subtree and, for a public root, its cross messages.
         let fee = fee.filter(|_| M::executes_transaction_root(false));
@@ -1085,13 +1095,16 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
             mode.start_with_transaction_root(&mut executor)?;
             // push fee work (before root)
             executor.queue_fee(fee);
-            let (from, to, message) = match root {
-                TransactionEntry::Sync(RootCall { to, message }) => (None, to, message),
+            let (from, to, message, grants) = match root {
+                TransactionEntry::Sync(RootCall { to, message }) => {
+                    let grants = executor.root_grants(to);
+                    (None, to, message, grants)
+                }
                 TransactionEntry::Async(MessageBody { from, to, message }) => {
-                    (Some(from), to, message)
+                    (Some(from), to, message, BTreeSet::new())
                 }
             };
-            executor.queue_entry(from, to, message);
+            executor.queue_entry(from, to, message, grants);
         } else {
             // push fee transfer & start without root
             executor.queue_fee(fee);
@@ -1101,20 +1114,62 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         // push all claims (in reverse), they will be popped first
         // so that the balance becomes `current + claimed`
         for MessageBody { from, to, message } in claims.rev() {
-            executor.queue_entry(Some(from), to, message);
+            executor.queue_entry(Some(from), to, message, BTreeSet::new());
         }
         Ok(executor)
     }
 
-    fn queue_entry(&mut self, from: Option<Actor>, to: Actor, message: MessageData) {
-        self.work_stack
-            .push(WorkItem::Deliver(Box::new(Delivery::entry(
-                MessageEnvelope {
-                    from: Sender::Root { from },
-                    to,
-                    message,
-                },
-            ))));
+    // A signature, or an authorized witness's marks, authorize only the transaction's own root
+    // call: claims, async roots and promoted messages were written by someone else. A public root
+    // holds a private account's grants only as its declared presentations.
+    fn root_grants(&self, to: Actor) -> BTreeSet<Actor> {
+        let public_signers = self
+            .public_context
+            .actors
+            .iter()
+            .filter(|(actor, authority)| {
+                **authority == Authority::Signer
+                    && self
+                        .public_context
+                        .authorized_accounts
+                        .contains(&actor.account_id)
+            })
+            .map(|(actor, _)| *actor);
+        if self.public_context.runs_publicly(to) {
+            return public_signers
+                .chain(self.public_context.private_signers.iter().copied())
+                .collect();
+        }
+        public_signers
+            .chain(
+                self.witnesses
+                    .iter()
+                    .filter(|witness| witness.kind.is_authorized())
+                    .flat_map(|witness| {
+                        let account_id = witness.account_id();
+                        witness
+                            .signer_programs
+                            .iter()
+                            .map(move |program| Actor::new(account_id, *program))
+                    }),
+            )
+            .collect()
+    }
+
+    fn queue_entry(
+        &mut self,
+        from: Option<Actor>,
+        to: Actor,
+        message: MessageData,
+        grants: BTreeSet<Actor>,
+    ) {
+        let mut delivery = Delivery::entry(MessageEnvelope {
+            from: Sender::Root { from },
+            to,
+            message,
+        });
+        delivery.grants = grants;
+        self.work_stack.push(WorkItem::Deliver(Box::new(delivery)));
     }
 
     fn queue_fee(&mut self, fee: Option<FeeTransfer>) {
@@ -1140,7 +1195,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
             to: Actor::native_balance(payer),
             message,
         });
-        delivery.inherited_authorizations.insert(payer);
+        delivery.grants.insert(Actor::native_balance(payer));
         self.work_stack.push(WorkItem::Deliver(Box::new(delivery)));
     }
 
@@ -1166,7 +1221,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
     fn deliver<E: ExecutionEnvironment>(
         &mut self,
         mode: &mut M,
-        mut delivery: Delivery<Sender>,
+        delivery: Delivery<Sender>,
         environment: &mut E,
     ) -> Result<(), E::Error> {
         let to = delivery.envelope.to;
@@ -1177,10 +1232,6 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         if self.public_context.runs_publicly(to) {
             if M::CHECKS_ADMISSION {
                 self.admit(&delivery, environment)?;
-            }
-            // Each public subtree's private callbacks start out inheriting what its entry withheld.
-            if self.opens_public_subtree(&delivery) {
-                delivery.inherits_entry_authorizations = true;
             }
             mode.deliver_to_public(self, delivery, environment)
         } else {
@@ -1262,14 +1313,86 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         }
     }
 
-    // No public handler can observe a grant over a private account, so a boundary or prediction
-    // discloses only the other grants; the private part restores the withheld ones on re-entry.
-    fn disclose<F, T>(&self, delivery: &Delivery<F>, from: T) -> Delivery<T> {
-        let mut disclosed = delivery.with_from(from);
-        disclosed
-            .inherited_authorizations
-            .retain(|account_id| !self.is_private(account_id));
-        disclosed
+    // A sync message carries exactly the grants its sender attaches, each of which it must hold. A
+    // private sender may name a grant it holds under any address of its account.
+    fn attach(
+        &self,
+        sender: Actor,
+        held: &BTreeSet<Actor>,
+        attached: BTreeSet<Actor>,
+    ) -> Result<BTreeSet<Actor>, ExecutionError> {
+        let private_sender = self.is_private(&sender.account_id);
+        attached
+            .into_iter()
+            .map(|actor| {
+                let target = self.resolve(actor);
+                held.iter()
+                    .copied()
+                    .find(|&grant| {
+                        grant == actor || (private_sender && self.resolve(grant) == target)
+                    })
+                    .ok_or(ExecutionError::UnheldGrant { actor })
+            })
+            .collect()
+    }
+
+    // A private sender's grant over its own account carries the address it sends from; one over
+    // another private account crossing to the public side is presented anew.
+    fn present_grants<E: ExecutionEnvironment>(
+        &mut self,
+        from: Actor,
+        grants: BTreeSet<Actor>,
+        crosses_out: bool,
+        environment: &mut E,
+    ) -> Result<BTreeSet<Actor>, E::Error> {
+        let sender_account = self.resolve(from).account_id;
+        let mut presented = BTreeSet::new();
+        for grant in grants {
+            presented.insert(if self.resolve(grant).account_id == sender_account {
+                Actor::new(from.account_id, grant.program_account_id)
+            } else if crosses_out && self.is_private(&grant.account_id) {
+                let presentation = environment.present_grant(grant)?;
+                self.presented(grant, presentation)?
+            } else {
+                grant
+            });
+        }
+        Ok(presented)
+    }
+
+    fn present<E: ExecutionEnvironment>(
+        &mut self,
+        actor: Actor,
+        environment: &mut E,
+    ) -> Result<Actor, E::Error> {
+        let presentation = environment.present(actor)?;
+        Ok(self.presented(actor, presentation)?)
+    }
+
+    fn presented(
+        &mut self,
+        actor: Actor,
+        presentation: SenderPresentation,
+    ) -> Result<Actor, ExecutionError> {
+        match presentation {
+            SenderPresentation::Canonical => Ok(actor),
+            SenderPresentation::Blinded(factor) => {
+                let alias = actor.account_id.blinded(&factor);
+                self.register_alias(alias, actor.account_id)?;
+                Ok(Actor::new(alias, actor.program_account_id))
+            }
+        }
+    }
+
+    fn is_private_signer(&self, actor: Actor) -> bool {
+        matches!(
+            self.accounts.get(&actor.account_id),
+            Some(AccountEntry::Private { witness_index, .. })
+                if self.witnesses[*witness_index].kind.is_authorized()
+                    && self.witnesses[*witness_index]
+                        .signer_programs
+                        .contains(&actor.program_account_id)
+        )
     }
 
     // A private delivery from a declared public actor is where the execution crosses into a proven
@@ -1281,7 +1404,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
             .from
             .actor()
             .filter(|&sender| self.public_context.runs_publicly(sender))
-            .map(|sender| self.disclose(delivery, sender))
+            .map(|sender| delivery.with_from(sender))
     }
 
     fn process_actor_message<E: ExecutionEnvironment>(
@@ -1290,7 +1413,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         environment: &mut E,
     ) -> Result<(), E::Error> {
         let actor = self.resolve(delivery.envelope.to);
-        let (is_authorized, authorizations) = self.authorize(actor, &delivery)?;
+        let grants = self.authorize(actor, &delivery)?;
         let entry = self
             .accounts
             .get_mut(&actor.account_id)
@@ -1306,7 +1429,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         let input = ReceiveInput {
             receiver: actor,
             from: delivery.envelope.from.source(),
-            is_authorized,
+            grants: grants.clone(),
             pre_state: entry
                 .staged(actor.program_account_id)
                 .expect("a delivered actor's state is loaded")
@@ -1349,27 +1472,34 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         }
         let reached = delivery.envelope.to;
         let call_reply = |to: Actor| (input.from == Some(to)).then_some(reached);
-        let mut sent = transition
-            .response
-            .sync_messages
-            .into_iter()
-            .map(
-                |SyncMessage {
-                     to,
-                     message,
-                     pda_seeds,
-                 }| {
-                    Ok(Delivery::sent(
-                        self.sender(actor, call_reply(to), environment)?,
-                        to,
-                        message,
-                        authorizations.clone(),
-                        delivery.inherits_entry_authorizations,
-                        pda_seeds,
-                    ))
-                },
-            )
-            .collect::<Result<Vec<_>, E::Error>>()?;
+        let private_sender = self.is_private(&actor.account_id);
+        let mut sent = Vec::new();
+        for SyncMessage {
+            to,
+            message,
+            pda_seeds,
+            grants: attached,
+        } in transition.response.sync_messages
+        {
+            let attached = self.attach(actor, &grants, attached)?;
+            // A private call to another actor of its own account names the account as is: the call
+            // stays in the proof, and the receiver holds the caller's grant under the account.
+            let within_account = private_sender
+                && call_reply(to).is_none()
+                && self.resolve(to).account_id == actor.account_id;
+            let from = if within_account {
+                actor
+            } else {
+                self.sender(actor, call_reply(to), environment)?
+            };
+            let attached = if private_sender {
+                let crosses_out = self.public_context.runs_publicly(to);
+                self.present_grants(from, attached, crosses_out, environment)?
+            } else {
+                attached
+            };
+            sent.push(Delivery::sent(from, to, message, attached, pda_seeds));
+        }
         for AsyncMessage { to, message } in transition.response.async_messages {
             let body = MessageBody {
                 from: self.sender(actor, None, environment)?,
@@ -1385,14 +1515,12 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
                 environment.promote(placement, self.candidates.next(placement), &body)?
             };
             if promoted {
-                // A promoted async message keeps transaction credentials but inherits no
-                // authorization.
+                // A promoted async message carries no grant.
                 sent.push(Delivery::sent(
                     body.from,
                     body.to,
                     body.message,
                     BTreeSet::new(),
-                    false,
                     BTreeSet::new(),
                 ));
             } else {
@@ -1419,55 +1547,55 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         if let Some(reached) = call_reply {
             return Ok(reached);
         }
-        match environment.present(actor)? {
-            SenderPresentation::Canonical => Ok(actor),
-            SenderPresentation::Blinded(factor) => {
-                let alias = actor.account_id.blinded(&factor);
-                self.register_alias(alias, actor.account_id)?;
-                Ok(Actor::new(alias, actor.program_account_id))
-            }
-        }
+        self.present(actor, environment)
     }
 
     fn authorize(
         &mut self,
         actor: Actor,
         delivery: &Delivery<Sender>,
-    ) -> Result<(bool, BTreeSet<AccountId>), ExecutionError> {
+    ) -> Result<BTreeSet<Actor>, ExecutionError> {
         let account_id = actor.account_id;
         let issuer = delivery.envelope.from.issuer();
         let entry = self
             .accounts
             .get(&account_id)
             .ok_or(ExecutionError::UndeclaredActor { actor })?;
-        let (credential, granted) = match entry {
-            AccountEntry::Public { is_authorized, .. } => (
-                *is_authorized,
-                issuer.and_then(|issuer| {
-                    delivery
-                        .pda_seeds
-                        .iter()
-                        .find(|seed| AccountId::for_public_pda(&issuer, seed) == account_id)
-                        .map(|seed| (issuer, *seed))
-                }),
-            ),
+        let granted = match entry {
+            AccountEntry::Public { .. } => issuer.and_then(|issuer| {
+                delivery
+                    .pda_seeds
+                    .iter()
+                    .find(|seed| AccountId::for_public_pda(&issuer, seed) == account_id)
+                    .map(|seed| (issuer, *seed))
+            }),
             AccountEntry::Private { witness_index, .. } => {
-                let witness = &self.witnesses[*witness_index];
-                (
-                    witness.kind.is_authorized(),
-                    private_seed_grant(issuer, &delivery.pda_seeds, witness),
-                )
+                private_seed_grant(issuer, &delivery.pda_seeds, &self.witnesses[*witness_index])
             }
         };
-        let mut authorizations = delivery.inherited_authorizations.clone();
+        // A private receiver holds a grant over its own account under the account, any other under
+        // the address its sender named, as a public receiver does.
+        let mut grants: BTreeSet<Actor> = if self.is_private(&account_id) {
+            delivery
+                .grants
+                .iter()
+                .map(|&grant| {
+                    let resolved = self.resolve(grant);
+                    if resolved.account_id == account_id {
+                        resolved
+                    } else {
+                        grant
+                    }
+                })
+                .collect()
+        } else {
+            delivery.grants.clone()
+        };
         if let Some((program, seed)) = granted {
             bind_family(&mut self.pda_family_binding, program, seed, account_id)?;
-            authorizations.insert(account_id);
+            grants.insert(actor);
         }
-        Ok((
-            credential || authorizations.contains(&account_id),
-            authorizations,
-        ))
+        Ok(grants)
     }
 
     fn public(self) -> PublicOutcome {

@@ -29,9 +29,9 @@ pub use fees::{DeclaredFee, DryRunReport, FeeParams, PrivateFee};
 use futures::TryFutureExt as _;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
 use lee::{
-    Account, AccountId, EncryptedNote, PredictedCrossMessages, PrivacyPreservingTransaction,
-    ProgramId, ProvingInput, PublicExecutionContext, PublicationMode, PublicationsPage, Recipient,
-    RecipientEncryption, SenderPresentation, Simulation,
+    Account, AccountId, EncryptedNote, PredictedCrossMessages, Presenter, Presenting,
+    PrivacyPreservingTransaction, ProgramId, ProvingInput, PublicExecutionContext, PublicationMode,
+    PublicationsPage, Recipient, RecipientEncryption, SenderPresentation, Simulation,
     privacy_preserving_transaction::{
         circuit::{Dependency, ProgramCatalog, ProgramKind},
         message::Message,
@@ -43,7 +43,7 @@ use lee_core::{
     MembershipProof, MessageWitness, Nullifier, NullifierSecretKey, PrivateAccountKind, RootCall,
     SharedSecretKey,
     account::{Actor, Nonce},
-    execution_state::TransactionEntry,
+    execution_state::{Authority, TransactionEntry},
     native_token::NATIVE_TOKEN_PROGRAM_ID,
     program::{MessageBody, MessageData, PROGRAM_LOADER_ACCOUNT_ID, Publication},
     signing_key::{KeyType, SigningKeyState, signature_program_id},
@@ -309,6 +309,29 @@ struct Receipt {
     position: CommitmentPosition,
     rho: Option<[u8; 32]>,
     commitment: Commitment,
+}
+
+// A presenter recording each actor as presented, for the publication choice to map back.
+struct RecordingPresenter<P> {
+    presenter: P,
+    senders: Arc<Mutex<HashMap<Actor, Actor>>>,
+}
+
+impl<P: Presenter> Presenter for RecordingPresenter<P> {
+    fn present(&mut self, presenting: Presenting, actor: Actor) -> SenderPresentation {
+        let presentation = self.presenter.present(presenting, actor);
+        let presented = match presentation {
+            SenderPresentation::Canonical => actor,
+            SenderPresentation::Blinded(factor) => {
+                Actor::new(actor.account_id.blinded(&factor), actor.program_account_id)
+            }
+        };
+        self.senders
+            .lock()
+            .expect("the sender map's lock is never poisoned")
+            .insert(presented, actor);
+        presentation
+    }
 }
 
 #[expect(async_fn_in_trait, reason = "For internal usage only")]
@@ -1803,7 +1826,10 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 .collect(),
             public_context: PublicExecutionContext {
                 promotions: public,
-                ..PublicExecutionContext::new(acc_manager.public_actors(), acc_manager.signers())
+                ..PublicExecutionContext::new(
+                    acc_manager.public_actor_authority(),
+                    acc_manager.signers(),
+                )
             },
             private_witnesses: acc_manager.private_witnesses()?,
             dummy_inputs: acc_manager.dummy_inputs_default(),
@@ -1812,6 +1838,9 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             private_promotions: private,
             fee: None,
         };
+        if input.public_root().is_some() {
+            input.public_context.private_signers = acc_manager.private_signers();
+        }
         let witnessed: HashSet<AccountId> = input
             .private_witnesses
             .iter()
@@ -1834,7 +1863,10 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         // the refund.
         let fee_inbox = system_accounts::fee_inbox_account_id();
         let inbox_actor = Actor::native_balance(fee_inbox);
-        input.public_context.actors.insert(inbox_actor);
+        input
+            .public_context
+            .actors
+            .insert(inbox_actor, Authority::None);
         let mut simulation = Simulation {
             public_actor_states: acc_manager.public_actor_states(),
             admitted_accounts: Some(acc_manager.admitted_accounts()),
@@ -1854,13 +1886,13 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         }
         let (mut input, simulation, programs, cycles) = match cross_messages {
             None => {
-                let (mut present, mut select) = (acc_manager.presenter(None), select.clone());
+                let (present, mut select) = (acc_manager.presenter(None), select.clone());
                 tokio::task::spawn_blocking(move || {
                     let cycles = lee::simulate_privacy_preserving_transaction(
                         &input,
                         &simulation,
                         &programs,
-                        &mut present,
+                        present,
                         &mut select,
                     )?;
                     Ok::<_, lee::error::LeeError>((input, simulation, programs, cycles))
@@ -2022,6 +2054,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                         fee_at_head: at_head(cycles.saturating_add(verify_gas)),
                         reserve_at_head: reserve,
                         revert_reason,
+                        signer_actors: acc_manager.signer_actors(),
                     },
                 )));
             }
@@ -2080,8 +2113,9 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         let FeeParams { refund_to, tip, .. } = self.fee_params;
         if let Some(target) = refund_to
             && !acc_manager
-                .public_actors()
-                .contains(&Actor::native_balance(target))
+                .public_actor_authority()
+                .iter()
+                .any(|(actor, _)| *actor == Actor::native_balance(target))
         {
             warn!(
                 %target,
@@ -2245,6 +2279,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                         headroom_reserve,
                         claims: claims.len(),
                         swept,
+                        signer_actors: acc_manager.signer_actors(),
                     },
                 )));
             }
@@ -2502,7 +2537,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
     ///
     /// An explicit payer may be one of `accounts`' signing entries, or any other public account
     /// whose signing key the wallet holds: the latter co-signs (nonce and signature appended
-    /// after `accounts`' own) without joining the message's `account_ids`, so programs with a
+    /// after `accounts`' own) without its declared actors gaining authority, so programs with a
     /// fixed account shape (like the `program_loader`, whose accounts are all freshly claimed
     /// and unfunded) can still be paid for.
     pub async fn send_pub_tx_with_pre_check(
@@ -2540,8 +2575,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
 
         tx_pre_check(&acc_manager.selected_actor_states())?;
 
-        let public_actors = acc_manager.public_actors();
-        let account_ids = acc_manager.public_account_ids();
+        let public_actors = acc_manager.public_actor_authority();
         let mut nonces = acc_manager.public_account_nonces();
 
         let invalid_input = |msg: &str| {
@@ -2560,11 +2594,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                 None,
             ),
             Some(payer) if acc_manager.signs_for(payer) => (payer, None),
-            Some(payer) if account_ids.contains(&payer) => {
-                return Err(invalid_input(
-                    "Fee payer is a non-signing account of this transaction",
-                ));
-            }
+            // Signs for the fee alone; its declared actors stay without authority.
             Some(payer) => {
                 let secret = self
                     .storage
@@ -2703,6 +2733,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
                     reserve_at_head: at_head(gas_limit),
                     revert_reason,
                     quote,
+                    signer_actors: acc_manager.signer_actors(),
                 },
             )));
         }
@@ -2731,7 +2762,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         let declared: BTreeSet<AccountId> = message
             .public_context
             .actors
-            .iter()
+            .keys()
             .map(|actor| actor.program_account_id)
             .collect();
         for program in declared {
@@ -2810,9 +2841,8 @@ impl<C: WalletSequencerClient> WalletCore<C> {
     }
 
     // Executes the message as published. Its recipient takes part as `accounts` declare its
-    // account, unauthorized otherwise, and each declared program missing from `programs` runs
-    // from its deployment. Authorization is per account: authorizing the recipient's account
-    // authorizes the published message too.
+    // account, and each declared program missing from `programs` runs from its deployment. The
+    // published message carries no grant, so authorizing the recipient authorizes nothing it asks.
     pub async fn receive_pending_message_with(
         &mut self,
         PendingMessage {
@@ -3318,39 +3348,20 @@ fn decrypt_fee_fallback_note(
 
 // `presenter` recording each sender as presented, as the interpreter derives it, and the
 // publication choice that maps the presented senders back to their actors.
-#[expect(
-    clippy::type_complexity,
-    reason = "a presenter paired with the publication choice that reads what it records"
-)]
 fn present_and_publish(
-    mut presenter: impl FnMut(Actor) -> SenderPresentation,
+    presenter: impl Presenter + Send + 'static,
     seals: Vec<Recipient>,
     clear_messages: Vec<MessageBody>,
 ) -> (
-    impl FnMut(Actor) -> SenderPresentation,
+    impl Presenter + Send + 'static,
     impl FnMut(&[MessageBody]) -> Result<Vec<PublicationMode>, lee::error::LeeError>,
 ) {
     let senders = Arc::new(Mutex::new(HashMap::new()));
-    let present = {
-        let senders = Arc::clone(&senders);
-        move |sender: Actor| {
-            let presentation = presenter(sender);
-            let presented = match presentation {
-                SenderPresentation::Canonical => sender,
-                SenderPresentation::Blinded(factor) => Actor::new(
-                    sender.account_id.blinded(&factor),
-                    sender.program_account_id,
-                ),
-            };
-            senders
-                .lock()
-                .expect("the sender map's lock is never poisoned")
-                .insert(presented, sender);
-            presentation
-        }
-    };
     (
-        present,
+        RecordingPresenter {
+            presenter,
+            senders: Arc::clone(&senders),
+        },
         choose_publications_with(seals, clear_messages, senders),
     )
 }
@@ -3840,10 +3851,10 @@ mod tests {
         assert_eq!(async_delivery.recoveries.len(), 1);
         assert_eq!(async_delivery.recoveries[0].recipient, recipient_material);
 
-        // A public recipient takes part either way, as the caller named it.
+        // A public recipient takes part either way, as the caller named it, without authorizing.
         let (declared, _) = route(&sender, public.clone(), CreditDelivery::DeferredPrivate);
         let declared = declared.unwrap();
-        assert!(declared.identity == public && declared.authorizes);
+        assert!(declared.identity == public && !declared.authorizes);
 
         // A sender crediting itself takes part once.
         let (declared, _) = route(&sender, sender.clone(), CreditDelivery::Automatic);
@@ -4292,7 +4303,7 @@ mod tests {
         // The destination stays undeclared, so its credit is published and not executed at once.
         assert_eq!(
             tx.message.public_context.actors,
-            BTreeSet::from([Actor::native_balance(sender)])
+            BTreeMap::from([(Actor::native_balance(sender), lee::Authority::Signer)])
         );
 
         assert!(matches!(
@@ -4304,6 +4315,145 @@ mod tests {
             )) if actor == Actor::native_balance(absent)
         ));
         assert!(submitted.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_signing_public_account_authorizes_only_its_authorizing_mentions() {
+        let (wallet, _home, _sequencer, submitted, sender) =
+            wallet_with_a_public_sender(AccountId::new([2; 32])).await;
+        let other = Actor::new(sender, AccountId::new([5; 32]));
+
+        wallet
+            .send_tx(
+                vec![
+                    AccountIdentity::Public(sender).balance(),
+                    AccountIdentity::Public(sender)
+                        .select_program_actor_state(other.program_account_id)
+                        .without_authorization(),
+                ],
+                0,
+                borsh::to_vec(&native_token::Message::Transfer {
+                    to: sender,
+                    amount: 0,
+                })
+                .unwrap(),
+                &ProgramCatalog::default(),
+                None,
+                AsyncDelivery::default(),
+            )
+            .await
+            .unwrap();
+
+        let Some(LeeTransaction::Public(tx)) = submitted.lock().unwrap().pop() else {
+            panic!("the transaction should have been submitted publicly");
+        };
+        assert_eq!(
+            tx.message.public_context.actors,
+            BTreeMap::from([
+                (Actor::native_balance(sender), lee::Authority::Signer),
+                (other, lee::Authority::None),
+            ])
+        );
+        assert!(tx.message.nonces.contains_key(&sender));
+    }
+
+    #[tokio::test]
+    async fn a_payer_declared_without_authority_co_signs_for_the_fee_alone() {
+        let (wallet, _home, _sequencer, submitted, sender) =
+            wallet_with_a_public_sender(AccountId::new([2; 32])).await;
+        let other = Actor::new(sender, AccountId::new([5; 32]));
+
+        wallet
+            .send_pub_tx_paid_by(
+                vec![
+                    AccountIdentity::Public(sender)
+                        .select_program_actor_state(other.program_account_id)
+                        .without_authorization(),
+                ],
+                0,
+                Vec::new(),
+                Some(sender),
+            )
+            .await
+            .unwrap();
+
+        let Some(LeeTransaction::Public(tx)) = submitted.lock().unwrap().pop() else {
+            panic!("the transaction should have been submitted publicly");
+        };
+        assert_eq!(
+            tx.message.public_context.actors,
+            BTreeMap::from([(other, lee::Authority::None)])
+        );
+        assert!(tx.message.nonces.contains_key(&sender));
+    }
+
+    #[tokio::test]
+    async fn a_private_account_marks_only_the_programs_its_authorizing_mentions_select() {
+        let (mut wallet, _home, _sequencer, _served) = wallet_with_a_received_message().await;
+        let (other, _) = wallet.create_new_account_private(None);
+        let unmarked = AccountId::new([5; 32]);
+
+        let manager = crate::account_manager::AccountManager::new(
+            &wallet,
+            vec![
+                AccountIdentity::PrivateOwned(other).balance(),
+                AccountIdentity::PrivateOwned(other)
+                    .select_program_actor_state(unmarked)
+                    .without_authorization(),
+            ],
+            None,
+            None,
+            &[],
+        )
+        .await
+        .unwrap();
+
+        let witnesses = manager.private_witnesses().unwrap();
+        let witness = witnesses
+            .iter()
+            .find(|witness| witness.account_id() == other)
+            .unwrap();
+        assert!(witness.kind.is_authorized());
+        assert_eq!(
+            witness.signer_programs,
+            BTreeSet::from([NATIVE_TOKEN_PROGRAM_ID])
+        );
+    }
+
+    // A private fee payer authorizing through its balance reports its other mention as mentioned:
+    // without authority, as the proof grants it none.
+    #[tokio::test]
+    async fn a_private_payers_rows_report_only_the_authority_they_are_mentioned_with() {
+        let (mut wallet, _home, _sequencer, _served) = wallet_with_a_received_message().await;
+        let (payer, _) = wallet.create_new_account_private(None);
+        let unmarked = AccountId::new([5; 32]);
+
+        let manager = crate::account_manager::AccountManager::new(
+            &wallet,
+            vec![
+                AccountIdentity::PrivateOwned(payer).balance(),
+                AccountIdentity::PrivateOwned(payer)
+                    .select_program_actor_state(unmarked)
+                    .without_authorization(),
+            ],
+            None,
+            Some(payer),
+            &[],
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            manager
+                .selected_actor_states()
+                .iter()
+                .map(|state| (state.selector, state.is_authorized))
+                .collect::<Vec<_>>(),
+            vec![
+                (Actor::native_balance(payer), true),
+                (Actor::new(payer, unmarked), false),
+            ]
+        );
     }
 
     async fn wallet_with_a_received_message() -> (
@@ -4954,10 +5104,10 @@ mod tests {
         ));
     }
 
-    // The recipient pays the receipt's fee, but its key authorizes only the fee entry: the transfer
-    // the message asks of it runs only when the caller mentions it as authorizing.
+    // The recipient pays the receipt's fee, but its key authorizes only the fee entry: the message
+    // carries no grant, so the transfer it asks of the recipient never runs.
     #[tokio::test]
-    async fn a_receipt_runs_unauthorized_unless_its_caller_authorizes_the_recipient() {
+    async fn a_receipt_runs_unauthorized_even_when_its_caller_authorizes_the_recipient() {
         let (mut wallet, _home, _sequencer, served) = wallet_with_a_received_message().await;
         let recipient = wallet
             .find_pending_message(1)
@@ -4986,21 +5136,25 @@ mod tests {
             )) if account_id == recipient
         ));
 
+        // A message someone else wrote carries no grant, so marking the recipient changes nothing.
         let pending = wallet.find_pending_message(1).await.unwrap().unwrap();
-        wallet
-            .receive_pending_message_with(
-                pending,
-                vec![AccountIdentity::PrivateOwned(recipient).balance()],
-                &ProgramCatalog::default(),
-                None,
-                AsyncDelivery::default(),
-            )
-            .await
-            .unwrap();
         assert!(matches!(
-            served.lock().unwrap().submitted.as_slice(),
-            [LeeTransaction::PrivacyPreserving(_)]
+            wallet
+                .receive_pending_message_with(
+                    pending,
+                    vec![AccountIdentity::PrivateOwned(recipient).balance()],
+                    &ProgramCatalog::default(),
+                    None,
+                    AsyncDelivery::default(),
+                )
+                .await,
+            Err(ExecutionFailureKind::TransactionBuildError(
+                LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::NativeTransferFailed(
+                    TransferError::UnauthorizedSender { account_id }
+                ))
+            )) if account_id == recipient
         ));
+        assert!(served.lock().unwrap().submitted.is_empty());
     }
 
     #[tokio::test]

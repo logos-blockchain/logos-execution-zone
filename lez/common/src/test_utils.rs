@@ -6,6 +6,8 @@ use std::collections::BTreeMap;
 use std::collections::HashMap;
 
 #[cfg(any(test, feature = "test-utils"))]
+use lee::Authority;
+#[cfg(any(test, feature = "test-utils"))]
 use lee::test_utils::{TestSigner, signer_nonces, witness_for};
 #[cfg(test)]
 use lee::{Account, V03State, ValidatedStateDiff};
@@ -177,6 +179,19 @@ pub fn create_transaction_native_token_transfer(
 }
 
 #[cfg(any(test, feature = "test-utils"))]
+fn transfer_actors(from: AccountId, to: AccountId, signer: &TestSigner) -> [(Actor, Authority); 2] {
+    let signer = signer.account_id();
+    [from, to].map(|account_id| {
+        let authority = if account_id == signer {
+            Authority::Signer
+        } else {
+            Authority::None
+        };
+        (Actor::native_balance(account_id), authority)
+    })
+}
+
+#[cfg(any(test, feature = "test-utils"))]
 #[must_use]
 pub fn create_transaction_native_token_transfer_with_fees(
     from: AccountId,
@@ -186,10 +201,9 @@ pub fn create_transaction_native_token_transfer_with_fees(
     signer: &TestSigner,
     fee_declaration: lee::FeeDeclaration,
 ) -> LeeTransaction {
-    let public_actors = vec![Actor::native_balance(from), Actor::native_balance(to)];
     let message = lee::public_transaction::Message::try_new_with_fees(
         Actor::native_balance(from),
-        public_actors,
+        transfer_actors(from, to, signer),
         signer_nonces(&[signer], vec![lee_core::account::Nonce(nonce)]),
         native_transfer(to, balance_to_move),
         fee_declaration,
@@ -217,7 +231,7 @@ pub fn create_transaction_native_token_transfer_without_fee(
 ) -> LeeTransaction {
     let message = lee::public_transaction::Message::try_new(
         Actor::native_balance(from),
-        vec![Actor::native_balance(from), Actor::native_balance(to)],
+        transfer_actors(from, to, signer),
         signer_nonces(&[signer], vec![lee_core::account::Nonce(nonce)]),
         native_transfer(to, balance_to_move),
     )

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use common::transaction::LeeTransaction;
 use lee::{
-    AccountId, Actor, PublicTransaction,
+    AccountId, Actor, Authority, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
 use program_deployment::{admission_evidence, deploy_program, fee_paid_by};
@@ -75,7 +75,8 @@ async fn main() {
         admission_evidence: admission_evidence(&wallet_core, account_id)
             .into_iter()
             .collect(),
-        ..Message::try_new_with_fees(hello, vec![hello], nonces, greeting, fee).unwrap()
+        ..Message::try_new_with_fees(hello, vec![(hello, Authority::None)], nonces, greeting, fee)
+            .unwrap()
     };
     let witness_set = WitnessSet::sign(&message, &signing_keys);
     let tx = PublicTransaction::new(message, witness_set);

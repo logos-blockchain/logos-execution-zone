@@ -52,7 +52,7 @@ impl PublicTransaction {
             self.message
                 .public_context
                 .actors
-                .iter()
+                .keys()
                 .map(|actor| actor.account_id),
         );
 
@@ -72,6 +72,9 @@ impl SignedTransaction for PublicTransaction {
     fn check_stateless(&self) -> Result<Vec<AccountId>, InvalidTransaction> {
         if !self.message.public_context.promotions.is_empty() {
             return Err(InvalidTransaction::PublicPromotions);
+        }
+        if !self.message.public_context.private_signers.is_empty() {
+            return Err(InvalidTransaction::PublicPrivateSigners);
         }
         let signers = self.signer_account_ids();
         if self.witness_set.entries().len() != signers.len() {
@@ -107,7 +110,8 @@ pub mod tests {
     use sha2::{Digest as _, digest::FixedOutput as _};
 
     use crate::{
-        AccountId, InvalidTransaction, PublicTransaction, SignedTransaction as _, V03State,
+        AccountId, Authority, InvalidTransaction, PublicTransaction, SignedTransaction as _,
+        V03State,
         error::LeeError,
         public_transaction::{Message, WitnessSet},
         test_utils::{TestSigner, witness_for},
@@ -145,7 +149,10 @@ pub mod tests {
         let nonces = BTreeMap::from([(addr1, Nonce(0)), (addr2, Nonce(0))]);
         let message = Message::try_new(
             Actor::native_balance(addr1),
-            vec![Actor::native_balance(addr1), Actor::native_balance(addr2)],
+            vec![
+                (Actor::native_balance(addr1), Authority::Signer),
+                (Actor::native_balance(addr2), Authority::Signer),
+            ],
             nonces,
             transfer_to(addr2),
         )
@@ -268,6 +275,38 @@ pub mod tests {
     }
 
     #[test]
+    fn a_signer_authority_needs_its_account_to_sign() {
+        let (key1, key2, ..) = keys_for_tests();
+        let mut message = transaction_for_tests().message;
+        let unsigned = Actor::native_balance(AccountId::new([9; 32]));
+        message
+            .public_context
+            .actors
+            .insert(unsigned, Authority::Signer);
+
+        let tx = signed(message, &[&key1, &key2]);
+        let rejection = InvalidTransaction::UnsignedAuthority;
+        assert_eq!(tx.check_stateless(), Err(rejection));
+        assert!(matches!(
+            ValidatedStateDiff::from_public_transaction(&tx, &state_for_tests(), 1, 0),
+            Err(LeeError::InvalidInput(msg)) if msg == rejection.to_string()
+        ));
+    }
+
+    #[test]
+    fn an_unsigned_actor_may_be_declared_without_authority() {
+        let (key1, key2, ..) = keys_for_tests();
+        let mut message = transaction_for_tests().message;
+        message.public_context.actors.insert(
+            Actor::native_balance(AccountId::new([9; 32])),
+            Authority::None,
+        );
+
+        let tx = signed(message, &[&key1, &key2]);
+        assert!(tx.check_stateless().is_ok());
+    }
+
+    #[test]
     fn each_nonce_pairs_with_its_account_whatever_the_signature_order() {
         let (key1, key2, addr1, addr2) = keys_for_tests();
         let state = V03State::new().with_public_accounts([
@@ -298,6 +337,24 @@ pub mod tests {
 
         let tx = signed(message, &[&key1, &key2]);
         let rejection = InvalidTransaction::PublicPromotions;
+        assert_eq!(tx.check_stateless(), Err(rejection));
+        assert!(matches!(
+            ValidatedStateDiff::from_public_transaction(&tx, &state_for_tests(), 1, 0),
+            Err(LeeError::InvalidInput(msg)) if msg == rejection.to_string()
+        ));
+    }
+
+    #[test]
+    fn a_public_transaction_cannot_declare_private_signers() {
+        let (key1, key2, ..) = keys_for_tests();
+        let mut message = transaction_for_tests().message;
+        message
+            .public_context
+            .private_signers
+            .insert(Actor::new(AccountId::new([7; 32]), AccountId::new([8; 32])));
+
+        let tx = signed(message, &[&key1, &key2]);
+        let rejection = InvalidTransaction::PublicPrivateSigners;
         assert_eq!(tx.check_stateless(), Err(rejection));
         assert!(matches!(
             ValidatedStateDiff::from_public_transaction(&tx, &state_for_tests(), 1, 0),
@@ -358,7 +415,10 @@ pub mod tests {
         let to = Actor::new(addr1, unknown_program_id);
         let message = Message::try_new(
             to,
-            vec![to, Actor::native_balance(addr2)],
+            vec![
+                (to, Authority::Signer),
+                (Actor::native_balance(addr2), Authority::Signer),
+            ],
             nonces,
             instruction,
         )

@@ -22,7 +22,7 @@ use lee_core::{
 #[cfg(feature = "test-utils")]
 use crate::validated_state_diff::{StateDiff, ValidatedStateDiff};
 use crate::{
-    Account, AccountId, PublicAccountEvidence,
+    Account, AccountId, Actor, Authority, PublicAccountEvidence,
     error::LeeError,
     privacy_preserving_transaction::{self, circuit::Proof},
     public_transaction::{self, WitnessEntry},
@@ -155,6 +155,26 @@ pub fn signer_nonces(signers: &[&TestSigner], nonces: Vec<Nonce>) -> BTreeMap<Ac
         .collect()
 }
 
+/// Declares `actors`, each [`Authority::Signer`] exactly when its account is one of `signers`.
+#[must_use]
+pub fn signed_by(
+    actors: impl IntoIterator<Item = Actor>,
+    signers: impl IntoIterator<Item = AccountId>,
+) -> Vec<(Actor, Authority)> {
+    let signers: BTreeSet<AccountId> = signers.into_iter().collect();
+    actors
+        .into_iter()
+        .map(|actor| {
+            let authority = if signers.contains(&actor.account_id) {
+                Authority::Signer
+            } else {
+                Authority::None
+            };
+            (actor, authority)
+        })
+        .collect()
+}
+
 /// The witness of `signers` for `message`, each signing with its key at its nonce in
 /// `message.nonces` and rotating to the next; each signer must be named in `message.nonces`.
 #[must_use]
@@ -225,6 +245,7 @@ pub fn init_witness(keys: &TestPrivateKeys) -> PrivateWitness {
             commitment_root: DUMMY_COMMITMENT_HASH,
         },
         address_openings: BTreeSet::new(),
+        signer_programs: BTreeSet::from([lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID]),
     }
 }
 
@@ -243,6 +264,7 @@ pub fn update_witness(
             membership_proof,
         },
         address_openings: BTreeSet::new(),
+        signer_programs: BTreeSet::from([lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID]),
     }
 }
 

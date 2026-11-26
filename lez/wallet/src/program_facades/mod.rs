@@ -35,7 +35,10 @@ pub(crate) fn credit_destination<C: WalletSequencerClient>(
     let mention = recipient.select_program_actor_state(program);
     if !pending {
         let joins = mention.identity.account_id() != sender.account_id();
-        return Ok((joins.then(|| mention.receiving()), AsyncDelivery::default()));
+        return Ok((
+            joins.then(|| mention.without_authorization()),
+            AsyncDelivery::default(),
+        ));
     }
     let (_, mut async_delivery) = if sender.is_private() {
         wallet.seal_destination(mention)?

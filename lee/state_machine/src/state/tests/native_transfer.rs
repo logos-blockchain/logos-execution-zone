@@ -105,8 +105,10 @@ fn a_guest_writes_its_own_actor_state_and_sends_a_transfer_of_the_same_account()
         .with_programs([crate::test_methods::scripted()]);
 
     let writer = Actor::new(sender, program_id);
-    let script = Script::write(written.clone())
-        .send_sync(Actor::native_balance(sender), &transfer(recipient, amount));
+    let script = Script::write(written.clone()).send(
+        SyncMessage::new(Actor::native_balance(sender), &transfer(recipient, amount))
+            .with_grants([Actor::native_balance(sender)]),
+    );
     let tx = public_tx(
         writer,
         vec![

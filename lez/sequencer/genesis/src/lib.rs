@@ -9,7 +9,7 @@ use common::{
     transaction::{FeePayee, LeeTransaction, TxEvents, clock_invocation, fee_invocation},
 };
 use lee::{
-    AccountId, Actor, GENESIS_BLOCK_ID, PublicAccountEvidence, PublicTransaction,
+    AccountId, Actor, Authority, GENESIS_BLOCK_ID, PublicAccountEvidence, PublicTransaction,
     public_transaction::{Message, WitnessEntry},
     signature::{
         INITIAL_KEY_TYPE, PublicAccountSecret, Signer, authenticate, current_key, initial_key,
@@ -345,12 +345,21 @@ pub fn genesis_stake_message(
         ..Message::try_new(
             ownership,
             vec![
-                ownership,
-                Actor::native_balance(system_accounts::stake_funds_account_id(&ownership_id)),
-                Actor::native_balance(genesis_stake_funding_account()),
-                Actor::new(
-                    system_accounts::sequencer_stake_config_account_id(),
-                    sequencer_stake_program_id,
+                (ownership, Authority::Signer),
+                (
+                    Actor::native_balance(system_accounts::stake_funds_account_id(&ownership_id)),
+                    Authority::None,
+                ),
+                (
+                    Actor::native_balance(genesis_stake_funding_account()),
+                    Authority::Signer,
+                ),
+                (
+                    Actor::new(
+                        system_accounts::sequencer_stake_config_account_id(),
+                        sequencer_stake_program_id,
+                    ),
+                    Authority::None,
                 ),
             ],
             BTreeMap::from([
@@ -501,7 +510,7 @@ fn build_init_channel_params_transaction(
     );
     let message = Message::try_new(
         config,
-        vec![config],
+        vec![(config, Authority::None)],
         BTreeMap::new(),
         sequencer_stake_core::Message::InitChannelParams {
             params: channel_params,

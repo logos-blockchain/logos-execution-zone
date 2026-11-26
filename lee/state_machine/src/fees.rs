@@ -53,7 +53,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        PublicTransaction, V03State, ValidatedStateDiff,
+        Authority, PublicTransaction, V03State, ValidatedStateDiff,
         error::LeeError,
         public_transaction::{Message, WitnessSet},
         test_utils::{TestSigner, witness_for},
@@ -69,7 +69,10 @@ mod tests {
                 keys().0.account_id(),
                 AccountId::from_builtin_program([0_u32; 8]),
             ),
-            vec![Actor::native_balance(keys().0.account_id())],
+            vec![(
+                Actor::native_balance(keys().0.account_id()),
+                Authority::Signer,
+            )],
             BTreeMap::from([(keys().0.account_id(), Nonce(0))]),
             vec![1_u8, 2, 3],
             FeeDeclaration::new(payer, 1_000, 0, 10_000),
@@ -83,7 +86,10 @@ mod tests {
                 keys().0.account_id(),
                 AccountId::from_builtin_program([0_u32; 8]),
             ),
-            vec![Actor::native_balance(keys().0.account_id())],
+            vec![(
+                Actor::native_balance(keys().0.account_id()),
+                Authority::Signer,
+            )],
             BTreeMap::from([(keys().0.account_id(), Nonce(0))]),
             vec![1_u8, 2, 3],
         )

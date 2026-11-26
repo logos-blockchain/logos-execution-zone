@@ -226,7 +226,7 @@ async fn run_scripted_write(ctx: &mut TestContext, program: AccountId) -> Result
     let payer = ctx.existing_public_accounts()[0];
     let target_id = new_account(ctx, false, None).await?;
     let signers = [target_id, payer];
-    let nonces = signers
+    let nonces: std::collections::BTreeMap<_, _> = signers
         .into_iter()
         .zip(ctx.wallet_mut().get_accounts_nonces(&signers).await?)
         .collect();
@@ -234,7 +234,7 @@ async fn run_scripted_write(ctx: &mut TestContext, program: AccountId) -> Result
     let target = Actor::new(target_id, program);
     let message = lee::public_transaction::Message::try_new_with_fees(
         target,
-        [target],
+        lee::test_utils::signed_by([target], nonces.keys().copied()),
         nonces,
         test_guest_core::Script::write(written.clone()),
         common::test_utils::test_fee_declaration(payer),

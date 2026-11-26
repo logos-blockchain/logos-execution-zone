@@ -43,10 +43,10 @@ pub const INITIAL_PRIVATE_BALANCES_FOR_WALLET: [u128; 2] = [10_000_000_000, 20_0
 
 /// What the funder is charged for a shield that funds a private account at setup, which
 /// genesis must price before any transaction exists; setup checks it against the charge.
-pub const SHIELD_FEE: u128 = 5_163_368;
+pub const SHIELD_FEE: u128 = 5_163_400;
 
 /// The first of those shields: the funder's signature carries its initial key at nonce 0.
-pub const FIRST_SHIELD_FEE: u128 = 5_163_632;
+pub const FIRST_SHIELD_FEE: u128 = 5_163_664;
 
 /// The public account for funding the private accounts' balances at genesis.
 pub(crate) const PRIVATE_FUNDER_INDEX: usize = 0;

@@ -55,7 +55,7 @@ async fn fund_private_pda(
         .send_tx(
             vec![
                 AccountIdentity::Public(sender).balance(),
-                pda.balance().receiving(),
+                pda.balance().without_authorization(),
             ],
             0,
             transfer,
@@ -170,7 +170,7 @@ async fn a_private_pda_receives_and_spends() -> Result<()> {
         let segment = Actor::new(segment_ids[i], lee_core::program::PROGRAM_LOADER_ACCOUNT_ID);
         let segment_message = lee::public_transaction::Message::try_new_with_fees(
             segment,
-            vec![segment],
+            lee::test_utils::signed_by(vec![segment], [segment_ids[i], payer.account_id]),
             BTreeMap::from([
                 (segment_ids[i], lee_core::account::Nonce(0)),
                 (payer.account_id, lee_core::account::Nonce(next_payer_nonce)),
@@ -199,7 +199,7 @@ async fn a_private_pda_receives_and_spends() -> Result<()> {
     let header = Actor::new(proxy_id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID);
     let header_message = lee::public_transaction::Message::try_new_with_fees(
         header,
-        vec![header],
+        lee::test_utils::signed_by(vec![header], [proxy_id, payer.account_id]),
         BTreeMap::from([
             (proxy_id, lee_core::account::Nonce(0)),
             (payer.account_id, lee_core::account::Nonce(next_payer_nonce)),

@@ -7,7 +7,7 @@
 //! The clock account uses this program's actor state.
 
 use clock_core::{CLOCK_PROGRAM_ACCOUNT_ID, ClockAccountData, Message, Reply};
-use lee_core::program::{ReceiveInput, Response};
+use lee_core::program::{ReceiveInput, Response, SyncMessage};
 
 lee_core::actor_entrypoint!(handle_message);
 
@@ -50,7 +50,8 @@ fn send_back(input: &ReceiveInput, reply: Reply) -> Response {
     let sender = input
         .from
         .expect("The clock replies to its sender, so a root call cannot read it");
-    Response::keep_state().send_sync(sender, &reply)
+    // The reply returns the grant the sender lent, so its handler can act on it.
+    Response::keep_state().send(SyncMessage::new(sender, &reply).with_lent_grant(input))
 }
 
 fn round_down(value: u64, granularity: u64) -> u64 {
@@ -93,7 +94,7 @@ mod tests {
         let input = ReceiveInput {
             receiver,
             from,
-            is_authorized: false,
+            grants: std::collections::BTreeSet::new(),
             pre_state: ActorState::from(pre.to_bytes()),
             message: borsh::to_vec(&message).unwrap(),
         };
@@ -161,6 +162,27 @@ mod tests {
             );
             assert!(transition.response.async_messages.is_empty());
         }
+    }
+
+    #[test]
+    fn a_read_returns_only_the_grant_its_sender_lent() {
+        let sender = Actor::new(AccountId::new([3; 32]), AccountId::new([4; 32]));
+        let other = Actor::new(AccountId::new([5; 32]), AccountId::new([4; 32]));
+        let message = Message::ReadBlockId { granularity: 1 };
+        let input = ReceiveInput {
+            receiver: Actor::new(CLOCK_PROGRAM_ACCOUNT_ID, CLOCK),
+            from: Some(sender),
+            grants: std::collections::BTreeSet::from([sender, other]),
+            pre_state: ActorState::from(data(57).to_bytes()),
+            message: borsh::to_vec(&message).unwrap(),
+        };
+
+        let transition = handle_message(&input, message).into_transition(input);
+
+        assert_eq!(
+            transition.response.sync_messages,
+            vec![SyncMessage::new(sender, &Reply::BlockId(57)).with_grants([sender])]
+        );
     }
 
     #[test]

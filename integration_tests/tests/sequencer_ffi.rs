@@ -16,7 +16,7 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use core_ffi::primitives::types::{
     FfiOption,
-    actor::FfiActor,
+    actor::FfiDeclaredActor,
     transaction::{FfiTransaction, FfiTransactionKind},
 };
 use integration_tests::{
@@ -367,7 +367,7 @@ fn sequencer_ffi_acc_id_to_tx_map() -> Result<()> {
         anyhow::ensure!(
             actors
                 .iter()
-                .any(|actor| AccountId::from(actor.account_id) == owner_id),
+                .any(|declared| AccountId::from(declared.actor.account_id) == owner_id),
             "Transaction {i} does not declare {owner_id}"
         );
 
@@ -561,7 +561,7 @@ fn sequencer_ffi_starting_events_produced_correctly() -> Result<()> {
 }
 
 /// The root actor, declared actors and root message of a public `tx`, borrowed from the FFI.
-fn public_call(tx: &FfiTransaction) -> Option<(Actor, &[FfiActor], &[u8])> {
+fn public_call(tx: &FfiTransaction) -> Option<(Actor, &[FfiDeclaredActor], &[u8])> {
     let FfiTransactionKind::Public = tx.kind else {
         return None;
     };

@@ -4,7 +4,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     RootCall,
     account::{Actor, Nonce},
-    execution_state::PublicExecutionContext,
+    execution_state::{Authority, PublicExecutionContext},
     program::MessageData,
 };
 
@@ -28,7 +28,7 @@ impl Message {
     pub fn new(
         to: Actor,
         message: MessageData,
-        public_actors: impl IntoIterator<Item = Actor>,
+        public_actors: impl IntoIterator<Item = (Actor, Authority)>,
         nonces: BTreeMap<AccountId, Nonce>,
         fee: Option<FeeDeclaration>,
         admission_evidence: Vec<PublicAccountEvidence>,
@@ -49,7 +49,7 @@ impl Message {
     /// [`Self::try_new_with_fees`].
     pub fn try_new(
         to: Actor,
-        public_actors: impl IntoIterator<Item = Actor>,
+        public_actors: impl IntoIterator<Item = (Actor, Authority)>,
         nonces: BTreeMap<AccountId, Nonce>,
         message: impl BorshSerialize,
     ) -> Result<Self, LeeError> {
@@ -64,7 +64,7 @@ impl Message {
 
     pub fn try_new_with_fees(
         to: Actor,
-        public_actors: impl IntoIterator<Item = Actor>,
+        public_actors: impl IntoIterator<Item = (Actor, Authority)>,
         nonces: BTreeMap<AccountId, Nonce>,
         message: impl BorshSerialize,
         fee: FeeDeclaration,
@@ -82,7 +82,7 @@ impl Message {
     pub fn new_preserialized(
         to: Actor,
         message: MessageData,
-        public_actors: impl IntoIterator<Item = Actor>,
+        public_actors: impl IntoIterator<Item = (Actor, Authority)>,
         nonces: BTreeMap<AccountId, Nonce>,
         fee: Option<FeeDeclaration>,
     ) -> Self {
@@ -107,6 +107,7 @@ mod tests {
     use sha2::{Digest as _, Sha256};
 
     use super::{Message, PREFIX};
+    use crate::Authority;
 
     fn key(commitment: u8) -> SigningKeyState {
         SigningKeyState {
@@ -120,7 +121,7 @@ mod tests {
         Message::new_preserialized(
             to,
             vec![0],
-            [to],
+            [(to, Authority::Signer)],
             BTreeMap::from([(to.account_id, Nonce(1))]),
             None,
         )
@@ -132,7 +133,7 @@ mod tests {
         let message = Message::new_preserialized(
             to,
             vec![0],
-            [to],
+            [(to, Authority::Signer)],
             BTreeMap::from([(to.account_id, Nonce(1))]),
             None,
         );
@@ -141,9 +142,11 @@ mod tests {
             &[1, 0, 0, 0][..], // public_context.actors: one actor
             &[42; 32],
             &[0; 32],
+            &[1],          // Authority::Signer: its account signs
             &[1, 0, 0, 0], // public_context.authorized_accounts: the account naming a nonce
             &[42; 32],
             &[0, 0, 0, 0], // public_context.promotions: none
+            &[0, 0, 0, 0], // public_context.private_signers: none
             &[42; 32],     // execution.root.to.account_id
             &[0; 32],      // execution.root.to.program_account_id: the native token program
             &[1, 0, 0, 0], // execution.root.message
@@ -166,11 +169,11 @@ mod tests {
         let message = pinned_message();
         assert_eq!(
             message.message_with_keys(&[key(7)]),
-            hex!("7d75d1b69cfdc57948e4bf46066fc123c0dde6d6a07fac2188a166188b0e2583")
+            hex!("ae983ec82822a8363e7fc615b34760e312acba3b319b34b6d58e96b4192b6ed7")
         );
         assert_eq!(
             message.message_with_keys(&[key(1), key(2), key(3)]),
-            hex!("c080ce0d2bb1e35332de33f8907c2fc9c0d864d921192ca51ec34b604c49a710")
+            hex!("53a14d2f1445b1e1eb042d95a39d58268edf89efc90600be5eb8fa5aa9da37fc")
         );
     }
 

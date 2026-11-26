@@ -31,6 +31,7 @@ use crate::{
             update_witness,
         },
     },
+    test_utils::signed_by,
     validated_state_diff::ValidatedStateDiff,
 };
 
@@ -107,7 +108,10 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_accounts() {
     let root_transfer = transfer(recipient_account_id, balance_to_move);
     let (output, proof) = execute_and_prove(
         ProvingInput {
-            public_context: PublicExecutionContext::new(vec![sender], [sender_id]),
+            public_context: PublicExecutionContext::new(
+                signed_by(vec![sender], [sender_id]),
+                [sender_id],
+            ),
             private_witnesses: vec![init_witness(&recipient_keys)],
             ..proving_input(root(sender, &root_transfer))
         },
@@ -343,6 +347,7 @@ fn note_ciphertext_is_padded_to_the_requested_length() {
                 membership_proof: commitment_set.get_proof_for(&commitment).unwrap(),
             },
             address_openings: BTreeSet::new(),
+            signer_programs: BTreeSet::from([lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID]),
         },
         &Script::default(),
         Some(PAD),
@@ -432,7 +437,10 @@ fn prove_pda_spend(
     let recipient = Actor::native_balance(AccountId::new([0; 32]));
     execute_and_prove(
         ProvingInput {
-            public_context: PublicExecutionContext::new(vec![recipient], [recipient.account_id]),
+            public_context: PublicExecutionContext::new(
+                signed_by(vec![recipient], [recipient.account_id]),
+                [recipient.account_id],
+            ),
             private_witnesses: vec![witness],
             ..proving_input(root(
                 Actor::new(handle_account, scripted_id()),
@@ -518,6 +526,7 @@ fn unauthorized_update(
             membership_proof,
         },
         address_openings: BTreeSet::new(),
+        signer_programs: BTreeSet::new(),
     }
 }
 
@@ -598,7 +607,10 @@ fn the_prover_never_reads_a_public_actor_state() {
     // proof.
     let (output, proof) = execute_and_prove(
         ProvingInput {
-            public_context: PublicExecutionContext::new(vec![root_actor, callee], []),
+            public_context: PublicExecutionContext::new(
+                signed_by(vec![root_actor, callee], []),
+                [],
+            ),
             ..proving_input(root(root_actor, &script))
         },
         &Simulation::default(),
@@ -686,7 +698,7 @@ fn direct_input(
             claims: Vec::new(),
             root: root(Actor::new(keys.account_id(), program_account_id), script),
             public_context: PublicExecutionContext::default(),
-            private_witnesses: vec![init_witness(&keys)],
+            private_witnesses: vec![init_witness(&keys).with_signer_programs([program_account_id])],
             dummy_inputs: Vec::new(),
             ciphertext_padding: None,
             recoveries: Vec::new(),
@@ -712,10 +724,15 @@ fn assert_circuit_rejects<T: std::fmt::Debug>(result: &Result<T, LeeError>, expe
 // The root transition `direct_input` schedules for `script` on a `scripted` actor.
 fn scripted_root_input(script: &Script, is_authorized: bool) -> ReceiveInput {
     let keys = test_private_account_keys_1();
+    let receiver = Actor::new(keys.account_id(), scripted_id());
     ReceiveInput {
-        receiver: Actor::new(keys.account_id(), scripted_id()),
+        receiver,
         from: None,
-        is_authorized,
+        grants: if is_authorized {
+            BTreeSet::from([receiver, Actor::native_balance(keys.account_id())])
+        } else {
+            BTreeSet::new()
+        },
         pre_state: ActorState::empty(),
         message: borsh::to_vec(script).unwrap(),
     }
@@ -955,7 +972,7 @@ fn preparation_meters_a_public_self_call_chain_as_settlement_does() {
             public_actor_states: &HashMap::new(),
             admitted_accounts: None,
             recorder: SenderPresentationRecorder {
-                choose: &mut |_| None,
+                choose: &mut |_, _| None,
                 recorded: Vec::new(),
             },
             selector: PromotionSelector {
@@ -987,7 +1004,7 @@ fn preparation_meters_a_public_self_call_chain_as_settlement_does() {
                 &ReceiveInput {
                     receiver: revisited,
                     from: None,
-                    is_authorized: false,
+                    grants: BTreeSet::new(),
                     pre_state: ActorState::empty(),
                     message: tx.message.execution.root.message.clone(),
                 },

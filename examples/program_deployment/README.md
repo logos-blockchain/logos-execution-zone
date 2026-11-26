@@ -324,15 +324,21 @@ wallet_core
 
 # 8. Account authorization mechanism
 The Hello World program does not check `is_authorized` before writing its actor state.
-For regular accounts, authorization comes from:
+An actor is authorized when its delivery carries a grant over it. Grants come from:
 
-- a transaction signature for a public account;
-- knowledge of the authorization secret key (`ask`) for a private account.
+- a transaction signature, for the public actors the transaction marks `Signer`;
+- knowledge of the authorization secret key (`ask`), for the private actors the witness marks;
+- a PDA seed, for the actor it derives, on the message its program sends with it.
 
-Programs receive the result in `ReceiveInput::is_authorized`. The authorized Hello World example checks it before writing:
+A signature or `ask` grants only the root call. A program passes a grant on only by attaching
+it to a message it sends.
+
+Programs receive the grants they hold in `ReceiveInput::grants`, and
+`ReceiveInput::is_authorized()` reports whether they include the receiver's own. The authorized
+Hello World example checks this before writing:
 
 ```rust
-assert!(input.is_authorized, "Missing required authorization");
+assert!(input.is_authorized(), "Missing required authorization");
 ```
 
 # 9. Public execution of the Hello world with authorization example

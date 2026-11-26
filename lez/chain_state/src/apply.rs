@@ -599,7 +599,7 @@ fn settle_private_transaction(
         let refund_diff = lee::ValidatedStateDiff::from_fee_settlement_invocation(
             refund_msg.execution.root.to,
             &refund_msg.execution.root.message,
-            &refund_msg.public_context.actors,
+            refund_msg.public_context.actors.clone(),
             &HashSet::new(),
             state,
             block_id,
@@ -686,7 +686,7 @@ fn settle_charged_transaction(
     let reserve_diff = lee::ValidatedStateDiff::from_fee_settlement_invocation(
         reserve_msg.execution.root.to,
         &reserve_msg.execution.root.message,
-        &reserve_msg.public_context.actors,
+        reserve_msg.public_context.actors.clone(),
         &payer_authorized,
         state,
         block_id,
@@ -775,7 +775,7 @@ fn settle_charged_transaction(
         let refund_diff = lee::ValidatedStateDiff::from_fee_settlement_invocation(
             refund_msg.execution.root.to,
             &refund_msg.execution.root.message,
-            &refund_msg.public_context.actors,
+            refund_msg.public_context.actors.clone(),
             &HashSet::new(),
             state,
             block_id,
@@ -1167,7 +1167,10 @@ mod tests {
         let apply = LeeTransaction::Public(PublicTransaction::new(
             public_transaction::Message::try_new(
                 registry_actor(),
-                [registry_actor(), loader_actor(&clock_core::CLOCK_NAME)],
+                [
+                    (registry_actor(), lee::Authority::None),
+                    (loader_actor(&clock_core::CLOCK_NAME), lee::Authority::None),
+                ],
                 BTreeMap::new(),
                 Message::Apply {
                     name: clock_core::CLOCK_NAME,
@@ -1330,9 +1333,12 @@ mod tests {
         let message = lee::public_transaction::Message::try_new_with_fees(
             fee_state,
             vec![
-                fee_state,
-                lee::Actor::native_balance(system_accounts::fee_inbox_account_id()),
-                lee::Actor::native_balance(attacker),
+                (fee_state, lee::Authority::None),
+                (
+                    lee::Actor::native_balance(system_accounts::fee_inbox_account_id()),
+                    lee::Authority::None,
+                ),
+                (lee::Actor::native_balance(attacker), lee::Authority::Signer),
             ],
             BTreeMap::from([(attacker, state.get_account_by_id(attacker).nonce)]),
             fee_core::Message::Refund {
@@ -1370,7 +1376,7 @@ mod tests {
         // can reject the block.
         let message = public_transaction::Message::try_new_with_fees(
             clock,
-            vec![clock],
+            vec![(clock, lee::Authority::None)],
             BTreeMap::from([(payer, payer_nonce)]),
             clock_core::Message::Tick {
                 timestamp: 200,
@@ -1635,7 +1641,7 @@ mod tests {
         let emitter = Actor::new(from, emitter_id);
         let message = public_transaction::Message::try_new_with_fees(
             emitter,
-            vec![emitter],
+            vec![(emitter, lee::Authority::Signer)],
             BTreeMap::from([(from, Nonce(0))]),
             Script {
                 response: Response::keep_state().event(emitted(5)),
@@ -1745,7 +1751,10 @@ mod tests {
                     .unwrap(),
                 }),
                 fee,
-                public_context: lee::PublicExecutionContext::new(public_actors, []),
+                public_context: lee::PublicExecutionContext::new(
+                    lee::test_utils::signed_by(public_actors, []),
+                    [],
+                ),
                 private_witnesses: vec![update_witness(keys, funded.clone(), membership_proof)],
                 dummy_inputs: Vec::new(),
                 ciphertext_padding: None,
@@ -1826,7 +1835,10 @@ mod tests {
                         .unwrap(),
                 }),
                 fee: Some(fee),
-                public_context: lee::PublicExecutionContext::new(public_actors, []),
+                public_context: lee::PublicExecutionContext::new(
+                    lee::test_utils::signed_by(public_actors, []),
+                    [],
+                ),
                 private_witnesses: vec![update_witness(keys, funded.clone(), membership_proof)],
                 dummy_inputs: Vec::new(),
                 ciphertext_padding: None,
@@ -1965,7 +1977,10 @@ mod tests {
                 root: TransactionEntry::Sync(root),
                 claims: Vec::new(),
                 fee,
-                public_context: lee::PublicExecutionContext::new(public_actors, signer),
+                public_context: lee::PublicExecutionContext::new(
+                    lee::test_utils::signed_by(public_actors, signer),
+                    signer,
+                ),
                 private_witnesses: vec![update_witness(keys, funded.clone(), membership_proof)],
                 dummy_inputs: Vec::new(),
                 ciphertext_padding: None,

@@ -1,4 +1,8 @@
-use lee_core::{RootCall, execution_state::BoundaryStep, signing_key::signature_program_id};
+use lee_core::{
+    RootCall,
+    execution_state::{Authority, BoundaryStep},
+    signing_key::signature_program_id,
+};
 
 use super::*;
 
@@ -33,7 +37,7 @@ impl PrivateRoot {
             .get_proof_for_commitment(&Commitment::new(&self.account_id, &self.pre_account))
             .expect("the account's commitment must be in state");
         ProvingInput {
-            public_context: PublicExecutionContext::new(public_actors, []),
+            public_context: PublicExecutionContext::new(signed_by(public_actors, []), []),
             private_witnesses: vec![update_witness(
                 &self.keys,
                 self.pre_account.clone(),
@@ -73,7 +77,7 @@ impl NestedBoundary {
         let (outer, inner) = nested_actors();
         let proven = execute_and_prove_with_cross_messages(
             ProvingInput {
-                public_context: PublicExecutionContext::new(vec![outer, inner], []),
+                public_context: PublicExecutionContext::new(signed_by(vec![outer, inner], []), []),
                 private_witnesses: vec![init_witness(&keys)],
                 ..proving_input(root(outer, outer_script))
             },
@@ -84,8 +88,7 @@ impl NestedBoundary {
                         to: nested_private(),
                         message: borsh::to_vec(&inner_transition()).unwrap(),
                     },
-                    inherited_authorizations: BTreeSet::new(),
-                    inherits_entry_authorizations: true,
+                    grants: BTreeSet::new(),
                     pda_seeds: BTreeSet::new(),
                 }],
                 Vec::new(),
@@ -302,6 +305,9 @@ fn a_journal_claiming_an_unsigned_account_authorized_is_rejected() {
 
     // Dropping the claim to match the missing signature detaches the statement from its proof.
     message.public_context.authorized_accounts.clear();
+    for authority in message.public_context.actors.values_mut() {
+        *authority = Authority::None;
+    }
     let unclaimed = PrivacyPreservingTransaction::new(
         message.clone(),
         privacy_witness_for(&message, witness_set.proof, &[]),
@@ -366,10 +372,14 @@ fn a_failing_public_transition_leaves_the_state_untouched() {
     let overdraft: u128 = 11;
 
     // The builder's snapshot funds the overdraft, so it proves and only fails once settled.
-    let script = Script::write(vec![1]).send_sync(sender, &transfer(recipient_id, overdraft));
+    let script = Script::write(vec![1])
+        .send(SyncMessage::new(sender, &transfer(recipient_id, overdraft)).with_grants([sender]));
     let proven = execute_and_prove(
         ProvingInput {
-            public_context: PublicExecutionContext::new(vec![own, sender], [sender_id]),
+            public_context: PublicExecutionContext::new(
+                signed_by(vec![own, sender], [sender_id]),
+                [sender_id],
+            ),
             private_witnesses: vec![init_witness(&recipient_keys)],
             ..proving_input(root(own, &script))
         },
@@ -498,7 +508,7 @@ fn an_unauthorized_public_debit_proves_but_is_refused_at_settlement() {
     // An honest prover would refuse the debit; this one assumes its credit without running it.
     let proven = execute_and_prove_with_cross_messages(
         ProvingInput {
-            public_context: PublicExecutionContext::new(vec![sender], []),
+            public_context: PublicExecutionContext::new(signed_by(vec![sender], []), []),
             private_witnesses: vec![init_witness(&recipient_keys)],
             ..proving_input(root(sender, &transfer(recipient_id, 10)))
         },
@@ -587,9 +597,12 @@ fn a_private_roots_public_outputs_settle_against_live_state() {
     let tx = root.prove(
         &Script::default()
             .send_sync(written_to, &Script::write(vec![5; 4]))
-            .send_sync(
-                Actor::native_balance(root.account_id),
-                &transfer(recipient.account_id, amount),
+            .send(
+                SyncMessage::new(
+                    Actor::native_balance(root.account_id),
+                    &transfer(recipient.account_id, amount),
+                )
+                .with_grants([Actor::native_balance(root.account_id)]),
             ),
         vec![written_to, recipient],
     );
@@ -666,7 +679,7 @@ fn a_public_transition_forging_any_echoed_field_is_refused() {
     for field in [
         ForgeField::Receiver,
         ForgeField::Sender,
-        ForgeField::IsAuthorized,
+        ForgeField::Grants,
         ForgeField::PreState,
         ForgeField::Message,
     ] {

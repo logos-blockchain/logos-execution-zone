@@ -81,7 +81,9 @@ pub fn handle_message(input: &ReceiveInput) -> Result<Transition, TransferError>
             let reader = input
                 .from
                 .ok_or(TransferError::UnroutableRead { account_id })?;
-            Response::keep_state().send_sync(reader, &StateReply::from(input))
+            // The reply returns the grant the reader lent, so its handler can act on it.
+            Response::keep_state()
+                .send(SyncMessage::new(reader, &StateReply::from(input)).with_lent_grant(input))
         }
     };
     Ok(response.into_transition(input.clone()))
@@ -89,7 +91,7 @@ pub fn handle_message(input: &ReceiveInput) -> Result<Transition, TransferError>
 
 fn debit(input: &ReceiveInput, amount: Balance) -> Result<Response, TransferError> {
     let account_id = input.receiver.account_id;
-    if !input.is_authorized {
+    if !input.is_authorized() {
         return Err(TransferError::UnauthorizedSender { account_id });
     }
     let post = decode_balance(&input.pre_state)?
@@ -125,10 +127,11 @@ mod tests {
     }
 
     fn input(self_account: u8, authorized: bool, pre: Balance, message: &Message) -> ReceiveInput {
+        let receiver = native(self_account);
         ReceiveInput {
-            receiver: native(self_account),
+            receiver,
             from: None,
-            is_authorized: authorized,
+            grants: authorized.then_some(receiver).into_iter().collect(),
             pre_state: encode_balance(pre),
             message: borsh::to_vec(message).unwrap(),
         }
@@ -273,6 +276,7 @@ mod tests {
                 to: native(1),
                 message: borsh::to_vec(&transfer(7)).unwrap(),
                 pda_seeds: BTreeSet::from([seed]),
+                grants: BTreeSet::new(),
             }
         );
     }
@@ -302,6 +306,32 @@ mod tests {
                 )],
                 Vec::new()
             )
+        );
+    }
+
+    #[test]
+    fn a_state_read_returns_only_the_grant_its_reader_lent() {
+        let reader = Actor::new(AccountId::new([9; 32]), AccountId::new([8; 32]));
+        let other = Actor::new(AccountId::new([7; 32]), AccountId::new([8; 32]));
+
+        let transition = handle_message(&ReceiveInput {
+            from: Some(reader),
+            grants: BTreeSet::from([reader, other]),
+            ..input(1, false, 100, &Message::ReadState)
+        })
+        .unwrap();
+
+        assert_eq!(
+            transition.response.sync_messages,
+            vec![
+                SyncMessage::new(
+                    reader,
+                    &StateReply {
+                        state: encode_balance(100),
+                    },
+                )
+                .with_grants([reader])
+            ]
         );
     }
 
