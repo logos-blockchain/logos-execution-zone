@@ -2090,8 +2090,11 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             );
         }
         let opening = account_manager::random_bytes();
+        // Where the fee's recovery sits; a publicly paid transaction goes without it.
+        let mut fee_recovery_idx = None;
         // A refund to a public target is never published to the payer's alias.
         if refund_to.is_none() {
+            fee_recovery_idx = Some(input.recoveries.len());
             input
                 .recoveries
                 .push(acc_manager.fee_recovery(payer, opening)?);
@@ -2168,8 +2171,8 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             };
             if short {
                 let mut unpaid = input.clone();
-                if refund_to.is_none() {
-                    unpaid.recoveries.pop();
+                if let Some(index) = fee_recovery_idx {
+                    unpaid.recoveries.remove(index);
                 }
                 return send_publicly_paid(signer, unpaid).await;
             }
