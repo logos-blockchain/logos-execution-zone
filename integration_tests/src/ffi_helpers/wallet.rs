@@ -13,9 +13,12 @@ use std::{
 use anyhow::Result;
 use common::HashType;
 use core_ffi::{
-    error, primitives::types::{
+    error,
+    primitives::types::{
         FfiAccountId, FfiBytes32, FfiPrivateAccountKeys, FfiSigningKeyState, account::FfiAccount,
-    }, sequencer::SequencerServiceFFI, wallet::{
+    },
+    sequencer::SequencerServiceFFI,
+    wallet::{
         FfiAccountIdWithPrivacy, FfiAccountIdentity, FfiAccountList, FfiAccountMention,
         FfiPendingMessageList, FfiTransferResult, WalletHandle,
         fees::{FfiFeeParams, FfiFeeState},
