@@ -179,7 +179,7 @@ fn a_public_transaction_rejects_a_transition_forging_any_echoed_field() {
     for field in [
         ForgeField::Receiver,
         ForgeField::Sender,
-        ForgeField::IsAuthorized,
+        ForgeField::Grants,
         ForgeField::PreState,
         ForgeField::Message,
     ] {

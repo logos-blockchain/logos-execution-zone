@@ -727,7 +727,6 @@ fn scripted_root_input(script: &Script, is_authorized: bool) -> ReceiveInput {
     ReceiveInput {
         receiver,
         from: None,
-        is_authorized,
         grants: if is_authorized {
             BTreeSet::from([receiver, Actor::native_balance(keys.account_id())])
         } else {
@@ -974,7 +973,6 @@ fn preparation_meters_a_public_self_call_chain_as_settlement_does() {
                 &ReceiveInput {
                     receiver: revisited,
                     from: None,
-                    is_authorized: false,
                     grants: BTreeSet::new(),
                     pre_state: ActorState::empty(),
                     message: tx.message.execution.root.message.clone(),

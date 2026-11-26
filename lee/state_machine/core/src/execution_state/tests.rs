@@ -229,11 +229,6 @@ impl ExecutionEnvironment for Script {
         input: &ReceiveInput,
         _view: &TransitionView<'_>,
     ) -> Result<Transition, ExecutionError> {
-        assert_eq!(
-            input.is_authorized,
-            input.grants.contains(&input.receiver),
-            "a handler is authorized exactly when it holds its own grant"
-        );
         self.log.push(input.clone());
         let handler = self
             .handlers
@@ -479,7 +474,7 @@ fn authorized(script: &Script) -> Vec<(Actor, bool)> {
     script
         .log
         .iter()
-        .map(|input| (input.receiver, input.is_authorized))
+        .map(|input| (input.receiver, input.is_authorized()))
         .collect()
 }
 
@@ -4114,7 +4109,6 @@ fn a_receipt_root_to_a_private_pda_grants_its_receiver_nothing() {
         vec![ReceiveInput {
             receiver: custody,
             from: Some(actor(4, 5)),
-            is_authorized: false,
             grants: BTreeSet::new(),
             pre_state: ActorState::empty(),
             message: b"stored".to_vec(),

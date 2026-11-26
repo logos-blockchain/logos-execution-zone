@@ -191,7 +191,7 @@ fn deliver(input: &ReceiveInput, delivery: Delivery) -> Response {
 /// program that reached it; whether that program may act, and who the authority is, stay the
 /// config's own answer.
 fn forward_as_authority(input: &ReceiveInput, message: &Message, unsigned: &str) -> Response {
-    assert!(input.is_authorized, "{unsigned}");
+    assert!(input.is_authorized(), "{unsigned}");
     let program = input.receiver.program_account_id;
     Response::keep_state().send_sync(Actor::new(config_account_id(program), program), message)
 }
@@ -362,8 +362,7 @@ mod tests {
         let input = ReceiveInput {
             receiver,
             from: origin.map(|sender| Actor::new(sender, sender)),
-            is_authorized,
-            grants: std::collections::BTreeSet::new(),
+            grants: is_authorized.then_some(receiver).into_iter().collect(),
             pre_state: ActorState::from(pre),
             message: borsh::to_vec(message).unwrap(),
         };

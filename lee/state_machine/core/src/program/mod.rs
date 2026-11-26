@@ -436,8 +436,6 @@ pub struct ReceiveInput {
     /// The actor that sent this message, at the address it presented; `None` when the transaction
     /// itself submitted it.
     pub from: Option<Actor>,
-    /// Whether the delivery carries a grant over the receiver.
-    pub is_authorized: bool,
     /// The actors whose grants this handler holds and may attach to its sync messages.
     pub grants: BTreeSet<Actor>,
     /// State the actor starts with at the beginning of the message handling.
@@ -447,6 +445,12 @@ pub struct ReceiveInput {
 }
 
 impl ReceiveInput {
+    /// Whether the delivery carries a grant over the receiver.
+    #[must_use]
+    pub fn is_authorized(&self) -> bool {
+        self.grants.contains(&self.receiver)
+    }
+
     /// Whether the message came from another actor of the receiver's own program.
     #[must_use]
     pub fn from_own_program(&self) -> bool {

@@ -678,7 +678,7 @@ fn a_public_transition_forging_any_echoed_field_is_refused() {
     for field in [
         ForgeField::Receiver,
         ForgeField::Sender,
-        ForgeField::IsAuthorized,
+        ForgeField::Grants,
         ForgeField::PreState,
         ForgeField::Message,
     ] {

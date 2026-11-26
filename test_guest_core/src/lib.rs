@@ -72,7 +72,7 @@ impl Script {
 pub enum ForgeField {
     Receiver,
     Sender,
-    IsAuthorized,
+    Grants,
     PreState,
     Message,
 }

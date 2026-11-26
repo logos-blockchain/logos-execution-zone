@@ -5,7 +5,6 @@ fn receive_input() -> ReceiveInput {
     ReceiveInput {
         receiver,
         from: None,
-        is_authorized: false,
         grants: BTreeSet::new(),
         pre_state: ActorState::empty(),
         message: Vec::new(),
@@ -384,7 +383,6 @@ fn a_transition_journal_frame_has_a_pinned_layout() {
         input: ReceiveInput {
             receiver,
             from: None,
-            is_authorized: true,
             grants: BTreeSet::from([receiver]),
             pre_state: ActorState::from(b"ab".to_vec()),
             message: b"m".to_vec(),
@@ -407,11 +405,10 @@ fn a_transition_journal_frame_has_a_pinned_layout() {
     };
 
     let expected: Vec<u8> = [
-        &[86, 1, 0, 0][..], // frame length: the 342 bytes below
+        &[85, 1, 0, 0][..], // frame length: the 341 bytes below
         &[1; 32],           // input.receiver.account_id
         &[2; 32],           // input.receiver.program_account_id
         &[0],               // input.from: None
-        &[1],               // input.is_authorized
         &[1, 0, 0, 0],      // input.grants: the receiver
         &[1; 32],
         &[2; 32],

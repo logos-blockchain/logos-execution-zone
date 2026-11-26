@@ -333,11 +333,12 @@ An actor is authorized when its delivery carries a grant over it. Grants come fr
 A signature or `ask` grants only the root call. A program passes a grant on only by attaching
 it to a message it sends.
 
-Programs receive the result in `ReceiveInput::is_authorized`, and the grants they hold in
-`ReceiveInput::grants`. The authorized Hello World example checks `is_authorized` before writing:
+Programs receive the grants they hold in `ReceiveInput::grants`, and
+`ReceiveInput::is_authorized()` reports whether they include the receiver's own. The authorized
+Hello World example checks it before writing:
 
 ```rust
-assert!(input.is_authorized, "Missing required authorization");
+assert!(input.is_authorized(), "Missing required authorization");
 ```
 
 # 9. Public execution of the Hello world with authorization example

@@ -922,7 +922,7 @@ fn a_forged_echo_is_caught_before_proving() {
     for field in [
         ForgeField::Receiver,
         ForgeField::Sender,
-        ForgeField::IsAuthorized,
+        ForgeField::Grants,
         ForgeField::PreState,
         ForgeField::Message,
     ] {

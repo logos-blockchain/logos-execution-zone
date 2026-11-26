@@ -154,7 +154,7 @@ fn deliver(input: &ReceiveInput, delivery: Delivery) -> Response {
 /// act, are the config's own answer and are checked there.
 fn forward_as_authority(input: &ReceiveInput, message: &ReceiverMessage) -> Response {
     assert!(
-        input.is_authorized,
+        input.is_authorized(),
         "the configured authority must authorize a change"
     );
     let program = input.receiver.program_account_id;
@@ -245,8 +245,7 @@ mod tests {
         let input = ReceiveInput {
             receiver,
             from: origin.map(|sender| Actor::new(sender, sender)),
-            is_authorized,
-            grants: std::collections::BTreeSet::new(),
+            grants: is_authorized.then_some(receiver).into_iter().collect(),
             pre_state: ActorState::from(pre),
             message: borsh::to_vec(message).unwrap(),
         };

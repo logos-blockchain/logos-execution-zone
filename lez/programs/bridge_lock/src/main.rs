@@ -63,7 +63,7 @@ fn handle_message(input: &ReceiveInput, message: Message) -> Response {
             // The holder's signature authorizes its own account only, which is why a lock is
             // received there; the derivation pins the debit target to a genuine bridge-lock
             // holding.
-            assert!(input.is_authorized, "holder must authorize the lock");
+            assert!(input.is_authorized(), "holder must authorize the lock");
             let holder = input.receiver.account_id.into_value();
 
             // The outbox actor's program, not a new message field, carries the proposed route.
@@ -203,8 +203,7 @@ mod tests {
         let input = ReceiveInput {
             receiver,
             from: origin.map(|sender| Actor::new(sender, sender)),
-            is_authorized,
-            grants: std::collections::BTreeSet::new(),
+            grants: is_authorized.then_some(receiver).into_iter().collect(),
             pre_state: ActorState::from(pre),
             message: borsh::to_vec(&message).unwrap(),
         };

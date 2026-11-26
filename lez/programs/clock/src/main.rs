@@ -94,7 +94,6 @@ mod tests {
         let input = ReceiveInput {
             receiver,
             from,
-            is_authorized: false,
             grants: std::collections::BTreeSet::new(),
             pre_state: ActorState::from(pre.to_bytes()),
             message: borsh::to_vec(&message).unwrap(),
@@ -173,7 +172,6 @@ mod tests {
         let input = ReceiveInput {
             receiver: Actor::new(CLOCK_PROGRAM_ACCOUNT_ID, CLOCK),
             from: Some(sender),
-            is_authorized: false,
             grants: std::collections::BTreeSet::from([sender, other]),
             pre_state: ActorState::from(data(57).to_bytes()),
             message: borsh::to_vec(&message).unwrap(),

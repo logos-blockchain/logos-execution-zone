@@ -1413,7 +1413,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         environment: &mut E,
     ) -> Result<(), E::Error> {
         let actor = self.resolve(delivery.envelope.to);
-        let (is_authorized, grants) = self.authorize(actor, &delivery)?;
+        let grants = self.authorize(actor, &delivery)?;
         let entry = self
             .accounts
             .get_mut(&actor.account_id)
@@ -1429,7 +1429,6 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         let input = ReceiveInput {
             receiver: actor,
             from: delivery.envelope.from.source(),
-            is_authorized,
             grants: grants.clone(),
             pre_state: entry
                 .staged(actor.program_account_id)
@@ -1555,7 +1554,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
         &mut self,
         actor: Actor,
         delivery: &Delivery<Sender>,
-    ) -> Result<(bool, BTreeSet<Actor>), ExecutionError> {
+    ) -> Result<BTreeSet<Actor>, ExecutionError> {
         let account_id = actor.account_id;
         let issuer = delivery.envelope.from.issuer();
         let entry = self
@@ -1596,7 +1595,7 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
             bind_family(&mut self.pda_family_binding, program, seed, account_id)?;
             grants.insert(actor);
         }
-        Ok((grants.contains(&actor), grants))
+        Ok(grants)
     }
 
     fn public(self) -> PublicOutcome {

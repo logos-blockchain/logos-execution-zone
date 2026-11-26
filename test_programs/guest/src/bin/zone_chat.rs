@@ -35,7 +35,7 @@ fn handle_message(input: &ReceiveInput) -> Response {
         ChatMessage::InitConfig(config) => {
             if input.receiver.account_id == program {
                 assert!(
-                    input.is_authorized,
+                    input.is_authorized(),
                     "the deployer must authorize the receiver config claim"
                 );
                 Response::keep_state().send(

@@ -108,8 +108,7 @@ fn manually_segmented_program_reconstructs_and_executes_identically() {
     let input = ReceiveInput {
         receiver,
         from: None,
-        is_authorized: true,
-        grants: std::collections::BTreeSet::new(),
+        grants: std::collections::BTreeSet::from([receiver]),
         pre_state: ActorState::empty(),
         message: Program::serialize_message(Script::write(vec![7; 4])).unwrap(),
     };

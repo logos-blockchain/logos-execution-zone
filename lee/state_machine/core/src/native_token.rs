@@ -91,7 +91,7 @@ pub fn handle_message(input: &ReceiveInput) -> Result<Transition, TransferError>
 
 fn debit(input: &ReceiveInput, amount: Balance) -> Result<Response, TransferError> {
     let account_id = input.receiver.account_id;
-    if !input.is_authorized {
+    if !input.is_authorized() {
         return Err(TransferError::UnauthorizedSender { account_id });
     }
     let post = decode_balance(&input.pre_state)?
@@ -127,11 +127,11 @@ mod tests {
     }
 
     fn input(self_account: u8, authorized: bool, pre: Balance, message: &Message) -> ReceiveInput {
+        let receiver = native(self_account);
         ReceiveInput {
-            receiver: native(self_account),
+            receiver,
             from: None,
-            is_authorized: authorized,
-            grants: BTreeSet::new(),
+            grants: authorized.then_some(receiver).into_iter().collect(),
             pre_state: encode_balance(pre),
             message: borsh::to_vec(message).unwrap(),
         }

@@ -13,7 +13,7 @@ use crate::{ForgeField, LIVE_PAYOUT_SEED, PayoutRequest, Relay, Script};
 pub fn scripted(input: &ReceiveInput, script: Script) -> Response {
     if script.require_authorized {
         assert!(
-            input.is_authorized,
+            input.is_authorized(),
             "scripted: {} is not authorized",
             input.receiver.account_id
         );
@@ -67,10 +67,13 @@ pub fn forges_echo() -> ! {
             from: Some(input.receiver),
             ..input
         },
-        ForgeField::IsAuthorized => ReceiveInput {
-            is_authorized: !input.is_authorized,
-            ..input
-        },
+        ForgeField::Grants => {
+            let mut grants = input.grants;
+            if !grants.remove(&input.receiver) {
+                grants.insert(input.receiver);
+            }
+            ReceiveInput { grants, ..input }
+        }
         ForgeField::PreState => ReceiveInput {
             pre_state: ActorState::from(b"forged".to_vec()),
             ..input
