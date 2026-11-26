@@ -521,8 +521,8 @@ mod tests {
     use indexer_service_protocol::{
         AccountId, Actor, BoundaryStep, Ciphertext, Commitment, CommitmentSetDigest, Delivery,
         EncryptedNote, EphemeralPublicKey, FeeDeclaration, FeeFallback, KeyType, MessageEnvelope,
-        Nullifier, PrivateAction, ProvenFee, PublicExecutionContext, Publication, RootCall,
-        SealedMessage, SigningKeyState,
+        Nullifier, ProvenFee, PublicExecutionContext, Publication, RootCall, SealedMessage,
+        SigningKeyState,
     };
 
     use super::*;
@@ -661,15 +661,10 @@ mod tests {
                     refund_to: Some(account_id(70)),
                     tip: 9,
                     fallback: Some(FeeFallback {
-                        action: PrivateAction {
-                            nullifier: Nullifier([71; 32]),
-                            root: CommitmentSetDigest([72; 32]),
-                            commitment: Commitment([73; 32]),
-                            encrypted_post_state: EncryptedNote {
-                                ciphertext: Ciphertext(vec![74; 3]),
-                                epk: EphemeralPublicKey(vec![75; 2]),
-                            },
-                        },
+                        nullifier: Nullifier([71; 32]),
+                        root: CommitmentSetDigest([72; 32]),
+                        commitment: Commitment([73; 32]),
+                        ciphertext: Ciphertext(vec![74; 3]),
                         boundary: vec![
                             BoundaryStep::PrivateToPublic(repeated),
                             BoundaryStep::EndPublicSubtree,

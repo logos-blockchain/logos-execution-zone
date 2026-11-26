@@ -2123,9 +2123,12 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             );
         }
         let opening = account_manager::random_bytes();
-        input
-            .recoveries
-            .push(acc_manager.fee_recovery(payer, opening)?);
+        // A refund to a public target is never published to the payer's alias.
+        if refund_to.is_none() {
+            input
+                .recoveries
+                .push(acc_manager.fee_recovery(payer, opening)?);
+        }
         let priced = |amount| {
             let mut priced = input.clone();
             priced.fee = Some(FeeTransfer {
@@ -3270,7 +3273,7 @@ fn spent_in(block: &Block) -> Vec<Nullifier> {
                 .as_ref()
                 .and_then(|fee| fee.fallback.as_ref());
             match (block.body.is_reverted(position), fallback) {
-                (true, Some(fallback)) => vec![fallback.action.nullifier],
+                (true, Some(fallback)) => vec![fallback.nullifier],
                 (true, None) => Vec::new(),
                 (false, _) => execution
                     .private_actions
@@ -3288,6 +3291,17 @@ fn decrypt_note(
     secret: &SharedSecretKey,
 ) -> Option<(lee_core::PrivateAccountKind, Account)> {
     lee_core::EncryptionScheme::decrypt(
+        &action.encrypted_post_state.ciphertext,
+        secret,
+        &action.nullifier,
+    )
+}
+
+fn decrypt_fee_fallback_note(
+    action: &lee_core::PrivateAction,
+    secret: &SharedSecretKey,
+) -> Option<(lee_core::PrivateAccountKind, Account)> {
+    lee_core::EncryptionScheme::decrypt_fee_fallback(
         &action.encrypted_post_state.ciphertext,
         secret,
         &action.nullifier,

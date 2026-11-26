@@ -124,5 +124,8 @@ async fn a_fee_refund_goes_to_the_public_target() -> Result<()> {
         INITIAL_PRIVATE_BALANCES_FOR_WALLET[0] - 100 - reserve
     );
     assert!(ctx.wallet_mut().owned_pending_messages().await?.is_empty());
+    // No refund reaches the payer's alias, so the transaction binds no recovery for one.
+    let tx = test_fixtures::fetch_privacy_preserving_tx(ctx.sequencer_client(), sent).await;
+    assert!(tx.message().execution.recovery_bindings.is_empty());
     Ok(())
 }

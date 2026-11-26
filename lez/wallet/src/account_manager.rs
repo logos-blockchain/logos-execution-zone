@@ -640,19 +640,7 @@ impl AccountManager {
 
     pub fn shared_secrets(&self) -> Vec<SharedSecretKey> {
         self.private_states()
-            .map(|pre| {
-                let nonce = pre
-                    .pre_state
-                    .account
-                    .nonce
-                    .private_account_nonce_increment(&pre.kind.nsk());
-                let esk = lee_core::EphemeralSecretKey::new(
-                    &pre.pre_state.account_id,
-                    &pre.random_seed,
-                    &nonce,
-                );
-                SharedSecretKey::encapsulate_deterministic(&pre.vpk, &esk).0
-            })
+            .map(|pre| SharedSecretKey::encapsulate_deterministic(&pre.vpk, &note_esk(pre)).0)
             .collect()
     }
 
@@ -841,7 +829,8 @@ impl AccountManager {
                 kind,
                 opening: Some(opening),
             },
-            esk: EphemeralSecretKey(random_bytes()),
+            // The payer's own note key: the circuit then makes one encapsulation for both.
+            esk: note_esk(pre),
         })
     }
 
@@ -968,6 +957,16 @@ struct AccountPreparedData {
     proof: Option<MembershipProof>,
     random_seed: [u8; 32],
     address_openings: BTreeSet<[u8; 32]>,
+}
+
+/// The ephemeral key the circuit encrypts `pre`'s successor note under.
+fn note_esk(pre: &AccountPreparedData) -> EphemeralSecretKey {
+    let nonce = pre
+        .pre_state
+        .account
+        .nonce
+        .private_account_nonce_increment(&pre.kind.nsk());
+    EphemeralSecretKey::new(&pre.pre_state.account_id, &pre.random_seed, &nonce)
 }
 
 /// Builds a witness kind from the account kind and the key holding the account.
@@ -1523,6 +1522,15 @@ mod tests {
         let recovery = manager.fee_recovery(payer_id, [7; 32]).unwrap();
         assert_eq!(recovery.recipient.account_id(), payer_id);
         assert_eq!(recovery.recipient.address(), payer_id.blinded(&[7; 32]));
+        // Under the key the circuit derives for the payer's note, so it encapsulates once for both.
+        let nsk = NullifierSecretKey::from(&AuthorizationSecretKey([3; 32]));
+        let nonce = Account::funded(1)
+            .nonce
+            .private_account_nonce_increment(&nsk);
+        assert_eq!(
+            recovery.esk.0,
+            EphemeralSecretKey::new(&payer_id, &[0; 32], &nonce).0
+        );
     }
 
     #[test]
