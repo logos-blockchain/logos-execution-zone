@@ -2240,4 +2240,24 @@ mod tests {
         assert_ne!(present.present(Presenting::Grant, other), pinned);
         assert_ne!(present.present(Presenting::Sender, mentioned), pinned);
     }
+
+    #[test]
+    fn the_presenter_presents_a_mentioned_fee_payers_grant_under_its_mention_opening() {
+        let payer = AccountId::new([1; 32]);
+        let balance = Actor::native_balance(payer);
+        let mut present = AccountManager {
+            mention_openings: HashMap::from([(balance, [9; 32])]),
+            ..manager(Vec::new())
+        }
+        .presenter(Some((payer, [8; 32])));
+
+        assert_eq!(
+            present.present(Presenting::Grant, balance),
+            SenderPresentation::Blinded([9; 32])
+        );
+        assert_eq!(
+            present.present(Presenting::Sender, balance),
+            SenderPresentation::Blinded([8; 32])
+        );
+    }
 }
