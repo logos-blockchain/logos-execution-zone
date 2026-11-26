@@ -720,7 +720,11 @@ impl Publisher {
             .finalized
             .iter()
             .chain(&view.unfinalized)
-            .filter(|note| note.program == *VAULT_PROGRAM && note.opening.data == committee)
+            .filter(|note| {
+                note.program == *VAULT_PROGRAM
+                    && note.opening.data == committee
+                    && view.spendable.contains(&note.commitment)
+            })
             .collect();
         spendable.sort_unstable_by_key(|note| std::cmp::Reverse(note.opening.value));
 
