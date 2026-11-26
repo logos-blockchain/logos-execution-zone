@@ -85,6 +85,29 @@ fn proof_inner_roundtrip() {
 }
 
 #[test]
+fn a_deeply_nested_composite_receipt_is_rejected() {
+    let mut bytes = vec![0_u8];
+    for _ in 0..24_000 {
+        bytes.extend_from_slice(&0_u32.to_le_bytes());
+        bytes.extend_from_slice(&1_u32.to_le_bytes());
+        bytes.push(0);
+    }
+    let proof = Proof::from_inner(bytes);
+    let valid = std::thread::Builder::new()
+        .stack_size(256 << 10)
+        .spawn(move || {
+            proof.is_valid_for(
+                &PublicExecutionContext::default(),
+                &ProvenExecution::default(),
+            )
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    assert!(!valid);
+}
+
+#[test]
 fn prove_privacy_preserving_execution_circuit_public_and_private_accounts() {
     let recipient_keys = test_private_account_keys_1();
     let sender_id = AccountId::new([0; 32]);
