@@ -106,7 +106,7 @@ The sweep's callee is the native token program, which has no guest to prove, so 
 
 ### Fee cases (`--ppe-fee-case N`)
 
-A deshielding transfer from one private account, which also pays the fee inside the proof. These rows close a plain `--ppe` run; `--ppe-fee-case N` runs one alone, and under `RISC0_DEV_MODE=1` it prints the cycle counts in under a second.
+A deshielding transfer from one private account, which also pays the fee inside the proof. These rows close a plain `--ppe` run; `--ppe-fee-case N` runs one alone, and under `RISC0_DEV_MODE=1` it prints the cycle counts in under a second. The cases run with no dummy inputs. A wallet transaction pads with six, about 74k user cycles more by the sweep above, which is enough to take the plain transfer there into a second segment.
 
 | N | Case | user_cycles | total_cycles | segments | prove_ms | prove_s | proof_bytes |
 |---:|---|---:|---:|---:|---:|---:|---:|
