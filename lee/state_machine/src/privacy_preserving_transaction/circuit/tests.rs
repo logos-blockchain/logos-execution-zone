@@ -58,20 +58,29 @@ fn prove_scripted(
     )
 }
 
+// The output shuffles commitments apart from their notes, so try each.
+fn decrypt_note(
+    output: &PrivacyPreservingCircuitOutput,
+    ssk: &SharedSecretKey,
+    idx: usize,
+) -> (PrivateAccountKind, Account) {
+    let ciphertext = &output.execution.private_actions[idx]
+        .encrypted_post_state
+        .ciphertext;
+    output
+        .execution
+        .commitments()
+        .iter()
+        .find_map(|commitment| EncryptionScheme::decrypt(ciphertext, ssk, commitment))
+        .unwrap()
+}
+
 fn decrypt_kind(
     output: &PrivacyPreservingCircuitOutput,
     ssk: &SharedSecretKey,
     idx: usize,
 ) -> PrivateAccountKind {
-    let (kind, _) = EncryptionScheme::decrypt(
-        &output.execution.private_actions[idx]
-            .encrypted_post_state
-            .ciphertext,
-        ssk,
-        &output.execution.private_actions[idx].nullifier,
-    )
-    .unwrap();
-    kind
+    decrypt_note(output, ssk, idx).0
 }
 
 #[test]
@@ -184,14 +193,7 @@ fn prove_privacy_preserving_execution_circuit_public_and_private_accounts() {
     );
     assert_eq!(output.execution.private_actions.len(), 1);
 
-    let (_kind, recipient_post) = EncryptionScheme::decrypt(
-        &output.execution.private_actions[0]
-            .encrypted_post_state
-            .ciphertext,
-        &shared_secret,
-        &output.execution.private_actions[0].nullifier,
-    )
-    .unwrap();
+    let (_kind, recipient_post) = decrypt_note(&output, &shared_secret, 0);
     assert_eq!(recipient_post, expected_recipient_post);
 }
 
@@ -297,14 +299,7 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
         .iter()
         .position(|action| action.nullifier == sender_nullifier)
         .unwrap();
-    let (_kind, sender_post) = EncryptionScheme::decrypt(
-        &output.execution.private_actions[sender_slot]
-            .encrypted_post_state
-            .ciphertext,
-        &shared_secret_1,
-        &output.execution.private_actions[sender_slot].nullifier,
-    )
-    .unwrap();
+    let (_kind, sender_post) = decrypt_note(&output, &shared_secret_1, sender_slot);
     assert_eq!(sender_post, expected_private_account_1);
 
     let recipient_slot = output
@@ -313,14 +308,7 @@ fn prove_privacy_preserving_execution_circuit_fully_private() {
         .iter()
         .position(|action| action.nullifier == recipient_nullifier)
         .unwrap();
-    let (_kind, recipient_post) = EncryptionScheme::decrypt(
-        &output.execution.private_actions[recipient_slot]
-            .encrypted_post_state
-            .ciphertext,
-        &shared_secret_2,
-        &output.execution.private_actions[recipient_slot].nullifier,
-    )
-    .unwrap();
+    let (_kind, recipient_post) = decrypt_note(&output, &shared_secret_2, recipient_slot);
     assert_eq!(recipient_post, expected_private_account_2);
 }
 
@@ -373,7 +361,7 @@ fn note_ciphertext_is_padded_to_the_requested_length() {
     let (kind, post) = EncryptionScheme::decrypt(
         ciphertext,
         &shared_secret,
-        &padded.execution.private_actions[0].nullifier,
+        &padded.execution.private_actions[0].commitment,
     )
     .unwrap();
     assert_eq!(kind, PrivateAccountKind::Regular);

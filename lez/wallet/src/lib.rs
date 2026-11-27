@@ -3327,22 +3327,20 @@ fn spent_in(block: &Block) -> Vec<Nullifier> {
 fn decrypt_note(
     action: &lee_core::PrivateAction,
     secret: &SharedSecretKey,
+    commitment: &Commitment,
 ) -> Option<(lee_core::PrivateAccountKind, Account)> {
-    lee_core::EncryptionScheme::decrypt(
-        &action.encrypted_post_state.ciphertext,
-        secret,
-        &action.nullifier,
-    )
+    lee_core::EncryptionScheme::decrypt(&action.encrypted_post_state.ciphertext, secret, commitment)
 }
 
 fn decrypt_fee_fallback_note(
     action: &lee_core::PrivateAction,
     secret: &SharedSecretKey,
+    commitment: &Commitment,
 ) -> Option<(lee_core::PrivateAccountKind, Account)> {
     lee_core::EncryptionScheme::decrypt_fee_fallback(
         &action.encrypted_post_state.ciphertext,
         secret,
-        &action.nullifier,
+        commitment,
     )
 }
 

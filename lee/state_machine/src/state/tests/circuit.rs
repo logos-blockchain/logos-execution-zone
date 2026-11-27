@@ -75,7 +75,7 @@ fn a_private_account_keeps_a_stranger_actor_state_through_an_own_actor_state_wri
         EncryptionScheme::decrypt(
             &action.encrypted_post_state.ciphertext,
             &shared_secret,
-            &action.nullifier,
+            &action.commitment,
         )
         .unwrap(),
         (PrivateAccountKind::Regular, expected.clone())
@@ -143,7 +143,7 @@ fn a_private_account_may_act_under_two_actor_states_in_one_transaction() {
         EncryptionScheme::decrypt(
             &action.encrypted_post_state.ciphertext,
             &shared_secret,
-            &action.nullifier,
+            &action.commitment,
         )
         .unwrap(),
         (PrivateAccountKind::Regular, expected.clone())
