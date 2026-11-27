@@ -59,11 +59,15 @@ pub fn slot(elf: &[u8]) -> u64 {
     hasher.finish()
 }
 
-/// What an entry costs to hold: the ELF copy plus its image. An upper bound, not a measurement,
-/// since `MemoryImage` does not expose its size and measured images come in under their ELF. Only
-/// moves when eviction starts.
-const fn footprint(elf: &[u8]) -> usize {
-    elf.len().saturating_mul(2)
+/// The ELF copy plus its image, which holds every word the user ELF loads. An ELF whose program
+/// headers do not parse is never cached.
+fn footprint(elf: &[u8]) -> usize {
+    let loaded = ProgramBinary::decode(elf)
+        .ok()
+        .and_then(|binary| program_loader_core::loadable_memory(binary.user_elf))
+        .and_then(|(_, memory)| usize::try_from(memory).ok())
+        .unwrap_or(usize::MAX);
+    elf.len().saturating_mul(2).saturating_add(loaded)
 }
 
 /// The image for these exact bytes, marked most recently used. A slot holding different bytes is

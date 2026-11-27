@@ -288,3 +288,24 @@ fn incompatible_abi_is_rejected_on_both_paths() {
         "the cached path accepted a guest risc0 rejects"
     );
 }
+
+#[test]
+fn an_entry_is_charged_its_zero_fill() {
+    let user_elf = {
+        let mut elf = vec![0x7f, b'E', b'L', b'F', 1, 1, 1];
+        elf.resize(28, 0);
+        elf.extend_from_slice(&52_u32.to_le_bytes());
+        elf.resize(42, 0);
+        elf.extend_from_slice(&32_u16.to_le_bytes());
+        elf.extend_from_slice(&1_u16.to_le_bytes());
+        elf.resize(52, 0);
+        for word in [1, 0, 0x1000, 0x1000, 0, 1 << 20, 6, 4] {
+            elf.extend_from_slice(&u32::to_le_bytes(word));
+        }
+        elf
+    };
+    let binary = ProgramBinary::new(&user_elf, &user_elf).encode();
+
+    assert_eq!(super::footprint(&binary), binary.len() * 2 + (1 << 20));
+    assert_eq!(super::footprint(b"not a program binary"), usize::MAX);
+}
