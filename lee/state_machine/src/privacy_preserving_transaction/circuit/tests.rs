@@ -867,6 +867,59 @@ fn a_receipt_for_other_inputs_does_not_bind_in_the_circuit() {
     assert_circuit_rejects(&result, "no receipt found to resolve assumption");
 }
 
+// A private root calling the public `router` twice, the second call issuing it a grant over the
+// balance of the root program's public PDA, with the receipt of that root transition.
+fn issuing_input() -> (PrivacyPreservingCircuitInput, Receipt, Actor) {
+    let seed = PdaSeed::new([37; 32]);
+    let balance = Actor::native_balance(AccountId::for_public_pda(&scripted_id(), &seed));
+    let router = Actor::new(BOB, TWIN);
+    let call = || SyncMessage::new(router, &Script::default());
+    let script = Script::default()
+        .send(call())
+        .send(call().with_pda_grant(balance, seed));
+    let scripted = crate::test_methods::scripted();
+    let (receipt, response) = receive_receipt(&scripted, &scripted_root_input(&script, true));
+    let mut input = direct_input(scripted_id(), &script, &[&scripted], vec![response]);
+    input.input.public_context =
+        PublicExecutionContext::new(signed_by(vec![router, balance], []), []);
+    input.sender_presentations = vec![SenderPresentation::Canonical; 2];
+    input.predicted_cross_messages = vec![Vec::new(); 2];
+    (input, receipt, balance)
+}
+
+#[test]
+fn a_pda_grant_a_private_root_issues_crosses_out_on_the_call_it_is_issued_on() {
+    let (input, receipt, balance) = issuing_input();
+
+    let output = prove_circuit_directly(&input, vec![receipt]).unwrap();
+
+    let crossed: Vec<_> = output
+        .execution
+        .boundary
+        .iter()
+        .filter_map(|step| match step {
+            BoundaryStep::PrivateToPublic(delivery) => Some(delivery.grants.clone()),
+            BoundaryStep::PublicToPrivate(_)
+            | BoundaryStep::EndPrivateSubtree
+            | BoundaryStep::EndPublicSubtree => None,
+        })
+        .collect();
+    assert_eq!(crossed, vec![BTreeSet::new(), BTreeSet::from([balance])]);
+}
+
+#[test]
+fn a_pda_grant_moved_to_another_sync_message_does_not_bind_in_the_circuit() {
+    let (mut input, receipt, _) = issuing_input();
+    let [first, second] = input.responses[0].sync_messages.as_mut_slice() else {
+        panic!("the root sends two sync messages");
+    };
+    std::mem::swap(&mut first.pda_grants, &mut second.pda_grants);
+
+    let result = prove_circuit_directly(&input, vec![receipt]);
+
+    assert_circuit_rejects(&result, "no receipt found to resolve assumption");
+}
+
 #[test]
 fn an_undeclared_actor_is_rejected_by_the_circuit() {
     let scripted = crate::test_methods::scripted();

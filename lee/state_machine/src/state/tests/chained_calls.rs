@@ -105,6 +105,87 @@ fn execution_that_requires_authentication_of_a_program_derived_account_id_succee
     assert_eq!(to_post, expected_to_post);
 }
 
+// `scripted` hands a router of another program the grant over the native balance of its PDA, and
+// the router debits it. Without the issuance the router attaches a grant it does not hold, and the
+// router's program cannot issue it under the same seed.
+#[test]
+fn a_router_debits_a_pda_with_the_grant_its_owning_program_issues() {
+    let seed = PdaSeed::new([37; 32]);
+    let vault = AccountId::for_public_pda(&scripted_id(), &seed);
+    let balance = Actor::native_balance(vault);
+    let (issuer_account, to) = (AccountId::new([1; 32]), AccountId::new([2; 32]));
+    let router = Actor::new(AccountId::new([3; 32]), TWIN);
+    let run = |issuer_program: AccountId, issued: bool| {
+        let mut state = V03State::new()
+            .with_public_account_balances([
+                (vault, 1000),
+                (to, 0),
+                (issuer_account, 0),
+                (router.account_id, 0),
+            ])
+            .with_test_programs();
+        let issuer = Actor::new(issuer_account, issuer_program);
+        let call = SyncMessage::new(router, &Script::default().send(native_send(vault, to, 58)));
+        let tx = public_tx(
+            issuer,
+            vec![issuer, router, balance, Actor::native_balance(to)],
+            vec![],
+            Script::default().send(if issued {
+                call.with_pda_grant(balance, seed)
+            } else {
+                call
+            }),
+            &[],
+        );
+        state
+            .transition_from_public_transaction(&tx, 1, 0)
+            .map(|_| {
+                (
+                    state.get_account_by_id(vault).data.native_balance(),
+                    state.get_account_by_id(to),
+                )
+            })
+    };
+
+    assert_eq!(
+        run(scripted_id(), true).unwrap(),
+        (Ok(942), Account::funded(58))
+    );
+    assert!(matches!(
+        execution_error(run(scripted_id(), false)),
+        ExecutionError::UnheldGrant { actor } if actor == balance
+    ));
+    assert!(matches!(
+        execution_error(run(TWIN, true)),
+        ExecutionError::ForeignPdaGrant { actor } if actor == balance
+    ));
+}
+
+#[test]
+fn a_grant_issued_and_never_used_does_not_register_its_pda() {
+    let seed = PdaSeed::new([37; 32]);
+    let vault = AccountId::for_public_pda(&scripted_id(), &seed);
+    let issuer = Actor::new(AccountId::new([1; 32]), scripted_id());
+    let router = Actor::new(AccountId::new([3; 32]), TWIN);
+    let mut state = V03State::new()
+        .with_public_account_balances([(issuer.account_id, 0), (router.account_id, 0)])
+        .with_test_programs();
+    let tx = public_tx(
+        issuer,
+        vec![issuer, router, Actor::native_balance(vault)],
+        vec![],
+        Script::default().send(
+            SyncMessage::new(router, &Script::default())
+                .with_pda_grant(Actor::native_balance(vault), seed),
+        ),
+        &[],
+    );
+
+    state.transition_from_public_transaction(&tx, 1, 0).unwrap();
+
+    assert!(state.get_account_by_id_ref(vault).is_none());
+}
+
 #[test]
 fn a_pda_seed_delegated_to_one_sibling_does_not_leak_to_another() {
     let seed = PdaSeed::new([77; 32]);

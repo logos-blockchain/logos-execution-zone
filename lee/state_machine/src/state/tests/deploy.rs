@@ -613,3 +613,61 @@ fn a_program_deployed_earlier_in_the_transaction_is_dispatchable_by_a_later_call
         [7; 4]
     );
 }
+
+// The PDAs of a program belong to its account: once its mutable header points at an image that
+// issues grants, the program issues them over a PDA derived and funded before the update.
+#[test]
+fn a_program_updated_in_place_issues_grants_over_its_existing_pda() {
+    let header_key = TestSigner::new(0xAB);
+    let program = header_key.account_id();
+    let seed = PdaSeed::new([37; 32]);
+    let vault = AccountId::for_public_pda(&program, &seed);
+    let (issuer, to) = (
+        Actor::new(AccountId::new([1; 32]), program),
+        AccountId::new([2; 32]),
+    );
+    let router = Actor::new(AccountId::new([3; 32]), TWIN);
+    let mut state = V03State::new()
+        .with_public_account_balances([
+            (vault, 1000),
+            (to, 0),
+            (issuer.account_id, 0),
+            (router.account_id, 0),
+        ])
+        .with_test_programs()
+        .with_programs_at([(program, crate::test_methods::forges_echo(), false)]);
+    let segments =
+        force_insert_segment_chain(&mut state, crate::test_methods::scripted().elf(), 0x04);
+    let update_tx = loader_tx(
+        program,
+        vec![state.get_account_by_id(program).nonce],
+        &LoaderMessage::UpdateHeader {
+            first_segment: segments[0],
+            immutable: false,
+        },
+        &[&header_key],
+    );
+    state
+        .transition_from_public_transaction(&update_tx, 1, 0)
+        .unwrap();
+
+    let balance = Actor::native_balance(vault);
+    let transfer_from_vault = SyncMessage::new(balance, &transfer(to, 58)).with_grants([balance]);
+    let tx = public_tx(
+        issuer,
+        vec![issuer, router, balance, Actor::native_balance(to)],
+        vec![],
+        Script::default().send(
+            SyncMessage::new(router, &Script::default().send(transfer_from_vault))
+                .with_pda_grant(balance, seed),
+        ),
+        &[],
+    );
+    state.transition_from_public_transaction(&tx, 2, 0).unwrap();
+
+    assert_eq!(
+        state.get_account_by_id(vault).data.native_balance(),
+        Ok(942)
+    );
+    assert_eq!(state.get_account_by_id(to), Account::funded(58));
+}
