@@ -1122,9 +1122,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 }
 
                 // Settle on a scratch clone: settlement is the single validation
-                // and charging pass (restricted- and bridge-account guards
-                // included), so a transaction that cannot pay, breaches a cap, or
-                // touches a restricted account is dropped, never included.
+                // and charging pass, so a transaction that cannot pay or breaches
+                // a cap is dropped, never included. One whose action touches a
+                // restricted account is included as a paid revert.
                 let mut scratch = state.clone();
                 let mut scratch_summary = *summary;
                 match chain_state::apply::settle_transaction(

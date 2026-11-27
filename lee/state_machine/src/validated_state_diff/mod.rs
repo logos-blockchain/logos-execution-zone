@@ -519,6 +519,16 @@ impl ValidatedStateDiff {
         &self.0.public_diff
     }
 
+    /// The diff reverted: only the signers' nonce advances and key rotations, as a chargeable
+    /// failure keeps.
+    #[must_use]
+    pub fn into_signers_only(self) -> Self {
+        Self(StateDiff {
+            signers: self.0.signers,
+            ..StateDiff::default()
+        })
+    }
+
     pub(crate) fn into_state_diff(self) -> StateDiff {
         self.0
     }
