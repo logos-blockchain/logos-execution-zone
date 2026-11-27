@@ -31,16 +31,16 @@ pub const MAX_MAX_BLOCK_SIZE: u64 = 1_835_008;
 pub const MIN_POSTING_TIMEOUT: u32 = 10;
 
 /// The channel signing public key a stake backs. Holds only a valid Ed25519
-/// public key.
+/// public key of large order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SequencerKey([u8; 32]);
 
 impl SequencerKey {
-    /// `None` if `bytes` is not a valid Ed25519 public key.
+    /// `None` if `bytes` is not a valid Ed25519 public key or is of small order.
     #[must_use]
     pub fn new(bytes: [u8; 32]) -> Option<Self> {
         ed25519_dalek::VerifyingKey::from_bytes(&bytes)
-            .is_ok()
+            .is_ok_and(|key| !key.is_weak())
             .then_some(Self(bytes))
     }
 
@@ -474,6 +474,25 @@ mod tests {
 
         // A `StakeRecord` is the 32 key bytes alone.
         assert_eq!(StakeRecord::from_bytes(&off_curve), None);
+    }
+
+    #[test]
+    fn a_small_order_point_is_not_a_sequencer_key() {
+        let identity = {
+            let mut bytes = [0_u8; 32];
+            bytes[0] = 1;
+            bytes
+        };
+        let order_eight: [u8; 32] = [
+            0xc7, 0x17, 0x6a, 0x70, 0x3d, 0x4d, 0xd8, 0x4f, 0xba, 0x3c, 0x0b, 0x76, 0x0d, 0x10,
+            0x67, 0x0f, 0x2a, 0x20, 0x53, 0xfa, 0x2c, 0x39, 0xcc, 0xc6, 0x4e, 0xc7, 0xfd, 0x77,
+            0x92, 0xac, 0x03, 0x7a,
+        ];
+        for weak in [identity, order_eight] {
+            assert!(ed25519_dalek::VerifyingKey::from_bytes(&weak).is_ok_and(|key| key.is_weak()));
+            assert!(SequencerKey::new(weak).is_none());
+            assert_eq!(StakeRecord::from_bytes(&weak), None);
+        }
     }
 
     #[test]

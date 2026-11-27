@@ -576,8 +576,8 @@ impl UserKeyChain {
         followed: &HashSet<usize>,
         index: &mut NullifierIndex,
     ) {
-        let commitments: HashSet<Commitment> =
-            message.execution.commitments().into_iter().collect();
+        let commitments = message.execution.commitments();
+        let commitments = &commitments;
         let found: Vec<_> = (0..message.execution.private_actions.len())
             .filter(|slot| !followed.contains(slot))
             .flat_map(|slot| {
@@ -585,20 +585,23 @@ impl UserKeyChain {
                 self.owned_key_chains().filter_map(move |key_chain| {
                     let secret = key_chain
                         .calculate_shared_secret_receiver(&action.encrypted_post_state.epk)?;
-                    let (kind, account) = crate::decrypt_note(action, &secret)?;
-                    let account_id = AccountId::for_private_account(
-                        &key_chain.nullifier_public_key,
-                        &key_chain.viewing_public_key,
-                        &kind,
-                    );
-                    let nsk = key_chain.private_key_holder.nullifier_secret_key();
-                    Some((account_id, kind, account, nsk))
+                    commitments.iter().find_map(|commitment| {
+                        let (kind, account) = crate::decrypt_note(action, &secret, commitment)?;
+                        let account_id = AccountId::for_private_account(
+                            &key_chain.nullifier_public_key,
+                            &key_chain.viewing_public_key,
+                            &kind,
+                        );
+                        (Commitment::new(&account_id, &account) == *commitment).then(|| {
+                            let nsk = key_chain.private_key_holder.nullifier_secret_key();
+                            (account_id, kind, account, nsk)
+                        })
+                    })
                 })
             })
-            .filter(|(account_id, _, account, _)| {
+            .filter(|(account_id, _, _, _)| {
                 self.private_account(*account_id).is_none()
                     && self.shared_private_account(*account_id).is_none()
-                    && commitments.contains(&Commitment::new(account_id, account))
             })
             .collect();
         for (account_id, kind, account, nsk) in found {
@@ -707,7 +710,11 @@ impl UserKeyChain {
         account_id: AccountId,
         action: &PrivateAction,
         committed: &HashSet<Commitment>,
-        decrypt: fn(&PrivateAction, &SharedSecretKey) -> Option<(PrivateAccountKind, Account)>,
+        decrypt: fn(
+            &PrivateAction,
+            &SharedSecretKey,
+            &Commitment,
+        ) -> Option<(PrivateAccountKind, Account)>,
     ) -> Option<Nullifier> {
         let keys = self.managed_private_account(account_id)?.keys;
         let secret = SharedSecretKey::decapsulate(
@@ -717,11 +724,11 @@ impl UserKeyChain {
         )?;
         let nsk = keys.nullifier_secret_key();
 
-        let (kind, new_account) = decrypt(action, &secret)?;
-        // The note is the sender's claim: follow it only to a state the message commits.
-        if !committed.contains(&Commitment::new(&account_id, &new_account)) {
-            return None;
-        }
+        // Commitments are shuffled apart from their notes: try each, keeping the state it commits.
+        let (kind, new_account) = committed.iter().find_map(|commitment| {
+            decrypt(action, &secret, commitment)
+                .filter(|(_, account)| Commitment::new(&account_id, account) == *commitment)
+        })?;
         let new_nullifier = NullifierIndex::next_update_nullifier(account_id, &new_account, &nsk);
         self.insert_private_account(account_id, kind, new_account)
             .ok()?;
@@ -1182,13 +1189,20 @@ pub(crate) mod tests {
         next: &Account,
     ) -> Message {
         let (secret, epk) = SharedSecretKey::encapsulate(vpk);
+        let commitment = Commitment::new(&account_id, next);
         Message {
             execution: ProvenExecution {
                 private_actions: vec![PrivateAction {
                     nullifier: spent,
-                    commitment: Commitment::new(&account_id, next),
+                    commitment,
                     encrypted_post_state: EncryptedNote {
-                        ciphertext: EncryptionScheme::encrypt(next, kind, &secret, &spent, None),
+                        ciphertext: EncryptionScheme::encrypt(
+                            next,
+                            kind,
+                            &secret,
+                            &commitment,
+                            None,
+                        ),
                         epk,
                     },
                     ..Default::default()

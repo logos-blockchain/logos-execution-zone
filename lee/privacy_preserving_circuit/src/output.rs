@@ -228,17 +228,18 @@ fn fee_fallback(
         nonce: key.nonce,
         data: post,
     };
+    let commitment = Commitment::new(&witness.account_id(), &post_state);
     let ciphertext = EncryptionScheme::encrypt_fee_fallback(
         &post_state,
         &witness.kind.account_kind(),
         &key.shared_secret,
-        &main.nullifier,
+        &commitment,
         ciphertext_padding,
     );
     Some(FeeFallback {
         nullifier: main.nullifier,
         root: main.root,
-        commitment: Commitment::new(&witness.account_id(), &post_state),
+        commitment,
         ciphertext,
         boundary: vec![
             BoundaryStep::PrivateToPublic(crossing),
@@ -275,18 +276,19 @@ fn private_action(
     let esk = EphemeralSecretKey::new(&account_id, random_seed, &post_state.nonce);
     let (shared_secret, epk) = SharedSecretKey::encapsulate_deterministic(vpk, &esk);
 
+    let commitment = Commitment::new(&account_id, &post_state);
     let encrypted_account = EncryptionScheme::encrypt(
         &post_state,
         &account_kind,
         &shared_secret,
-        &nullifier,
+        &commitment,
         ciphertext_padding,
     );
 
     let action = PrivateAction {
         nullifier,
         root,
-        commitment: Commitment::new(&account_id, &post_state),
+        commitment,
         encrypted_post_state: EncryptedNote {
             ciphertext: encrypted_account,
             epk,
@@ -362,16 +364,28 @@ mod tests {
             }
         }
 
-        fn decrypt(&self, action: &PrivateAction) -> (PrivateAccountKind, Account) {
+        // The output shuffles commitments apart from their notes, so try each.
+        fn decrypt(
+            &self,
+            action: &PrivateAction,
+            commitments: &[Commitment],
+        ) -> (PrivateAccountKind, Account) {
             let shared =
                 SharedSecretKey::decapsulate(&action.encrypted_post_state.epk, &self.d, &self.z)
                     .expect("the note's ephemeral key decapsulates");
-            EncryptionScheme::decrypt(
-                &action.encrypted_post_state.ciphertext,
-                &shared,
-                &action.nullifier,
-            )
-            .expect("the note decrypts")
+            commitments
+                .iter()
+                .find_map(|commitment| {
+                    EncryptionScheme::decrypt(
+                        &action.encrypted_post_state.ciphertext,
+                        &shared,
+                        commitment,
+                    )
+                    .filter(|(_, account)| {
+                        Commitment::new(&self.account_id(), account) == *commitment
+                    })
+                })
+                .expect("the note decrypts")
         }
 
         fn decrypt_fallback(&self, action: &PrivateAction) -> (PrivateAccountKind, Account) {
@@ -381,7 +395,7 @@ mod tests {
             EncryptionScheme::decrypt_fee_fallback(
                 &action.encrypted_post_state.ciphertext,
                 &shared,
-                &action.nullifier,
+                &action.commitment,
             )
             .expect("the fallback note decrypts")
         }
@@ -462,7 +476,7 @@ mod tests {
         };
         let action = &output.execution.private_actions[0];
         assert_eq!(
-            owner.decrypt(action),
+            owner.decrypt(action, &output.execution.commitments()),
             (PrivateAccountKind::Regular, expected.clone())
         );
         assert_eq!(
@@ -653,6 +667,7 @@ mod tests {
             let data = Account::funded(balance).data;
             (PrivateAccountKind::Regular, Account { nonce, data })
         };
+        let commitments = output.commitments();
         let fallback = output
             .proven_fee
             .and_then(|fee| fee.fallback)
@@ -662,7 +677,7 @@ mod tests {
             .iter()
             .find(|action| action.nullifier == fallback.nullifier)
             .expect("the fallback spends the payer's nullifier");
-        assert_eq!(payer.decrypt(main), state(40));
+        assert_eq!(payer.decrypt(main, &commitments), state(40));
         let action = fallback
             .action(&output.private_actions)
             .expect("the fallback finds the payer's action");
@@ -749,7 +764,7 @@ mod tests {
             &Account::default(),
             &PrivateAccountKind::Regular,
             &SharedSecretKey([0; 32]),
-            &nullifier,
+            &commitment,
             None,
         );
         PrivateAction {

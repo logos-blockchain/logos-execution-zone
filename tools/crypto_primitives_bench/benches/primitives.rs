@@ -11,7 +11,7 @@ use std::time::Duration;
 use criterion::{Criterion, criterion_group, criterion_main};
 use key_protocol::key_management::KeyChain;
 use lee_core::{
-    EncryptionScheme, Nullifier, SharedSecretKey,
+    Commitment, EncryptionScheme, SharedSecretKey,
     account::{Account, AccountId},
     program::PrivateAccountKind,
 };
@@ -49,21 +49,18 @@ fn bench_encryption(c: &mut Criterion) {
     let npk = recipient_kc.nullifier_public_key;
     let account = Account::default();
     let account_id = AccountId::for_regular_private_account(&npk, &recipient_kc.viewing_public_key);
-    let nullifier = Nullifier::for_account_initialization(
-        &account_id,
-        &recipient_kc.private_key_holder.nullifier_secret_key(),
-    );
+    let commitment = Commitment::new(&account_id, &account);
     let (shared, _epk) = SharedSecretKey::encapsulate(&recipient_kc.viewing_public_key);
     let kind = PrivateAccountKind::Regular;
 
     let mut g = c.benchmark_group("encryption");
     g.sample_size(50).noise_threshold(0.05);
     g.bench_function("encrypt", |b| {
-        b.iter(|| EncryptionScheme::encrypt(&account, &kind, &shared, &nullifier, None));
+        b.iter(|| EncryptionScheme::encrypt(&account, &kind, &shared, &commitment, None));
     });
-    let ct = EncryptionScheme::encrypt(&account, &kind, &shared, &nullifier, None);
+    let ct = EncryptionScheme::encrypt(&account, &kind, &shared, &commitment, None);
     g.bench_function("decrypt", |b| {
-        b.iter(|| EncryptionScheme::decrypt(&ct, &shared, &nullifier));
+        b.iter(|| EncryptionScheme::decrypt(&ct, &shared, &commitment));
     });
     g.finish();
 }

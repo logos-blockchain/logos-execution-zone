@@ -23,6 +23,12 @@ pub const MAX_PROGRAM_SEGMENTS: usize = 20;
 /// This is a client-side batching choice, not a limit enforced by the program.
 pub const MAX_SEGMENT_DATA_LEN: usize = 96 * 1024;
 
+/// Most `PT_LOAD` segments a deployed program may carry.
+pub const MAX_LOAD_SEGMENTS: usize = 8;
+
+/// Most summed `p_memsz` a deployed program's `PT_LOAD` segments may carry.
+pub const MAX_LOADABLE_MEMORY: u64 = 4 << 20;
+
 /// Variants are append-only. Borsh encodes the variant as a leading tag byte, so inserting one
 /// ahead of `WriteSegment` shifts every existing encoding.
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -133,6 +139,29 @@ pub enum SegmentChainError {
 #[must_use]
 pub const fn segment_count(user_elf: &[u8]) -> usize {
     user_elf.len().div_ceil(MAX_SEGMENT_DATA_LEN)
+}
+
+/// The `PT_LOAD` segment count and summed `p_memsz` of an ELF32, `None` if its program headers do
+/// not parse.
+#[must_use]
+pub fn loadable_memory(elf: &[u8]) -> Option<(usize, u64)> {
+    const PT_LOAD: u32 = 1;
+    let bytes = |at: usize, len: usize| elf.get(at..at.checked_add(len)?);
+    let u16_at = |at| Some(u16::from_le_bytes(bytes(at, 2)?.try_into().ok()?));
+    let u32_at = |at| Some(u32::from_le_bytes(bytes(at, 4)?.try_into().ok()?));
+
+    let table = usize::try_from(u32_at(28)?).ok()?;
+    let entry_len = usize::from(u16_at(42)?);
+    let mut segments = 0_usize;
+    let mut memory = 0_u64;
+    for index in 0..usize::from(u16_at(44)?) {
+        let header = table.checked_add(index.checked_mul(entry_len)?)?;
+        if u32_at(header)? == PT_LOAD {
+            segments = segments.checked_add(1)?;
+            memory = memory.checked_add(u64::from(u32_at(header.checked_add(20)?)?))?;
+        }
+    }
+    Some((segments, memory))
 }
 
 /// The image ID and bytecode of the program whose header is at `account_id`, walking its segment
@@ -344,6 +373,18 @@ fn compute_image_id<'state>(
         elf.extend_from_slice(&segment.bytecode);
         expected_next = segment.next_segment;
     }
+
+    // risc0-binfmt builds the image unmetered.
+    let (segments, memory) =
+        loadable_memory(&elf).expect("program bytecode must carry parseable ELF32 program headers");
+    assert!(
+        segments <= MAX_LOAD_SEGMENTS,
+        "loadable segments exceed the cap of {MAX_LOAD_SEGMENTS}"
+    );
+    assert!(
+        memory <= MAX_LOADABLE_MEMORY,
+        "loadable memory exceeds the cap of {MAX_LOADABLE_MEMORY} bytes"
+    );
 
     let full_binary =
         risc0_binfmt::ProgramBinary::new(&elf, risc0_zkos_v1compat::V1COMPAT_ELF).encode();

@@ -657,3 +657,60 @@ fn system_upgrader_loader_message_encodings_are_pinned() {
 
     assert_eq!(borsh::to_vec(&Message::AssertMutable).unwrap(), vec![4]);
 }
+
+/// A RISC-V ELF32 header followed by one `PT_LOAD` header per entry of `memory_sizes`.
+fn elf_with_loads(memory_sizes: &[u32]) -> Vec<u8> {
+    let phnum = u16::try_from(memory_sizes.len()).unwrap();
+    let mut elf = vec![0x7f, b'E', b'L', b'F', 1, 1, 1];
+    elf.resize(16, 0);
+    elf.extend_from_slice(&2_u16.to_le_bytes());
+    elf.extend_from_slice(&0xf3_u16.to_le_bytes());
+    elf.extend_from_slice(&1_u32.to_le_bytes());
+    elf.extend_from_slice(&0x1000_u32.to_le_bytes());
+    elf.extend_from_slice(&52_u32.to_le_bytes());
+    elf.extend_from_slice(&0_u32.to_le_bytes());
+    elf.extend_from_slice(&0_u32.to_le_bytes());
+    elf.extend_from_slice(&52_u16.to_le_bytes());
+    elf.extend_from_slice(&32_u16.to_le_bytes());
+    elf.extend_from_slice(&phnum.to_le_bytes());
+    elf.extend_from_slice(&[0; 6]);
+    for &memory_size in memory_sizes {
+        for word in [1, 0, 0x1000, 0x1000, 0, memory_size, 6, 4] {
+            elf.extend_from_slice(&u32::to_le_bytes(word));
+        }
+    }
+    elf
+}
+
+fn create_header_over(elf: Vec<u8>) {
+    let first_segment = AccountId::new([2; 32]);
+    let actor_states = ActorStates::default().segment(first_segment, elf, None);
+    let message = Message::CreateHeader {
+        first_segment,
+        immutable: false,
+    };
+    let _transition = handle_message(
+        &input(AccountId::new([1; 32]), true, ActorState::empty(), &message),
+        actor_states.read(),
+    );
+}
+
+#[test]
+fn loadable_memory_counts_every_load_segment() {
+    assert_eq!(
+        loadable_memory(&elf_with_loads(&[512 << 10; 8])),
+        Some((MAX_LOAD_SEGMENTS, MAX_LOADABLE_MEMORY))
+    );
+}
+
+#[test]
+#[should_panic(expected = "loadable memory exceeds")]
+fn create_header_rejects_a_program_over_the_memory_cap() {
+    create_header_over(elf_with_loads(&[8 << 20]));
+}
+
+#[test]
+#[should_panic(expected = "loadable segments exceed")]
+fn create_header_rejects_a_program_with_too_many_loadable_segments() {
+    create_header_over(elf_with_loads(&[4; 9]));
+}
