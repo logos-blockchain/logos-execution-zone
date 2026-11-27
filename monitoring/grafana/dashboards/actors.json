@@ -681,7 +681,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sort_desc(label_replace(sum by (message_name) (increase(actor_message_handling_time_seconds_sum{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__range])), \"message\", \"$1\", \"message_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\") > 0)",
+          "expr": "sort_desc(label_replace(sum by (message_name) (increase(actor_message_handling_time_seconds_sum{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__range])), \"message\", \"$1\", \"message_name\", \"(.*)\") > 0)",
           "instant": true,
           "legendFormat": "{{message}}",
           "range": false,
@@ -727,7 +727,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sort_desc(label_replace(sum by (message_name) (increase(actor_message_handling_time_seconds_count{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__range])), \"message\", \"$1\", \"message_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\") > 0)",
+          "expr": "sort_desc(label_replace(sum by (message_name) (increase(actor_message_handling_time_seconds_count{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__range])), \"message\", \"$1\", \"message_name\", \"(.*)\") > 0)",
           "instant": true,
           "legendFormat": "{{message}}",
           "range": false,
@@ -761,7 +761,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sort_desc(label_replace(histogram_quantile(${percentile}, sum by (le, message_name) (rate(actor_message_handling_time_seconds_bucket{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__range]))) >= 0, \"message\", \"$1\", \"message_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\"))",
+          "expr": "sort_desc(label_replace(histogram_quantile(${percentile}, sum by (le, message_name) (rate(actor_message_handling_time_seconds_bucket{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__range]))) >= 0, \"message\", \"$1\", \"message_name\", \"(.*)\"))",
           "instant": true,
           "legendFormat": "{{message}}",
           "range": false,
@@ -795,7 +795,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sort_desc(label_replace(sum by (message_name) (rate(actor_message_handling_time_seconds_sum{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__range])) / (sum by (message_name) (rate(actor_message_handling_time_seconds_count{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__range])) > 0), \"message\", \"$1\", \"message_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\"))",
+          "expr": "sort_desc(label_replace(sum by (message_name) (rate(actor_message_handling_time_seconds_sum{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__range])) / (sum by (message_name) (rate(actor_message_handling_time_seconds_count{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__range])) > 0), \"message\", \"$1\", \"message_name\", \"(.*)\"))",
           "instant": true,
           "legendFormat": "{{message}}",
           "range": false,
@@ -831,7 +831,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "label_replace(sum by (message_name) (rate(actor_message_handling_time_seconds_count{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__rate_interval])), \"message\", \"$1\", \"message_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\")",
+          "expr": "label_replace(sum by (message_name) (rate(actor_message_handling_time_seconds_count{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__rate_interval])), \"message\", \"$1\", \"message_name\", \"(.*)\")",
           "legendFormat": "{{message}}",
           "refId": "A"
         }
@@ -865,13 +865,13 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "label_replace(histogram_quantile(${percentile}, sum by (le, message_name) (rate(actor_message_handling_time_seconds_bucket{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__rate_interval]))) >= 0, \"message\", \"$1\", \"message_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\")",
+          "expr": "label_replace(histogram_quantile(${percentile}, sum by (le, message_name) (rate(actor_message_handling_time_seconds_bucket{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__rate_interval]))) >= 0, \"message\", \"$1\", \"message_name\", \"(.*)\")",
           "legendFormat": "{{message}} · ${percentile:text}",
           "refId": "A"
         },
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "label_replace(sum by (message_name) (rate(actor_message_handling_time_seconds_sum{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__rate_interval])) / (sum by (message_name) (rate(actor_message_handling_time_seconds_count{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__rate_interval])) > 0), \"message\", \"$1\", \"message_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\")",
+          "expr": "label_replace(sum by (message_name) (rate(actor_message_handling_time_seconds_sum{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__rate_interval])) / (sum by (message_name) (rate(actor_message_handling_time_seconds_count{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__rate_interval])) > 0), \"message\", \"$1\", \"message_name\", \"(.*)\")",
           "legendFormat": "{{message}} · avg",
           "refId": "B"
         }
@@ -905,7 +905,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "100 * label_replace(sum by (message_name) (rate(actor_message_handling_time_seconds_sum{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__rate_interval])), \"message\", \"$1\", \"message_name\", \"(?:[a-z0-9_]+::)*([A-Za-z0-9_]+).*\")",
+          "expr": "100 * label_replace(sum by (message_name) (rate(actor_message_handling_time_seconds_sum{sequencer=\"$sequencer\", actor_name=~\"(?:[a-z0-9_]+::)*$actor_type(?:<.*)?\", actor_instance=~\"$instance\"}[$__rate_interval])), \"message\", \"$1\", \"message_name\", \"(.*)\")",
           "legendFormat": "{{message}}",
           "refId": "A"
         }

@@ -180,9 +180,10 @@ fn aggregated_per_instance(aggregation: &str, expr: &str) -> String {
     ))
 }
 
-/// `expr`'s series with their message's type name in [`MESSAGE_LABEL`].
+/// `expr`'s series with their message's name in [`MESSAGE_LABEL`], generic
+/// arguments included, e.g. `Store<BlockRecord>`.
 fn short_message_names(expr: &str) -> String {
-    type_name(expr, MESSAGE_LABEL, MESSAGE_NAME_LABEL)
+    format!(r#"label_replace({expr}, "{MESSAGE_LABEL}", "$1", "{MESSAGE_NAME_LABEL}", "(.*)")"#)
 }
 
 /// Messages handled per second over the time range, by every actor.

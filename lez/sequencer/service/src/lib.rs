@@ -51,7 +51,8 @@ pub type BedrockActor = sequencer_bedrock_actor::BedrockActor<StorageActor>;
 #[cfg(feature = "standalone")]
 pub type BedrockActor = sequencer_bedrock_actor::mock::MockBedrockActor;
 
-pub type ExecutorActor = sequencer_executor_actor::ExecutorActor<StorageActor, BedrockActor>;
+pub type ExecutorActor =
+    sequencer_executor_actor::ExecutorActor<StorageActor, BedrockActor, SlasherActor<StorageActor>>;
 
 /// The RPC server actor together with the address it ended up bound to.
 #[cfg(feature = "rpc")]
@@ -593,7 +594,11 @@ pub async fn setup_gossip(
 /// won't fix.
 async fn setup_executor(
     supervisor_ref: &ActorRef<SequencerSupervisor>,
-    args: sequencer_executor_actor::actor::Args<StorageActor, BedrockActor>,
+    args: sequencer_executor_actor::actor::Args<
+        StorageActor,
+        BedrockActor,
+        SlasherActor<StorageActor>,
+    >,
 ) -> Result<ActorRef<ExecutorActor>> {
     let executor_ref = ExecutorActor::supervise_with(supervisor_ref, move || args.clone())
         .restart_policy(RestartPolicy::Permanent)
@@ -693,7 +698,9 @@ fn bedrock_actor_args(
             let stored_tip = tokio::task::block_in_place(|| {
                 tokio::runtime::Handle::current().block_on(async {
                     storage_ref
-                        .ask(sequencer_storage_actor::protocol::GetLatestBlockMeta)
+                        .ask(sequencer_storage_actor::protocol::GetLast::<
+                            sequencer_core::storage::blocks::BlockRecord,
+                        >::new())
                         .await
                 })
             })?;

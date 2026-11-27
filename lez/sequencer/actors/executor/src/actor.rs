@@ -6,9 +6,7 @@ use common::{
     transaction::LeeTransaction,
 };
 use fee_core::validity::FeeError;
-use futures::{
-    FutureExt as _, StreamExt as _, TryFutureExt as _, TryStreamExt as _, future::ready, stream,
-};
+use futures::FutureExt as _;
 use kameo::{
     actor::{ActorId, ActorRef, WeakActorRef},
     error::ActorStopReason,
@@ -27,9 +25,19 @@ use sequencer_bedrock_actor::{
     protocol::{ChannelEvent, ChannelEventKind, Ed25519Key},
 };
 use sequencer_channel_signing_actor::{ChannelSigningActor, protocol as channel_signing_protocol};
-use sequencer_core::{StakeConfigUpdate, config::SequencerConfig};
-use sequencer_slasher_actor::SlasherActor;
-use sequencer_storage_actor::StorageActorTrait;
+use sequencer_core::{
+    StakeConfigUpdate,
+    config::SequencerConfig,
+    storage::{
+        CoreStorage,
+        blocks::{BlockIdByHashRecord, BlockRecord},
+    },
+};
+use sequencer_slasher_actor::SlasherActorTrait;
+use sequencer_storage_actor::{
+    encoding::BigEndian,
+    protocol::{Get, GetRange},
+};
 use sharding_pool_actor::{
     ShardingPoolActor,
     protocol::{Link, Reset, Unlink},
@@ -51,26 +59,25 @@ use crate::{
 };
 
 mod conversions;
+mod queries;
 mod state;
 #[cfg(test)]
 mod tests;
 
-/// How many block lookups a single [`GetBlockRange`] keeps in flight.
-const BLOCK_RANGE_CONCURRENCY: usize = 16;
 const MAX_PUBLICATIONS_PER_REQUEST: PageLimit = 256;
 
 /// What [`ExecutorActor`] starts from, on every start.
-pub struct Args<S: StorageActorTrait, B: BedrockActorTrait> {
+pub struct Args<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> {
     pub config: SequencerConfig,
     pub channel_signing_key: Ed25519Key,
     pub storage_ref: ActorRef<S>,
     pub bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
     pub stake_config_pubsub_ref: ActorRef<PubSub<StakeConfigUpdate>>,
-    pub slasher_ref: ActorRef<SlasherActor<S>>,
+    pub slasher_ref: ActorRef<Sl>,
     pub channel_signer_ref: ActorRef<ChannelSigningActor>,
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Clone for Args<S, B> {
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> Clone for Args<S, B, Sl> {
     fn clone(&self) -> Self {
         Self {
             config: self.config.clone(),
@@ -88,8 +95,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Clone for Args<S, B> {
 struct ChannelEventsResumed;
 
 /// Restarts along with the Bedrock actor of its channel, so it is meant to be supervised.
-pub struct ExecutorActor<S: StorageActorTrait, B: BedrockActorTrait> {
-    state: State<S, B>,
+pub struct ExecutorActor<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> {
+    state: State<S, B, Sl>,
     channel_id: ChannelId,
     storage_ref: ActorRef<S>,
     /// Whether [`ChannelEventsResumed`] was handled. A restart keeps the mailbox, so the events
@@ -101,10 +108,15 @@ pub struct ExecutorActor<S: StorageActorTrait, B: BedrockActorTrait> {
     failed_attempts: u32,
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> ExecutorActorTrait for ExecutorActor<S, B> {}
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> ExecutorActorTrait
+    for ExecutorActor<S, B, Sl>
+{
+}
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> kameo::Actor for ExecutorActor<S, B> {
-    type Args = Args<S, B>;
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> kameo::Actor
+    for ExecutorActor<S, B, Sl>
+{
+    type Args = Args<S, B, Sl>;
     type Error = Error;
 
     async fn on_start(args: Self::Args, actor_ref: ActorRef<Self>) -> Result<Self> {
@@ -182,8 +194,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> kameo::Actor for ExecutorActor<
     }
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEventsResumed>
-    for ExecutorActor<S, B>
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> Message<ChannelEventsResumed>
+    for ExecutorActor<S, B, Sl>
 {
     type Reply = ();
 
@@ -196,7 +208,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEventsResumed>
     }
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ProduceBlock> for ExecutorActor<S, B> {
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> Message<ProduceBlock>
+    for ExecutorActor<S, B, Sl>
+{
     type Reply = Result<()>;
 
     async fn handle(
@@ -259,8 +273,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ProduceBlock> for Execu
     }
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<channel_signing_protocol::SubmitConfig>
-    for ExecutorActor<S, B>
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait>
+    Message<channel_signing_protocol::SubmitConfig> for ExecutorActor<S, B, Sl>
 {
     type Reply = ();
 
@@ -287,7 +301,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<channel_signing_protoco
     }
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for ExecutorActor<S, B> {
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> Message<Transaction>
+    for ExecutorActor<S, B, Sl>
+{
     type Reply = Result<()>;
 
     async fn handle(
@@ -338,7 +354,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<Transaction> for Execut
     }
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetBlock> for ExecutorActor<S, B> {
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> Message<GetBlock>
+    for ExecutorActor<S, B, Sl>
+{
     type Reply = Result<Option<Block>>;
 
     async fn handle(
@@ -346,14 +364,17 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetBlock> for ExecutorA
         GetBlock { block_id }: GetBlock,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.storage_ref
-            .ask(sequencer_storage_actor::protocol::GetBlock { block_id })
-            .await
-            .map_err(Into::into)
+        Ok(self
+            .storage_ref
+            .ask(Get::<BlockRecord>::new(BigEndian::new(&block_id)))
+            .await?
+            .map(|record| record.block))
     }
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetBlockRange> for ExecutorActor<S, B> {
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> Message<GetBlockRange>
+    for ExecutorActor<S, B, Sl>
+{
     type Reply = DelegatedReply<Result<Vec<Block>>>;
 
     async fn handle(
@@ -363,29 +384,37 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetBlockRange> for Exec
     ) -> Self::Reply {
         let storage_ref = self.storage_ref.clone();
         // Not inside the handler's span, which would stay open, and timed,
-        // until the reads end.
-        let reads = tracing::info_span!(parent: None, "block_range_reads");
-        reads.follows_from(tracing::Span::current());
+        // until the read ends.
+        let read = tracing::info_span!(parent: None, "block_range_read");
+        read.follows_from(tracing::Span::current());
 
+        let ids = range.into_inner();
         ctx.spawn(async move {
-            stream::iter(range.into_inner())
-                .map(|block_id| {
-                    storage_ref
-                        .ask(sequencer_storage_actor::protocol::GetBlock { block_id })
-                        .into_future()
-                        .map_err(Into::into)
-                })
-                .buffered(BLOCK_RANGE_CONCURRENCY)
-                .try_take_while(|block_opt| ready(Ok(block_opt.is_some())))
-                .try_filter_map(|block_opt| ready(Ok(block_opt)))
-                .try_collect()
-                .instrument(reads)
-                .await
+            let records = storage_ref
+                .ask(GetRange::<BlockRecord>::new(
+                    Some(BigEndian::new(ids.start())),
+                    Some(BigEndian::new(ids.end())),
+                    // We're sure that range is not too big thanks to [`BoundedRangeInclusive`]
+                    usize::MAX,
+                ))
+                .into_future()
+                .instrument(read)
+                .await?;
+            // Up to the first missing block.
+            Ok(records
+                .into_iter()
+                .map(|(_block_id, record)| record.block)
+                .zip(ids)
+                .take_while(|(block, block_id)| block.header.block_id == *block_id)
+                .map(|(block, _)| block)
+                .collect())
         })
     }
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetLastBlockId> for ExecutorActor<S, B> {
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> Message<GetLastBlockId>
+    for ExecutorActor<S, B, Sl>
+{
     type Reply = Result<BlockId>;
 
     async fn handle(
@@ -397,8 +426,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetLastBlockId> for Exe
     }
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountBalance>
-    for ExecutorActor<S, B>
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> Message<GetAccountBalance>
+    for ExecutorActor<S, B, Sl>
 {
     type Reply = Result<Balance>;
 
@@ -422,7 +451,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountBalance>
     }
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetFeeQuote> for ExecutorActor<S, B> {
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> Message<GetFeeQuote>
+    for ExecutorActor<S, B, Sl>
+{
     type Reply = Result<FeeStateQuote>;
 
     async fn handle(
@@ -440,7 +471,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetFeeQuote> for Execut
     }
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetTransaction> for ExecutorActor<S, B> {
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> Message<GetTransaction>
+    for ExecutorActor<S, B, Sl>
+{
     type Reply = Result<Option<(LeeTransaction, BlockId)>>;
 
     async fn handle(
@@ -448,15 +481,19 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetTransaction> for Exe
         GetTransaction { tx_hash }: GetTransaction,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.storage_ref
-            .ask(sequencer_storage_actor::protocol::GetTransactionByHash { hash: tx_hash })
-            .await
-            .map_err(Into::into)
+        Ok(queries::block_with_transaction(&self.storage_ref, tx_hash)
+            .await?
+            .map(|(mut block, position)| {
+                (
+                    block.body.transactions.swap_remove(position),
+                    block.header.block_id,
+                )
+            }))
     }
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetTransactionReceipt>
-    for ExecutorActor<S, B>
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> Message<GetTransactionReceipt>
+    for ExecutorActor<S, B, Sl>
 {
     type Reply = Result<Option<TransactionReceipt>>;
 
@@ -465,14 +502,16 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetTransactionReceipt>
         GetTransactionReceipt { tx_hash }: GetTransactionReceipt,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.storage_ref
-            .ask(sequencer_storage_actor::protocol::GetTransactionReceiptByHash { hash: tx_hash })
-            .await
-            .map_err(Into::into)
+        // `None` also for a block's trailing fee and clock transactions, which have no receipt.
+        Ok(queries::block_with_transaction(&self.storage_ref, tx_hash)
+            .await?
+            .and_then(|(block, position)| block.body.receipts.get(position).copied()))
     }
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountNonces> for ExecutorActor<S, B> {
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> Message<GetAccountNonces>
+    for ExecutorActor<S, B, Sl>
+{
     type Reply = Result<Vec<Nonce>>;
 
     async fn handle(
@@ -498,7 +537,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountNonces> for E
     }
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetProofsAndRoot> for ExecutorActor<S, B> {
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> Message<GetProofsAndRoot>
+    for ExecutorActor<S, B, Sl>
+{
     type Reply = Result<GetProofsAndRootReply>;
 
     async fn handle(
@@ -532,7 +573,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetProofsAndRoot> for E
     }
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccount> for ExecutorActor<S, B> {
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> Message<GetAccount>
+    for ExecutorActor<S, B, Sl>
+{
     type Reply = Result<Option<Account>>;
 
     async fn handle(
@@ -549,7 +592,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccount> for Executo
     }
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountView> for ExecutorActor<S, B> {
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> Message<GetAccountView>
+    for ExecutorActor<S, B, Sl>
+{
     type Reply = Result<Option<Account>>;
 
     async fn handle(
@@ -576,7 +621,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountView> for Exe
     }
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetPublications> for ExecutorActor<S, B> {
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> Message<GetPublications>
+    for ExecutorActor<S, B, Sl>
+{
     type Reply = Result<GetPublicationsReply>;
 
     async fn handle(
@@ -600,7 +647,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetPublications> for Ex
     }
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetMessagePath> for ExecutorActor<S, B> {
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> Message<GetMessagePath>
+    for ExecutorActor<S, B, Sl>
+{
     type Reply = Result<Option<MembershipProof>>;
 
     async fn handle(
@@ -617,8 +666,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetMessagePath> for Exe
     }
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetRecoveryBinding>
-    for ExecutorActor<S, B>
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> Message<GetRecoveryBinding>
+    for ExecutorActor<S, B, Sl>
 {
     type Reply = Result<Option<EncryptedNote>>;
 
@@ -636,7 +685,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetRecoveryBinding>
     }
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetChannelId> for ExecutorActor<S, B> {
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> Message<GetChannelId>
+    for ExecutorActor<S, B, Sl>
+{
     type Reply = Reply<ChannelId>;
 
     async fn handle(
@@ -648,7 +699,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetChannelId> for Execu
     }
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetStatus> for ExecutorActor<S, B> {
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> Message<GetStatus>
+    for ExecutorActor<S, B, Sl>
+{
     type Reply = ExecutorStatus;
 
     async fn handle(
@@ -671,8 +724,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetStatus> for Executor
     }
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetSystemProposals>
-    for ExecutorActor<S, B>
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> Message<GetSystemProposals>
+    for ExecutorActor<S, B, Sl>
 {
     type Reply = Result<GetSystemProposalsReply>;
 
@@ -698,8 +751,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetSystemProposals>
     }
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<SubmitSystemApproval>
-    for ExecutorActor<S, B>
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> Message<SubmitSystemApproval>
+    for ExecutorActor<S, B, Sl>
 {
     type Reply = Result<()>;
 
@@ -719,39 +772,45 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> Message<SubmitSystemApproval>
     }
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetBlockByHash> for ExecutorActor<S, B> {
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> Message<GetBlockByHash>
+    for ExecutorActor<S, B, Sl>
+{
     type Reply = Result<Option<u64>>;
 
     async fn handle(
         &mut self,
-        msg: GetBlockByHash,
+        GetBlockByHash { block_hash }: GetBlockByHash,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.storage_ref
-            .ask::<sequencer_storage_actor::protocol::GetBlockByHash>(msg.into())
-            .await
-            .map_err(Into::into)
+        Ok(self
+            .storage_ref
+            .ask(Get::<BlockIdByHashRecord>::new(block_hash))
+            .await?
+            .map(|record| record.block_id))
     }
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<GetAccountTransactions>
-    for ExecutorActor<S, B>
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> Message<GetAccountTransactions>
+    for ExecutorActor<S, B, Sl>
 {
     type Reply = Result<Option<Vec<LeeTransaction>>>;
 
     async fn handle(
         &mut self,
-        msg: GetAccountTransactions,
+        GetAccountTransactions {
+            account_id,
+            offset,
+            limit,
+        }: GetAccountTransactions,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.storage_ref
-            .ask::<sequencer_storage_actor::protocol::GetAccountTransactions>(msg.into())
-            .await
-            .map_err(Into::into)
+        queries::account_transactions(&self.storage_ref, account_id, offset, limit).await
     }
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> Message<ChannelEvent> for ExecutorActor<S, B> {
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> Message<ChannelEvent>
+    for ExecutorActor<S, B, Sl>
+{
     /// An `Err` stops the Bedrock actor, and so this one, as they are linked.
     type Reply = std::result::Result<(), sequencer_bedrock_actor::protocol::ChannelEventFailed>;
 

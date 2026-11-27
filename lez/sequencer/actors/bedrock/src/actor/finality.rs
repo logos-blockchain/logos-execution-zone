@@ -557,9 +557,9 @@ mod tests {
     #[test]
     fn a_restored_index_reads_only_the_slots_after_it() {
         let mut chain = Chain::new(400).config_at(1, &[key(2)]);
-        let bytes = reported_through(&chain, 500).bytes_to_store().unwrap();
+        let bytes = borsh::to_vec(&reported_through(&chain, 500)).unwrap();
         // The checkpoint was final through slot 600.
-        let mut index = ConfigIndex::from_bytes(&bytes).unwrap();
+        let mut index: ConfigIndex = borsh::from_slice(&bytes).unwrap();
         futures::executor::block_on(index.cover_through(&mut chain, 600)).unwrap();
         assert_eq!(chain.reads, 1, "slots 501 to 600 should be read");
 

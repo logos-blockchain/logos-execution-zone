@@ -1,6 +1,10 @@
-use std::{fmt::Display, future::Future, time::Duration};
+use std::{collections::HashSet, fmt::Display, future::Future, time::Duration};
 
 use chain_state::{Anchor, AnchorConsistencyCheck, ChainConsistency, ChainState, Tip};
+use common::{
+    HashType,
+    block::{BedrockStatus, Block},
+};
 use kameo::actor::ActorRef;
 use kameo_actors::pubsub::PubSub;
 use sequencer_actors_common::SendErrorExt;
@@ -9,9 +13,20 @@ use sequencer_bedrock_actor::{
     protocol::{ChannelId, FollowStart, MsgId, Slot},
 };
 use sequencer_channel_signing_actor::ChannelSigningActor;
-use sequencer_core::{StakeConfigUpdate, config::SequencerConfig};
-use sequencer_slasher_actor::SlasherActor;
-use sequencer_storage_actor::{StorageActorTrait, protocol::ZoneAnchorRecord};
+use sequencer_core::{
+    StakeConfigUpdate,
+    config::SequencerConfig,
+    storage::{
+        ChannelViewRecord, CoreStorage, FinalSnapshotRecord, HeadStateRecord, ZoneAnchorRecord,
+        blocks::{BlockRecord, block_deletes, head_writes},
+    },
+};
+use sequencer_slasher_actor::SlasherActorTrait;
+use sequencer_storage_actor::{
+    encoding::BigEndian,
+    protocol::{Get, GetFirst, GetLast, WriteBatch},
+    utils::Pages,
+};
 use sharding_pool_actor::ShardingPoolActor;
 use tracing::{info, warn};
 
@@ -26,15 +41,17 @@ const CHANNEL_PROBE_DELAY: Duration = Duration::from_secs(2);
 /// Retries a failed startup read of the channel gets, so a node that is not ready yet does not fail
 /// the start.
 const CHANNEL_PROBE_RETRIES: u32 = 29;
+/// How many stored blocks one read takes when going over all of them.
+const STORED_BLOCKS_PAGE: usize = 64;
 
-pub enum State<S: StorageActorTrait, B: BedrockActorTrait> {
+pub enum State<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> {
     /// An error or future cancellation happened during [`Self::modify()`].
     Error(String),
-    Bootstrapping(bootstrapping::BootstrappingState<S, B>),
-    Online(online::OnlineState<S, B>),
+    Bootstrapping(bootstrapping::BootstrappingState<S, B, Sl>),
+    Online(online::OnlineState<S, B, Sl>),
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> State<S, B, Sl> {
     /// The state a start following the channel from `follow_start` begins in.
     pub async fn initialize(
         Args {
@@ -45,7 +62,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
             stake_config_pubsub_ref,
             slasher_ref,
             channel_signer_ref,
-        }: Args<S, B>,
+        }: Args<S, B, Sl>,
         follow_start: FollowStart,
     ) -> Result<Self> {
         // TODO: Rework this encapsulation cringe
@@ -89,14 +106,13 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
         })
         .await?;
 
-        let local_tip = storage_ref
-            .ask(sequencer_storage_actor::protocol::GetLatestBlockMeta)
-            .await?;
-        let anchor = storage_ref
-            .ask(sequencer_storage_actor::protocol::GetZoneAnchor)
-            .await?;
-        let consistency_check =
-            Self::validate(channel_tip_slot, local_tip.is_some(), anchor, &storage_ref).await?;
+        let local_tip = storage_ref.ask(GetLast::<BlockRecord>::new()).await?;
+        let anchor = storage_ref.ask(Get::<ZoneAnchorRecord>::default()).await?;
+        let consistency_check = Self::validate(
+            channel_tip_slot,
+            Self::holds_finalized_block(&storage_ref).await?,
+            anchor,
+        )?;
 
         let actors = ActorsBundle {
             storage_ref,
@@ -160,7 +176,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
         }
     }
 
-    pub const fn online(&self) -> Result<&online::OnlineState<S, B>> {
+    pub const fn online(&self) -> Result<&online::OnlineState<S, B, Sl>> {
         if let Self::Online(online) = self {
             Ok(online)
         } else {
@@ -168,7 +184,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
         }
     }
 
-    pub const fn online_mut(&mut self) -> Result<&mut online::OnlineState<S, B>> {
+    pub const fn online_mut(&mut self) -> Result<&mut online::OnlineState<S, B, Sl>> {
         if let Self::Online(online) = self {
             Ok(online)
         } else {
@@ -210,8 +226,9 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
     /// persisted channel view over it.
     async fn restore_chain_state(storage_ref: &ActorRef<S>) -> Result<ChainState> {
         let final_snapshot = storage_ref
-            .ask(sequencer_storage_actor::protocol::GetFinalSnapshot)
-            .await?;
+            .ask(Get::<FinalSnapshotRecord>::default())
+            .await?
+            .map(FinalSnapshotRecord::into_parts);
         let (final_state, final_tip) = match final_snapshot {
             Some((state, meta)) => (state, Some(Tip::from(meta))),
             // Nothing finalized yet: replay the whole stored chain.
@@ -219,25 +236,25 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
         };
 
         let mut chain = ChainState::from_final(final_state, final_tip);
-        let view = storage_ref
-            .ask(sequencer_storage_actor::protocol::GetChannelViewBytes)
-            .await?;
-        let restored = view.is_some_and(|bytes| {
-            chain
-                .restore_view(&bytes)
-                .inspect_err(|err| warn!(error = %err, "Stored channel view does not decode"))
-                .is_ok()
-        });
-        if !restored {
+        let Some(view) = storage_ref.ask(Get::<ChannelViewRecord>::default()).await? else {
             // Nothing the channel reported yet: the view fills from the
             // channel, or from our bootstrap publishes.
             info!("No stored channel view; starting on the final tier");
             return Ok(chain);
+        };
+        if let Err(err) = chain.restore_view(&view.bytes) {
+            warn!(
+                error = %err,
+                "Stored channel view does not decode; starting on the final tier"
+            );
+            trim_stored_head(storage_ref, &chain).await?;
+            return Ok(chain);
         }
 
         let stored_head_state = storage_ref
-            .ask(sequencer_storage_actor::protocol::GetLeeState)
-            .await?;
+            .ask(Get::<HeadStateRecord>::default())
+            .await?
+            .map(HeadStateRecord::into_state);
 
         // The replayed head must reproduce the persisted state, else store
         // and config disagree (e.g. edited genesis actions). Skipped only when
@@ -256,23 +273,29 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
         Ok(chain)
     }
 
-    async fn validate(
+    /// Whether the store holds a block the channel finalized.
+    ///
+    /// Blocks are finalized in order, so the first stored block is finalized
+    /// whenever any is.
+    async fn holds_finalized_block(storage_ref: &ActorRef<S>) -> Result<bool> {
+        let first = storage_ref.ask(GetFirst::<BlockRecord>::new()).await?;
+        Ok(first.is_some_and(|(_block_id, record)| {
+            matches!(record.block.bedrock_status, BedrockStatus::Finalized)
+        }))
+    }
+
+    /// `committed` is whether this sequencer has already committed blocks to the channel.
+    fn validate(
         channel_tip_slot: Option<Slot>,
-        holds_blocks: bool,
+        committed: bool,
         anchor: Option<ZoneAnchorRecord>,
-        storage_ref: &ActorRef<S>,
     ) -> Result<Option<AnchorConsistencyCheck>> {
         // If this sequencer has already committed blocks to the channel, that
         // channel must still exist. A missing channel then means a wiped/rewound
         // Bedrock or a node pointing at a different chain, so refuse to resume
-        // onto a foreign channel. Committed takes both stored blocks and a
-        // checkpoint from an earlier run: blocks alone are a store seeded
-        // offline, whose chain then creates the channel.
-        let committed = holds_blocks
-            && storage_ref
-                .ask(sequencer_storage_actor::protocol::GetZoneCheckpoint)
-                .await?
-                .is_some();
+        // onto a foreign channel. Committed takes a block the channel finalized:
+        // blocks it never finalized are a store seeded offline, whose chain then
+        // creates the channel.
         if committed && channel_tip_slot.is_none() {
             return Err(Error::StoreAndChannelDivergence(
                 chain_state::ChainMismatch::ChannelMissing,
@@ -306,11 +329,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
     clippy::struct_field_names,
     reason = "Every field is an actor ref, named the way they are everywhere else"
 )]
-struct ActorsBundle<S: StorageActorTrait, B: BedrockActorTrait> {
+struct ActorsBundle<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> {
     storage_ref: ActorRef<S>,
     bedrock_pool_ref: ActorRef<ShardingPoolActor<B, ChannelId>>,
     stake_config_pubsub_ref: ActorRef<PubSub<StakeConfigUpdate>>,
-    slasher_ref: ActorRef<SlasherActor<S>>,
+    slasher_ref: ActorRef<Sl>,
     channel_signer_ref: ActorRef<ChannelSigningActor>,
 }
 
@@ -358,4 +381,33 @@ where
             Err(err) => return Err(err),
         }
     }
+}
+
+/// Deletes the stored blocks above the final tier of `chain` that its head does not hold, then
+/// writes its head state and view. Its head holds only stored blocks.
+///
+/// Reads the blocks a page at a time, and writes the view last, so a restart midway does not find
+/// the new view over blocks left to delete.
+async fn trim_stored_head<S: CoreStorage>(
+    storage_ref: &ActorRef<S>,
+    chain: &ChainState,
+) -> Result<()> {
+    let held: HashSet<HashType> = chain.head_blocks().map(|block| block.header.hash).collect();
+    let first_above = chain
+        .final_tip()
+        .map(|tip| BigEndian::new(&tip.block_id.saturating_add(1)));
+    let mut pages =
+        Pages::<_, BlockRecord>::new(storage_ref, first_above, None, STORED_BLOCKS_PAGE);
+    while let Some(records) = pages.next().await? {
+        let dropped: Vec<Block> = records
+            .into_iter()
+            .map(|(_block_id, record)| record.block)
+            .filter(|block| !held.contains(&block.header.hash))
+            .collect();
+        if !dropped.is_empty() {
+            storage_ref.ask(WriteBatch(block_deletes(&dropped))).await?;
+        }
+    }
+    storage_ref.ask(WriteBatch(head_writes(chain))).await?;
+    Ok(())
 }

@@ -1,30 +1,22 @@
-#![expect(
-    clippy::arbitrary_source_item_ordering,
-    reason = "Can't place macro export before its definition"
-)]
-
-use std::path::Path;
+use std::{ops::Range, path::Path};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 
-macro_rules! type_name {
-    ($t:ty) => {{
-        // Ensure it's a real type, protecting from unwanted mismatch after refactoring.
-        const fn _ensure_type(_: &$t) {}
+use crate::{
+    Result, Storable,
+    error::Error,
+    protocol::RangeStart,
+    storable::{ColumnFamily, decode_key, encode_key, key_range, range_bounds, start_key},
+    writes::{StagedWrite, StagedWrites, Writes},
+};
 
-        stringify!($t)
-    }};
-}
+/// Memtable size for the families holding small records, well above
+/// what they take between flushes.
+const SMALL_WRITE_BUFFER_SIZE: usize = 4 * 1024 * 1024;
 
-pub(crate) use type_name;
-
-/// Separates the type name from the key it prefixes.
-///
-/// Type names never contain it, so no key can be read as another type's.
-const TYPE_NAME_SEPARATOR: u8 = 0;
-
-/// First byte past [`TYPE_NAME_SEPARATOR`], bounding a type's key range from above.
-const TYPE_NAME_SEPARATOR_END: u8 = TYPE_NAME_SEPARATOR + 1;
+/// Values above this are large enough to be worth keeping out of the
+/// LSM tree.
+const MIN_BLOB_SIZE: u64 = 4 * 1024;
 
 /// Zstandard compression level used for dumps.
 ///
@@ -32,58 +24,15 @@ const TYPE_NAME_SEPARATOR_END: u8 = TYPE_NAME_SEPARATOR + 1;
 /// negligible.
 const ZSTD_LEVEL: i32 = 19;
 
-pub type Result<T> = std::result::Result<T, Error>;
-
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    #[error("RocksDb error")]
-    RocksDb(#[from] rocksdb::Error),
-
-    #[error("Borsh encoding error")]
-    BorshEncoding(#[from] borsh::io::Error),
-
-    #[error("Compression error")]
-    Compression(#[source] std::io::Error),
-
-    #[error("Dump holds entries of column family {0:?}, which this database has none of")]
-    UnknownColumnFamily(String),
-}
-
-/// Column families affects how data is stored on disk and are used to group data which requires
-/// common configuration.
-pub trait ColumnFamilies: Into<&'static str> + enum_iterator::Sequence {
-    /// Options the family is created and opened with.
-    fn options(&self) -> rocksdb::Options {
-        rocksdb::Options::default()
-    }
-}
-
-pub trait Storable<C: ColumnFamilies>: BorshSerialize + BorshDeserialize {
-    /// Key the value is stored under.
-    ///
-    /// Key bytes are compared lexicographically to determine order in the column family.
-    type Key: AsRef<[u8]>;
-
-    const COLUMN_FAMILY: C;
-
-    /// Name telling this type apart from the others sharing its column family.
-    ///
-    /// Consider using `type_name!(TypeName)` for it.
-    const TYPE_NAME: &'static str;
-}
-
-pub struct Database<C: ColumnFamilies> {
+pub struct Database {
     db: rocksdb::DB,
-    _phantom: std::marker::PhantomData<C>,
 }
 
-impl<C: ColumnFamilies> Database<C> {
+impl Database {
     pub fn new(path: &Path) -> Result<Self> {
-        let cfs = enum_iterator::all::<C>()
-            .map(|cf| {
-                let options = cf.options();
-                rocksdb::ColumnFamilyDescriptor::new(cf.into(), options)
-            })
+        let cfs = ColumnFamily::ALL
+            .into_iter()
+            .map(|cf| rocksdb::ColumnFamilyDescriptor::new(cf.name(), options(cf)))
             .collect::<Vec<_>>();
 
         let mut db_opts = rocksdb::Options::default();
@@ -91,10 +40,7 @@ impl<C: ColumnFamilies> Database<C> {
         db_opts.create_if_missing(true);
         let db = rocksdb::DB::open_cf_descriptors(&db_opts, path, cfs)?;
 
-        Ok(Self {
-            db,
-            _phantom: std::marker::PhantomData,
-        })
+        Ok(Self { db })
     }
 
     /// Opens the database at `path`, writing `dump` into it.
@@ -114,46 +60,44 @@ impl<C: ColumnFamilies> Database<C> {
         Ok(database)
     }
 
-    pub fn put<T: Storable<C>>(&self, key: &T::Key, value: &T) -> Result<()> {
-        let cf = self.column_family::<T>();
-
-        let mut bytes = Vec::new();
-        value.serialize(&mut bytes)?;
-
-        self.db.put_cf(cf, Self::encode_key::<T>(key), bytes)?;
-
-        Ok(())
-    }
-
-    pub fn put_batch<T: Storable<C>>(
-        &self,
-        write_batch: &mut WriteBatch,
-        key: &T::Key,
-        value: &T,
-    ) -> Result<()> {
-        let cf = self.column_family::<T>();
-
-        let mut bytes = Vec::new();
-        value.serialize(&mut bytes)?;
-
-        write_batch.0.put_cf(cf, Self::encode_key::<T>(key), bytes);
+    pub fn put<T: Storable>(&self, key: &T::Key, value: &T) -> Result<()> {
+        let bytes = borsh::to_vec(value)?;
+        self.db.put_cf(
+            self.column_family(T::COLUMN_FAMILY),
+            encode_key::<T>(key),
+            bytes,
+        )?;
 
         Ok(())
     }
 
-    pub fn write(&self, batch: WriteBatch) -> Result<()> {
-        if batch.0.is_empty() {
+    /// Commits every write of `writes` together, in order, encoding their values.
+    pub fn write(&self, writes: &dyn Writes) -> Result<()> {
+        let mut staged = StagedWrites::new();
+        writes.write_to(&mut staged)?;
+        if staged.writes.is_empty() {
             return Ok(());
         }
 
-        self.db.write(batch.0)?;
+        let mut batch = rocksdb::WriteBatch::default();
+        for StagedWrite {
+            column_family,
+            key,
+            value,
+        } in staged.writes
+        {
+            let cf = self.column_family(column_family);
+            match value {
+                Some(value) => batch.put_cf(cf, key, value),
+                None => batch.delete_cf(cf, key),
+            }
+        }
+        self.db.write(batch)?;
         Ok(())
     }
 
-    pub fn get<T: Storable<C>>(&self, key: &T::Key) -> Result<Option<T>> {
-        let cf = self.column_family::<T>();
-
-        let Some(bytes) = self.db.get_cf(cf, Self::encode_key::<T>(key))? else {
+    pub fn get<T: Storable>(&self, key: &T::Key) -> Result<Option<T>> {
+        let Some(bytes) = self.get_bytes::<T>(key)? else {
             return Ok(None);
         };
 
@@ -162,9 +106,8 @@ impl<C: ColumnFamilies> Database<C> {
     }
 
     /// The stored bytes for `key`, undecoded.
-    pub fn get_bytes<T: Storable<C>>(&self, key: &T::Key) -> Result<Option<Vec<u8>>> {
-        let cf = self.column_family::<T>();
-        Ok(self.db.get_cf(cf, Self::encode_key::<T>(key))?)
+    pub fn get_bytes<T: Storable>(&self, key: &T::Key) -> Result<Option<Vec<u8>>> {
+        self.get_raw(T::COLUMN_FAMILY, &encode_key::<T>(key))
     }
 
     /// Get an iterator over all items of the given type.
@@ -172,17 +115,83 @@ impl<C: ColumnFamilies> Database<C> {
     /// Order of items is determined by lexicographic order of their encoded keys, see
     /// [`Storable::Key`] for more details.
     #[must_use]
-    pub fn iter<T: Storable<C>>(&self) -> Iter<'_, C, T> {
-        let cf = self.column_family::<T>();
-        Iter::new(&self.db, cf)
+    pub fn iter<T: Storable>(&self) -> Iter<'_, T> {
+        Iter {
+            values: self.values(T::COLUMN_FAMILY, key_range::<T>()),
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    /// Iterator over the items of the given type from `start` to `end`, with their keys.
+    ///
+    /// `end` is included if stored, and `None` stops at the last key.
+    pub fn iter_range<T: Storable>(
+        &self,
+        start: &RangeStart<T>,
+        end: Option<&T::Key>,
+    ) -> impl Iterator<Item = Result<(T::Key, T)>> + '_ {
+        let bounds = range_bounds::<T>(start_key(start), end);
+        let empty = bounds.start >= bounds.end;
+        let mut values = self
+            .db
+            .raw_iterator_cf_opt(self.column_family(T::COLUMN_FAMILY), iterate_opts(bounds));
+        values.seek_to_first();
+
+        std::iter::from_fn(move || {
+            if empty {
+                return None;
+            }
+            let item = decode_entry::<T>(values.key()?, values.value()?);
+            values.next();
+            Some(item)
+        })
     }
 
     /// How many items of the given type are stored, counted without decoding
     /// any of them.
     #[must_use]
-    pub fn count<T: Storable<C>>(&self) -> usize {
-        let cf = self.column_family::<T>();
-        let mut iter = self.db.raw_iterator_cf_opt(cf, Self::iterate_opts::<T>());
+    pub fn count<T: Storable>(&self) -> usize {
+        self.count_raw(T::COLUMN_FAMILY, key_range::<T>())
+    }
+
+    pub fn delete<T: Storable>(&self, key: &T::Key) -> Result<()> {
+        self.db
+            .delete_cf(self.column_family(T::COLUMN_FAMILY), encode_key::<T>(key))?;
+        Ok(())
+    }
+
+    /// Every entry of every column family, as the bytes they are stored as.
+    pub fn dump(&self) -> Result<Dump> {
+        let mut entries = Vec::new();
+
+        for column_family in ColumnFamily::ALL {
+            let cf = self.column_family(column_family);
+
+            for entry in self.db.iterator_cf(cf, rocksdb::IteratorMode::Start) {
+                let (key, value) = entry?;
+                entries.push(DumpEntry {
+                    column_family: column_family.name().to_owned(),
+                    key: key.into_vec(),
+                    value: value.into_vec(),
+                });
+            }
+        }
+
+        Ok(Dump { entries })
+    }
+
+    fn get_raw(&self, column_family: ColumnFamily, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        Ok(self.db.get_cf(self.column_family(column_family), key)?)
+    }
+
+    fn values(&self, column_family: ColumnFamily, keys: Range<Vec<u8>>) -> Values<'_> {
+        Values::new(&self.db, self.column_family(column_family), keys)
+    }
+
+    fn count_raw(&self, column_family: ColumnFamily, keys: Range<Vec<u8>>) -> usize {
+        let mut iter = self
+            .db
+            .raw_iterator_cf_opt(self.column_family(column_family), iterate_opts(keys));
         iter.seek_to_first();
 
         let mut count = 0_usize;
@@ -194,75 +203,8 @@ impl<C: ColumnFamilies> Database<C> {
         count
     }
 
-    pub fn delete<T: Storable<C>>(&self, key: &T::Key) -> Result<()> {
-        let cf = self.column_family::<T>();
-        self.db.delete_cf(cf, Self::encode_key::<T>(key))?;
-        Ok(())
-    }
-
-    pub fn delete_batch<T: Storable<C>>(&self, write_batch: &mut WriteBatch, key: &T::Key) {
-        let cf = self.column_family::<T>();
-        write_batch.0.delete_cf(cf, Self::encode_key::<T>(key));
-    }
-
-    /// Bytes `key` is stored under: the name of `T` and the key itself, so that
-    /// types sharing a column family stay in disjoint key ranges.
-    fn encode_key<T: Storable<C>>(key: &T::Key) -> Vec<u8> {
-        [
-            T::TYPE_NAME.as_bytes(),
-            &[TYPE_NAME_SEPARATOR],
-            key.as_ref(),
-        ]
-        .concat()
-    }
-
-    /// Key range holding every `T`: the prefix all of its keys share, and the
-    /// first key past them.
-    fn key_range<T: Storable<C>>() -> (Vec<u8>, Vec<u8>) {
-        let type_name = T::TYPE_NAME.as_bytes();
-
-        (
-            [type_name, &[TYPE_NAME_SEPARATOR]].concat(),
-            [type_name, &[TYPE_NAME_SEPARATOR_END]].concat(),
-        )
-    }
-
-    /// Read options confining an iterator to the keys of `T`.
-    fn iterate_opts<T: Storable<C>>() -> rocksdb::ReadOptions {
-        let (start, end) = Self::key_range::<T>();
-
-        let mut read_opts = rocksdb::ReadOptions::default();
-        read_opts.set_iterate_lower_bound(start);
-        read_opts.set_iterate_upper_bound(end);
-        read_opts
-    }
-
-    /// Every entry of every column family, as the bytes they are stored as.
-    pub fn dump(&self) -> Result<Dump> {
-        let mut entries = Vec::new();
-
-        for column_family in enum_iterator::all::<C>() {
-            let name: &'static str = column_family.into();
-            let cf = self.column_family_by_name(name);
-
-            for entry in self.db.iterator_cf(cf, rocksdb::IteratorMode::Start) {
-                let (key, value) = entry?;
-                entries.push(DumpEntry {
-                    column_family: name.to_owned(),
-                    key: key.into_vec(),
-                    value: value.into_vec(),
-                });
-            }
-        }
-
-        Ok(Dump { entries })
-    }
-
-    fn column_family<T: Storable<C>>(&self) -> &rocksdb::ColumnFamily {
-        self.column_family_by_name(T::COLUMN_FAMILY.into())
-    }
-
-    fn column_family_by_name(&self, name: &'static str) -> &rocksdb::ColumnFamily {
+    fn column_family(&self, column_family: ColumnFamily) -> &rocksdb::ColumnFamily {
+        let name = column_family.name();
         self.db
             .cf_handle(name)
             .unwrap_or_else(|| panic!("Column family {name:?} must be present"))
@@ -299,35 +241,51 @@ impl Dump {
     }
 }
 
-#[derive(Default)]
-pub struct WriteBatch(rocksdb::WriteBatch);
-
-/// Iterator over the items of one type in a column family of the database.
+/// Iterator over the items of one type in the database, with their keys.
 ///
 /// Order of items is determined by lexicographic order of their encoded keys, see
 /// [`Storable::Key`] for more details.
-pub struct Iter<'db, C: ColumnFamilies, T: Storable<C>> {
-    front: rocksdb::DBRawIterator<'db>,
-    back: rocksdb::DBRawIterator<'db>,
-    _phantom: std::marker::PhantomData<(C, T)>,
+pub struct Iter<'db, T: Storable> {
+    values: Values<'db>,
+    _phantom: std::marker::PhantomData<T>,
 }
 
-impl<'db, C: ColumnFamilies, T: Storable<C>> Iter<'db, C, T> {
-    fn new(db: &'db rocksdb::DB, cf: &rocksdb::ColumnFamily) -> Self {
-        let mut front = db.raw_iterator_cf_opt(cf, Database::<C>::iterate_opts::<T>());
+impl<T: Storable> Iterator for Iter<'_, T> {
+    type Item = Result<(T::Key, T)>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.values
+            .next()
+            .map(|(key, value)| decode_entry::<T>(&key, &value))
+    }
+}
+
+impl<T: Storable> DoubleEndedIterator for Iter<'_, T> {
+    fn next_back(&mut self) -> Option<Self::Item> {
+        self.values
+            .next_back()
+            .map(|(key, value)| decode_entry::<T>(&key, &value))
+    }
+}
+
+/// Stored keys and values in a range, from both ends towards each other.
+struct Values<'db> {
+    front: rocksdb::DBRawIterator<'db>,
+    back: rocksdb::DBRawIterator<'db>,
+}
+
+impl<'db> Values<'db> {
+    fn new(db: &'db rocksdb::DB, cf: &rocksdb::ColumnFamily, keys: Range<Vec<u8>>) -> Self {
+        let mut front = db.raw_iterator_cf_opt(cf, iterate_opts(keys.clone()));
         front.seek_to_first();
 
-        let mut back = db.raw_iterator_cf_opt(cf, Database::<C>::iterate_opts::<T>());
+        let mut back = db.raw_iterator_cf_opt(cf, iterate_opts(keys));
         back.seek_to_last();
 
-        Self {
-            front,
-            back,
-            _phantom: std::marker::PhantomData,
-        }
+        Self { front, back }
     }
 
-    /// Whether the ends have met, meaning every item has been yielded.
+    /// Whether the ends have met, meaning every value has been yielded.
     ///
     /// Relies on keys being ordered bytewise, which holds for the default comparator.
     fn ends_met(&self) -> bool {
@@ -338,54 +296,90 @@ impl<'db, C: ColumnFamilies, T: Storable<C>> Iter<'db, C, T> {
     }
 }
 
-impl<C: ColumnFamilies, T: Storable<C>> Iterator for Iter<'_, C, T> {
-    type Item = Result<T>;
+impl Iterator for Values<'_> {
+    /// The encoded key and the value.
+    type Item = (Vec<u8>, Vec<u8>);
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.ends_met() {
             return None;
         }
 
-        let item = T::try_from_slice(self.front.value()?).map_err(Into::into);
+        let entry = (self.front.key()?.to_vec(), self.front.value()?.to_vec());
         self.front.next();
-        Some(item)
+        Some(entry)
     }
 }
 
-impl<C: ColumnFamilies, T: Storable<C>> DoubleEndedIterator for Iter<'_, C, T> {
+impl DoubleEndedIterator for Values<'_> {
     fn next_back(&mut self) -> Option<Self::Item> {
         if self.ends_met() {
             return None;
         }
 
-        let item = T::try_from_slice(self.back.value()?).map_err(Into::into);
+        let entry = (self.back.key()?.to_vec(), self.back.value()?.to_vec());
         self.back.prev();
-        Some(item)
+        Some(entry)
     }
+}
+
+/// Options `column_family` is created and opened with.
+fn options(column_family: ColumnFamily) -> rocksdb::Options {
+    let mut options = rocksdb::Options::default();
+
+    match column_family {
+        ColumnFamily::Appended | ColumnFamily::Index => {
+            // Written in bursts, so more memtables to fill while one flushes.
+            options.set_max_write_buffer_number(4);
+        }
+        ColumnFamily::LargeRewritten | ColumnFamily::LargeAppended => {
+            // Large values rewritten or appended often. Blob files keep them
+            // out of compaction, which would otherwise copy every one of them
+            // through each level.
+            options.set_enable_blob_files(true);
+            options.set_min_blob_size(MIN_BLOB_SIZE);
+            options.set_enable_blob_gc(true);
+        }
+        ColumnFamily::LongLived | ColumnFamily::ShortLived => {
+            options.set_write_buffer_size(SMALL_WRITE_BUFFER_SIZE);
+        }
+    }
+
+    options
+}
+
+/// Read options confining an iterator to the keys in `keys`.
+fn iterate_opts(keys: Range<Vec<u8>>) -> rocksdb::ReadOptions {
+    let mut read_opts = rocksdb::ReadOptions::default();
+    read_opts.set_iterate_lower_bound(keys.start);
+    read_opts.set_iterate_upper_bound(keys.end);
+    read_opts
+}
+
+/// The key and the value of a `T` stored as `encoded_key` and `value`.
+fn decode_entry<T: Storable>(encoded_key: &[u8], value: &[u8]) -> Result<(T::Key, T)> {
+    let key = decode_key::<T>(encoded_key).ok_or(Error::KeyDecoding(T::TYPE_NAME))?;
+    Ok((key, T::try_from_slice(value)?))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::actor::encoding::{BigEndian, SingletonKey};
-
-    #[derive(strum::IntoStaticStr, enum_iterator::Sequence)]
-    enum TestColumnFamily {
-        Numbers,
-    }
-
-    impl ColumnFamilies for TestColumnFamily {}
+    use crate::{
+        encoding::{BigEndian, SingletonKey},
+        full_type_name,
+    };
 
     #[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
     struct Number {
         id: u64,
     }
 
-    impl Storable<TestColumnFamily> for Number {
+    impl Storable for Number {
         type Key = BigEndian<u64>;
 
-        const COLUMN_FAMILY: TestColumnFamily = TestColumnFamily::Numbers;
-        const TYPE_NAME: &'static str = type_name!(Number);
+        const COLUMN_FAMILY: ColumnFamily = ColumnFamily::LongLived;
+        const TYPE_NAME: &'static str = full_type_name!(Number);
     }
 
     /// Shares the column family with [`Number`], under a name [`Number`]'s is a
@@ -395,11 +389,11 @@ mod tests {
         ids: (u64, u64),
     }
 
-    impl Storable<TestColumnFamily> for NumberPair {
+    impl Storable for NumberPair {
         type Key = BigEndian<u64>;
 
-        const COLUMN_FAMILY: TestColumnFamily = TestColumnFamily::Numbers;
-        const TYPE_NAME: &'static str = type_name!(NumberPair);
+        const COLUMN_FAMILY: ColumnFamily = ColumnFamily::LongLived;
+        const TYPE_NAME: &'static str = full_type_name!(NumberPair);
     }
 
     /// Shares the column family with [`Number`], keyed by nothing at all.
@@ -408,15 +402,15 @@ mod tests {
         count: u64,
     }
 
-    impl Storable<TestColumnFamily> for NumberCount {
+    impl Storable for NumberCount {
         type Key = SingletonKey;
 
-        const COLUMN_FAMILY: TestColumnFamily = TestColumnFamily::Numbers;
-        const TYPE_NAME: &'static str = type_name!(NumberCount);
+        const COLUMN_FAMILY: ColumnFamily = ColumnFamily::LongLived;
+        const TYPE_NAME: &'static str = full_type_name!(NumberCount);
     }
 
     /// Opens a database at `dir` holding a [`Number`] per id in `ids`.
-    fn database_with(dir: &tempfile::TempDir, ids: &[u64]) -> Database<TestColumnFamily> {
+    fn database_with(dir: &tempfile::TempDir, ids: &[u64]) -> Database {
         let db = Database::new(dir.path()).expect("Failed to open db");
         for &id in ids {
             db.put(&BigEndian::new(&id), &Number { id })
@@ -425,8 +419,8 @@ mod tests {
         db
     }
 
-    fn collect_ids(iter: impl Iterator<Item = Result<Number>>) -> Vec<u64> {
-        iter.map(|number| number.expect("Failed to read a number").id)
+    fn collect_ids(iter: impl Iterator<Item = Result<(BigEndian<u64>, Number)>>) -> Vec<u64> {
+        iter.map(|entry| entry.expect("Failed to read a number").1.id)
             .collect()
     }
 
@@ -446,7 +440,7 @@ mod tests {
             .expect("Failed to serialize the dump");
 
         let restored_dir = tempfile::tempdir().expect("Failed to create temp dir");
-        let restored = Database::<TestColumnFamily>::restore(
+        let restored = Database::restore(
             restored_dir.path(),
             &Dump::from_bytes(&bytes).expect("Failed to read the dump back"),
         )
@@ -474,7 +468,7 @@ mod tests {
             }],
         };
 
-        let Err(error) = Database::<TestColumnFamily>::restore(dir.path(), &dump) else {
+        let Err(error) = Database::restore(dir.path(), &dump) else {
             panic!("Restore must refuse an unknown column family");
         };
 
@@ -489,8 +483,8 @@ mod tests {
         let dump = db.dump().expect("Failed to dump the database");
 
         let restored_dir = tempfile::tempdir().expect("Failed to create temp dir");
-        let restored = Database::<TestColumnFamily>::restore(restored_dir.path(), &dump)
-            .expect("Failed to restore the database");
+        let restored =
+            Database::restore(restored_dir.path(), &dump).expect("Failed to restore the database");
 
         assert_eq!(collect_ids(restored.iter::<Number>()), Vec::<u64>::new());
     }
@@ -597,12 +591,13 @@ mod tests {
         let dir = tempfile::tempdir().expect("Failed to create temp dir");
         let db = database_with(&dir, &[0, 1, 2]);
 
-        let last = db
+        let (key, last) = db
             .iter::<Number>()
             .next_back()
             .expect("Iterator must yield the last number")
             .expect("Failed to read the last number");
 
+        assert_eq!(key.as_ref(), BigEndian::new(&2_u64).as_ref());
         assert_eq!(last.id, 2);
     }
 
@@ -621,9 +616,10 @@ mod tests {
         let dir = tempfile::tempdir().expect("Failed to create temp dir");
         let db = database_with(&dir, &[0, 1, 2, 3]);
 
-        let read = |item: Option<Result<Number>>| {
+        let read = |item: Option<Result<(BigEndian<u64>, Number)>>| {
             item.expect("Iterator must yield every number")
                 .expect("Failed to read a number")
+                .1
                 .id
         };
 

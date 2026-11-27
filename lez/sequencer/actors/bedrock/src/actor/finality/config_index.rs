@@ -1,7 +1,9 @@
 //! The channel's final configs, as zone-sdk reports them, with the slots it has not reported read
 //! from L1.
 
-use std::{collections::BTreeMap, ops::Range};
+use std::{collections::BTreeMap, io, ops::Range};
+
+use borsh::BorshDeserialize;
 
 use super::L1Reader;
 use crate::Result;
@@ -12,17 +14,18 @@ const CONFIG_SCAN_SLOTS: u64 = 100;
 /// Slots one read spans past its first.
 const SCAN_SPAN: u64 = CONFIG_SCAN_SLOTS.saturating_sub(1);
 
-/// Covered final slots an index gains before [`ConfigIndex::bytes_to_store`] returns it again.
+/// Covered final slots an index gains before [`ConfigIndex::due_to_store`] returns `true` again.
 const STORE_SLOTS: u64 = 1000;
 
 /// The channel's configs in an unbroken range of final slots.
-#[derive(Clone, Debug, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[derive(Clone, Debug, borsh::BorshSerialize)]
 pub struct ConfigIndex {
     /// The final slots whose configs are all in `config_keys`.
     covered: Range<u64>,
     /// The key list of the last config in each final block holding one, by slot.
     config_keys: BTreeMap<u64, Vec<[u8; 32]>>,
-    /// The covered slots and config count of the last bytes returned.
+    /// The covered slots and config count when [`Self::due_to_store`] last returned `true`, or
+    /// when the index was read back.
     #[borsh(skip)]
     stored: (Range<u64>, usize),
 }
@@ -38,26 +41,17 @@ impl ConfigIndex {
         }
     }
 
-    /// The index stored as `bytes`, `None` if they do not decode.
-    #[must_use]
-    pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        let mut index: Self = borsh::from_slice(bytes).ok()?;
-        index.stored = (index.covered.clone(), index.config_keys.len());
-        Some(index)
-    }
-
-    /// The index's bytes if it starts lower, holds other configs, or covers [`STORE_SLOTS`] more
-    /// slots than the last bytes returned.
-    pub fn bytes_to_store(&mut self) -> Option<Vec<u8>> {
+    /// Whether the index starts lower, holds other configs, or covers [`STORE_SLOTS`] more slots
+    /// than when this last returned `true`.
+    pub fn due_to_store(&mut self) -> bool {
         let (stored_covered, stored_configs) = &self.stored;
         let due = self.covered.start < stored_covered.start
             || self.config_keys.len() != *stored_configs
             || self.covered.end >= stored_covered.end.saturating_add(STORE_SLOTS);
-        if !due {
-            return None;
+        if due {
+            self.stored = (self.covered.clone(), self.config_keys.len());
         }
-        self.stored = (self.covered.clone(), self.config_keys.len());
-        Some(borsh::to_vec(self).expect("encoding to memory does not fail"))
+        due
     }
 
     /// Adds the configs zone-sdk reported final, as slot and key list in chain order, in the slots
@@ -113,5 +107,19 @@ impl ConfigIndex {
         }
         self.covered = self.covered.start.min(from)..self.covered.end.max(to.saturating_add(1));
         Ok(())
+    }
+}
+
+/// Read back as stored, so it is not due to store again right away.
+impl BorshDeserialize for ConfigIndex {
+    fn deserialize_reader<R: io::Read>(reader: &mut R) -> io::Result<Self> {
+        let covered = Range::<u64>::deserialize_reader(reader)?;
+        let config_keys = BTreeMap::deserialize_reader(reader)?;
+        let stored = (covered.clone(), BTreeMap::len(&config_keys));
+        Ok(Self {
+            covered,
+            config_keys,
+            stored,
+        })
     }
 }

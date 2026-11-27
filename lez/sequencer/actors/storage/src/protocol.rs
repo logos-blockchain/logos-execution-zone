@@ -1,237 +1,150 @@
-use std::{
-    collections::{HashMap, HashSet},
-    sync::Arc,
-};
+use std::marker::PhantomData;
 
-use common::{
-    HashType,
-    block::{Block, BlockMeta},
-    transaction::TxEvents,
-};
-use lee::{AccountId, V03State};
-use lee_core::BlockId;
+use crate::{Storable, encoding::SingletonKey, writes::Writes};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GetBlock {
-    pub block_id: BlockId,
+/// Stores `value` under `key`, replacing what was stored there.
+pub struct Store<T: Storable> {
+    pub key: T::Key,
+    pub value: T,
 }
 
-pub struct GetAllBlocks;
-
-pub struct GetTransactionByHash {
-    pub hash: HashType,
+impl<T: Storable> Store<T> {
+    pub const fn new(key: T::Key, value: T) -> Self {
+        Self { key, value }
+    }
 }
 
-/// `None` also for a block's trailing fee and clock transactions, which have no receipt.
-pub struct GetTransactionReceiptByHash {
-    pub hash: HashType,
+impl<T: Storable<Key = SingletonKey>> Store<T> {
+    pub const fn from_value(value: T) -> Self {
+        Self::new(SingletonKey, value)
+    }
 }
 
-pub struct DeleteBlock {
-    pub block_id: BlockId,
+pub struct Get<T: Storable> {
+    pub key: T::Key,
 }
 
-#[cfg(feature = "test-utils")]
-pub struct ResetAllBlocksToPending;
-
-pub struct GetFirstBlockId;
-
-pub struct GetLastBlockId;
-
-pub struct GetLatestBlockMeta;
-
-pub struct GetLeeState;
-
-pub struct GetZoneCheckpoint;
-
-/// Stores the zone checkpoint `bytes`, replacing the stored one.
-pub struct UpdateZoneCheckpoint {
-    // TODO: Consider `bytes` crate for all `Vec<u8>` in protocol.
-    pub bytes: Vec<u8>,
+impl<T: Storable> Get<T> {
+    pub const fn new(key: T::Key) -> Self {
+        Self { key }
+    }
 }
 
-pub struct DeleteZoneCheckpoint;
-
-pub struct GetSlashRecordBytes;
-
-pub struct PutSlashRecordBytes {
-    pub bytes: Vec<u8>,
+impl<T: Storable<Key = SingletonKey>> Default for Get<T> {
+    fn default() -> Self {
+        Self::new(SingletonKey)
+    }
 }
 
-pub struct GetSystemApprovalsBytes;
-
-pub struct PutSystemApprovalsBytes {
-    pub bytes: Vec<u8>,
+pub struct Delete<T: Storable> {
+    pub key: T::Key,
 }
 
-pub struct GetFinalConfigsBytes;
-
-pub struct PutFinalConfigsBytes {
-    pub bytes: Vec<u8>,
+impl<T: Storable> Delete<T> {
+    pub const fn new(key: T::Key) -> Self {
+        Self { key }
+    }
 }
 
-pub struct GetZoneAnchor;
-
-pub struct SetZoneAnchor {
-    pub anchor: ZoneAnchorRecord,
+impl<T: Storable<Key = SingletonKey>> Default for Delete<T> {
+    fn default() -> Self {
+        Self::new(SingletonKey)
+    }
 }
 
-/// The serialized unfinalized channel view.
-pub struct GetChannelViewBytes;
-
-pub struct GetPendingDepositEvents;
-
-pub struct GetFinalSnapshot;
-
-pub struct GetBlockByHash {
-    pub block_hash: HashType,
+/// Up to `limit` values of `T` with their keys, in key order from `start` to `end`.
+pub struct GetRange<T: Storable> {
+    pub start: RangeStart<T>,
+    /// Key to stop at, included if stored. `None` stops at the last key.
+    pub end: Option<T::Key>,
+    pub limit: usize,
 }
 
-pub struct GetTxHashToBlockIdMapItem {
-    pub tx_hash: HashType,
-}
-
-pub struct GetAccountTransactions {
-    pub account_id: AccountId,
-    pub offset: u64,
-    pub limit: u64,
-}
-
-pub struct GetBlockEvents {
-    pub block_id: u64,
-}
-
-pub struct GetEventFilter;
-
-/// Which program events the store keeps.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum EventFilter {
-    /// Every event.
-    Archival,
-    /// Only events of the listed programs. Empty keeps nothing.
-    Sources(HashMap<AccountId, SelectorFilter>),
-}
-
-/// Which events of one program the store keeps.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SelectorFilter {
-    /// Every event of the program.
-    All,
-    /// Only events with one of these selectors.
-    Only(HashSet<[u8; 8]>),
-}
-
-pub struct DumpDb;
-
-/// Update everything in the store at once, atomically.
-// TODO: Process orphaned blocks
-// TODO: Experiment with per-actor data types and agnostic storage.
-pub struct AtomicUpdate {
-    /// Block payloads to write.
-    pub blocks: Vec<Block>,
-
-    /// Serialized unfinalized channel view; `None` leaves the stored one untouched.
-    pub channel_view: Option<Vec<u8>>,
-
-    /// Head tip to pin the stored chain to; `None` only for an empty chain.
-    pub head_tip: Option<BlockMeta>,
-    /// State after the last applied block.
-    pub head_state: Arc<V03State>,
-
-    /// `(state, meta)` of the final tier, when it advanced.
-    pub final_snapshot: Option<(Arc<V03State>, BlockMeta)>,
-
-    /// Highest block id this event made irreversible: stored blocks at or below
-    /// it become finalized.
-    pub finalized_up_to: Option<BlockId>,
-
-    /// Deposit events observed on L1, recorded unless already pending.
-    pub new_deposit_events: Vec<PendingDepositEventRecord>,
-    /// Deposit op ids whose mint finalized: their pending records are dropped.
-    pub finalized_deposit_records: HashSet<HashType>,
-    /// L1 withdraw events to reconcile against the intents held locally.
-    pub consumed_withdrawals: HashSet<WithdrawalReconciliationKey>,
-    /// L2 withdraw intents this update raises, awaiting their L1 event.
-    pub new_withdraw_intents: HashSet<WithdrawalReconciliationKey>,
-
-    /// Advance the channel-read anchor.
-    pub zone_anchor: Option<ZoneAnchorRecord>,
-
-    /// Events emitted by transactions in blocks.
-    pub events: Vec<(BlockId, Vec<TxEvents>)>,
-}
-
-impl AtomicUpdate {
-    /// Create [`ApplyStoreUpdate`] from a single non-finalized block and state.
-    ///
-    /// Leaves all other fields empty or [`None`].
-    #[must_use]
-    pub fn from_block(
-        block: Block,
-        state: Arc<V03State>,
-        events: Vec<(BlockId, Vec<TxEvents>)>,
-    ) -> Self {
+impl<T: Storable> GetRange<T> {
+    /// From `start` to `end`, both included if stored. `None` starts from the first key, or stops
+    /// at the last one.
+    pub fn new(start: Option<T::Key>, end: Option<T::Key>, limit: usize) -> Self {
         Self {
-            head_tip: Some(BlockMeta::from(&block)),
-            blocks: vec![block],
-            channel_view: None,
-            head_state: state,
-            final_snapshot: None,
-            finalized_up_to: None,
-            new_deposit_events: Vec::new(),
-            finalized_deposit_records: HashSet::new(),
-            consumed_withdrawals: HashSet::new(),
-            new_withdraw_intents: HashSet::new(),
-            zone_anchor: None,
-            events,
+            start: start.map_or(RangeStart::First, RangeStart::At),
+            end,
+            limit,
+        }
+    }
+
+    /// From the key past `last_key`, the key of the last entry of the range before, to `end`.
+    pub const fn after(last_key: T::Key, end: Option<T::Key>, limit: usize) -> Self {
+        Self {
+            start: RangeStart::After(last_key),
+            end,
+            limit,
         }
     }
 }
 
-/// Identity of one withdrawal: the id of the channel note it releases.
-///
-/// Shared by the intent recorded when the sequencer publishes a withdrawal and
-/// the Bedrock event that later reports it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct WithdrawalReconciliationKey {
-    pub released_note_id: [u8; 32],
+/// Where a [`GetRange`] starts.
+pub enum RangeStart<T: Storable> {
+    /// At the first key.
+    First,
+    /// At the key, included if stored.
+    At(T::Key),
+    /// Past the key, not included.
+    After(T::Key),
 }
 
-/// The last channel block read back and verified from Bedrock: the anchor for
-/// the startup consistency check and the resume point for reconstruction.
-///
-/// `slot` is the raw L1 inscription slot; the caller converts to and from the
-/// zone-sdk `Slot`, which does not derive borsh and so cannot be stored.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ZoneAnchorRecord {
-    pub slot: u64,
-    pub block_id: u64,
-    pub hash: HashType,
+/// The `T` with the lowest key, with its key.
+pub struct GetFirst<T: Storable>(PhantomData<fn() -> T>);
+
+impl<T: Storable> GetFirst<T> {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self(PhantomData)
+    }
 }
 
-/// An L1 deposit event observed but not yet seen finalized.
-///
-/// Purely a liveness queue: whether to emit a mint is decided against chain
-/// state, and the record is dropped once its mint finalizes.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PendingDepositEventRecord {
-    pub deposit_op_id: HashType,
-    pub source_tx_hash: HashType,
-    pub amount: u64,
-    pub metadata: Vec<u8>,
+impl<T: Storable> Default for GetFirst<T> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
-/// What [`ApplyStoreUpdate`] observed while staging, for the caller to act on
-/// *after* the write committed.
-#[derive(Debug, Default)]
-pub struct StoreUpdateOutcome {
-    /// How many deposit events were newly recorded; the rest were already
-    /// pending, and so already owed.
-    pub accepted_deposits: usize,
-    /// The `consumed_withdrawals` this node holds no intent for: a released
-    /// note it never published, and so cannot account for.
-    pub unmatched_withdrawals: Vec<WithdrawalReconciliationKey>,
+/// The `T` with the highest key, with its key.
+pub struct GetLast<T: Storable>(PhantomData<fn() -> T>);
+
+impl<T: Storable> GetLast<T> {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self(PhantomData)
+    }
 }
+
+impl<T: Storable> Default for GetLast<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// How many `T` are stored, counted without decoding any of them.
+pub struct Count<T: Storable>(PhantomData<fn() -> T>);
+
+impl<T: Storable> Count<T> {
+    #[must_use]
+    pub const fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<T: Storable> Default for Count<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Writes committed together or not at all.
+///
+/// Its type names the shape of the writes, e.g. `WriteBatch<(Store<A>, Vec<Delete<B>>)>`.
+pub struct WriteBatch<W: Writes>(pub W);
+
+pub struct DumpDb;
 
 /// Schema-agnostic snapshot of a whole store, opaque by design.
 pub struct DbDump {

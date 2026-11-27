@@ -325,7 +325,7 @@
         {
           "datasource": { "type": "tempo", "uid": "tempo" },
           "limit": 10000,
-          "query": "{ span.sequencer = \"$sequencer\" && span.sender = \"$actor_type\" && (span.sender_instance =~ \"$instance\" || span.sender_instance = nil) && name =~ \".*$message.*\" } | select(span.sender, span.cause, span.instance, link:traceID) with(most_recent=true)",
+          "query": "{ span.sequencer = \"$sequencer\" && span.sender = \"$actor_type\" && (span.sender_instance =~ \"$instance\" || span.sender_instance = nil) && name =~ `.*${message:regex}.*` } | select(span.sender, span.cause, span.instance, link:traceID) with(most_recent=true)",
           "queryType": "traceql",
           "refId": "A",
           "spss": 1,
@@ -432,7 +432,7 @@
         {
           "datasource": { "type": "tempo", "uid": "tempo" },
           "limit": 10000,
-          "query": "{ span.sequencer = \"$sequencer\" && span.actor = \"$actor_type\" && (span.instance =~ \"$instance\" || span.instance = nil) && name =~ \".*$message.*\" } | select(span.sender, span.cause, span.instance, link:traceID) with(most_recent=true)",
+          "query": "{ span.sequencer = \"$sequencer\" && span.actor = \"$actor_type\" && (span.instance =~ \"$instance\" || span.instance = nil) && name =~ `.*${message:regex}.*` } | select(span.sender, span.cause, span.instance, link:traceID) with(most_recent=true)",
           "queryType": "traceql",
           "refId": "A",
           "spss": 1,

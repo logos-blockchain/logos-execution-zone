@@ -1103,17 +1103,7 @@ pub fn spawn_standalone_bedrock_actor(
     bedrock_addr: SocketAddr,
     channel_id: ChannelId,
 ) -> Result<ActorRef<StandaloneBedrockActor>> {
-    let mut storage = MockStorageActor::default();
-    storage
-        .expect_handle_get_zone_checkpoint()
-        .returning(|_msg, _ctx| Ok(None));
-    storage
-        .expect_handle_put_final_configs_bytes()
-        .returning(|_msg, _ctx| Ok(()));
-    storage
-        .expect_handle_update_zone_checkpoint()
-        .returning(|_msg, _ctx| Ok(()));
-    let storage_ref = MockStorageActor::spawn(storage);
+    let storage_ref = MockStorageActor::spawn(MockStorageActor::new());
 
     Ok(StandaloneBedrockActor::spawn(
         sequencer_bedrock_actor::actor::Args {

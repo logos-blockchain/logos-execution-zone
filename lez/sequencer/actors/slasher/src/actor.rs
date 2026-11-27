@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use anyhow::Context as _;
 use common::transaction::LeeTransaction;
@@ -14,19 +14,17 @@ use logos_blockchain_zone_sdk::key_management_system_service::keys::Ed25519Key;
 use sequencer_stake_core::{
     SequencerKey, SequencerStakeConfig, SlashApproval, slash_approval_threshold,
 };
-use sequencer_storage_actor::{
-    StorageActorTrait,
-    protocol::{GetSlashRecordBytes, PutSlashRecordBytes},
-};
+use sequencer_storage_actor::protocol::{Get, Store};
 use tokio::sync::mpsc;
 use tracing::{debug, error, warn};
 
 use crate::{
-    Result,
+    Result, SlasherActorTrait,
     error::Error,
     protocol::{
         Approval, Offence, Propose, Report, ReportedOffence, SetApprovalPublisher, SetCommittee,
     },
+    storage::{Approvals, SlashRecord, SlasherStorage},
 };
 
 /// Cap on signatures kept per offence.
@@ -34,19 +32,7 @@ const MAX_APPROVERS_PER_OFFENCE: usize = 64;
 /// Cap on distinct offences held in `early`, which are still only a peer's word.
 const MAX_EARLY_OFFENCES: usize = 64;
 
-/// On-disk form, tagged so a later build can migrate instead of failing to decode.
-#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
-enum PersistedRecord {
-    V2 {
-        found: BTreeSet<Offence>,
-        approvals: Approvals,
-    },
-}
-
-/// Peers' signatures, by offence and then by signer.
-type Approvals = BTreeMap<Offence, BTreeMap<SequencerKey, [u8; 64]>>;
-
-pub struct SlasherActor<S: StorageActorTrait> {
+pub struct SlasherActor<S: SlasherStorage> {
     storage_ref: ActorRef<S>,
     /// Signs this node's approval of a slash.
     approver: Ed25519Key,
@@ -68,7 +54,7 @@ pub struct SlasherActor<S: StorageActorTrait> {
     publisher: Option<mpsc::Sender<Approval>>,
 }
 
-impl<S: StorageActorTrait> SlasherActor<S> {
+impl<S: SlasherStorage> SlasherActor<S> {
     /// Restores the persisted record, empty if none was written. Approvals are
     /// held until [`SetCommittee`] or [`Propose`] brings a committee to screen
     /// them against.
@@ -78,12 +64,10 @@ impl<S: StorageActorTrait> SlasherActor<S> {
         channel_id: [u8; 32],
     ) -> Self {
         let (found, approvals) = storage_ref
-            .ask(GetSlashRecordBytes)
+            .ask(Get::<SlashRecord>::default())
             .await
             .expect("Failed to read the slash record from store")
-            .map_or_else(Default::default, |bytes| {
-                let PersistedRecord::V2 { found, approvals } = borsh::from_slice(&bytes)
-                    .expect("persisted slash record should decode with this build");
+            .map_or_else(Default::default, |SlashRecord::V2 { found, approvals }| {
                 (found, approvals)
             });
         let own_key = SequencerKey::new(approver.public_key().to_bytes())
@@ -104,12 +88,11 @@ impl<S: StorageActorTrait> SlasherActor<S> {
 
     /// Fatal on failure: the checkpoint is about to move past the offence.
     async fn persist(&self) -> Result<()> {
-        let bytes = borsh::to_vec(&PersistedRecord::V2 {
+        let record = SlashRecord::V2 {
             found: self.found.clone(),
             approvals: self.approvals.clone(),
-        })
-        .expect("slash record should serialize");
-        self.storage_ref.ask(PutSlashRecordBytes { bytes }).await?;
+        };
+        self.storage_ref.ask(Store::from_value(record)).await?;
 
         Ok(())
     }
@@ -220,7 +203,9 @@ impl<S: StorageActorTrait> SlasherActor<S> {
     }
 }
 
-impl<S: StorageActorTrait> kameo::Actor for SlasherActor<S> {
+impl<S: SlasherStorage> SlasherActorTrait for SlasherActor<S> {}
+
+impl<S: SlasherStorage> kameo::Actor for SlasherActor<S> {
     type Args = Self;
     type Error = Error;
 
@@ -229,7 +214,7 @@ impl<S: StorageActorTrait> kameo::Actor for SlasherActor<S> {
     }
 }
 
-impl<S: StorageActorTrait> Message<Report> for SlasherActor<S> {
+impl<S: SlasherStorage> Message<Report> for SlasherActor<S> {
     type Reply = Result<()>;
 
     async fn handle(
@@ -279,7 +264,7 @@ impl<S: StorageActorTrait> Message<Report> for SlasherActor<S> {
     }
 }
 
-impl<S: StorageActorTrait> Message<Propose> for SlasherActor<S> {
+impl<S: SlasherStorage> Message<Propose> for SlasherActor<S> {
     type Reply = Vec<LeeTransaction>;
 
     async fn handle(
@@ -331,7 +316,7 @@ impl<S: StorageActorTrait> Message<Propose> for SlasherActor<S> {
     }
 }
 
-impl<S: StorageActorTrait> Message<SetCommittee> for SlasherActor<S> {
+impl<S: SlasherStorage> Message<SetCommittee> for SlasherActor<S> {
     type Reply = ();
 
     async fn handle(
@@ -343,7 +328,7 @@ impl<S: StorageActorTrait> Message<SetCommittee> for SlasherActor<S> {
     }
 }
 
-impl<S: StorageActorTrait> Message<Approval> for SlasherActor<S> {
+impl<S: SlasherStorage> Message<Approval> for SlasherActor<S> {
     type Reply = ();
 
     async fn handle(&mut self, msg: Approval, _ctx: &mut Context<Self, Self::Reply>) {
@@ -391,7 +376,7 @@ impl<S: StorageActorTrait> Message<Approval> for SlasherActor<S> {
     }
 }
 
-impl<S: StorageActorTrait> Message<SetApprovalPublisher> for SlasherActor<S> {
+impl<S: SlasherStorage> Message<SetApprovalPublisher> for SlasherActor<S> {
     type Reply = ();
 
     async fn handle(
@@ -454,6 +439,8 @@ pub fn build_slash_tx(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use kameo::actor::Spawn as _;
     use sequencer_stake_core::{PendingUnstake, SequencerEntry, SequencerStakeConfig};
     use sequencer_storage_actor::mock::MockStorageActor;
@@ -471,14 +458,8 @@ mod tests {
 
     type Slasher = ActorRef<SlasherActor<MockStorageActor>>;
 
-    /// A storage actor that holds no record and accepts every write.
     fn storage() -> ActorRef<MockStorageActor> {
-        let mut mock = MockStorageActor::new();
-        mock.expect_handle_get_slash_record_bytes()
-            .returning(|_, _| Ok(None));
-        mock.expect_handle_put_slash_record_bytes()
-            .returning(|_, _| Ok(()));
-        MockStorageActor::spawn(mock)
+        MockStorageActor::spawn(MockStorageActor::new())
     }
 
     fn offender_signing_key() -> Ed25519Key {

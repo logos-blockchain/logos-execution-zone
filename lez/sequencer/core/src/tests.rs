@@ -11,7 +11,7 @@ use bridge_core::{DepositMetadata, DepositRecipient};
 use chain_state::{ChainState, ChannelEntry};
 use common::{
     HashType,
-    block::{BedrockStatus, Block, HashableBlockData},
+    block::{BedrockStatus, Block, BlockMeta, HashableBlockData},
     transaction::{FeePayee, LeeTransaction, clock_invocation, fee_invocation},
 };
 use kameo::{actor::Spawn as _, supervision::RestartPolicy};
@@ -52,11 +52,9 @@ use sequencer_bedrock_actor::{
 use sequencer_channel_signing_actor::ChannelSigningActor;
 use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::{
-    StorageActor,
-    protocol::{
-        AtomicUpdate, GetBlock, GetChannelViewBytes, GetFinalSnapshot, GetFirstBlockId,
-        GetLatestBlockMeta, GetLeeState, GetPendingDepositEvents, PendingDepositEventRecord,
-    },
+    StorageActor, Writes,
+    encoding::{BigEndian, BorshArc},
+    protocol::{Get, GetFirst, GetLast, Store, WriteBatch},
 };
 use sharding_pool_actor::{RestartConfig, ShardingPoolActor};
 use tempfile::tempdir;
@@ -68,6 +66,11 @@ use crate::{
     build_finalize_unstake_tx,
     config::{self, BedrockConfig, SequencerConfig},
     config_target, deposit_already_minted, is_sequencer_only_program, resubmittable_txs,
+    storage::{
+        ChannelViewRecord, FinalSnapshotRecord, HeadStateRecord,
+        blocks::{BlockEventsRecord, BlockRecord},
+        bridge::{PendingDepositEventRecord, pending_deposits},
+    },
 };
 
 /// The inscription a test slash names; only has to match the approvals.
@@ -76,6 +79,14 @@ const TEST_INSCRIPTION: [u8; 32] = [0xA1; 32];
 const TEST_CHANNEL_ID: [u8; 32] = [0xC1; 32];
 /// The tips the fee distribution tests pay out.
 const TIPS: u128 = 7;
+
+/// The genesis block a test store is seeded with, with its events and state.
+#[derive(Writes)]
+struct GenesisWrites {
+    events: Store<BlockEventsRecord>,
+    block: Store<BlockRecord>,
+    head_state: Store<HeadStateRecord>,
+}
 
 /// The bootstrap sequencer's key for `config`: read from `config.home`'s key
 /// file if present, else generated and persisted there. Callers building
@@ -100,7 +111,7 @@ fn test_sequencer_key(seed: u8) -> sequencer_stake_core::SequencerKey {
 async fn start_sequencer(
     config: SequencerConfig,
 ) -> (
-    SequencerCore<StorageActor, MockBedrockActor>,
+    SequencerCore<StorageActor, MockBedrockActor, SlasherActor<StorageActor>>,
     MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
 ) {
     start_sequencer_on(config, CannedChannel::empty().share()).await
@@ -112,7 +123,7 @@ async fn start_sequencer_on(
     config: SequencerConfig,
     channel: SharedChannel,
 ) -> (
-    SequencerCore<StorageActor, MockBedrockActor>,
+    SequencerCore<StorageActor, MockBedrockActor, SlasherActor<StorageActor>>,
     MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
 ) {
     let (mut sequencer, mempool_handle) = start_sequencer_bare_on(config, channel).await;
@@ -145,7 +156,7 @@ async fn start_sequencer_on(
 async fn start_sequencer_bare(
     config: SequencerConfig,
 ) -> (
-    SequencerCore<StorageActor, MockBedrockActor>,
+    SequencerCore<StorageActor, MockBedrockActor, SlasherActor<StorageActor>>,
     MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
 ) {
     start_sequencer_bare_on(config, CannedChannel::empty().share()).await
@@ -159,44 +170,57 @@ async fn start_sequencer_bare_on(
     config: SequencerConfig,
     channel: SharedChannel,
 ) -> (
-    SequencerCore<StorageActor, MockBedrockActor>,
+    SequencerCore<StorageActor, MockBedrockActor, SlasherActor<StorageActor>>,
     MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
 ) {
     let storage = StorageActor::new(&config.db_path()).expect("Failed to open database");
     let storage_ref = StorageActor::spawn(storage);
 
-    if storage_ref.ask(GetFirstBlockId).await.unwrap().is_none() {
+    if storage_ref
+        .ask(GetFirst::<BlockRecord>::new())
+        .await
+        .unwrap()
+        .is_none()
+    {
         let genesis_spec = config
             .genesis_spec(Some(test_bootstrap_sequencer_key(&config)))
             .unwrap();
         let (genesis, genesis_state, genesis_events) =
             sequencer_genesis::genesis_block_and_state(&genesis_spec);
         let genesis_id = genesis.header.block_id;
-        storage_ref
-            .ask(AtomicUpdate::from_block(
-                genesis,
-                Arc::new(genesis_state),
-                vec![(genesis_id, genesis_events)],
-            ))
-            .await
-            .unwrap();
+        let writes = GenesisWrites {
+            events: Store::new(
+                BigEndian::new(&genesis_id),
+                BlockEventsRecord {
+                    events: genesis_events,
+                },
+            ),
+            block: Store::new(BigEndian::new(&genesis_id), BlockRecord { block: genesis }),
+            head_state: Store::from_value(HeadStateRecord {
+                state: BorshArc(Arc::new(genesis_state)),
+            }),
+        };
+        storage_ref.ask(WriteBatch(writes)).await.unwrap();
     }
 
     let (final_state, final_tip) = storage_ref
-        .ask(GetFinalSnapshot)
+        .ask(Get::<FinalSnapshotRecord>::default())
         .await
         .unwrap()
         .map_or_else(
             || (sequencer_genesis::build_initial_state(), None),
-            |(state, meta)| (state, Some(chain_state::Tip::from(meta))),
+            |snapshot| {
+                let (state, meta) = snapshot.into_parts();
+                (state, Some(chain_state::Tip::from(meta)))
+            },
         );
     let mut chain = ChainState::from_final(final_state, final_tip);
     // An undecodable view leaves the chain on the final tier, as it does the executor's.
     let _restored = storage_ref
-        .ask(GetChannelViewBytes)
+        .ask(Get::<ChannelViewRecord>::default())
         .await
         .unwrap()
-        .is_some_and(|view| chain.restore_view(&view).is_ok());
+        .is_some_and(|view| chain.restore_view(&view.bytes).is_ok());
 
     let bedrock_pool_ref = ShardingPoolActor::spawn(ShardingPoolActor::new(
         RestartConfig {
@@ -244,14 +268,15 @@ async fn start_sequencer_bare_on(
 
 /// The stored block at `block_id`.
 async fn block_at(
-    sequencer: &SequencerCore<StorageActor, MockBedrockActor>,
+    sequencer: &SequencerCore<StorageActor, MockBedrockActor, SlasherActor<StorageActor>>,
     block_id: u64,
 ) -> Option<Block> {
     sequencer
         .storage_ref
-        .ask(GetBlock { block_id })
+        .ask(Get::<BlockRecord>::new(BigEndian::new(&block_id)))
         .await
         .expect("Failed to read a stored block")
+        .map(|record| record.block)
 }
 
 /// A channel entry carrying `block`, under the id the canned channel gives it.
@@ -363,7 +388,7 @@ fn only_the_fee_and_system_upgrader_are_sequencer_only() {
 
 #[test]
 fn a_config_is_given_up_on_only_once_the_channel_has_moved_past_it() {
-    type Core = SequencerCore<StorageActor, MockBedrockActor>;
+    type Core = SequencerCore<StorageActor, MockBedrockActor, SlasherActor<StorageActor>>;
     let deadline = Core::CONFIG_LANDING_DEADLINE;
     let submitted_at = Slot::new(100);
 
@@ -444,7 +469,7 @@ fn create_signing_key_for_account2() -> TestSigner {
 }
 
 async fn common_setup() -> (
-    SequencerCore<StorageActor, MockBedrockActor>,
+    SequencerCore<StorageActor, MockBedrockActor, SlasherActor<StorageActor>>,
     MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
 ) {
     let config = setup_sequencer_config();
@@ -454,7 +479,7 @@ async fn common_setup() -> (
 async fn common_setup_with_config(
     config: SequencerConfig,
 ) -> (
-    SequencerCore<StorageActor, MockBedrockActor>,
+    SequencerCore<StorageActor, MockBedrockActor, SlasherActor<StorageActor>>,
     MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
 ) {
     let (mut sequencer, mempool_handle) = start_sequencer(config).await;
@@ -587,9 +612,10 @@ async fn a_charged_bridge_deposit_is_dropped_by_the_builder_bridge_guard() {
     let block_id = sequencer.run_production_turn().await.unwrap();
     let block = sequencer
         .storage_ref
-        .ask(GetBlock { block_id })
+        .ask(Get::<BlockRecord>::new(BigEndian::new(&block_id)))
         .await
         .unwrap()
+        .map(|record| record.block)
         .expect("produced block is stored");
 
     assert!(
@@ -676,9 +702,10 @@ async fn an_exempt_public_bridge_deposit_is_dropped_by_the_builder_bridge_guard(
     let block_id = sequencer.run_production_turn().await.unwrap();
     let block = sequencer
         .storage_ref
-        .ask(GetBlock { block_id })
+        .ask(Get::<BlockRecord>::new(BigEndian::new(&block_id)))
         .await
         .unwrap()
+        .map(|record| record.block)
         .expect("produced block is stored");
 
     assert!(
@@ -744,9 +771,10 @@ async fn a_mempool_transaction_too_large_for_any_block_is_dropped() {
     let block_id = sequencer.run_production_turn().await.unwrap();
     let block = sequencer
         .storage_ref
-        .ask(GetBlock { block_id })
+        .ask(Get::<BlockRecord>::new(BigEndian::new(&block_id)))
         .await
         .unwrap()
+        .map(|record| record.block)
         .unwrap();
     assert!(block.body.transactions.contains(&user_tx));
     assert!(!block.body.transactions.contains(&oversized));
@@ -780,9 +808,10 @@ async fn unused_declared_gas_is_recredited_after_settlement() {
     let block_id = sequencer.run_production_turn().await.unwrap();
     let block = sequencer
         .storage_ref
-        .ask(GetBlock { block_id })
+        .ask(Get::<BlockRecord>::new(BigEndian::new(&block_id)))
         .await
         .unwrap()
+        .map(|record| record.block)
         .unwrap();
     assert_block_tail(&block, &transfers);
 }
@@ -826,9 +855,10 @@ async fn a_block_full_of_charged_gas_defers_the_rest() {
     let block_id = sequencer.run_production_turn().await.unwrap();
     let block = sequencer
         .storage_ref
-        .ask(GetBlock { block_id })
+        .ask(Get::<BlockRecord>::new(BigEndian::new(&block_id)))
         .await
         .unwrap()
+        .map(|record| record.block)
         .unwrap();
     assert_block_tail(&block, &transfers[..1]);
     // One receipt per user transaction; the reverted transfer is charged its whole budget.
@@ -841,9 +871,10 @@ async fn a_block_full_of_charged_gas_defers_the_rest() {
     let block_id = sequencer.run_production_turn().await.unwrap();
     let block = sequencer
         .storage_ref
-        .ask(GetBlock { block_id })
+        .ask(Get::<BlockRecord>::new(BigEndian::new(&block_id)))
         .await
         .unwrap()
+        .map(|record| record.block)
         .unwrap();
     assert_block_tail(&block, &transfers[1..]);
 }
@@ -887,9 +918,10 @@ async fn an_over_cap_transaction_is_dropped_not_deferred() {
     let block_id = sequencer.run_production_turn().await.unwrap();
     let block = sequencer
         .storage_ref
-        .ask(GetBlock { block_id })
+        .ask(Get::<BlockRecord>::new(BigEndian::new(&block_id)))
         .await
         .unwrap()
+        .map(|record| record.block)
         .unwrap();
     assert_block_tail(&block, std::slice::from_ref(&normal));
 
@@ -897,9 +929,10 @@ async fn an_over_cap_transaction_is_dropped_not_deferred() {
     let block_id = sequencer.run_production_turn().await.unwrap();
     let block = sequencer
         .storage_ref
-        .ask(GetBlock { block_id })
+        .ask(Get::<BlockRecord>::new(BigEndian::new(&block_id)))
         .await
         .unwrap()
+        .map(|record| record.block)
         .unwrap();
     assert_block_tail(&block, &[]);
 }
@@ -1098,11 +1131,12 @@ async fn a_stake_only_moves_the_committee_once_it_has_finalized() {
 
     let genesis = sequencer
         .storage_ref
-        .ask(GetBlock {
-            block_id: lee_core::GENESIS_BLOCK_ID,
-        })
+        .ask(Get::<BlockRecord>::new(BigEndian::new(
+            &lee_core::GENESIS_BLOCK_ID,
+        )))
         .await
         .unwrap()
+        .map(|record| record.block)
         .unwrap();
     sequencer
         .on_channel_update(&ChannelUpdate {
@@ -1158,11 +1192,12 @@ async fn replay_transactions_are_rejected_in_the_same_block() {
     sequencer.run_production_turn().await.unwrap();
     let block = sequencer
         .storage_ref
-        .ask(GetBlock {
-            block_id: sequencer.chain_height().await,
-        })
+        .ask(Get::<BlockRecord>::new(BigEndian::new(
+            &sequencer.chain_height().await,
+        )))
         .await
         .unwrap()
+        .map(|record| record.block)
         .unwrap();
 
     // Only one user tx should be included; the fee and clock txs are always appended last.
@@ -1190,11 +1225,12 @@ async fn replay_transactions_are_rejected_in_different_blocks() {
     sequencer.run_production_turn().await.unwrap();
     let block = sequencer
         .storage_ref
-        .ask(GetBlock {
-            block_id: sequencer.chain_height().await,
-        })
+        .ask(Get::<BlockRecord>::new(BigEndian::new(
+            &sequencer.chain_height().await,
+        )))
         .await
         .unwrap()
+        .map(|record| record.block)
         .unwrap();
     assert_block_tail(&block, std::slice::from_ref(&tx));
 
@@ -1206,11 +1242,12 @@ async fn replay_transactions_are_rejected_in_different_blocks() {
     sequencer.run_production_turn().await.unwrap();
     let block = sequencer
         .storage_ref
-        .ask(GetBlock {
-            block_id: sequencer.chain_height().await,
-        })
+        .ask(Get::<BlockRecord>::new(BigEndian::new(
+            &sequencer.chain_height().await,
+        )))
         .await
         .unwrap()
+        .map(|record| record.block)
         .unwrap();
     // The replay is rejected, so only the fee and clock txs are in the block.
     assert_block_tail(&block, &[]);
@@ -1245,11 +1282,12 @@ async fn restart_from_storage() {
         sequencer.run_production_turn().await.unwrap();
         let block = sequencer
             .storage_ref
-            .ask(GetBlock {
-                block_id: sequencer.chain_height().await,
-            })
+            .ask(Get::<BlockRecord>::new(BigEndian::new(
+                &sequencer.chain_height().await,
+            )))
             .await
             .unwrap()
+            .map(|record| record.block)
             .unwrap();
         assert_block_tail(&block, std::slice::from_ref(&tx));
         sequencer.storage_ref.downgrade()
@@ -1325,9 +1363,10 @@ async fn produce_block_with_correct_prev_meta_after_restart() {
         // Get the metadata of the last block produced
         let meta = sequencer
             .storage_ref
-            .ask(GetLatestBlockMeta)
+            .ask(GetLast::<BlockRecord>::new())
             .await
             .unwrap()
+            .map(|(_block_id, record)| BlockMeta::from(&record.block))
             .unwrap();
         (sequencer.storage_ref.downgrade(), meta)
     };
@@ -1357,11 +1396,12 @@ async fn produce_block_with_correct_prev_meta_after_restart() {
     // Step 5: Verify the new block has correct previous block metadata
     let new_block = sequencer
         .storage_ref
-        .ask(GetBlock {
-            block_id: sequencer.chain_height().await,
-        })
+        .ask(Get::<BlockRecord>::new(BigEndian::new(
+            &sequencer.chain_height().await,
+        )))
         .await
         .unwrap()
+        .map(|record| record.block)
         .unwrap();
 
     assert_eq!(
@@ -1930,9 +1970,10 @@ async fn follow_update_persists_the_blocks_it_adopts() {
     let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
     let genesis_meta = sequencer
         .storage_ref
-        .ask(GetLatestBlockMeta)
+        .ask(GetLast::<BlockRecord>::new())
         .await
         .unwrap()
+        .map(|(_block_id, record)| BlockMeta::from(&record.block))
         .expect("genesis meta is set");
 
     let peer_block = common::test_utils::produce_dummy_block(2, Some(genesis_meta.hash), vec![]);
@@ -2188,11 +2229,7 @@ async fn follow_update_records_deposits_for_the_production_drain() {
         })
         .await;
 
-    let pending = sequencer
-        .storage_ref
-        .ask(GetPendingDepositEvents)
-        .await
-        .unwrap();
+    let pending = pending_deposits(&sequencer.storage_ref).await.unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].deposit_op_id, HashType([21; 32]));
 }
@@ -2276,7 +2313,7 @@ async fn an_observed_deposit_mints_in_a_block_pinned_on_its_notes() {
 /// A node that observed a deposit and minted it in the block it produced, with
 /// that deposit and block.
 async fn sequencer_minting_an_observed_deposit() -> (
-    SequencerCore<StorageActor, MockBedrockActor>,
+    SequencerCore<StorageActor, MockBedrockActor, SlasherActor<StorageActor>>,
     MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
     DepositInfo,
     Block,
@@ -2302,7 +2339,7 @@ async fn sequencer_minting_an_observed_deposit() -> (
 
 /// Whether this node signs a peer's pin of `block` on `deposit`'s notes.
 async fn signs_peer_pin(
-    sequencer: &SequencerCore<StorageActor, MockBedrockActor>,
+    sequencer: &SequencerCore<StorageActor, MockBedrockActor, SlasherActor<StorageActor>>,
     block: &Block,
     deposit: &DepositInfo,
 ) -> bool {
@@ -2643,11 +2680,7 @@ async fn a_pinned_deposit_is_not_minted_again_once_final() {
         "the head already holds the mint, so the final record is skipped"
     );
     assert_eq!(pins.lock().unwrap().last(), Some(&Vec::new()));
-    let records = sequencer
-        .storage_ref
-        .ask(GetPendingDepositEvents)
-        .await
-        .unwrap();
+    let records = pending_deposits(&sequencer.storage_ref).await.unwrap();
     assert!(
         records
             .iter()
@@ -2663,7 +2696,7 @@ fn deposit_recipient() -> AccountId {
 
 /// The native balance `account_id` holds in head state.
 async fn native_balance(
-    sequencer: &SequencerCore<StorageActor, MockBedrockActor>,
+    sequencer: &SequencerCore<StorageActor, MockBedrockActor, SlasherActor<StorageActor>>,
     account_id: AccountId,
 ) -> u128 {
     sequencer
@@ -2680,7 +2713,7 @@ async fn native_balance(
 /// Reorgs the channel back to genesis: the view keeps only genesis, and
 /// `shared` serves `channel` with its tip there.
 async fn reorg_to_genesis(
-    sequencer: &mut SequencerCore<StorageActor, MockBedrockActor>,
+    sequencer: &mut SequencerCore<StorageActor, MockBedrockActor, SlasherActor<StorageActor>>,
     shared: &SharedChannel,
     channel: CannedChannel,
 ) {
@@ -3008,9 +3041,10 @@ async fn follow_adopted_peer_block_applies_and_persists() {
     let (mut sequencer, _mempool_handle) = start_sequencer(config.clone()).await;
     let genesis_meta = sequencer
         .storage_ref
-        .ask(GetLatestBlockMeta)
+        .ask(GetLast::<BlockRecord>::new())
         .await
         .unwrap()
+        .map(|(_block_id, record)| BlockMeta::from(&record.block))
         .expect("genesis meta is set");
 
     let acc1 = initial_public_user_accounts()[0].account_id;
@@ -3248,9 +3282,10 @@ async fn follow_finalized_backfill_block_is_applied_and_marked_finalized() {
     let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
     let genesis_meta = sequencer
         .storage_ref
-        .ask(GetLatestBlockMeta)
+        .ask(GetLast::<BlockRecord>::new())
         .await
         .unwrap()
+        .map(|(_block_id, record)| BlockMeta::from(&record.block))
         .expect("genesis meta is set");
 
     // A peer block the view never held arrives straight from the finalized
@@ -3445,9 +3480,10 @@ async fn a_publish_on_a_pin_the_view_moved_past_is_dropped() {
     let (mut sequencer, _mempool_handle) = start_sequencer(config).await;
     let genesis_meta = sequencer
         .storage_ref
-        .ask(GetLatestBlockMeta)
+        .ask(GetLast::<BlockRecord>::new())
         .await
         .unwrap()
+        .map(|(_block_id, record)| BlockMeta::from(&record.block))
         .expect("genesis meta is set");
     let pin = sequencer.chain().lock().await.pin();
 
@@ -3511,9 +3547,10 @@ async fn follow_update_persists_blocks_meta_and_state_atomically() {
     let (mut sequencer, _mempool_handle) = start_sequencer(config.clone()).await;
     let genesis_meta = sequencer
         .storage_ref
-        .ask(GetLatestBlockMeta)
+        .ask(GetLast::<BlockRecord>::new())
         .await
         .unwrap()
+        .map(|(_block_id, record)| BlockMeta::from(&record.block))
         .expect("genesis meta is set");
 
     let acc1 = initial_public_user_accounts()[0].account_id;
@@ -3563,9 +3600,10 @@ async fn follow_update_persists_blocks_meta_and_state_atomically() {
     // finalized entry for an earlier block must not drag the tip meta back.
     let meta = sequencer
         .storage_ref
-        .ask(GetLatestBlockMeta)
+        .ask(GetLast::<BlockRecord>::new())
         .await
         .unwrap()
+        .map(|(_block_id, record)| BlockMeta::from(&record.block))
         .expect("meta is set");
     assert_eq!(meta.id, 3);
     assert_eq!(meta.hash, block3.header.hash);
@@ -3573,10 +3611,12 @@ async fn follow_update_persists_blocks_meta_and_state_atomically() {
     assert!(matches!(stored2.bedrock_status, BedrockStatus::Finalized));
     let stored_balance = sequencer
         .storage_ref
-        .ask(GetLeeState)
+        .ask(Get::<HeadStateRecord>::default())
         .await
         .unwrap()
         .expect("the store holds a chain")
+        .state
+        .0
         .get_account_by_id(acc2)
         .data
         .native_balance()
@@ -3622,9 +3662,7 @@ async fn a_foreign_block_below_the_final_tip_settles_no_deposit_record() {
             ..empty_channel_update()
         })
         .await;
-    let record = sequencer
-        .storage_ref
-        .ask(GetPendingDepositEvents)
+    let record = pending_deposits(&sequencer.storage_ref)
         .await
         .unwrap()
         .into_iter()
@@ -3646,9 +3684,7 @@ async fn a_foreign_block_below_the_final_tip_settles_no_deposit_record() {
         .await;
 
     assert!(
-        sequencer
-            .storage_ref
-            .ask(GetPendingDepositEvents)
+        pending_deposits(&sequencer.storage_ref)
             .await
             .unwrap()
             .iter()
@@ -3738,23 +3774,30 @@ async fn a_block_back_on_the_head_is_stored_again() {
 /// and takes its blocks back as the channel finalizes them.
 #[tokio::test]
 async fn a_restart_without_a_view_follows_the_channel_from_the_final_tier() {
+    #[derive(Writes)]
+    struct UnreadableViewWrites {
+        view: Store<ChannelViewRecord>,
+        block: Store<BlockRecord>,
+        head_state: Store<HeadStateRecord>,
+    }
+
     let config = setup_sequencer_config();
     let (storage_weak, view) = {
         let (mut sequencer, _mempool_handle) = start_sequencer(config.clone()).await;
         sequencer.run_production_turn().await.unwrap();
         let view = sequencer.chain().lock().await.view().to_vec();
-        sequencer
-            .storage_ref
-            .ask(AtomicUpdate {
-                channel_view: Some(vec![0xff]),
-                ..AtomicUpdate::from_block(
-                    view[1].block.clone().unwrap(),
-                    sequencer.chain().lock().await.share_head_state(),
-                    vec![],
-                )
-            })
-            .await
-            .unwrap();
+        let block = view[1].block.clone().unwrap();
+        let writes = UnreadableViewWrites {
+            view: Store::from_value(ChannelViewRecord { bytes: vec![0xff] }),
+            block: Store::new(
+                BigEndian::new(&block.header.block_id),
+                BlockRecord { block },
+            ),
+            head_state: Store::from_value(HeadStateRecord {
+                state: BorshArc(sequencer.chain().lock().await.share_head_state()),
+            }),
+        };
+        sequencer.storage_ref.ask(WriteBatch(writes)).await.unwrap();
         (sequencer.storage_ref.downgrade(), view)
     };
     storage_weak.wait_for_shutdown_with_result(|_| ()).await;
@@ -3779,9 +3822,10 @@ async fn a_restart_without_a_view_follows_the_channel_from_the_final_tier() {
     assert_eq!(
         sequencer
             .storage_ref
-            .ask(GetLatestBlockMeta)
+            .ask(GetLast::<BlockRecord>::new())
             .await
             .unwrap()
+            .map(|(_block_id, record)| BlockMeta::from(&record.block))
             .unwrap()
             .id,
         2
@@ -5664,7 +5708,7 @@ async fn sequencer_with_a_full_exit(
     channel: CannedChannel,
     seed: u8,
 ) -> (
-    SequencerCore<StorageActor, MockBedrockActor>,
+    SequencerCore<StorageActor, MockBedrockActor, SlasherActor<StorageActor>>,
     MemPoolHandle<(TransactionOrigin, LeeTransaction)>,
 ) {
     let (sequencer, mempool_handle) =
@@ -5674,7 +5718,10 @@ async fn sequencer_with_a_full_exit(
 }
 
 /// Gives the head `seed`'s key with its whole stake pending release.
-async fn set_up_a_full_exit(sequencer: &SequencerCore<StorageActor, MockBedrockActor>, seed: u8) {
+async fn set_up_a_full_exit(
+    sequencer: &SequencerCore<StorageActor, MockBedrockActor, SlasherActor<StorageActor>>,
+    seed: u8,
+) {
     let amount = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
     let (ownership_id, ownership_key) = committee_ownership(seed);
     let funding_key = TestSigner::new(41);
@@ -6216,10 +6263,14 @@ fn a_slash_without_enough_approvals_is_rejected() {
 }
 
 /// Whether the slasher has recorded any offence.
-async fn slash_recorded(sequencer: &SequencerCore<StorageActor, MockBedrockActor>) -> bool {
+async fn slash_recorded(
+    sequencer: &SequencerCore<StorageActor, MockBedrockActor, SlasherActor<StorageActor>>,
+) -> bool {
     sequencer
         .storage_ref
-        .ask(sequencer_storage_actor::protocol::GetSlashRecordBytes)
+        .ask(sequencer_storage_actor::protocol::Get::<
+            sequencer_slasher_actor::storage::SlashRecord,
+        >::default())
         .await
         .expect("Failed to read the slash record")
         .is_some()
@@ -6227,7 +6278,7 @@ async fn slash_recorded(sequencer: &SequencerCore<StorageActor, MockBedrockActor
 
 /// Finalizes `entry`, signed by a key this node does not hold.
 async fn finalize_signed(
-    sequencer: &mut SequencerCore<StorageActor, MockBedrockActor>,
+    sequencer: &mut SequencerCore<StorageActor, MockBedrockActor, SlasherActor<StorageActor>>,
     entry: ChannelEntry,
 ) {
     let signer = Ed25519Key::from_bytes(&[5; 32]).public_key();
@@ -6242,7 +6293,7 @@ async fn finalize_signed(
 
 /// Finalizes the stored genesis, so later entries are judged against it.
 async fn finalize_genesis(
-    sequencer: &mut SequencerCore<StorageActor, MockBedrockActor>,
+    sequencer: &mut SequencerCore<StorageActor, MockBedrockActor, SlasherActor<StorageActor>>,
 ) -> (Block, ChannelEntry) {
     let genesis = block_at(sequencer, GENESIS_BLOCK_ID).await.unwrap();
     let entry = finalized_as_held(&sequencer.chain(), &genesis).await;
@@ -6299,7 +6350,10 @@ async fn a_finalized_block_off_the_lineage_is_not_reported() {
 }
 
 /// Adopts `entry`, as the sdk reports it entering the view.
-async fn adopt(sequencer: &mut SequencerCore<StorageActor, MockBedrockActor>, entry: ChannelEntry) {
+async fn adopt(
+    sequencer: &mut SequencerCore<StorageActor, MockBedrockActor, SlasherActor<StorageActor>>,
+    entry: ChannelEntry,
+) {
     sequencer
         .on_channel_update(&ChannelUpdate {
             view: ViewChange::Extension(vec![entry]),
@@ -6539,9 +6593,10 @@ async fn a_turn_on_a_view_with_a_hole_is_skipped() {
     let (mut sequencer, mempool_handle) = start_sequencer(config.clone()).await;
     let genesis_meta = sequencer
         .storage_ref
-        .ask(GetLatestBlockMeta)
+        .ask(GetLast::<BlockRecord>::new())
         .await
         .unwrap()
+        .map(|(_block_id, record)| BlockMeta::from(&record.block))
         .expect("genesis meta is set");
     let producer = bootstrap_stake_account_id(&config);
     let mut state = sequencer.with_state(Clone::clone).await;
@@ -6831,9 +6886,10 @@ async fn an_approved_change_has_room_in_a_full_block() {
     let block_id = sequencer.run_production_turn().await.unwrap();
     let block = sequencer
         .storage_ref
-        .ask(GetBlock { block_id })
+        .ask(Get::<BlockRecord>::new(BigEndian::new(&block_id)))
         .await
         .unwrap()
+        .map(|record| record.block)
         .unwrap();
     let txs = &block.body.transactions;
     let included = txs.iter().filter(|tx| transfers.contains(tx)).count();

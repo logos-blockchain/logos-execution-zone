@@ -9,7 +9,7 @@ use lee_core::{
     program::PdaSeed,
     signing_key::{KeyType, SigningKeyState},
 };
-use sequencer_storage_actor::actor::event_filter::Selector;
+use sequencer_core::event_filter::Selector;
 
 use crate::primitives::{errors::PrimitiveOperationStatus, types::vectors::FfiVecU8};
 

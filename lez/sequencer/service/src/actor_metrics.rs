@@ -123,7 +123,7 @@ impl<S: Subscriber + for<'lookup> LookupSpan<'lookup>> Layer<S> for ActorMetrics
         };
         if handles_message && let Some(message_name) = fields.message {
             extensions.insert(Handling {
-                message_name,
+                message_name: traces::without_module_paths(&message_name),
                 instance: instances::of(&actor_id),
                 sender: None,
                 since: Instant::now(),
@@ -534,7 +534,10 @@ mod tests {
     fn handling_time<A: Message<M>, M: Send + 'static>(recorder: &PrometheusRecorder) -> f64 {
         let sum = format!("{ACTOR_MESSAGE_HANDLING_TIME}_sum{{");
         let actor_name = format!(r#"{ACTOR_NAME_LABEL}="{}""#, <A as kameo::Actor>::name());
-        let message_name = format!(r#"{MESSAGE_NAME_LABEL}="{}""#, <A as Message<M>>::name());
+        let message_name = format!(
+            r#"{MESSAGE_NAME_LABEL}="{}""#,
+            traces::without_module_paths(<A as Message<M>>::name())
+        );
         recorder
             .handle()
             .render()
@@ -574,7 +577,7 @@ mod tests {
         let rendered = recorder.handle().render();
         let message_name = format!(
             r#"{MESSAGE_NAME_LABEL}="{}""#,
-            <Worker as Message<Work>>::name()
+            traces::without_module_paths(<Worker as Message<Work>>::name())
         );
         assert!(
             rendered

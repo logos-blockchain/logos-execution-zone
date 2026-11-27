@@ -2906,26 +2906,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "enum-iterator"
-version = "2.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4549325971814bda7a44061bf3fe7e487d447cba01e4220a4b454d630d7a016"
-dependencies = [
- "enum-iterator-derive",
-]
-
-[[package]]
-name = "enum-iterator-derive"
-version = "1.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "685adfa4d6f3d765a26bc5dbc936577de9abf756c1feeb3089b01dd395034842"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
-
-[[package]]
 name = "enum-map"
 version = "2.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11022,6 +11002,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "trait-set",
  "url",
 ]
 
@@ -11092,6 +11073,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "trait-set",
  "url",
 ]
 
@@ -11320,6 +11302,7 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+ "trait-set",
 ]
 
 [[package]]
@@ -11345,24 +11328,26 @@ dependencies = [
 name = "sequencer_storage_actor"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "borsh",
- "common",
- "enum-iterator",
- "itertools 0.14.0",
  "kameo",
- "lee",
- "lee_core",
  "mockall",
  "num-traits",
  "rocksdb",
  "sequencer_actors_common",
- "strum 0.28.0",
+ "sequencer_storage_actor_derive",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "tracing",
+ "trait-set",
  "zstd",
+]
+
+[[package]]
+name = "sequencer_storage_actor_derive"
+version = "0.1.0"
+dependencies = [
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -13266,6 +13251,17 @@ dependencies = [
  "tracing-core",
  "tracing-log",
  "tracing-serde",
+]
+
+[[package]]
+name = "trait-set"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b79e2e9c9ab44c6d7c20d5976961b47e8f49ac199154daa514b77cd1ab536625"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
 ]
 
 [[package]]

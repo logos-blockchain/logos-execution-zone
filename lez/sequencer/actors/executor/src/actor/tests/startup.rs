@@ -1,6 +1,6 @@
 //! Starting the executor: creating the channel, and restarting over a store it already holds.
 
-use std::{collections::BTreeSet, sync::Arc};
+use std::collections::BTreeSet;
 
 use anyhow::Result;
 use common::{block::Block, transaction::LeeTransaction};
@@ -20,17 +20,22 @@ use sequencer_bedrock_actor::{
         MsgId, PendingBlock, PublishOutcome, Slot, ViewChange,
     },
 };
-use sequencer_core::config::SequencerConfig;
+use sequencer_core::{config::SequencerConfig, storage::blocks::BlockEventsRecord};
+use sequencer_slasher_actor::SlasherActor;
 use sequencer_storage_actor::{
+    encoding::BigEndian,
     mock::{MockStorageActor, SharedStore},
-    protocol::AtomicUpdate,
 };
 use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 use tokio::test;
 
 use super::{
     channel_event, executor_args, feed, finalized_at, finalized_updates, ready, sequencer_config,
-    spawn_bedrock_pool, spawn_executor, stored_chain::genesis,
+    spawn_bedrock_pool, spawn_executor,
+    stored_chain::{
+        genesis, store_block, store_head_state, stored_block, stored_blocks, stored_final_snapshot,
+        stored_pending_deposits, stored_tip,
+    },
 };
 use crate::{
     ExecutorActor,
@@ -41,7 +46,7 @@ use crate::{
     },
 };
 
-type Executor = ExecutorActor<MockStorageActor, MockBedrockActor>;
+type Executor = ExecutorActor<MockStorageActor, MockBedrockActor, SlasherActor<MockStorageActor>>;
 
 /// Starts an executor over `store`, against a Bedrock serving `channel`.
 async fn start(
@@ -137,8 +142,7 @@ fn assert_carries(block: &Block, user_txs: &[LeeTransaction]) {
 }
 
 fn stored_ids(store: &SharedStore) -> Vec<BlockId> {
-    store
-        .blocks()
+    stored_blocks(&store.values())
         .iter()
         .map(|block| block.header.block_id)
         .collect()
@@ -267,11 +271,15 @@ async fn a_start_over_a_stored_genesis_bootstraps_from_the_channel() -> Result<(
         &config.genesis_spec(Some(bootstrap_sequencer_key)).unwrap(),
     );
     let store = SharedStore::default();
-    store.lock().apply(AtomicUpdate::from_block(
-        genesis.clone(),
-        Arc::new(genesis_state),
-        vec![(genesis.header.block_id, genesis_events)],
-    ));
+    let values = store.values();
+    store_block(&values, genesis.clone());
+    store_head_state(&values, genesis_state);
+    values.store(
+        &BigEndian::new(&genesis.header.block_id),
+        &BlockEventsRecord {
+            events: genesis_events,
+        },
+    )?;
 
     let channel = CannedChannel {
         tip: Some(mock_msg_of(&genesis)),
@@ -389,9 +397,7 @@ async fn bootstrapping_records_replayed_deposits() -> Result<()> {
         ExecutorStatus::Bootstrapping { .. }
     ));
 
-    let recorded: Vec<[u8; 32]> = store
-        .lock()
-        .pending_deposits
+    let recorded: Vec<[u8; 32]> = stored_pending_deposits(&store.values())
         .iter()
         .map(|record| record.deposit_op_id.0)
         .collect();
@@ -418,13 +424,13 @@ async fn a_restart_restores_the_state_from_storage() -> Result<()> {
             })
             .await?;
         executor.ask(ProduceBlock).await?;
-        assert_carries(store.blocks().last().unwrap(), &[tx]);
+        assert_carries(stored_blocks(&store.values()).last().unwrap(), &[tx]);
         executor.stop_gracefully().await?;
         executor.wait_for_shutdown().await;
     }
 
     let executor = start(&config, &store, &channel).await?;
-    replay(&config, &executor, &store.blocks()).await?;
+    replay(&config, &executor, &stored_blocks(&store.values())).await?;
 
     // The recipient gained exactly the transfer; the sender also paid a real fee.
     assert!(
@@ -464,10 +470,10 @@ async fn a_block_produced_after_a_restart_chains_on_the_stored_tip() -> Result<(
         executor.stop_gracefully().await?;
         executor.wait_for_shutdown().await;
     }
-    let expected_prev_meta = store.lock().tip().expect("block 2 is stored");
+    let expected_prev_meta = stored_tip(&store.values()).expect("block 2 is stored");
 
     let executor = start(&config, &store, &channel).await?;
-    replay(&config, &executor, &store.blocks()).await?;
+    replay(&config, &executor, &stored_blocks(&store.values())).await?;
 
     let tx = transfer(1, 50);
     executor
@@ -478,7 +484,9 @@ async fn a_block_produced_after_a_restart_chains_on_the_stored_tip() -> Result<(
         .await?;
     executor.ask(ProduceBlock).await?;
 
-    let new_block = store.blocks().pop().expect("block 3 is stored");
+    let new_block = stored_blocks(&store.values())
+        .pop()
+        .expect("block 3 is stored");
     assert_eq!(new_block.header.block_id, 3);
     assert_eq!(
         new_block.header.prev_block_hash, expected_prev_meta.hash,
@@ -513,8 +521,8 @@ async fn a_restart_recovers_a_published_block_the_store_lost() -> Result<()> {
         executor.wait_for_shutdown().await;
         store_before_publish
     };
-    let [genesis, block2] =
-        <[Block; 2]>::try_from(store.blocks()).expect("genesis and block 2 are stored");
+    let [genesis, block2] = <[Block; 2]>::try_from(stored_blocks(&store.values()))
+        .expect("genesis and block 2 are stored");
     *store.lock() = store_before_publish;
     channel.lock().pending_blocks = vec![PendingBlock {
         block: block2.clone(),
@@ -539,7 +547,9 @@ async fn a_restart_recovers_a_published_block_the_store_lost() -> Result<()> {
     );
 
     executor.ask(ProduceBlock).await?;
-    let block3 = store.blocks().pop().expect("block 3 is stored");
+    let block3 = stored_blocks(&store.values())
+        .pop()
+        .expect("block 3 is stored");
     assert_eq!(block3.header.block_id, 3);
     assert_eq!(
         block3.header.prev_block_hash, block2.header.hash,
@@ -560,8 +570,8 @@ async fn a_restart_keeps_a_pending_block_the_store_holds() -> Result<()> {
         executor.stop_gracefully().await?;
         executor.wait_for_shutdown().await;
     }
-    let [genesis, block2] =
-        <[Block; 2]>::try_from(store.blocks()).expect("genesis and block 2 are stored");
+    let [genesis, block2] = <[Block; 2]>::try_from(stored_blocks(&store.values()))
+        .expect("genesis and block 2 are stored");
     channel.lock().pending_blocks = vec![PendingBlock {
         block: block2.clone(),
         outcome: PublishOutcome {
@@ -577,7 +587,10 @@ async fn a_restart_keeps_a_pending_block_the_store_holds() -> Result<()> {
 
     assert_eq!(stored_ids(&store), [1, 2, 3]);
     assert_eq!(
-        store.lock().blocks[&3].header.prev_block_hash,
+        stored_block(&store.values(), 3)
+            .expect("block 3 is stored")
+            .header
+            .prev_block_hash,
         block2.header.hash,
         "block 3 must chain on the pending block"
     );
@@ -596,7 +609,7 @@ async fn the_pin_the_genesis_publish_leaves_survives_a_lagging_channel_read() ->
 
     // The read does not show our genesis yet.
     channel.serve(CannedChannel {
-        tip: Some(mock_msg_of(&store.blocks()[0])),
+        tip: Some(mock_msg_of(&stored_blocks(&store.values())[0])),
         stale_tip_read: Some(MsgId::from([42_u8; 32])),
         ..CannedChannel::absent()
     });
@@ -630,8 +643,8 @@ async fn a_restart_restores_the_head_tier_and_recovers_from_an_orphan() -> Resul
         executor.stop_gracefully().await?;
         executor.wait_for_shutdown().await;
     }
-    let [genesis, block2] =
-        <[Block; 2]>::try_from(store.blocks()).expect("genesis and block 2 are stored");
+    let [genesis, block2] = <[Block; 2]>::try_from(stored_blocks(&store.values()))
+        .expect("genesis and block 2 are stored");
 
     // Only genesis is on the channel, so block 2 must come back as *head*, not
     // final — the L1 can still orphan it.
@@ -677,12 +690,17 @@ async fn a_restart_restores_the_head_tier_and_recovers_from_an_orphan() -> Resul
         "the orphaned transfer must be reverted"
     );
     assert_eq!(
-        store.lock().blocks[&2].header.hash,
+        stored_block(&store.values(), 2)
+            .expect("block 2 is stored")
+            .header
+            .hash,
         block2_prime.header.hash,
         "block 2' replaces block 2 in the store"
     );
     executor.ask(ProduceBlock).await?;
-    let block3 = store.blocks().pop().expect("block 3 is stored");
+    let block3 = stored_blocks(&store.values())
+        .pop()
+        .expect("block 3 is stored");
     assert_eq!(block3.header.prev_block_hash, block2_prime.header.hash);
     assert_carries(&block3, &[tx]);
 
@@ -706,12 +724,14 @@ async fn a_restart_reanchors_on_the_persisted_final_snapshot() -> Result<()> {
             })
             .await?;
         executor.ask(ProduceBlock).await?;
-        let block2 = store.blocks().pop().expect("block 2 is stored");
+        let block2 = stored_blocks(&store.values())
+            .pop()
+            .expect("block 2 is stored");
         executor
             .ask(ChannelEvent {
                 channel_id: config.bedrock_config.channel_id,
                 event: ChannelEventKind::Update(Box::new(ChannelUpdate {
-                    finalized: vec![entry(&block2, &store.blocks()[0])],
+                    finalized: vec![entry(&block2, &stored_blocks(&store.values())[0])],
                     ..empty_channel_update()
                 })),
             })
@@ -720,11 +740,7 @@ async fn a_restart_reanchors_on_the_persisted_final_snapshot() -> Result<()> {
         executor.wait_for_shutdown().await;
     }
     assert_eq!(
-        store
-            .lock()
-            .final_snapshot
-            .as_ref()
-            .map(|(_, meta)| meta.id),
+        stored_final_snapshot(&store.values()).map(|(_, meta)| meta.id),
         Some(2),
         "block 2's finalization is persisted"
     );
@@ -732,7 +748,7 @@ async fn a_restart_reanchors_on_the_persisted_final_snapshot() -> Result<()> {
     // Restart: the final tier re-anchors on the snapshot, so block 2 is final
     // and an orphan report can no longer revert it.
     let executor = start(&config, &store, &channel).await?;
-    let blocks = store.blocks();
+    let blocks = stored_blocks(&store.values());
     replay(&config, &executor, &blocks).await?;
     executor
         .ask(channel_event(
@@ -749,7 +765,10 @@ async fn a_restart_reanchors_on_the_persisted_final_snapshot() -> Result<()> {
 
     assert_eq!(executor.ask(GetLastBlockId).await?, 2);
     assert_eq!(
-        store.lock().blocks[&2].header.hash,
+        stored_block(&store.values(), 2)
+            .expect("block 2 is stored")
+            .header
+            .hash,
         blocks[1].header.hash,
         "a finalized block stays stored"
     );

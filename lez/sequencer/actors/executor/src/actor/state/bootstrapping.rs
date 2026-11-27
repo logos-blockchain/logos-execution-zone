@@ -1,7 +1,8 @@
 use std::collections::{BTreeSet, HashSet};
 
 use chain_state::{AcceptOutcome, AnchorConsistencyCheck, ChainConsistency, ChainState};
-use common::{HashType, block::BlockMeta};
+use common::{HashType, block::Block, transaction::TxEvents};
+use lee_core::BlockId;
 use sequencer_bedrock_actor::{
     BedrockActorTrait,
     protocol::{
@@ -9,11 +10,22 @@ use sequencer_bedrock_actor::{
         L1Position, MsgId, Slot,
     },
 };
-use sequencer_core::{config::SequencerConfig, faults, release_finality};
-use sequencer_slasher_actor::protocol::{Report, ReportedOffence};
+use sequencer_core::{
+    config::SequencerConfig,
+    faults, release_finality,
+    storage::{
+        CoreStorage, ReplayWrites, ZoneAnchorRecord,
+        blocks::{BlockRecord, StoredChain, chain_writes},
+        bridge::{deposit_writes, withdrawal_writes},
+    },
+};
+use sequencer_slasher_actor::{
+    SlasherActorTrait,
+    protocol::{Report, ReportedOffence},
+};
 use sequencer_storage_actor::{
-    StorageActorTrait,
-    protocol::{AtomicUpdate, ZoneAnchorRecord},
+    encoding::BigEndian,
+    protocol::{Get, Store, WriteBatch},
 };
 use tracing::{debug, warn};
 
@@ -26,7 +38,7 @@ use crate::{
 #[cfg(test)]
 mod tests;
 
-pub struct BootstrappingState<S: StorageActorTrait, B: BedrockActorTrait> {
+pub struct BootstrappingState<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> {
     pub(super) config: SequencerConfig,
     pub(super) chain: ChainState,
     pub(super) channel_signing_key: Ed25519Key,
@@ -39,17 +51,17 @@ pub struct BootstrappingState<S: StorageActorTrait, B: BedrockActorTrait> {
     pub(super) replayed_up_to: Option<Slot>,
     /// Whether the finalized history is read up to the node's LIB.
     pub(super) ready: bool,
-    pub(super) actors: ActorsBundle<S, B>,
+    pub(super) actors: ActorsBundle<S, B, Sl>,
 }
 
-impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
+impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> BootstrappingState<S, B, Sl> {
     pub(super) const fn new(
         config: SequencerConfig,
         chain: ChainState,
         channel_signing_key: Ed25519Key,
         consistency_check: Option<AnchorConsistencyCheck>,
         follow_start: FollowStart,
-        actors: ActorsBundle<S, B>,
+        actors: ActorsBundle<S, B, Sl>,
     ) -> Self {
         Self {
             config,
@@ -84,7 +96,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
     ///
     /// The view is left to the online state, which zone-sdk reports it to again once the
     /// publisher is initialized.
-    pub async fn on_channel_event(mut self, event: &ChannelEventKind) -> Result<State<S, B>> {
+    pub async fn on_channel_event(mut self, event: &ChannelEventKind) -> Result<State<S, B, Sl>> {
         match event {
             ChannelEventKind::Update(update) => self.on_channel_update(update).await?,
             ChannelEventKind::Ready => self.ready = true,
@@ -99,7 +111,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
     ///
     /// A chain holding no block yet waits for the channel's first one to finalize, as it has
     /// nothing to follow the channel from.
-    async fn go_online_if_caught_up(self) -> Result<State<S, B>> {
+    async fn go_online_if_caught_up(self) -> Result<State<S, B, Sl>> {
         if !self.ready || self.chain.head_tip().is_none() {
             return Ok(State::Bootstrapping(self));
         }
@@ -122,7 +134,8 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
             finalized_signers,
         } = update;
 
-        let mut store_update = sequencer_core::chain_update(&self.chain);
+        let stored = StoredChain::of(&self.chain);
+        let mut replayed = Replayed::default();
         for entry in finalized {
             let signer = |signed: &[(MsgId, Ed25519PublicKey)]| {
                 signed
@@ -135,36 +148,45 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
             } else {
                 signer(undecodable).map(Signed::NotABlock)
             };
-            self.apply_finalized_entry(entry, signed, &mut store_update)
+            self.apply_finalized_entry(entry, signed, &mut replayed)
                 .await?;
         }
 
-        let AtomicUpdate {
-            channel_view,
-            head_tip,
-            head_state,
-            ..
-        } = sequencer_core::chain_update(&self.chain);
-        let outcome = self
-            .actors
-            .storage_ref
-            .ask(AtomicUpdate {
-                channel_view,
-                head_tip,
-                head_state,
-                new_deposit_events: deposits
-                    .iter()
-                    .map(sequencer_core::pending_deposit_event_record)
-                    .collect(),
-                consumed_withdrawals: withdrawals
-                    .iter()
-                    .flat_map(sequencer_core::released_note_keys)
-                    .collect(),
-                ..store_update
-            })
+        let Replayed {
+            finalized: finalized_blocks,
+            events,
+            anchor,
+            settled_deposits,
+        } = replayed;
+        let storage_ref = &self.actors.storage_ref;
+        let (deposit_records_writes, recorded_deposits) = deposit_writes(
+            storage_ref,
+            deposits
+                .iter()
+                .map(sequencer_core::pending_deposit_event_record)
+                .collect(),
+            &settled_deposits,
+        )
+        .await?;
+        let (withdrawal_records_writes, unmatched_withdrawals) = withdrawal_writes(
+            storage_ref,
+            &HashSet::new(),
+            &withdrawals
+                .iter()
+                .flat_map(sequencer_core::released_note_keys)
+                .collect(),
+        )
+        .await?;
+        storage_ref
+            .ask(WriteBatch(ReplayWrites {
+                chain: chain_writes(&stored, &self.chain, &finalized_blocks, events),
+                anchor: anchor.map(Store::from_value),
+                deposits: deposit_records_writes,
+                withdrawals: withdrawal_records_writes,
+            }))
             .await?;
-        sequencer_core::log_recorded_deposits(&outcome);
-        sequencer_core::log_unmatched_withdrawals(&outcome);
+        sequencer_core::log_recorded_deposits(recorded_deposits);
+        sequencer_core::log_unmatched_withdrawals(&unmatched_withdrawals);
 
         self.finalized_config = *finalized_config;
         self.replayed_up_to = Some(*lib_slot);
@@ -183,14 +205,14 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
     }
 
     /// Applies one finalized channel entry, signed as `signed` says, adding what it changes to
-    /// `store_update`. A block the store already holds only settles its deposits, a block that
+    /// `replayed`. A block the store already holds only settles its deposits, a block that
     /// does not apply is skipped, like the online state does. Advances the persisted anchor to a
     /// block the store holds after this, and reports the offence the entry proves before that.
     async fn apply_finalized_entry(
         &mut self,
         entry: &ChannelEntry,
         signed: Option<Signed>,
-        store_update: &mut AtomicUpdate,
+        replayed: &mut Replayed,
     ) -> Result<()> {
         let msg = entry.msg;
         let slot = Slot::from(
@@ -228,11 +250,6 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
             None => BTreeSet::new(),
         };
         let storage_ref = &self.actors.storage_ref;
-        let head_before: HashSet<HashType> = self
-            .chain
-            .head_blocks()
-            .map(|block| block.header.hash)
-            .collect();
         let was_empty = self.chain.final_tip().is_none();
         // A root lineage over a held tier is a store restored without its view.
         let judgeable = !was_empty && self.chain.final_msg() != MsgId::root();
@@ -265,28 +282,18 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
             self.report_offence(offence).await?;
         }
 
+        // A reconstructed block is finalized, so any deposit it mints is
+        // permanently reflected in state (its receipt PDA); drop the
+        // pending record backfill may have re-delivered, so the drain
+        // stops re-minting.
         let newly_final = self.chain.take_newly_final();
-        store_update
-            .blocks
-            .extend(sequencer_core::new_head_blocks(&self.chain, &head_before));
-        if !newly_final.is_empty() {
-            // A reconstructed block is finalized, so any deposit it mints is
-            // permanently reflected in state (its receipt PDA); drop the
-            // pending record backfill may have re-delivered, so the drain
-            // stops re-minting.
-            store_update.finalized_deposit_records.extend(
-                newly_final
-                    .iter()
-                    .flat_map(|block| block.body.transactions.iter())
-                    .filter_map(sequencer_core::extract_bridge_deposit_id),
-            );
-            store_update.blocks.extend(newly_final.iter().cloned());
-            store_update.final_snapshot = self
-                .chain
-                .final_tip()
-                .map(|tip| (self.chain.share_final_state(), BlockMeta::from(&tip)));
-            store_update.finalized_up_to = self.chain.final_tip().map(|tip| tip.block_id);
-        }
+        replayed.settled_deposits.extend(
+            newly_final
+                .iter()
+                .flat_map(|block| block.body.transactions.iter())
+                .filter_map(sequencer_core::extract_bridge_deposit_id),
+        );
+        replayed.finalized.extend(newly_final);
 
         if let Some(block) = entry_block {
             let block_id = block.header.block_id;
@@ -301,16 +308,17 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
                 .is_some_and(|tip| tip.block_id >= block_id)
             {
                 storage_ref
-                    .ask(sequencer_storage_actor::protocol::GetBlock { block_id })
+                    .ask(Get::<BlockRecord>::new(BigEndian::new(&block_id)))
                     .await?
+                    .map(|stored| stored.block)
                     .filter(|stored| stored.header.hash == block.header.hash)
             } else {
                 None
             };
             match outcome {
                 Some(AcceptOutcome::Applied(events)) => {
-                    store_update.zone_anchor = Some(record);
-                    store_update.events.extend(events);
+                    replayed.anchor = Some(record);
+                    replayed.events.extend(events);
                 }
                 // A block we already hold verbatim needs no replay, but the
                 // channel serving it is what makes it irreversible, so its
@@ -318,14 +326,15 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
                 Some(AcceptOutcome::AlreadyApplied | AcceptOutcome::Parked(_))
                     if let Some(stored) = held_final =>
                 {
-                    store_update.finalized_deposit_records.extend(
+                    replayed.settled_deposits.extend(
                         stored
                             .body
                             .transactions
                             .iter()
                             .filter_map(sequencer_core::extract_bridge_deposit_id),
                     );
-                    store_update.zone_anchor = Some(record);
+                    replayed.anchor = Some(record);
+                    replayed.finalized.push(stored);
                 }
                 Some(AcceptOutcome::AlreadyApplied) | None => {}
                 Some(AcceptOutcome::Parked(err) | AcceptOutcome::RetryableFailure(err)) => {
@@ -341,6 +350,18 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
 
         Ok(())
     }
+}
+
+/// What the finalized entries of one channel update change, gathered for one store write.
+#[derive(Default)]
+struct Replayed {
+    /// Blocks finalized, or found finalized again.
+    finalized: Vec<Block>,
+    events: Vec<(BlockId, Vec<TxEvents>)>,
+    /// The last block read back from the channel that the store holds.
+    anchor: Option<ZoneAnchorRecord>,
+    /// Deposits whose mint is final.
+    settled_deposits: HashSet<HashType>,
 }
 
 /// The key that signed a finalized entry, by what the entry carries.

@@ -3,17 +3,17 @@
 
 #![expect(clippy::print_stdout, reason = "It's normal in this small cli")]
 
-use std::{collections::HashSet, path::Path, sync::Arc};
+use std::path::Path;
 
 use anyhow::{Context as _, Result};
+use common::block::{BedrockStatus, BlockMeta};
 use kameo::actor::Spawn as _;
 use logos_blockchain_zone_sdk::key_management_system_service::keys::UnsecuredEd25519Key;
+use sequencer_bedrock_actor::storage::ZoneCheckpoint;
+use sequencer_core::storage::{FinalSnapshotRecord, HeadStateRecord, blocks::BlockRecord};
 use sequencer_storage_actor::{
     StorageActor,
-    protocol::{
-        AtomicUpdate, DeleteZoneCheckpoint, DumpDb, GetLatestBlockMeta, GetLeeState,
-        ResetAllBlocksToPending,
-    },
+    protocol::{Delete, DumpDb, Get, GetRange, Store, WriteBatch},
 };
 use test_fixtures::{
     config,
@@ -95,11 +95,26 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
         StorageActor::new(&db_path).context("Failed to reopen sequencer storage after shutdown")?;
     let storage_ref = StorageActor::spawn(storage);
     storage_ref
-        .ask(DeleteZoneCheckpoint)
+        .ask(Delete::<ZoneCheckpoint>::default())
         .await
         .context("Failed to strip zone-sdk checkpoint from fixture database")?;
+    let blocks = storage_ref
+        .ask(GetRange::<BlockRecord>::new(None, None, usize::MAX))
+        .await
+        .context("Failed to read the fixture blocks")?;
+    let tip = blocks
+        .last()
+        .map(|(_block_id, record)| BlockMeta::from(&record.block))
+        .context("Fixture store has no blocks")?;
+    let reset: Vec<_> = blocks
+        .into_iter()
+        .map(|(block_id, BlockRecord { mut block })| {
+            block.bedrock_status = BedrockStatus::Pending;
+            Store::new(block_id, BlockRecord { block })
+        })
+        .collect();
     storage_ref
-        .ask(ResetAllBlocksToPending)
+        .ask(WriteBatch(reset))
         .await
         .context("Failed to reset fixture blocks to pending")?;
 
@@ -110,33 +125,17 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
     //
     // TODO: once Bedrock communication lives in its own mockable actor, mock it
     // here to finalize immediately and drop this direct storage manipulation.
-    let state = storage_ref
-        .ask(GetLeeState)
+    let head_state = storage_ref
+        .ask(Get::<HeadStateRecord>::default())
         .await
         .context("Failed to read the fixture head state")?
         .context("Fixture store has no persisted head state")?;
-    let tip = storage_ref
-        .ask(GetLatestBlockMeta)
-        .await
-        .context("Failed to read the fixture tip block meta")?
-        .context("Fixture store has no blocks")?;
-    let state = Arc::new(state);
+    // Blocks must stay Pending for the re-publish; only the snapshot moves.
     storage_ref
-        .ask(AtomicUpdate {
-            blocks: vec![],
-            channel_view: None,
-            head_tip: Some(tip.clone()),
-            head_state: Arc::clone(&state),
-            final_snapshot: Some((state, tip)),
-            // Blocks must stay Pending for the re-publish; only the snapshot moves.
-            finalized_up_to: None,
-            new_deposit_events: vec![],
-            finalized_deposit_records: HashSet::new(),
-            consumed_withdrawals: HashSet::new(),
-            new_withdraw_intents: HashSet::new(),
-            zone_anchor: None,
-            events: vec![],
-        })
+        .ask(Store::from_value(FinalSnapshotRecord {
+            state: head_state.state,
+            meta: tip,
+        }))
         .await
         .context("Failed to stamp the fixture final snapshot at the tip")?;
 

@@ -79,6 +79,14 @@ impl TryFrom<Vec<u8>> for HashType {
     }
 }
 
+impl TryFrom<&[u8]> for HashType {
+    type Error = std::array::TryFromSliceError;
+
+    fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
+        Ok(Self(bytes.try_into()?))
+    }
+}
+
 impl From<HashType> for Vec<u8> {
     fn from(hash: HashType) -> Self {
         hash.0.to_vec()

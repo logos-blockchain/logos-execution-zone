@@ -112,10 +112,11 @@ enum Place {
 
 impl Place {
     /// The condition an actor table's search joins on to keep to the Message
-    /// field's text.
+    /// field's text, taken literally, as a series' name may have regex
+    /// characters in it.
     fn filter(self) -> String {
         match self {
-            Self::Here => format!(r#" && name =~ ".*${MESSAGE_VAR}.*""#),
+            Self::Here => format!(" && name =~ `.*${{{MESSAGE_VAR}:regex}}.*`"),
             Self::Elsewhere => String::new(),
         }
     }

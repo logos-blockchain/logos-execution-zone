@@ -1,10 +1,13 @@
+use sequencer_core::{
+    event_filter::{
+        EventFilter, EventRecord, MAX_EVENT_QUERY_RESPONSE_BYTES, Selector, record_charge,
+    },
+    storage::blocks::{BlockEventsRecord, BlockIdByTransactionRecord},
+};
 use sequencer_executor_actor::protocol::{
     ExecutorStatus, GetAccountTransactions, GetBlockByHash, GetStatus, MAX_BLOCK_RANGE_LEN, Slot,
 };
-use sequencer_storage_actor::{
-    actor::event_filter::{EventRecord, MAX_EVENT_QUERY_RESPONSE_BYTES, Selector, record_charge},
-    protocol::{GetBlockEvents, GetEventFilter, GetTxHashToBlockIdMapItem},
-};
+use sequencer_storage_actor::{encoding::BigEndian, protocol::Get};
 use wallet::WalletSequencerClient as _;
 
 use crate::{
@@ -659,11 +662,10 @@ pub unsafe extern "C" fn sequencer_ffi_query_block_by_tx_hash(
         .block_on(
             sequencer
                 .storage_ref()
-                .ask(GetTxHashToBlockIdMapItem {
-                    tx_hash: tx_hash.into(),
-                })
+                .ask(Get::<BlockIdByTransactionRecord>::new(tx_hash.into()))
                 .send(),
         )
+        .map(|record| record.map(|record| record.block_id))
         .inspect_err(|e| {
             tracing::error!(error = format_args!("{e:#}"), "Failed to query block by id");
         });
@@ -762,17 +764,9 @@ pub unsafe extern "C" fn sequencer_ffi_query_events(
     let program_account_id = unsafe { program_account_id.as_ref() }.map(|id| id.data);
     let selector = unsafe { selector.as_ref() }.map(|s| Selector(s.data));
 
-    let event_filter_res = sequencer
-        .runtime()
-        .block_on(sequencer.storage_ref().ask(GetEventFilter).send())
-        .inspect_err(|e| {
-            tracing::error!(error = format_args!("{e:#}"), "Failed to query block by id");
-        });
-
-    let Ok(event_filter) = event_filter_res else {
-        tracing::error!("GetEventFilter: query failed");
-        return PointerResult::from_error(FfiOperationError::QueryError);
-    };
+    // For now, storage is only archival.
+    // TODO: update sequencer configs to support custom archival policies.
+    let event_filter = EventFilter::Archival;
 
     let records = if let Some(tx_hash) = unsafe { tx_hash.as_ref() } {
         // Coverage is judged at the transaction's height, resolved BEFORE the events
@@ -785,7 +779,7 @@ pub unsafe extern "C" fn sequencer_ffi_query_events(
         }
         let block_id = unsafe { block_id_res.value.read() };
 
-        if !sequencer_storage_actor::actor::event_filter::covered_over_range(
+        if !sequencer_core::event_filter::covered_over_range(
             &[(event_filter, block_id)],
             block_id,
             block_id,
@@ -805,9 +799,10 @@ pub unsafe extern "C" fn sequencer_ffi_query_events(
             .block_on(
                 sequencer
                     .storage_ref()
-                    .ask(GetBlockEvents { block_id })
+                    .ask(Get::<BlockEventsRecord>::new(BigEndian::new(&block_id)))
                     .send(),
             )
+            .map(|record| record.map(|record| record.events))
             .inspect_err(|e| {
                 tracing::error!(error = format_args!("{e:#}"), "Failed to query block by id");
             })
@@ -842,17 +837,16 @@ pub unsafe extern "C" fn sequencer_ffi_query_events(
             return PointerResult::from_error(FfiOperationError::InvalidArgument);
         }
         let to_block = to_block.is_some.then(|| unsafe { *to_block.value });
-        let (from_block, to_block) =
-            match sequencer_storage_actor::actor::event_filter::resolve_event_block_range(
-                from_block, to_block, tip,
-            ) {
-                Ok(range) => range,
-                Err(err) => {
-                    tracing::error!(error = ?err, "query_events");
-                    return PointerResult::from_error(FfiOperationError::InvalidArgument);
-                }
-            };
-        if !sequencer_storage_actor::actor::event_filter::covered_over_range(
+        let (from_block, to_block) = match sequencer_core::event_filter::resolve_event_block_range(
+            from_block, to_block, tip,
+        ) {
+            Ok(range) => range,
+            Err(err) => {
+                tracing::error!(error = ?err, "query_events");
+                return PointerResult::from_error(FfiOperationError::InvalidArgument);
+            }
+        };
+        if !sequencer_core::event_filter::covered_over_range(
             (from_block..=to_block)
                 .map(|block_id| (event_filter.clone(), block_id))
                 .collect::<Vec<_>>()
@@ -880,9 +874,10 @@ pub unsafe extern "C" fn sequencer_ffi_query_events(
                 .block_on(
                     sequencer
                         .storage_ref()
-                        .ask(GetBlockEvents { block_id })
+                        .ask(Get::<BlockEventsRecord>::new(BigEndian::new(&block_id)))
                         .send(),
                 )
+                .map(|record| record.map(|record| record.events))
                 .inspect_err(|e| {
                     tracing::error!(
                         error = format_args!("{e:#}"),
