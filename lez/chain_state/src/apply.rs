@@ -2,7 +2,10 @@
 //! indexer. Pure and storage-free: callers apply on a scratch clone of state and
 //! commit only on `Ok`.
 
-use std::collections::{BTreeSet, HashSet};
+use std::{
+    collections::{BTreeSet, HashSet},
+    ops::RangeInclusive,
+};
 
 use common::{
     HashType,
@@ -31,6 +34,9 @@ use crate::{
     full_stake_releases,
     ingest_error::BlockIngestError,
 };
+
+/// How far one block may move the clock forward, in milliseconds.
+pub const MAX_TIMESTAMP_STEP: Timestamp = 10 * 60 * 1000;
 
 /// The parent the next block must chain on.
 // `l1_slot` will be added here when the `ChainState` anchor layer lands.
@@ -167,7 +173,10 @@ pub fn apply_judged_block_to_state(
     let LeeTransaction::Public(clock_tx) = clock_entry else {
         return Err(BlockIngestError::InvalidClockTransaction);
     };
-    if *clock_tx != clock_invocation(block.header.block_id, block.header.timestamp) {
+    if *clock_tx != clock_invocation(block.header.block_id, block.header.timestamp)
+        || (block.header.block_id != GENESIS_BLOCK_ID
+            && next_timestamps(state).is_some_and(|next| !next.contains(&block.header.timestamp)))
+    {
         return Err(BlockIngestError::InvalidClockTransaction);
     }
 
@@ -341,6 +350,27 @@ pub fn opening_fee_state(state: &V03State) -> FeeState {
             .data
             .actor_state(system_accounts::fee_program_id()),
     )
+}
+
+/// The timestamps the block after `state` may carry, `None` if the clock does not decode.
+#[must_use]
+pub fn next_timestamps(state: &V03State) -> Option<RangeInclusive<Timestamp>> {
+    let clock = system_accounts::clock_actor();
+    let previous = borsh::from_slice::<clock_core::ClockAccountData>(
+        state
+            .get_account_by_id(clock.account_id)
+            .data
+            .actor_state(clock.program_account_id)
+            .as_ref(),
+    )
+    .ok()?;
+    // Genesis is stamped 0, so the block after it, from the channel's creator, sets the clock.
+    let furthest = if previous.block_id == GENESIS_BLOCK_ID {
+        Timestamp::MAX
+    } else {
+        previous.timestamp.saturating_add(MAX_TIMESTAMP_STEP)
+    };
+    Some(previous.timestamp.saturating_add(1)..=furthest)
 }
 
 /// The producer payout a block settling to `summary` pays out of the escrow.
@@ -1216,6 +1246,60 @@ mod tests {
         .into_pending_block();
         let err = apply_block(None, &block, &mut state).expect_err("should reject");
         assert!(matches!(err, BlockIngestError::InvalidClockTransaction));
+    }
+
+    #[test]
+    fn a_block_outside_the_step_after_the_previous_one_is_invalid_clock() {
+        let mut state = initial_state();
+        let genesis = produce_dummy_block(1, None, vec![]);
+        apply_block(None, &genesis, &mut state).expect("genesis applies");
+        let at = |parent: &Block, timestamp| {
+            let block_id = parent.header.block_id.saturating_add(1);
+            HashableBlockData {
+                receipts: Vec::new(),
+                block_id,
+                prev_block_hash: parent.header.hash,
+                timestamp,
+                transactions: vec![
+                    LeeTransaction::Public(fee_invocation(
+                        BlockFeeSummary::default(),
+                        0,
+                        FeePayee::Present(producer_account_for_testing()),
+                    )),
+                    LeeTransaction::Public(clock_invocation(block_id, timestamp)),
+                ],
+            }
+            .into_pending_block()
+        };
+
+        // The block after genesis may move the clock any distance forward.
+        let first = at(&genesis, 1_700_000_000_000);
+        apply_block(Some(&tip_of(&genesis)), &first, &mut state).expect("the first block applies");
+
+        let previous = first.header.timestamp;
+        let furthest = previous.saturating_add(MAX_TIMESTAMP_STEP);
+        for outside in [
+            previous.saturating_sub(1),
+            previous,
+            furthest.saturating_add(1),
+            Timestamp::MAX,
+        ] {
+            let err = apply_block(
+                Some(&tip_of(&first)),
+                &at(&first, outside),
+                &mut state.clone(),
+            )
+            .expect_err("should reject");
+            assert!(matches!(err, BlockIngestError::InvalidClockTransaction));
+        }
+        for inside in [previous.saturating_add(1), furthest] {
+            apply_block(
+                Some(&tip_of(&first)),
+                &at(&first, inside),
+                &mut state.clone(),
+            )
+            .expect("a block within the step applies");
+        }
     }
 
     #[test]

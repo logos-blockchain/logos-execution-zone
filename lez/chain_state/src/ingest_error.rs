@@ -24,7 +24,10 @@ pub enum BlockIngestError {
     },
     #[error("Block has no transactions")]
     EmptyBlock,
-    #[error("Last transaction must be the public clock invocation for the block timestamp")]
+    #[error(
+        "Last transaction must be the public clock invocation for the block timestamp, which must \
+         be after the previous block's and at most 10 minutes after it"
+    )]
     InvalidClockTransaction,
     #[error("Second-to-last transaction must be the canonical public fee invocation")]
     InvalidFeeTransaction,

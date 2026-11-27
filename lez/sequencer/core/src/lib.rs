@@ -1337,8 +1337,11 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
         )
         .expect("`max_block_size` should fit into usize");
 
+        let next_timestamps = chain_state::apply::next_timestamps(&working_state)
+            .context("The clock account does not decode")?;
         let new_block_timestamp = u64::try_from(chrono::Utc::now().timestamp_millis())
-            .expect("Timestamp must be positive");
+            .expect("Timestamp must be positive")
+            .clamp(*next_timestamps.start(), *next_timestamps.end());
 
         // Look up this sequencer's stake ownership account as the reward target.
         let own_sequencer_key = sequencer_stake_core::SequencerKey::new(
