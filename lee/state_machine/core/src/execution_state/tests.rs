@@ -1310,6 +1310,326 @@ fn a_program_seeds_each_actor_of_its_pda_it_needs() {
     );
 }
 
+fn held(script: &Script) -> Vec<(Actor, BTreeSet<Actor>)> {
+    script
+        .log
+        .iter()
+        .map(|input| (input.receiver, input.grants.clone()))
+        .collect()
+}
+
+// `pool` issues `router` a grant over the balance of its PDA, and `router` debits with it. Without
+// the issuance `router` holds nothing, so the balance never runs.
+#[test]
+fn a_program_issues_the_actor_it_calls_a_grant_over_an_actor_of_its_pda() {
+    let (pool, router) = (actor(1, 9), actor(2, 8));
+    let seed = PdaSeed::new([5; 32]);
+    let balance = Actor::new(
+        AccountId::for_public_pda(&pool.program_account_id, &seed),
+        id(7),
+    );
+    let run = |call: SyncMessage| {
+        let mut script = Script::default()
+            .on(pool, sending(vec![call]))
+            .on(router, debiting)
+            .on(balance, sending(Vec::new()));
+        public_transaction(
+            public_context(vec![pool, router, balance]),
+            pool,
+            &mut script,
+        )
+        .unwrap();
+        held(&script)
+    };
+
+    assert_eq!(
+        run(send_to(router).with_pda_grant(balance, seed)),
+        vec![
+            (pool, BTreeSet::new()),
+            (router, BTreeSet::from([balance])),
+            (balance, BTreeSet::from([balance])),
+        ]
+    );
+    assert_eq!(
+        run(send_to(router)),
+        vec![(pool, BTreeSet::new()), (router, BTreeSet::new())]
+    );
+}
+
+// `router` sits on the PDA itself under another program, and the seed does not authorize it: it
+// holds the grant over `holding` alone, unless `pool` issues it its own as well.
+#[test]
+fn an_issued_grant_covers_only_the_actor_it_names() {
+    let pool = actor(1, 9);
+    let seed = PdaSeed::new([5; 32]);
+    let vault = AccountId::for_public_pda(&pool.program_account_id, &seed);
+    let (holding, router) = (Actor::new(vault, id(6)), Actor::new(vault, id(7)));
+    let run = |issued: SyncMessage, attached: Actor| {
+        let mut script = Script::default()
+            .on(pool, sending(vec![issued]))
+            .on(
+                router,
+                sending(vec![send_to(holding).with_grants([attached])]),
+            )
+            .on(holding, sending(Vec::new()));
+        public_transaction(
+            public_context(vec![pool, holding, router]),
+            pool,
+            &mut script,
+        )
+        .map(|_| held(&script))
+    };
+    let issue_holding = || send_to(router).with_pda_grant(holding, seed);
+
+    assert_eq!(
+        run(issue_holding(), holding).unwrap(),
+        vec![
+            (pool, BTreeSet::new()),
+            (router, BTreeSet::from([holding])),
+            (holding, BTreeSet::from([holding])),
+        ]
+    );
+    assert!(matches!(
+        run(issue_holding(), router),
+        Err(ExecutionError::UnheldGrant { actor }) if actor == router
+    ));
+    assert_eq!(
+        run(issue_holding().with_pda_grant(router, seed), router).unwrap(),
+        vec![
+            (pool, BTreeSet::new()),
+            (router, BTreeSet::from([holding, router])),
+            (holding, BTreeSet::from([router])),
+        ]
+    );
+}
+
+#[test]
+fn an_issued_grant_reaches_only_the_message_it_is_issued_on() {
+    let (pool, router, peer) = (actor(1, 9), actor(2, 8), actor(3, 8));
+    let seed = PdaSeed::new([5; 32]);
+    let balance = Actor::new(
+        AccountId::for_public_pda(&pool.program_account_id, &seed),
+        id(7),
+    );
+    let mut script = Script::default()
+        .on(
+            pool,
+            sending(vec![
+                send_to(router).with_pda_grant(balance, seed),
+                send_to(peer),
+                send_to(router),
+            ]),
+        )
+        .on(router, sending(Vec::new()))
+        .on(peer, sending(Vec::new()));
+
+    public_transaction(
+        public_context(vec![pool, router, peer, balance]),
+        pool,
+        &mut script,
+    )
+    .unwrap();
+
+    assert_eq!(
+        held(&script),
+        vec![
+            (pool, BTreeSet::new()),
+            (router, BTreeSet::from([balance])),
+            (peer, BTreeSet::new()),
+            (router, BTreeSet::new()),
+        ]
+    );
+}
+
+// Another program's PDA, another seed's, and a signer's account whose grant the issuer holds and
+// could have attached.
+#[test]
+fn a_program_issues_no_grant_over_an_actor_it_does_not_derive() {
+    let (pool, stranger, router, signer) = (actor(1, 9), actor(2, 8), actor(3, 8), actor(4, 7));
+    let seed = PdaSeed::new([5; 32]);
+    let balance = Actor::new(
+        AccountId::for_public_pda(&pool.program_account_id, &seed),
+        id(7),
+    );
+    let refused = |issuer: Actor, target: Actor, under: PdaSeed| {
+        let mut script = Script::default().on(
+            issuer,
+            sending(vec![send_to(router).with_pda_grant(target, under)]),
+        );
+        let context = PublicExecutionContext::new(
+            [
+                (pool, Authority::None),
+                (stranger, Authority::None),
+                (router, Authority::None),
+                (balance, Authority::None),
+                (signer, Authority::Signer),
+            ],
+            [signer.account_id],
+        );
+        matches!(
+            public_transaction(context, issuer, &mut script),
+            Err(ExecutionError::ForeignPdaGrant { actor }) if actor == target
+        )
+    };
+
+    assert!(refused(stranger, balance, seed));
+    assert!(refused(pool, balance, PdaSeed::new([6; 32])));
+    assert!(refused(pool, signer, seed));
+}
+
+// The transaction must declare the actor a grant is issued over, not only its account. A declared
+// one that is never called is not loaded.
+#[test]
+fn a_grant_is_issued_only_over_a_declared_actor() {
+    let (pool, router) = (actor(1, 9), actor(2, 8));
+    let seed = PdaSeed::new([5; 32]);
+    let vault = AccountId::for_public_pda(&pool.program_account_id, &seed);
+    let (balance, sibling) = (Actor::new(vault, id(7)), Actor::new(vault, id(6)));
+    let run = |declared: Vec<Actor>| {
+        let mut script = Script::default()
+            .on(
+                pool,
+                sending(vec![send_to(router).with_pda_grant(balance, seed)]),
+            )
+            .on(router, sending(Vec::new()));
+        public_transaction(public_context(declared), pool, &mut script)
+            .map(|outcome| (held(&script), outcome.accounts))
+    };
+
+    for undeclared in [vec![pool, router], vec![pool, router, sibling]] {
+        assert!(matches!(
+            run(undeclared),
+            Err(ExecutionError::UndeclaredActor { actor }) if actor == balance
+        ));
+    }
+    let (seen, accounts) = run(vec![pool, router, balance]).unwrap();
+    assert_eq!(seen[1], (router, BTreeSet::from([balance])));
+    assert!(accounts[&vault].actor_states.is_empty());
+}
+
+// A private program issues a public holder the grant over its private PDA's balance. It crosses
+// out under the presentation the prover chooses, and `router`'s debit with it is authorized.
+#[test]
+fn a_private_program_issues_a_public_holder_a_grant_over_its_private_pda() {
+    let (keys, pda_keys) = (Keys::new(1), Keys::new(2));
+    let owner = holder(&keys);
+    let seed = PdaSeed::new([5; 32]);
+    let balance = Actor::new(pda_keys.pda_id(owner.program_account_id, seed), id(7));
+    let router = actor(2, 9);
+    let scripted = || {
+        Script::default()
+            .presenting([
+                SenderPresentation::Canonical,
+                SenderPresentation::Blinded(OPENING),
+            ])
+            .on(
+                owner,
+                sending(vec![send_to(router).with_pda_grant(balance, seed)]),
+            )
+            .on(router, debiting)
+            .on(balance, sending(Vec::new()))
+    };
+
+    let Pipeline {
+        whole,
+        private,
+        boundary,
+        ..
+    } = pipeline(
+        &[router],
+        &[
+            keys.regular(false),
+            pda_keys.pda(owner.program_account_id, seed),
+        ],
+        owner,
+        scripted,
+    );
+
+    assert_eq!(
+        held(&whole),
+        vec![
+            (owner, BTreeSet::new()),
+            (router, BTreeSet::from([blinded(balance)])),
+            (balance, BTreeSet::from([balance])),
+        ]
+    );
+    assert_eq!(
+        held(&private),
+        vec![
+            (owner, BTreeSet::new()),
+            (balance, BTreeSet::from([balance])),
+        ]
+    );
+    assert_eq!(
+        public_calls(&boundary)[0].grants,
+        BTreeSet::from([blinded(balance)])
+    );
+}
+
+// Its own PDA under another seed, another program's private PDA, and a regular private account.
+#[test]
+fn a_private_program_issues_no_grant_over_a_private_account_it_does_not_derive() {
+    let (keys, pda_keys, foreign_keys, regular_keys) =
+        (Keys::new(1), Keys::new(2), Keys::new(3), Keys::new(4));
+    let owner = holder(&keys);
+    let program = owner.program_account_id;
+    let seed = PdaSeed::new([5; 32]);
+    let custody = Actor::new(pda_keys.pda_id(program, seed), id(7));
+    let foreign = Actor::new(foreign_keys.pda_id(id(6), seed), id(7));
+    let regular = Actor::new(regular_keys.regular_id(), id(7));
+    let refused = |target: Actor, under: PdaSeed| {
+        let mut script = Script::default().on(
+            owner,
+            sending(vec![send_to(custody).with_pda_grant(target, under)]),
+        );
+        let result = private_part(
+            PublicExecutionContext::default(),
+            &[
+                keys.regular(false),
+                pda_keys.pda(program, seed),
+                foreign_keys.pda(id(6), seed),
+                regular_keys.regular(true),
+            ],
+            root(owner),
+            Vec::new(),
+            &mut script,
+        );
+        matches!(
+            result,
+            Err(ExecutionError::ForeignPdaGrant { actor }) if actor == target
+        )
+    };
+
+    assert!(refused(custody, PdaSeed::new([6; 32])));
+    assert!(refused(foreign, seed));
+    assert!(refused(regular, seed));
+}
+
+// Settlement holds no witness, so a private account a public program names is not known to it.
+#[test]
+fn a_public_program_issues_no_grant_over_a_private_account() {
+    let pda_keys = Keys::new(2);
+    let (pool, router) = (actor(1, 8), actor(2, 9));
+    let seed = PdaSeed::new([5; 32]);
+    let balance = Actor::new(pda_keys.pda_id(pool.program_account_id, seed), id(7));
+    let mut script = Script::default().on(
+        pool,
+        sending(vec![send_to(router).with_pda_grant(balance, seed)]),
+    );
+
+    let result = whole(
+        public_context(vec![pool, router]),
+        &[pda_keys.pda(pool.program_account_id, seed)],
+        root(pool),
+        &mut script,
+    );
+
+    assert!(matches!(
+        result,
+        Err(ExecutionError::UndeclaredActor { actor }) if actor == balance
+    ));
+}
+
 #[test]
 fn a_signer_grant_reaches_its_actor_only_where_attached() {
     let (signer, peer) = (actor(1, 9), actor(2, 9));

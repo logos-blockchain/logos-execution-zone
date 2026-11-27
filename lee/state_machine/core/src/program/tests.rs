@@ -439,3 +439,117 @@ fn a_transition_journal_frame_has_a_pinned_layout() {
 
     assert_eq!(transition.to_journal(), expected);
 }
+
+fn send(tag: u8) -> SyncMessage {
+    SyncMessage::new(
+        Actor::new(AccountId::new([tag; 32]), AccountId::new([tag; 32])),
+        &(),
+    )
+}
+
+fn two_sends(first: SyncMessage, second: SyncMessage) -> Transition {
+    Response {
+        sync_messages: vec![first, second],
+        ..Response::keep_state()
+    }
+    .into_transition(receive_input())
+}
+
+#[test]
+fn a_transition_journal_appends_its_pda_grants_after_the_pinned_layout() {
+    let actor = Actor::new(AccountId::new([2; 32]), AccountId::new([3; 32]));
+    let seed = PdaSeed::new([4; 32]);
+    let plain = two_sends(send(0), send(1));
+    let issuing = two_sends(send(0), send(1).with_pda_grant(actor, seed));
+    let legacy = plain.to_journal();
+
+    let extension: Vec<u8> = [
+        &[1][..],      // tag
+        &[1, 0, 0, 0], // entries: one sync message
+        &[1, 0, 0, 0], // its index
+        &[1, 0, 0, 0], // its requests: one
+        &[2; 32],      // actor.account_id
+        &[3; 32],      // actor.program_account_id
+        &[4; 32],      // seed
+    ]
+    .concat();
+    let expected = crate::to_frame(&[&legacy[4..], extension.as_slice()].concat());
+
+    assert_eq!(issuing.to_journal(), expected);
+    assert_eq!(Transition::from_journal(&expected).unwrap(), issuing);
+    assert_eq!(Transition::from_journal(&legacy).unwrap(), plain);
+}
+
+#[test]
+fn pda_grants_are_encoded_in_one_order_however_they_were_added() {
+    let issuing = |tags: [u8; 2]| {
+        tags.into_iter().fold(send(1), |message, tag| {
+            message.with_pda_grant(
+                Actor::new(AccountId::new([tag; 32]), AccountId::new([tag; 32])),
+                PdaSeed::new([tag; 32]),
+            )
+        })
+    };
+
+    assert_eq!(
+        two_sends(issuing([2, 3]), issuing([3, 2])).to_journal(),
+        two_sends(issuing([3, 2]), issuing([2, 3])).to_journal(),
+    );
+}
+
+#[test]
+fn a_malformed_pda_grant_extension_is_rejected() {
+    let legacy = two_sends(send(0), send(1)).to_journal();
+    let request: Vec<u8> = [[2; 32], [3; 32], [4; 32]].concat();
+    let later: Vec<u8> = [[2; 32], [3; 32], [5; 32]].concat();
+    let entry = |index: u8, requests: &[&[u8]]| {
+        [
+            &[index, 0, 0, 0][..],
+            &[u8::try_from(requests.len()).unwrap(), 0, 0, 0],
+            requests.concat().as_slice(),
+        ]
+        .concat()
+    };
+    let extension = |entries: &[Vec<u8>]| {
+        [
+            &[1, u8::try_from(entries.len()).unwrap(), 0, 0, 0][..],
+            entries.concat().as_slice(),
+        ]
+        .concat()
+    };
+    let rejection = |appended: &[u8]| {
+        let journal = crate::to_frame(&[&legacy[4..], appended].concat());
+        Transition::from_journal(&journal).unwrap_err().to_string()
+    };
+
+    assert_eq!(rejection(&[2]), "unknown transition journal extension");
+    assert_eq!(rejection(&extension(&[])), "empty PDA grant extension");
+    assert_eq!(
+        rejection(&extension(&[entry(0, &[])])),
+        "empty PDA grant entry"
+    );
+    assert_eq!(
+        rejection(&extension(&[entry(2, &[&request])])),
+        "PDA grants for a sync message that was not sent"
+    );
+    for unordered in [
+        extension(&[entry(1, &[&request]), entry(0, &[&request])]),
+        extension(&[entry(0, &[&request]), entry(0, &[&request])]),
+        extension(&[entry(0, &[&later, &request])]),
+        extension(&[entry(0, &[&request, &request])]),
+    ] {
+        assert_eq!(
+            rejection(&unordered),
+            "keys were not serialized in ascending order"
+        );
+    }
+    let complete = extension(&[entry(0, &[&request])]);
+    assert_eq!(
+        rejection(complete.split_last().unwrap().1),
+        "Unexpected length of input"
+    );
+    assert_eq!(
+        rejection(&[complete, vec![0]].concat()),
+        "Not all bytes read"
+    );
+}
