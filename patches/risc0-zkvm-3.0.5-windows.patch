@@ -1,0 +1,53 @@
+diff -ru a/src/host/client/prove/mod.rs b/src/host/client/prove/mod.rs
+--- a/src/host/client/prove/mod.rs
++++ b/src/host/client/prove/mod.rs
+@@ -14,6 +14,7 @@
+ 
+ #[cfg(feature = "bonsai")]
+ pub(crate) mod bonsai;
++#[cfg(unix)]
+ pub(crate) mod default;
+ pub(crate) mod external;
+ #[cfg(feature = "prove")]
+@@ -28,7 +29,9 @@
+ #[cfg(feature = "bonsai")]
+ use self::bonsai::BonsaiProver;
+ 
+-use self::{default::DefaultProver, external::ExternalProver, opts::ProverOpts};
++#[cfg(unix)]
++use self::default::DefaultProver;
++use self::{external::ExternalProver, opts::ProverOpts};
+ 
+ use crate::{
+     get_version, host::prove_info::ProveInfo, ExecutorEnv, Receipt, SessionInfo, VerifierContext,
+@@ -184,6 +187,7 @@
+     let explicit = std::env::var("RISC0_PROVER").unwrap_or_default();
+     if !explicit.is_empty() {
+         return match explicit.to_lowercase().as_str() {
++            #[cfg(unix)]
+             "actor" => Rc::new(DefaultProver::new(get_r0vm_path().unwrap()).unwrap()),
+             #[cfg(feature = "bonsai")]
+             "bonsai" => Rc::new(BonsaiProver::new("bonsai")),
+diff -ru a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -129,7 +129,6 @@
+         client::{
+             env::{ExecutorEnv, ExecutorEnvBuilder},
+             prove::{
+-                default::DefaultProver,
+                 default_executor, default_prover,
+                 external::ExternalProver,
+                 opts::{ProverOpts, ReceiptKind},
+@@ -140,6 +139,11 @@
+     risc0_circuit_rv32im::trace::{TraceCallback, TraceEvent},
+ };
+ 
++// The r0vm "actor" prover is a UnixStream socketpair; it has no Windows form.
++#[cfg(not(target_os = "zkvm"))]
++#[cfg(all(feature = "client", unix))]
++pub use self::host::client::prove::default::DefaultProver;
++
+ /// TODO
+ #[cfg(not(target_os = "zkvm"))]
+ #[cfg(feature = "client")]
