@@ -440,17 +440,9 @@ pub unsafe fn start_sequencer_ffi(
     let metrics_addr = c_string(&metrics_addr.to_string())?;
     let overrides = SequencerStartOverrides {
         config: config.as_ptr(),
-        create_channel: false,
-        wait_for_channel: false,
-        channel_signing_key_file: std::ptr::null(),
-        funding_public_key: std::ptr::null(),
-        bedrock_node_url: std::ptr::null(),
-        channel_id: std::ptr::null(),
         rpc_listen_address: rpc_addr.as_ptr(),
         metrics_listen_address: metrics_addr.as_ptr(),
-        gossip_listen_addr: std::ptr::null(),
-        gossip_bootstrap_peers: std::ptr::null(),
-        gossip_bootstrap_peers_len: 0,
+        ..SequencerStartOverrides::default()
     };
 
     // SAFETY: the caller guarantees `runtime` is null or valid, and the strings outlive the call.

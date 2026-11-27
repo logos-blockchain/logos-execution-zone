@@ -54,23 +54,27 @@ pub struct SequencerStartOverrides {
     pub gossip_bootstrap_peers_len: usize,
 }
 
-impl SequencerStartOverrides {
-    /// Overrides nothing.
-    const NONE: Self = Self {
-        config: std::ptr::null(),
-        create_channel: false,
-        wait_for_channel: false,
-        channel_signing_key_file: std::ptr::null(),
-        funding_public_key: std::ptr::null(),
-        bedrock_node_url: std::ptr::null(),
-        channel_id: std::ptr::null(),
-        rpc_listen_address: std::ptr::null(),
-        metrics_listen_address: std::ptr::null(),
-        gossip_listen_addr: std::ptr::null(),
-        gossip_bootstrap_peers: std::ptr::null(),
-        gossip_bootstrap_peers_len: 0,
-    };
+/// Overrides nothing.
+impl Default for SequencerStartOverrides {
+    fn default() -> Self {
+        Self {
+            config: std::ptr::null(),
+            create_channel: false,
+            wait_for_channel: false,
+            channel_signing_key_file: std::ptr::null(),
+            funding_public_key: std::ptr::null(),
+            bedrock_node_url: std::ptr::null(),
+            channel_id: std::ptr::null(),
+            rpc_listen_address: std::ptr::null(),
+            metrics_listen_address: std::ptr::null(),
+            gossip_listen_addr: std::ptr::null(),
+            gossip_bootstrap_peers: std::ptr::null(),
+            gossip_bootstrap_peers_len: 0,
+        }
+    }
+}
 
+impl SequencerStartOverrides {
     /// `start`'s options for `home` with these overrides.
     ///
     /// # Safety
@@ -246,7 +250,7 @@ unsafe fn setup_sequencer(
     // SAFETY: the caller guarantees `overrides` is null or valid, and so are its pointers.
     let args = match unsafe { overrides.as_ref() } {
         Some(overrides) => unsafe { overrides.to_start_args(home.into()) }?,
-        None => unsafe { SequencerStartOverrides::NONE.to_start_args(home.into()) }?,
+        None => unsafe { SequencerStartOverrides::default().to_start_args(home.into()) }?,
     };
 
     let start = || -> anyhow::Result<_> {
