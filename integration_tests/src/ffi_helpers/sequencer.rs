@@ -26,7 +26,7 @@ use core_ffi::{
     sequencer::{
         SequencerServiceFFI,
         api::{
-            lifecycle::InitializedSequencerServiceFFIResult,
+            lifecycle::{InitializedSequencerServiceFFIResult, SequencerStartOverrides},
             query::{ExecutorStatusResult, FfiExecutorState, LastBlockIdResult},
         },
     },
@@ -67,8 +67,8 @@ unsafe extern "C" {
 
     pub unsafe fn sequencer_ffi_start_sequencer(
         runtime: *const Runtime,
-        args: *const *const c_char,
-        args_len: usize,
+        home: *const c_char,
+        overrides: *const SequencerStartOverrides,
     ) -> InitializedSequencerServiceFFIResult;
 
     pub unsafe fn sequencer_ffi_query_account(
@@ -421,8 +421,8 @@ pub fn joining_setup_no_stake_on(
     })
 }
 
-/// Starts an FFI node as `sequencer_service start <home> --config <config_path>` would, serving
-/// its RPC on `rpc_addr` and its ops server on `metrics_addr`.
+/// Starts an FFI node out of `home` with the config at `config_path`, serving its RPC on
+/// `rpc_addr` and its ops server on `metrics_addr`.
 ///
 /// # Safety
 /// `runtime` must be null or a valid pointer to a [`Runtime`] that outlives the sequencer.
@@ -433,25 +433,28 @@ pub unsafe fn start_sequencer_ffi(
     rpc_addr: SocketAddr,
     metrics_addr: SocketAddr,
 ) -> Result<InitializedSequencerServiceFFIResult> {
-    let args = [
-        home.to_str().context("Home is not UTF-8")?.to_owned(),
-        "--config".to_owned(),
-        config_path
-            .to_str()
-            .context("Config path is not UTF-8")?
-            .to_owned(),
-        "--rpc-listen-address".to_owned(),
-        rpc_addr.to_string(),
-        "--metrics-listen-address".to_owned(),
-        metrics_addr.to_string(),
-    ]
-    .map(CString::new)
-    .into_iter()
-    .collect::<Result<Vec<_>, _>>()?;
-    let arg_ptrs: Vec<*const c_char> = args.iter().map(|arg| arg.as_ptr()).collect();
+    let c_string = |s: &str| CString::new(s).context("Interior NUL");
+    let home = c_string(home.to_str().context("Home is not UTF-8")?)?;
+    let config = c_string(config_path.to_str().context("Config path is not UTF-8")?)?;
+    let rpc_addr = c_string(&rpc_addr.to_string())?;
+    let metrics_addr = c_string(&metrics_addr.to_string())?;
+    let overrides = SequencerStartOverrides {
+        config: config.as_ptr(),
+        create_channel: false,
+        wait_for_channel: false,
+        channel_signing_key_file: std::ptr::null(),
+        funding_public_key: std::ptr::null(),
+        bedrock_node_url: std::ptr::null(),
+        channel_id: std::ptr::null(),
+        rpc_listen_address: rpc_addr.as_ptr(),
+        metrics_listen_address: metrics_addr.as_ptr(),
+        gossip_listen_addr: std::ptr::null(),
+        gossip_bootstrap_peers: std::ptr::null(),
+        gossip_bootstrap_peers_len: 0,
+    };
 
-    // SAFETY: the caller guarantees `runtime` is null or valid, and `args` outlives the call.
-    Ok(unsafe { sequencer_ffi_start_sequencer(runtime, arg_ptrs.as_ptr(), arg_ptrs.len()) })
+    // SAFETY: the caller guarantees `runtime` is null or valid, and the strings outlive the call.
+    Ok(unsafe { sequencer_ffi_start_sequencer(runtime, home.as_ptr(), &raw const overrides) })
 }
 
 /// Sets up blocking context with one leader node, and joins an FFI node that `start` starts from

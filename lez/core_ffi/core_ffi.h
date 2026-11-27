@@ -775,6 +775,67 @@ typedef struct PointerResult_SequencerServiceFFI__FfiOperationError {
 typedef struct PointerResult_SequencerServiceFFI__FfiOperationError InitializedSequencerServiceFFIResult;
 
 /**
+ * Overrides of what a sequencer starts with by default: `sequencer_service start`'s options
+ * besides its home, each overriding the config the same way.
+ *
+ * Every string is null-terminated UTF-8, and null keeps its default; zeroed, the struct overrides
+ * nothing. Unlike `start`, no option falls back to a `SEQUENCER_*` env var.
+ */
+typedef struct SequencerStartOverrides {
+  /**
+   * Null for `<home>/sequencer_config.json`, the config `sequencer_service setup` writes; that
+   * one keeps its genesis, as `setup` decided.
+   */
+  const char *config;
+  /**
+   * Keeps the genesis of `config`, so the channel is created if it does not exist. Needs
+   * `config`.
+   */
+  bool create_channel;
+  /**
+   * Waits for the channel to be created, instead of failing, when it does not exist yet and
+   * this node has no genesis to create it with.
+   */
+  bool wait_for_channel;
+  /**
+   * Null for `<home>/channel_signing_key`.
+   */
+  const char *channel_signing_key_file;
+  /**
+   * In hex. Null for the one in `<home>/bedrock_funding_public_key`.
+   */
+  const char *funding_public_key;
+  /**
+   * Overrides the config's `bedrock_config.node_url`.
+   */
+  const char *bedrock_node_url;
+  /**
+   * In hex. Overrides the config's `bedrock_config.channel_id`.
+   */
+  const char *channel_id;
+  /**
+   * `ip:port`. Null for `127.0.0.1:3040`. The RPC has no caller auth, so only widen it behind a
+   * firewall.
+   */
+  const char *rpc_listen_address;
+  /**
+   * `ip:port` serving `/ping`, `/health` and `/metrics`. Overrides the config's
+   * `metrics_listen_address`.
+   */
+  const char *metrics_listen_address;
+  /**
+   * Gossip's QUIC (UDP) `ip:port`. Turns gossip on if the config leaves it off.
+   */
+  const char *gossip_listen_addr;
+  /**
+   * `gossip_bootstrap_peers_len` peers, each `host:port` or a multiaddr; null when the length
+   * is zero. Any peers replace the config's `bootstrap_peers`, and turn gossip on.
+   */
+  const char *const *gossip_bootstrap_peers;
+  uintptr_t gossip_bootstrap_peers_len;
+} SequencerStartOverrides;
+
+/**
  * Result of [`query_last_block`], returned **inline** (no heap allocation, so
  * there is no corresponding `free_*` to call).
  *
@@ -1531,24 +1592,23 @@ void primitives_ffi_free_ffi_transaction_opt(struct FfiOption_FfiTransaction *va
 void primitives_ffi_free_ffi_transaction_vec(struct FfiVec_FfiTransaction *val);
 
 /**
- * Creates and starts a sequencer the way `sequencer_service start` does, taking the same
- * options.
+ * Creates and starts a sequencer out of `home` the way `sequencer_service start` does, with
+ * `overrides` over its defaults.
  *
- * `args` are `start`'s arguments without the program name, e.g. `["/var/lib/sequencer",
- * "--config", "/etc/sequencer/config.json"]`. Each option left out falls back to its
- * `SEQUENCER_<OPTION>` env var, then to the config, exactly as for `start`. That includes
- * serving the RPC on `--rpc-listen-address` and `/ping`, `/health` and `/metrics` on the
- * config's `metrics_listen_address`.
+ * That includes serving the RPC on `rpc_listen_address`, and `/ping`, `/health` and `/metrics` on
+ * the metrics address.
  *
- * Blocks until the sequencer has started, which with `--wait-for-channel` lasts until the
- * channel exists.
+ * Blocks until the sequencer has started, which with `wait_for_channel` lasts until the channel
+ * exists.
  *
  * # Arguments
  *
  * - `runtime`: A runtime for the sequencer to run on, or null to have the sequencer create and own
  *   one.
- * - `args`: Pointer to `args_len` null-terminated strings, or null when `args_len` is zero.
- * - `args_len`: The number of strings in `args`.
+ * - `home`: The sequencer's home: it holds the database, and by default the config
+ *   (`<home>/sequencer_config.json`) and keys.
+ * - `overrides`: What to start with other than the defaults, see [`SequencerStartOverrides`]; null
+ *   for none.
  *
  * # Returns
  *
@@ -1558,11 +1618,13 @@ void primitives_ffi_free_ffi_transaction_vec(struct FfiVec_FfiTransaction *val);
  * # Safety
  * The caller must ensure that:
  * - `runtime` is either null or a valid pointer to a [`Runtime`] that outlives the sequencer.
- * - `args` points to `args_len` valid pointers to null-terminated C strings.
+ * - `home` is a valid pointer to a null-terminated UTF-8 string.
+ * - `overrides` is null or a valid pointer, whose own pointers are each null or valid as
+ *   documented.
  */
 InitializedSequencerServiceFFIResult sequencer_ffi_start_sequencer(const struct Runtime *runtime,
-                                                                   const char *const *args,
-                                                                   uintptr_t args_len);
+                                                                   const char *home,
+                                                                   const struct SequencerStartOverrides *overrides);
 
 /**
  * Whether every task of the sequencer is still running, as its `/health` reports.

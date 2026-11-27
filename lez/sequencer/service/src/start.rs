@@ -2,7 +2,7 @@
 //! take the same options, env vars included.
 
 use std::{
-    net::{IpAddr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     path::PathBuf,
 };
 
@@ -16,6 +16,10 @@ use crate::SequencerConfig;
 
 /// The config a home holds, written by `setup`.
 pub const CONFIG_FILE: &str = "sequencer_config.json";
+
+/// Where the RPC listens unless told otherwise.
+pub const DEFAULT_RPC_LISTEN_ADDRESS: SocketAddr =
+    SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 3040);
 
 /// Each option also reads `SEQUENCER_<OPTION>`. A flag wins over its env var, and both win over
 /// the config.
@@ -52,7 +56,7 @@ pub struct StartArgs {
     #[clap(
         long,
         env = "SEQUENCER_RPC_LISTEN_ADDRESS",
-        default_value = "127.0.0.1:3040"
+        default_value_t = DEFAULT_RPC_LISTEN_ADDRESS
     )]
     pub rpc_listen_address: SocketAddr,
     /// Overrides the config's `metrics_listen_address`.
