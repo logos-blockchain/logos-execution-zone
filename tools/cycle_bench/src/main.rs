@@ -43,7 +43,6 @@ use lee_core::{
         ExecutionEnvironment, PublicExecutionContext, TransactionEntry, TransitionView,
         WholeExecution,
     },
-    from_frame,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID, encode_balance},
     program::{MessageData, PROGRAM_LOADER_ACCOUNT_ID, ReceiveInput, Transition},
 };
@@ -346,8 +345,7 @@ impl ExecutionEnvironment for Meter {
             |env| Ok(Program::write_receive_input(input, env)?),
         )?;
         self.rows.push(row);
-        let payload = from_frame(&journal).ok_or_else(|| anyhow!("malformed journal frame"))?;
-        Ok(borsh::from_slice(payload)?)
+        Ok(Transition::from_journal(&journal)?)
     }
 
     fn public_actor_state(&mut self, actor: Actor) -> Result<ActorState> {
