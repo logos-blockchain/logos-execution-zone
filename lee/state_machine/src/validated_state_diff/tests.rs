@@ -297,6 +297,7 @@ fn a_sent_transitions_nonzero_exit_adds_its_cycles_to_its_senders() {
                 message: Vec::new(),
                 pda_seeds: BTreeSet::new(),
                 grants: BTreeSet::new(),
+                pda_grants: BTreeSet::new(),
             })
         });
         let tx = public_tx(

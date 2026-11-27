@@ -397,6 +397,7 @@ fn a_transition_journal_frame_has_a_pinned_layout() {
                     AccountId::new([5; 32]),
                     AccountId::new([6; 32]),
                 )]),
+                pda_grants: BTreeSet::new(),
             }],
             async_messages: Vec::new(),
             events: Vec::new(),

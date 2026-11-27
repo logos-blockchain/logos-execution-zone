@@ -1,22 +1,27 @@
 #[cfg(feature = "host")]
-use std::io::{self, Cursor};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io::{self, Cursor},
+};
 
 #[cfg(feature = "host")]
 use crate::Nullifier;
 #[cfg(feature = "host")]
-use crate::account::ActorState;
+use crate::account::{Actor, ActorState};
 #[cfg(feature = "host")]
 use crate::encryption::EphemeralPublicKey;
 #[cfg(feature = "host")]
 use crate::error::LeeCoreError;
 #[cfg(feature = "host")]
-use crate::program::{ReceiveInput, SyncMessage};
+use crate::program::{PdaSeed, ReceiveInput, SyncMessage};
 use crate::{
     Commitment, NullifierPublicKey,
     account::{Account, AccountId},
     encryption::Ciphertext,
     program::{Response, Transition},
 };
+
+const PDA_GRANTS_TAG: u8 = 1;
 
 impl Account {
     /// Serializes the account to bytes.
@@ -144,6 +149,22 @@ impl Transition {
             .expect(INFALLIBLE);
         }
         borsh::to_writer(&mut journal, &(async_messages, events, validity)).expect(INFALLIBLE);
+        let issuing = || {
+            sync_messages
+                .iter()
+                .zip(0_u32..)
+                .filter(|(sync_message, _)| !sync_message.pda_grants.is_empty())
+        };
+        let entry_count =
+            u32::try_from(issuing().count()).expect("bounded by the sync message count");
+        if entry_count > 0 {
+            journal.push(PDA_GRANTS_TAG);
+            borsh::to_writer(&mut journal, &entry_count).expect(INFALLIBLE);
+            for (sync_message, index) in issuing() {
+                borsh::to_writer(&mut journal, &(index, &sync_message.pda_grants))
+                    .expect(INFALLIBLE);
+            }
+        }
         let payload_len = journal
             .len()
             .checked_sub(4)
@@ -172,9 +193,29 @@ impl Transition {
                 message,
                 pda_seeds,
                 grants,
+                pda_grants: BTreeSet::new(),
             });
         }
         let (async_messages, events, validity) = <(_, _, _)>::deserialize(&mut payload)?;
+        if !payload.is_empty() {
+            let malformed = |reason: &str| io::Error::new(io::ErrorKind::InvalidData, reason);
+            if u8::deserialize(&mut payload)? != PDA_GRANTS_TAG {
+                return Err(malformed("unknown transition journal extension"));
+            }
+            let entries = BTreeMap::<u32, BTreeSet<(Actor, PdaSeed)>>::deserialize(&mut payload)?;
+            if entries.is_empty() {
+                return Err(malformed("empty PDA grant extension"));
+            }
+            for (index, pda_grants) in entries {
+                let sync_message = sync_messages
+                    .get_mut(usize::try_from(index).unwrap_or(usize::MAX))
+                    .ok_or_else(|| malformed("PDA grants for a sync message that was not sent"))?;
+                if pda_grants.is_empty() {
+                    return Err(malformed("empty PDA grant entry"));
+                }
+                sync_message.pda_grants = pda_grants;
+            }
+        }
         if !payload.is_empty() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,

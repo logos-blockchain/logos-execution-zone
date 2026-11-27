@@ -141,6 +141,7 @@ impl From<ExecutionError> for LeeError {
             | ExecutionError::MissingPredictedCrossMessages { .. }
             | ExecutionError::UnmarkedPrivateSigner { .. }
             | ExecutionError::UnheldGrant { .. }
+            | ExecutionError::ForeignPdaGrant { .. }
             | ExecutionError::UnusedPredictedCrossMessages
             | ExecutionError::UnwitnessedFeePayer { .. }
             | ExecutionError::FeePayerWithoutAuthorization { .. }

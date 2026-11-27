@@ -349,6 +349,8 @@ pub struct SyncMessage {
     pub pda_seeds: BTreeSet<PdaSeed>,
     /// Grants the sender attaches, each over an actor whose grant it holds.
     pub grants: BTreeSet<Actor>,
+    /// Grants the sender issues, each over an actor of its program's PDA under the paired seed.
+    pub pda_grants: BTreeSet<(Actor, PdaSeed)>,
 }
 
 impl SyncMessage {
@@ -358,6 +360,7 @@ impl SyncMessage {
             message: borsh::to_vec(message).expect("borsh serialization is infallible"),
             pda_seeds: BTreeSet::new(),
             grants: BTreeSet::new(),
+            pda_grants: BTreeSet::new(),
         }
     }
 
@@ -370,6 +373,12 @@ impl SyncMessage {
     #[must_use]
     pub fn with_grants(mut self, grants: impl IntoIterator<Item = Actor>) -> Self {
         self.grants.extend(grants);
+        self
+    }
+
+    #[must_use]
+    pub fn with_pda_grant(mut self, actor: Actor, seed: PdaSeed) -> Self {
+        self.pda_grants.insert((actor, seed));
         self
     }
 

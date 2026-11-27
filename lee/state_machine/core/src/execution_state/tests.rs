@@ -303,6 +303,7 @@ fn send_to(receiver: Actor) -> SyncMessage {
         message: Vec::new(),
         pda_seeds: BTreeSet::new(),
         grants: BTreeSet::new(),
+        pda_grants: BTreeSet::new(),
     }
 }
 
@@ -313,6 +314,7 @@ fn enter(message: &[u8]) -> SyncMessage {
         message: message.to_vec(),
         pda_seeds: BTreeSet::new(),
         grants: BTreeSet::new(),
+        pda_grants: BTreeSet::new(),
     }
 }
 
@@ -1505,6 +1507,7 @@ fn a_private_root_records_its_public_call_and_the_predicted_reply() {
         message: b"credit".to_vec(),
         pda_seeds: BTreeSet::new(),
         grants: BTreeSet::new(),
+        pda_grants: BTreeSet::new(),
     };
     let reply = delivery(vault, owner, b"credit");
     let event = ProgramEvent {
@@ -2696,6 +2699,7 @@ fn sync_message(to: Actor, message: &[u8]) -> SyncMessage {
         message: message.to_vec(),
         pda_seeds: BTreeSet::new(),
         grants: BTreeSet::new(),
+        pda_grants: BTreeSet::new(),
     }
 }
 

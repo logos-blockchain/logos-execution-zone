@@ -277,6 +277,7 @@ mod tests {
                 message: borsh::to_vec(&transfer(7)).unwrap(),
                 pda_seeds: BTreeSet::from([seed]),
                 grants: BTreeSet::new(),
+                pda_grants: BTreeSet::new(),
             }
         );
     }

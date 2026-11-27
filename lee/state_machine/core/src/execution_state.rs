@@ -285,6 +285,11 @@ pub enum ExecutionError {
     UnheldGrant { actor: Actor },
 
     #[error(
+        "A sync message issues a grant over {actor:?}, which its sender's program does not derive under the given seed"
+    )]
+    ForeignPdaGrant { actor: Actor },
+
+    #[error(
         "Predicted cross messages were supplied for public segments the execution never entered"
     )]
     UnusedPredictedCrossMessages,
@@ -1336,6 +1341,30 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
             .collect()
     }
 
+    // A program issues a grant only over an actor of its own PDA: a declared public actor, or a
+    // witnessed private one when the issuing transition is itself private.
+    fn issue(&mut self, issuer: Actor, target: Actor, seed: PdaSeed) -> Result<(), ExecutionError> {
+        let program = issuer.program_account_id;
+        let account_id = self.resolve(target).account_id;
+        let derived = match self.accounts.get(&account_id) {
+            Some(AccountEntry::Public { .. }) if self.public_context.runs_publicly(target) => {
+                AccountId::for_public_pda(&program, &seed) == account_id
+            }
+            Some(AccountEntry::Private { witness_index, .. })
+                if self.is_private(&issuer.account_id) =>
+            {
+                self.witnesses[*witness_index].pda_binding() == Some((program, seed))
+            }
+            Some(AccountEntry::Public { .. } | AccountEntry::Private { .. }) | None => {
+                return Err(ExecutionError::UndeclaredActor { actor: target });
+            }
+        };
+        if !derived {
+            return Err(ExecutionError::ForeignPdaGrant { actor: target });
+        }
+        bind_family(&mut self.pda_family_binding, program, seed, account_id)
+    }
+
     // A private sender's grant over its own account carries the address it sends from; one over
     // another private account crossing to the public side is presented anew.
     fn present_grants<E: ExecutionEnvironment>(
@@ -1479,9 +1508,14 @@ impl<'witnesses, M: Mode> Executor<'witnesses, M> {
             message,
             pda_seeds,
             grants: attached,
+            pda_grants,
         } in transition.response.sync_messages
         {
-            let attached = self.attach(actor, &grants, attached)?;
+            let mut attached = self.attach(actor, &grants, attached)?;
+            for (target, seed) in pda_grants {
+                self.issue(actor, target, seed)?;
+                attached.insert(target);
+            }
             // A private call to another actor of its own account names the account as is: the call
             // stays in the proof, and the receiver holds the caller's grant under the account.
             let within_account = private_sender

@@ -18,5 +18,6 @@ fn handle_message(input: &ReceiveInput) -> Response {
         message: input.message.clone(),
         pda_seeds: BTreeSet::new(),
         grants: BTreeSet::new(),
+        pda_grants: BTreeSet::new(),
     })
 }

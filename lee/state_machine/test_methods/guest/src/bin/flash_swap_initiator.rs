@@ -131,6 +131,7 @@ fn answer(input: &ReceiveInput, mut pending: Vec<Phase>, reply: &StateReply) -> 
                     message: callback_message,
                     pda_seeds: BTreeSet::new(),
                     grants: BTreeSet::new(),
+                    pda_grants: BTreeSet::new(),
                 })
                 .send(read_vault(vault))
         }
