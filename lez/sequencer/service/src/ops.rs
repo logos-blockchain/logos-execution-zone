@@ -3,7 +3,7 @@
 
 use std::{
     net::SocketAddr,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock, Weak},
     time::Duration,
 };
 
@@ -22,7 +22,7 @@ use crate::SequencerHandle;
 pub struct OpsServer {
     server: JoinHandle<Result<()>>,
     upkeep: JoinHandle<()>,
-    sequencer: Arc<OnceLock<Arc<SequencerHandle>>>,
+    sequencer: Arc<OnceLock<Weak<SequencerHandle>>>,
     shutdown: CancellationToken,
 }
 
@@ -66,11 +66,14 @@ impl OpsServer {
     }
 
     /// Turns `/health` from starting to the sequencer's own health.
-    pub fn set_sequencer(&self, sequencer: Arc<SequencerHandle>) {
-        self.sequencer.get_or_init(|| sequencer);
+    ///
+    /// Only a [`Weak`] is kept, so the ops server never owns the sequencer: its owner can shut the
+    /// handle down whenever, and `/health` then reports stopping.
+    pub fn set_sequencer(&self, sequencer: &Arc<SequencerHandle>) {
+        self.sequencer.get_or_init(|| Arc::downgrade(sequencer));
     }
 
-    /// Stops serving and lets go of the sequencer, so its handle can be shut down.
+    /// Stops serving.
     pub async fn stop(self) {
         self.shutdown.cancel();
         match self.server.await {
@@ -85,7 +88,7 @@ impl OpsServer {
 #[derive(Clone)]
 struct Ops {
     metrics: PrometheusHandle,
-    sequencer: Arc<OnceLock<Arc<SequencerHandle>>>,
+    sequencer: Arc<OnceLock<Weak<SequencerHandle>>>,
 }
 
 /// Binds first, so a taken or invalid address fails `start` instead of a background task.
@@ -100,7 +103,7 @@ async fn bind(address: SocketAddr) -> Result<TcpListener> {
 async fn serve(
     listener: TcpListener,
     metrics: PrometheusHandle,
-    sequencer: Arc<OnceLock<Arc<SequencerHandle>>>,
+    sequencer: Arc<OnceLock<Weak<SequencerHandle>>>,
     shutdown: CancellationToken,
 ) -> Result<()> {
     let router = Router::new()
@@ -114,13 +117,14 @@ async fn serve(
         .context("Ops server failed")
 }
 
-/// 503 while starting, and once any of the sequencer's tasks has died. Gossip is not part of it:
-/// without gossip the node keeps running on L1 alone.
+/// 503 while starting, once any of the sequencer's tasks has died, and once its handle is gone.
+/// Gossip is not part of it: without gossip the node keeps running on L1 alone.
 async fn health(State(ops): State<Ops>) -> (StatusCode, Json<Value>) {
-    let (code, status) = match ops.sequencer.get() {
+    let (code, status) = match ops.sequencer.get().map(Weak::upgrade) {
         None => (StatusCode::SERVICE_UNAVAILABLE, "starting"),
-        Some(sequencer) if sequencer.is_healthy() => (StatusCode::OK, "ok"),
-        Some(_) => (StatusCode::SERVICE_UNAVAILABLE, "failing"),
+        Some(None) => (StatusCode::SERVICE_UNAVAILABLE, "stopping"),
+        Some(Some(sequencer)) if sequencer.is_healthy() => (StatusCode::OK, "ok"),
+        Some(Some(_)) => (StatusCode::SERVICE_UNAVAILABLE, "failing"),
     };
     (code, Json(json!({ "status": status })))
 }

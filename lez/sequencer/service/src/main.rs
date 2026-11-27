@@ -189,7 +189,7 @@ async fn start(args: StartArgs, traces: Option<&traces::Traces>) -> Result<()> {
         }
     };
     if let Some(ops_server) = &ops_server {
-        ops_server.set_sequencer(Arc::clone(&sequencer_handle));
+        ops_server.set_sequencer(&sequencer_handle);
     }
 
     tokio::select! {
@@ -208,10 +208,12 @@ async fn start(args: StartArgs, traces: Option<&traces::Traces>) -> Result<()> {
     if let Some(ops_server) = ops_server {
         ops_server.stop().await;
     }
-    Arc::into_inner(sequencer_handle)
-        .expect("the ops server, the only other holder, has stopped")
-        .shutdown()
-        .await;
+    // The ops server only holds a `Weak`, so this is the last strong reference.
+    if let Some(handle) = Arc::into_inner(sequencer_handle) {
+        handle.shutdown().await;
+    } else {
+        error!("Sequencer handle still shared, dropping it without waiting for shutdown");
+    }
 
     info!("Sequencer shutdown complete");
 

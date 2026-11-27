@@ -277,7 +277,7 @@ unsafe fn setup_sequencer(
                 Ok(handle) => {
                     let handle = Arc::new(handle);
                     if let Some(ops) = &ops {
-                        ops.set_sequencer(Arc::clone(&handle));
+                        ops.set_sequencer(&handle);
                     }
                     Ok((handle, ops))
                 }

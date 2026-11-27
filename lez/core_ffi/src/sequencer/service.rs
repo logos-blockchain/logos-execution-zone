@@ -82,15 +82,20 @@ impl Drop for SequencerServiceFFI {
         if !self.handle.is_null() {
             let Inner { handle, ops } = *unsafe { Box::from_raw(self.handle.cast::<Inner>()) };
             self.runtime.block_on(async move {
-                // The ops server holds the handle too, so it goes first.
+                // Stop serving `/health` before the sequencer behind it goes away.
                 if let Some(ops) = ops {
                     ops.stop().await;
                 }
-                // The handle stops the actors in dependency order and waits for each.
-                Arc::into_inner(handle)
-                    .expect("the ops server, the only other holder, has stopped")
-                    .shutdown()
-                    .await;
+                // The handle stops the actors in dependency order and waits for each. The ops
+                // server only holds a `Weak`, so this is the last strong reference; never panic
+                // here regardless, as this runs under an `extern "C"` fn.
+                if let Some(handle) = Arc::into_inner(handle) {
+                    handle.shutdown().await;
+                } else {
+                    tracing::error!(
+                        "Sequencer handle still shared, dropping it without waiting for shutdown"
+                    );
+                }
             });
         }
 
