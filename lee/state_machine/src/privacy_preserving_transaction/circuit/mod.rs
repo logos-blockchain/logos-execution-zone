@@ -29,6 +29,9 @@ use crate::{
     validated_state_diff::{charged_cycles, run_program_loader},
 };
 
+/// Borsh tag of `InnerReceipt::Composite`.
+const COMPOSITE_RECEIPT_TAG: u8 = 0;
+
 /// Proof of the privacy preserving execution circuit.
 #[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Proof(pub(crate) Vec<u8>);
@@ -61,6 +64,10 @@ impl Proof {
         public_context: &PublicExecutionContext,
         execution: &ProvenExecution,
     ) -> bool {
+        // Refused by tag: decoding a composite receipt recurses without bound.
+        if self.0.first() == Some(&COMPOSITE_RECEIPT_TAG) {
+            return false;
+        }
         let Ok(inner) = borsh::from_slice::<InnerReceipt>(&self.0) else {
             return false;
         };
