@@ -3,7 +3,6 @@ use std::borrow::Cow;
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
     account::{AccountId, ActorState, Cycles},
-    from_frame,
     program::{MessageData, ProgramId, ReceiveInput, Transition},
     to_frame,
 };
@@ -227,8 +226,5 @@ pub fn load_program<'state>(
 }
 
 pub(crate) fn transition_journal(journal: &[u8]) -> Result<Transition, LeeError> {
-    let payload = from_frame(journal).ok_or_else(|| {
-        LeeError::ProgramExecutionFailed("malformed program journal frame".to_owned())
-    })?;
-    borsh::from_slice(payload).map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))
+    Transition::from_journal(journal).map_err(|e| LeeError::ProgramExecutionFailed(e.to_string()))
 }

@@ -61,15 +61,11 @@ fn journal_is_the_borsh_frame_of_the_transition_and_echoes_the_message() {
         .execute(env_builder.build().unwrap(), program.elf())
         .unwrap();
 
-    let payload = lee_core::from_frame(&session_info.journal.bytes).unwrap();
-    let transition: Transition = borsh::from_slice(payload).unwrap();
+    let transition = Transition::from_journal(&session_info.journal.bytes).unwrap();
 
-    // The journal must be byte-identical to `to_frame(borsh(transition))`: the privacy circuit
-    // reconstructs exactly these bytes for `env::verify`, so any drift breaks recursion.
-    assert_eq!(
-        session_info.journal.bytes,
-        lee_core::to_frame(&borsh::to_vec(&transition).unwrap())
-    );
+    // The journal must be byte-identical to the transition's journal encoding: the privacy
+    // circuit reconstructs exactly these bytes for `env::verify`, so any drift breaks recursion.
+    assert_eq!(session_info.journal.bytes, transition.to_journal());
     // The guest must echo the message bytes verbatim: delivery binding compares them.
     assert_eq!(transition.input.message, input.message);
 }

@@ -473,7 +473,7 @@ impl From<&ReceiveInput> for StateReply {
 }
 
 /// An i/o pair representing actor processing a given message.
-#[derive(Clone, BorshSerialize, BorshDeserialize)]
+#[derive(Clone)]
 #[cfg_attr(any(feature = "host", test), derive(Debug, PartialEq, Eq))]
 #[must_use = "a Transition does nothing unless committed"]
 pub struct Transition {
@@ -483,7 +483,7 @@ pub struct Transition {
 
 impl Transition {
     pub fn commit(&self) {
-        env::commit_slice(&crate::to_borsh_frame(self));
+        env::commit_slice(&self.to_journal());
     }
 }
 

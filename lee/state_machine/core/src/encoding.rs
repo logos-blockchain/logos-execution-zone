@@ -1,16 +1,21 @@
 #[cfg(feature = "host")]
-use std::io::Cursor;
+use std::io::{self, Cursor};
 
 #[cfg(feature = "host")]
 use crate::Nullifier;
 #[cfg(feature = "host")]
+use crate::account::ActorState;
+#[cfg(feature = "host")]
 use crate::encryption::EphemeralPublicKey;
 #[cfg(feature = "host")]
 use crate::error::LeeCoreError;
+#[cfg(feature = "host")]
+use crate::program::{ReceiveInput, SyncMessage};
 use crate::{
     Commitment, NullifierPublicKey,
     account::{Account, AccountId},
     encryption::Ciphertext,
+    program::{Response, Transition},
 };
 
 impl Account {
@@ -102,6 +107,90 @@ impl AccountId {
     #[must_use]
     pub const fn to_bytes(&self) -> [u8; 32] {
         *self.value()
+    }
+}
+
+impl Transition {
+    #[must_use]
+    pub fn to_journal(&self) -> Vec<u8> {
+        const INFALLIBLE: &str = "borsh serialization is infallible";
+
+        let Self {
+            input,
+            response:
+                Response {
+                    post_state,
+                    sync_messages,
+                    async_messages,
+                    events,
+                    validity,
+                },
+        } = self;
+        let mut journal = vec![0; 4];
+        borsh::to_writer(&mut journal, &(input, post_state)).expect(INFALLIBLE);
+        let sync_message_count =
+            u32::try_from(sync_messages.len()).expect("sync message count fits in u32");
+        borsh::to_writer(&mut journal, &sync_message_count).expect(INFALLIBLE);
+        for sync_message in sync_messages {
+            borsh::to_writer(
+                &mut journal,
+                &(
+                    &sync_message.to,
+                    &sync_message.message,
+                    &sync_message.pda_seeds,
+                    &sync_message.grants,
+                ),
+            )
+            .expect(INFALLIBLE);
+        }
+        borsh::to_writer(&mut journal, &(async_messages, events, validity)).expect(INFALLIBLE);
+        let payload_len = journal
+            .len()
+            .checked_sub(4)
+            .and_then(|len| u32::try_from(len).ok())
+            .expect("frame payload length must fit in u32");
+        journal[..4].copy_from_slice(&payload_len.to_le_bytes());
+        journal
+    }
+
+    #[cfg(feature = "host")]
+    pub fn from_journal(journal: &[u8]) -> io::Result<Self> {
+        use borsh::BorshDeserialize as _;
+
+        let mut payload = crate::from_frame(journal).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "malformed program journal frame",
+            )
+        })?;
+        let (input, post_state) = <(ReceiveInput, Option<ActorState>)>::deserialize(&mut payload)?;
+        let mut sync_messages = Vec::new();
+        for _ in 0..u32::deserialize(&mut payload)? {
+            let (to, message, pda_seeds, grants) = <(_, _, _, _)>::deserialize(&mut payload)?;
+            sync_messages.push(SyncMessage {
+                to,
+                message,
+                pda_seeds,
+                grants,
+            });
+        }
+        let (async_messages, events, validity) = <(_, _, _)>::deserialize(&mut payload)?;
+        if !payload.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Not all bytes read",
+            ));
+        }
+        Ok(Self {
+            input,
+            response: Response {
+                post_state,
+                sync_messages,
+                async_messages,
+                events,
+                validity,
+            },
+        })
     }
 }
 

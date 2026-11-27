@@ -74,7 +74,7 @@ impl ExecutionEnvironment for PrivateBackend {
             .next()
             .expect("a scheduled transition must carry its response")
             .into_transition(input.clone());
-        env::verify(image_id, &lee_core::to_borsh_frame(&transition))
+        env::verify(image_id, &transition.to_journal())
             .unwrap_or_else(|_: Infallible| unreachable!("Infallible error is never constructed"));
         Ok(transition)
     }

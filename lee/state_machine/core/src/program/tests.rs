@@ -436,5 +436,5 @@ fn a_transition_journal_frame_has_a_pinned_layout() {
     ]
     .concat();
 
-    assert_eq!(crate::to_borsh_frame(&transition), expected);
+    assert_eq!(transition.to_journal(), expected);
 }
