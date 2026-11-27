@@ -313,10 +313,14 @@ mod tests {
     fn setup_prepares_a_home_start_accepts() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path().join("home");
-        let config = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../sequencer/service/networks/local.json"
-        );
+        // `local.json` without its `home`: setup and start supply that themselves.
+        let mut template: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../sequencer/service/networks/local.json"
+        ))
+        .unwrap();
+        template.as_object_mut().unwrap().remove("home").unwrap();
+        let config = dir.path().join("config.json");
+        std::fs::write(&config, template.to_string()).unwrap();
         let args =
             serde_json::json!({ "config": config, "funding_public_key": FUNDING_PUBLIC_KEY })
                 .to_string();
