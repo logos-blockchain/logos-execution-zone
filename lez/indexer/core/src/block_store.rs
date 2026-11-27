@@ -1,12 +1,14 @@
-use std::{path::Path, sync::Arc};
+use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 use anyhow::{Context as _, Result, ensure};
 use chain_state::{
-    AcceptOutcome, BlockIngestError, StallReason, Tip, apply_block_to_state, validate_against_tip,
+    AcceptOutcome, BlockIngestError, StallReason, Tip, apply_block_to_state,
+    check_injected_deposits, validate_against_tip,
 };
 use common::{
+    HashType,
     block::{BedrockStatus, Block, BlockHeader, TransactionReceipt},
-    transaction::{LeeTransaction, TxEvents},
+    transaction::{LeeTransaction, TxEvents, injected_deposit_op_id},
 };
 use lee::{Account, AccountId, Actor, V03State};
 use lee_core::BlockId;
@@ -22,6 +24,8 @@ pub struct IndexerStore {
     dbio: Arc<RocksDBIO>,
     current_state: Arc<RwLock<V03State>>,
     filter_segments: Vec<(EventFilter, BlockId)>,
+    /// Final L1 deposits not yet minted, by op id, each with the hash of the mint it backs.
+    l1_deposits: Arc<RwLock<BTreeMap<[u8; 32], HashType>>>,
 }
 
 impl IndexerStore {
@@ -59,6 +63,10 @@ impl IndexerStore {
 
         let current_state = dbio.final_state()?;
         let filter_segments = reconcile_filter_segments(&dbio, event_filter)?;
+        let l1_deposits = match dbio.get_l1_deposits_bytes()? {
+            Some(bytes) => borsh::from_slice(&bytes)?,
+            None => BTreeMap::new(),
+        };
         if filter_segments
             .last()
             .is_some_and(|(filter, _)| filter.keeps_nothing())
@@ -73,6 +81,7 @@ impl IndexerStore {
             dbio: Arc::new(dbio),
             current_state: Arc::new(RwLock::new(current_state)),
             filter_segments,
+            l1_deposits: Arc::new(RwLock::new(l1_deposits)),
         })
     }
 
@@ -301,6 +310,15 @@ impl IndexerStore {
         self.set_stall_reason(&Some(stall))
     }
 
+    /// Records a final L1 deposit and the mint it backs, durably, before the cursor passes it.
+    pub async fn record_l1_deposit(&self, op_id: [u8; 32], mint: HashType) -> Result<()> {
+        let mut deposits = self.l1_deposits.write().await;
+        deposits.insert(op_id, mint);
+        self.dbio
+            .put_l1_deposits_bytes(&borsh::to_vec(&*deposits)?)
+            .context("Failed to persist L1 deposits")
+    }
+
     /// Validates `block` against the tip and, if it chains, applies it atomically
     /// (scratch clone, commit only on full success) and advances the tip.
     /// Retryable apply failures return `RetryableFailure` without recording a stall
@@ -319,7 +337,12 @@ impl IndexerStore {
 
         // Validate before paying for the scratch clone; validation failures
         // are never retryable, so parking immediately is exact.
-        if let Err(err) = validate_against_tip(tip.as_ref(), block) {
+        let validated = {
+            let deposits = self.l1_deposits.read().await;
+            validate_against_tip(tip.as_ref(), block)
+                .and_then(|()| check_injected_deposits(block, |op_id| deposits.get(op_id).copied()))
+        };
+        if let Err(err) = validated {
             self.record_stall(Some(&block.header), l1_slot, err.clone())?;
             return Ok(AcceptOutcome::Parked(err));
         }
@@ -348,6 +371,25 @@ impl IndexerStore {
 
         // Commit in-memory state (infallible) only after the DB write succeeded.
         *self.current_state.write().await = scratch;
+        let minted: Vec<_> = block
+            .body
+            .transactions
+            .iter()
+            .filter_map(injected_deposit_op_id)
+            .collect();
+        if !minted.is_empty() {
+            let mut deposits = self.l1_deposits.write().await;
+            for op_id in &minted {
+                deposits.remove(op_id);
+            }
+            // A minted entry left behind is harmless: its receipt refuses a second mint.
+            if let Err(err) = self.dbio.put_l1_deposits_bytes(&borsh::to_vec(&*deposits)?) {
+                warn!(
+                    error = format_args!("{err:#}"),
+                    "Failed to prune minted L1 deposits"
+                );
+            }
+        }
         // Best-effort: the block is durably applied, so a failed stall clear must not
         // fail the apply. It self-heals on the next clear.
         if let Err(err) = self.clear_stall_if_present() {
@@ -1721,6 +1763,52 @@ mod accept_tests {
     }
 
     #[tokio::test]
+    async fn an_unbacked_deposit_parks_and_a_recorded_one_survives_a_reopen() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let receipt = Actor::new(
+            lee::AccountId::new([1_u8; 32]),
+            programs::bridge_account_id(),
+        );
+        let mint = common::transaction::LeeTransaction::Public(lee::PublicTransaction::new(
+            lee::public_transaction::Message::try_new(
+                receipt,
+                vec![(receipt, lee::Authority::None)],
+                std::collections::BTreeMap::new(),
+                bridge_core::Message::Deposit {
+                    l1_deposit_op_id: [7_u8; 32],
+                    recipient_id: lee::AccountId::new([3_u8; 32]),
+                    amount: 5,
+                },
+            )
+            .expect("valid message"),
+            lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+        ));
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let block = produce_dummy_block(2, Some(genesis.header.hash), vec![mint.clone()]);
+        {
+            let store = open_default(dir.path());
+            store.accept_block(&genesis, Slot::from(0)).await.unwrap();
+            let outcome = store.accept_block(&block, Slot::from(0)).await.unwrap();
+            assert!(matches!(
+                outcome,
+                AcceptOutcome::Parked(BlockIngestError::UnbackedDeposit { tx_index: 0, .. })
+            ));
+            store
+                .record_l1_deposit([7_u8; 32], mint.hash())
+                .await
+                .unwrap();
+        }
+
+        // Reopened, the deposit still backs the mint, which now reaches execution.
+        let store = open_default(dir.path());
+        let outcome = store.accept_block(&block, Slot::from(0)).await.unwrap();
+        assert!(matches!(
+            outcome,
+            AcceptOutcome::RetryableFailure(BlockIngestError::StateTransition { .. })
+        ));
+    }
+
+    #[tokio::test]
     async fn transient_apply_failure_returns_retryable_failure_without_stall() {
         let dir = tempfile::tempdir().expect("tempdir");
         let store = open_default(dir.path());
@@ -1756,6 +1844,11 @@ mod accept_tests {
                 lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
             ))
         };
+        // Backed on L1, so it reaches execution.
+        store
+            .record_l1_deposit([7_u8; 32], bogus_deposit.hash())
+            .await
+            .unwrap();
         let block = produce_dummy_block(2, Some(genesis.header.hash), vec![bogus_deposit]);
         let outcome = store.accept_block(&block, Slot::from(0)).await.unwrap();
 

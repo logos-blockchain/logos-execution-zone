@@ -15,6 +15,7 @@ prove = ["lee/prove", "chain_state/prove", "storage/prove"]
 [dependencies]
 chain_state.workspace = true
 common.workspace = true
+sequencer_bridge.workspace = true
 logos-blockchain-zone-sdk.workspace = true
 lee.workspace = true
 lee_core = { workspace = true, features = ["host"] }

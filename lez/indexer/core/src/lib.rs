@@ -319,8 +319,25 @@ impl IndexerCore {
 
                     let zone_block = match msg {
                         ZoneMessage::Block(b) => b,
+                        ZoneMessage::Deposit(deposit) => {
+                            // A deposit whose metadata builds no mint backs none.
+                            let Ok(mint) = sequencer_bridge::deposit_mint(
+                                deposit.op_id,
+                                deposit.amount,
+                                &Vec::from(deposit.metadata),
+                            ) else {
+                                continue;
+                            };
+                            let mint = common::transaction::LeeTransaction::Public(mint).hash();
+                            if let Err(err) = self.store.record_l1_deposit(deposit.op_id, mint).await {
+                                error!(error = format_args!("{err:#}"), "Failed to record L1 deposit, holding the cursor");
+                                had_cycle_error = true;
+                                break;
+                            }
+                            continue;
+                        }
                         // FIXME: will be handled in prep of decentralized sequencers
-                        ZoneMessage::Deposit(_) | ZoneMessage::Withdraw(_) => continue,
+                        ZoneMessage::Withdraw(_) => continue,
                     };
 
                     let block: Block = match borsh::from_slice(&zone_block.data) {

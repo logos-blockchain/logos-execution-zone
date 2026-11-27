@@ -9,8 +9,8 @@ use common::{
     block::{Block, BlockMeta, FeeReceipt, TransactionReceipt},
     transaction::{
         LeeTransaction, TxEvents, clock_invocation, fee_invocation, fee_refund_invocation,
-        fee_reserve_invocation, private_fee_refund_invocation, validate_private_fee_credit,
-        validate_user_state_modification,
+        fee_reserve_invocation, injected_deposit_op_id, private_fee_refund_invocation,
+        validate_private_fee_credit, validate_user_state_modification,
     },
 };
 use fee_core::{
@@ -149,6 +149,29 @@ pub fn apply_block_to_state(
     state: &mut V03State,
 ) -> Result<Vec<TxEvents>, BlockIngestError> {
     apply_judged_block_to_state(block, state, None)
+}
+
+/// Refuses `block` unless each deposit it injects is byte for byte the one `expected` rebuilt from
+/// this node's own view of L1, by deposit op id. Genesis mints are exempt.
+pub fn check_injected_deposits(
+    block: &Block,
+    expected: impl Fn(&[u8; 32]) -> Option<HashType>,
+) -> Result<(), BlockIngestError> {
+    if block.header.block_id == GENESIS_BLOCK_ID {
+        return Ok(());
+    }
+    for (tx_index, tx) in block.body.transactions.iter().enumerate() {
+        let Some(op_id) = injected_deposit_op_id(tx) else {
+            continue;
+        };
+        if expected(&op_id) != Some(tx.hash()) {
+            return Err(BlockIngestError::UnbackedDeposit {
+                tx_index: u64::try_from(tx_index).expect("transaction index fits in u64"),
+                op_id: hex::encode(op_id),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// [`apply_block_to_state`], refusing a full stake release of a key outside `finally_absent_keys`
@@ -1200,6 +1223,37 @@ mod tests {
         assert!(matches!(err, BlockIngestError::UndecodableSystemRegistry));
         assert!(!err.blames_producer());
         assert!(!err.is_invalid_block());
+    }
+
+    #[test]
+    fn an_injected_deposit_must_be_the_mint_this_node_rebuilt() {
+        let receipt = Actor::new(AccountId::new([1; 32]), programs::bridge_account_id());
+        let mint = LeeTransaction::Public(PublicTransaction::new(
+            lee::public_transaction::Message::try_new(
+                receipt,
+                vec![(receipt, lee::Authority::None)],
+                BTreeMap::new(),
+                bridge_core::Message::Deposit {
+                    l1_deposit_op_id: [7; 32],
+                    recipient_id: AccountId::new([3; 32]),
+                    amount: 5,
+                },
+            )
+            .unwrap(),
+            lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+        ));
+        let hash = mint.hash();
+        let block = produce_dummy_block(2, None, vec![mint.clone()]);
+
+        assert!(check_injected_deposits(&block, |_| Some(hash)).is_ok());
+        for expected in [None, Some(HashType([9; 32]))] {
+            assert!(matches!(
+                check_injected_deposits(&block, |_| expected),
+                Err(BlockIngestError::UnbackedDeposit { tx_index: 0, .. })
+            ));
+        }
+        let genesis = produce_dummy_block(1, None, vec![mint]);
+        assert!(check_injected_deposits(&genesis, |_| None).is_ok());
     }
 
     #[test]

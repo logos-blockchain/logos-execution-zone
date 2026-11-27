@@ -2402,9 +2402,11 @@ async fn a_peer_pin_of_a_deposit_final_on_l1_is_still_signed() {
 async fn a_peer_pin_of_a_deposit_minted_in_a_final_block_is_not_signed() {
     let (mut sequencer, _mempool_handle, deposit, block) =
         sequencer_minting_an_observed_deposit().await;
+    // The pin rides in the inscription's L1 tx, so the deposit is final with the block.
     sequencer
         .on_channel_update(&ChannelUpdate {
             finalized: vec![finalized_as_held(&sequencer.chain(), &block).await],
+            deposits: vec![deposit.clone()],
             ..empty_channel_update()
         })
         .await;

@@ -86,6 +86,13 @@ pub enum BlockIngestError {
         /// The released sequencer key, hex.
         key: String,
     },
+    #[error("Transaction {tx_index} mints deposit {op_id}, which this node has not seen on L1")]
+    UnbackedDeposit {
+        /// Index of the offending transaction within the block body.
+        tx_index: u64,
+        /// The deposit's L1 op id, hex.
+        op_id: String,
+    },
     #[error("State transition failed at transaction {tx_index}: {reason}")]
     StateTransition {
         /// Index of the failing transaction within the block body.
@@ -145,6 +152,7 @@ impl BlockIngestError {
             | Self::NonPublicGenesisTransaction
             | Self::ReceiptMismatch { .. }
             | Self::UnfinalizedRelease { .. }
+            | Self::UnbackedDeposit { .. }
             | Self::StateTransition { .. } => true,
         }
     }

@@ -228,6 +228,10 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
                 .inspect_err(|err| warn!(error = %err, "Stored channel view does not decode"))
                 .is_ok()
         });
+        let stored_deposits = storage_ref
+            .ask(sequencer_storage_actor::protocol::GetPendingDepositEvents)
+            .await?;
+        sequencer_core::record_stored_l1_deposits(&mut chain, &stored_deposits);
         if !restored {
             // Nothing the channel reported yet: the view fills from the
             // channel, or from our bootstrap publishes.

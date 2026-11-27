@@ -569,18 +569,28 @@ async fn reconstruction_reconciles_already_finished_deposit() -> Result<()> {
     let bridge_program_id = programs::bridge_account_id();
     let receipt_id = bridge_core::deposit_receipt_account_id(bridge_program_id, deposit_op_id);
 
+    // The record's metadata names the recipient, so it backs the block's mint of it.
+    let metadata = borsh::to_vec(&bridge_core::DepositMetadata {
+        recipient: bridge_core::DepositRecipient::Identified(lee::PublicAccountEvidence::Key(
+            lee::signature::initial_key(
+                &testnet_initial_state::initial_pub_accounts_private_keys()[0].secret,
+            ),
+        )),
+    })?;
+    let mint = sequencer_bridge::deposit_mint(deposit_op_id, deposit_amount, &metadata)?;
+
     let genesis = genesis();
     let block2 = produce_dummy_block(
         2,
         Some(genesis.header.hash),
-        vec![deposit_tx(deposit_op_id, recipient, deposit_amount)],
+        vec![LeeTransaction::Public(mint)],
     );
     let store = CannedStore {
         pending_deposits: vec![PendingDepositEventRecord {
             deposit_op_id: HashType(deposit_op_id),
             source_tx_hash: HashType([0; 32]),
             amount: deposit_amount,
-            metadata: Vec::new(),
+            metadata,
         }],
         ..finalized_genesis_store()
     }

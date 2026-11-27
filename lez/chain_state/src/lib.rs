@@ -4,7 +4,7 @@
 
 pub use apply::{
     AcceptOutcome, Tip, apply_block, apply_block_to_state, apply_judged_block_to_state,
-    validate_against_tip,
+    check_injected_deposits, validate_against_tip,
 };
 pub use chain::{ChainState, ChannelEntry, PublishRecord};
 pub use consistency::{
