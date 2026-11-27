@@ -28,6 +28,9 @@ anyhow.workspace = true
 zeroize.workspace = true
 thiserror.workspace = true
 
+[dev-dependencies]
+lee = { workspace = true, features = ["test-signer"] }
+
 [lints]
 workspace = true
 
