@@ -14,7 +14,7 @@ use sequencer_core::{
     config::SequencerConfig,
     faults, release_finality,
     storage::{
-        CoreStorage, ZoneAnchorRecord,
+        CoreStorage, ReplayWrites, ZoneAnchorRecord,
         blocks::{BlockRecord, StoredChain, chain_writes},
         bridge::{deposit_writes, withdrawal_writes},
     },
@@ -178,12 +178,12 @@ impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> BootstrappingS
         )
         .await?;
         storage_ref
-            .ask(WriteBatch((
-                chain_writes(&stored, &self.chain, &finalized_blocks, events),
-                anchor.map(Store::from_value),
-                deposit_records_writes,
-                withdrawal_records_writes,
-            )))
+            .ask(WriteBatch(ReplayWrites {
+                chain: chain_writes(&stored, &self.chain, &finalized_blocks, events),
+                anchor: anchor.map(Store::from_value),
+                deposits: deposit_records_writes,
+                withdrawals: withdrawal_records_writes,
+            }))
             .await?;
         sequencer_core::log_recorded_deposits(recorded_deposits);
         sequencer_core::log_unmatched_withdrawals(&unmatched_withdrawals);

@@ -57,7 +57,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     logging::{log_rewind, log_update},
     storage::{
-        CoreStorage, HeadStateRecord,
+        CoreStorage, FollowWrites, HeadStateRecord, PublishWrites,
         blocks::{BlockRecord, StoredChain, chain_writes},
         bridge::{
             PendingDepositEventRecord, WithdrawalReconciliationKey, deposit_writes,
@@ -485,11 +485,11 @@ impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> SequencerCore<
                     withdrawal_writes(&self.storage_ref, &HashSet::new(), &consumed_withdrawals)
                         .await?;
                 self.storage_ref
-                    .ask(WriteBatch((
-                        chain_writes(&stored, &chain, &irreversible, events),
-                        deposit_records_writes,
-                        withdrawal_records_writes,
-                    )))
+                    .ask(WriteBatch(FollowWrites {
+                        chain: chain_writes(&stored, &chain, &irreversible, events),
+                        deposits: deposit_records_writes,
+                        withdrawals: withdrawal_records_writes,
+                    }))
                     .await?;
                 anyhow::Ok((recorded_deposits, unmatched_withdrawals))
             }
@@ -2139,10 +2139,10 @@ pub async fn record_published_block<S: CoreStorage>(
             let (withdrawals, _unmatched) =
                 withdrawal_writes(storage_ref, &published, &HashSet::new()).await?;
             storage_ref
-                .ask(WriteBatch((
-                    chain_writes(&stored, chain, &[], Vec::new()),
+                .ask(WriteBatch(PublishWrites {
+                    chain: chain_writes(&stored, chain, &[], Vec::new()),
                     withdrawals,
-                )))
+                }))
                 .await?;
 
             if record == PublishRecord::Extended {

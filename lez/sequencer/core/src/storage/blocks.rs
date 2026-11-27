@@ -12,7 +12,7 @@ use common::{
 use lee::AccountId;
 use lee_core::BlockId;
 use sequencer_storage_actor::{
-    ColumnFamily, Storable,
+    ColumnFamily, Storable, Writes,
     encoding::{BigEndian, BorshArc},
     full_type_name,
     protocol::{Delete, Store},
@@ -152,37 +152,43 @@ impl StoredChain {
 }
 
 /// Deletes of blocks with their index entries and events.
-pub type BlockDeletes = (
-    Vec<Delete<BlockIdByHashRecord>>,
-    Vec<Delete<BlockIdByTransactionRecord>>,
-    Vec<Delete<AccountBlockRecord>>,
-    Vec<Delete<BlockEventsRecord>>,
-    Vec<Delete<BlockRecord>>,
-);
+#[derive(Default, Writes)]
+pub struct BlockDeletes {
+    by_hash: Vec<Delete<BlockIdByHashRecord>>,
+    by_transaction: Vec<Delete<BlockIdByTransactionRecord>>,
+    by_account: Vec<Delete<AccountBlockRecord>>,
+    events: Vec<Delete<BlockEventsRecord>>,
+    blocks: Vec<Delete<BlockRecord>>,
+}
 
 /// Stores of blocks with their index entries.
-pub type BlockStores = (
-    Vec<Store<BlockIdByHashRecord>>,
-    Vec<Store<BlockIdByTransactionRecord>>,
-    Vec<Store<AccountBlockRecord>>,
-    Vec<Store<BlockRecord>>,
-);
+#[derive(Default, Writes)]
+struct BlockStores {
+    by_hash: Vec<Store<BlockIdByHashRecord>>,
+    by_transaction: Vec<Store<BlockIdByTransactionRecord>>,
+    by_account: Vec<Store<AccountBlockRecord>>,
+    blocks: Vec<Store<BlockRecord>>,
+}
 
 /// Writes moving the store from one chain to another, as [`chain_writes`] builds them.
-///
-/// Deletes come first, so a block replaced at the same height is deleted before its replacement
-/// is stored.
-pub type ChainWrites = (
-    BlockDeletes,
-    BlockStores,
-    Vec<Store<BlockEventsRecord>>,
-    Option<Store<HeadStateRecord>>,
-    Option<Store<FinalSnapshotRecord>>,
-    Store<ChannelViewRecord>,
-);
+#[derive(Writes)]
+pub struct ChainWrites {
+    /// Before [`Self::stores`], so a block replaced at the same height is deleted before its
+    /// replacement is stored.
+    deletes: BlockDeletes,
+    stores: BlockStores,
+    events: Vec<Store<BlockEventsRecord>>,
+    head_state: Option<Store<HeadStateRecord>>,
+    final_snapshot: Option<Store<FinalSnapshotRecord>>,
+    view: Store<ChannelViewRecord>,
+}
 
 /// Writes of the head state and the view of a chain.
-pub type HeadWrites = (Store<HeadStateRecord>, Store<ChannelViewRecord>);
+#[derive(Writes)]
+pub struct HeadWrites {
+    head_state: Store<HeadStateRecord>,
+    view: Store<ChannelViewRecord>,
+}
 
 /// Writes moving the store from `before` to `chain`.
 ///
@@ -256,14 +262,14 @@ pub fn chain_writes(
         })
     });
 
-    (
+    ChainWrites {
         deletes,
         stores,
         events,
         head_state,
         final_snapshot,
-        view(chain),
-    )
+        view: view(chain),
+    }
 }
 
 /// Deletes `blocks` with their index entries and events.
@@ -279,7 +285,10 @@ pub fn block_deletes(blocks: &[Block]) -> BlockDeletes {
 /// Writes the head state and the view of `chain`.
 #[must_use]
 pub fn head_writes(chain: &ChainState) -> HeadWrites {
-    (head_state(chain), view(chain))
+    HeadWrites {
+        head_state: head_state(chain),
+        view: view(chain),
+    }
 }
 
 fn head_state(chain: &ChainState) -> Store<HeadStateRecord> {
@@ -295,7 +304,15 @@ fn view(chain: &ChainState) -> Store<ChannelViewRecord> {
 }
 
 /// Stores `block` with its index entries.
-fn store_block((by_hash, by_transaction, by_account, blocks): &mut BlockStores, block: Block) {
+fn store_block(
+    BlockStores {
+        by_hash,
+        by_transaction,
+        by_account,
+        blocks,
+    }: &mut BlockStores,
+    block: Block,
+) {
     let block_id = block.header.block_id;
     by_hash.push(Store::new(
         block.header.hash,
@@ -321,7 +338,13 @@ fn store_block((by_hash, by_transaction, by_account, blocks): &mut BlockStores, 
 
 /// Deletes `block` with its index entries and events.
 fn delete_block(
-    (by_hash, by_transaction, by_account, events, blocks): &mut BlockDeletes,
+    BlockDeletes {
+        by_hash,
+        by_transaction,
+        by_account,
+        events,
+        blocks,
+    }: &mut BlockDeletes,
     block: &Block,
 ) {
     let block_id = block.header.block_id;

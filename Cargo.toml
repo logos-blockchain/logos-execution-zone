@@ -35,6 +35,7 @@ members = [
   "lez/sequencer/actors/rpc_server/metrics",
   "lez/sequencer/actors/slasher",
   "lez/sequencer/actors/storage",
+  "lez/sequencer/actors/storage/derive",
   "lez/sequencer/actors/bedrock",
   "lez/sequencer/actors/sharding_pool",
   "lez/ffi_types",
@@ -105,6 +106,7 @@ sequencer_rpc_server_actor = { path = "lez/sequencer/actors/rpc_server" }
 sequencer_rpc_server_actor_metrics = { path = "lez/sequencer/actors/rpc_server/metrics" }
 sequencer_slasher_actor = { path = "lez/sequencer/actors/slasher" }
 sequencer_storage_actor = { path = "lez/sequencer/actors/storage" }
+sequencer_storage_actor_derive = { path = "lez/sequencer/actors/storage/derive" }
 sequencer_bedrock_actor = { path = "lez/sequencer/actors/bedrock" }
 sharding_pool_actor = { path = "lez/sequencer/actors/sharding_pool" }
 sequencer_service = { path = "lez/sequencer/service" }
@@ -262,6 +264,8 @@ criterion = { version = "0.8", features = ["html_reports"] }
 num-traits = "0.2.19"
 enum-iterator = "2.3.0"
 trait-set = "0.3.0"
+syn = "2.0.117"
+quote = "1.0.45"
 cbindgen = "0.29"
 glob = "0.3.4"
 

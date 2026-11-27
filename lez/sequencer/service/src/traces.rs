@@ -207,10 +207,10 @@ pub fn is_long_lived(metadata: &Metadata<'_>) -> bool {
     })
 }
 
-/// The name of the trace a handled message roots: `actor` and `message` by
-/// type name, e.g. `ExecutorActor.ProduceBlock`.
+/// The name of the trace a handled message roots: `actor` by type name and
+/// `message` [`without_module_paths`], e.g. `StorageActor.Store<BlockRecord>`.
 pub fn handler_name(actor: &str, message: &str) -> String {
-    format!("{}.{}", type_name(actor), type_name(message))
+    format!("{}.{}", type_name(actor), without_module_paths(message))
 }
 
 /// Puts `attributes` on the trace span of `id`, if `dispatch` exports traces.
@@ -252,6 +252,25 @@ fn name_actor_span(span: &mut SpanData) {
 pub fn type_name(full: &str) -> &str {
     let path = full.split('<').next().unwrap_or(full);
     path.rsplit("::").next().unwrap_or(path)
+}
+
+/// `full` with every module path in it dropped, its generic arguments kept:
+/// `a::Store<b::BlockRecord>` is `Store<BlockRecord>`.
+pub fn without_module_paths(full: &str) -> String {
+    let mut short = String::with_capacity(full.len());
+    let mut segment_start = 0;
+    let mut chars = full.chars().peekable();
+    while let Some(char) = chars.next() {
+        if char == ':' && chars.next_if_eq(&':').is_some() {
+            short.truncate(segment_start);
+            continue;
+        }
+        short.push(char);
+        if !(char.is_alphanumeric() || char == '_') {
+            segment_start = short.len();
+        }
+    }
+    short
 }
 
 #[cfg(test)]
@@ -495,6 +514,23 @@ mod tests {
             ("Worker", "Worker"),
         ] {
             assert_eq!(type_name(full), short);
+        }
+    }
+
+    #[test]
+    fn names_without_module_paths_keep_the_arguments() {
+        for (full, short) in [
+            (
+                "sequencer_storage_actor::protocol::Store<sequencer_core::storage::HeadStateRecord>",
+                "Store<HeadStateRecord>",
+            ),
+            (
+                "a::WriteBatch<((alloc::vec::Vec<a::Delete<b::Record>>, core::option::Option<a::Store<b::Head>>), [u8; 32])>",
+                "WriteBatch<((Vec<Delete<Record>>, Option<Store<Head>>), [u8; 32])>",
+            ),
+            ("Worker", "Worker"),
+        ] {
+            assert_eq!(without_module_paths(full), short);
         }
     }
 }

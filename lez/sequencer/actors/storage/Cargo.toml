@@ -15,6 +15,7 @@ mock = ["sequencer_actors_common/mock", "dep:mockall"]
 
 [dependencies]
 sequencer_actors_common.workspace = true
+sequencer_storage_actor_derive.workspace = true
 
 kameo.workspace = true
 thiserror.workspace = true

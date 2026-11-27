@@ -11334,11 +11334,20 @@ dependencies = [
  "num-traits",
  "rocksdb",
  "sequencer_actors_common",
+ "sequencer_storage_actor_derive",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "trait-set",
  "zstd",
+]
+
+[[package]]
+name = "sequencer_storage_actor_derive"
+version = "0.1.0"
+dependencies = [
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]

@@ -7,7 +7,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use common::HashType;
 use kameo::{actor::ActorRef, error::SendError};
 use sequencer_storage_actor::{
-    ColumnFamily, Storable, Stores,
+    ColumnFamily, Storable, Stores, Writes,
     error::Error,
     full_type_name,
     protocol::{Delete, Get, GetRange, Store},
@@ -76,16 +76,18 @@ impl Storable for PendingWithdrawalRecord {
 }
 
 /// Deletes and stores of pending deposits.
-pub type DepositWrites = (
-    Vec<Delete<PendingDepositEventRecord>>,
-    Vec<Store<PendingDepositEventRecord>>,
-);
+#[derive(Writes)]
+pub struct DepositWrites {
+    deletes: Vec<Delete<PendingDepositEventRecord>>,
+    stores: Vec<Store<PendingDepositEventRecord>>,
+}
 
 /// Deletes and stores of withdraw intents.
-pub type WithdrawalWrites = (
-    Vec<Delete<PendingWithdrawalRecord>>,
-    Vec<Store<PendingWithdrawalRecord>>,
-);
+#[derive(Writes)]
+pub struct WithdrawalWrites {
+    deletes: Vec<Delete<PendingWithdrawalRecord>>,
+    stores: Vec<Store<PendingWithdrawalRecord>>,
+}
 
 /// Writes recording the deposits of `observed` not already pending and dropping the records of
 /// `finalized`, with how many deposits they record.
@@ -116,7 +118,7 @@ pub async fn deposit_writes<S: Stores<PendingDepositEventRecord>>(
         }
     }
 
-    Ok(((deletes, stores), recorded))
+    Ok((DepositWrites { deletes, stores }, recorded))
 }
 
 /// Writes raising the intents of `published` and settling the intents `consumed` reports, with the
@@ -154,7 +156,7 @@ pub async fn withdrawal_writes<S: Stores<PendingWithdrawalRecord>>(
         .map(|key| Store::new(*key, PendingWithdrawalRecord))
         .collect();
 
-    Ok(((deletes, stores), unmatched))
+    Ok((WithdrawalWrites { deletes, stores }, unmatched))
 }
 
 /// Every pending deposit, in deposit op id order.

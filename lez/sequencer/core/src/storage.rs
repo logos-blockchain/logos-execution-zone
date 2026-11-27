@@ -8,7 +8,7 @@ use kameo::message::Message;
 use lee::V03State;
 use lee_core::BlockId;
 use sequencer_storage_actor::{
-    ColumnFamily, Result, Storable, Stores,
+    ColumnFamily, Result, Storable, Stores, Writes,
     encoding::{BorshArc, SingletonKey},
     full_type_name,
     protocol::{Store, WriteBatch},
@@ -49,18 +49,28 @@ trait_set! {
 }
 
 /// Writes of a channel update the sequencer follows.
-pub type FollowWrites = (ChainWrites, DepositWrites, WithdrawalWrites);
+#[derive(Writes)]
+pub struct FollowWrites {
+    pub chain: ChainWrites,
+    pub deposits: DepositWrites,
+    pub withdrawals: WithdrawalWrites,
+}
 
 /// Writes of a block the sequencer publishes.
-pub type PublishWrites = (ChainWrites, WithdrawalWrites);
+#[derive(Writes)]
+pub struct PublishWrites {
+    pub chain: ChainWrites,
+    pub withdrawals: WithdrawalWrites,
+}
 
 /// Writes of finalized channel entries replayed while bootstrapping.
-pub type ReplayWrites = (
-    ChainWrites,
-    Option<Store<ZoneAnchorRecord>>,
-    DepositWrites,
-    WithdrawalWrites,
-);
+#[derive(Writes)]
+pub struct ReplayWrites {
+    pub chain: ChainWrites,
+    pub anchor: Option<Store<ZoneAnchorRecord>>,
+    pub deposits: DepositWrites,
+    pub withdrawals: WithdrawalWrites,
+}
 
 /// The state after the last stored block.
 #[derive(BorshSerialize, BorshDeserialize)]

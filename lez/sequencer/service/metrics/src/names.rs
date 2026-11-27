@@ -45,8 +45,8 @@ pub const ACTOR_INSTANCE_LABEL: &str = "actor_instance";
 pub const ACTOR_MESSAGE_HANDLING_TIME: &str = "actor_message_handling_time_seconds";
 
 /// Label on [`ACTOR_MESSAGE_HANDLING_TIME`]: kameo's name for the message, by
-/// default its type name with the module path, e.g.
-/// `sequencer_storage_actor::messages::GetBlock`.
+/// default its type name, with every module path in it dropped, e.g.
+/// `Store<BlockRecord>`.
 pub const MESSAGE_NAME_LABEL: &str = "message_name";
 
 /// Label on [`ACTOR_MESSAGE_HANDLING_TIME`]: what sent the message.

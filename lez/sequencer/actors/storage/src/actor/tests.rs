@@ -5,7 +5,7 @@ use kameo::{
 };
 
 use crate::{
-    ColumnFamily, Result, Storable, StorageActor, Stores,
+    ColumnFamily, Result, Storable, StorageActor, Stores, Writes,
     encoding::{BigEndian, SingletonKey},
     full_type_name,
     protocol::{Count, Delete, Get, GetFirst, GetLast, GetRange, Store, WriteBatch},
@@ -57,6 +57,13 @@ impl Storable for Unencodable {
 /// Holding the task's output keeps the stopped actor's state alive, which is exactly the
 /// situation `on_stop` exists for: the lock has to be gone by the time the shutdown result
 /// resolves, not by the time the state happens to be dropped.
+/// A note with the id after it.
+#[derive(Writes)]
+struct NoteWrites {
+    note: Store<Note>,
+    next: Store<NextNoteId>,
+}
+
 #[tokio::test]
 async fn stopped_actor_releases_the_database_lock() {
     let dir = tempfile::tempdir().expect("Failed to create temp dir");
@@ -129,9 +136,7 @@ async fn note_range(
 /// the way a client crate would.
 async fn add_note<S>(storage_ref: &ActorRef<S>, text: &str) -> u64
 where
-    S: Stores<Note>
-        + Stores<NextNoteId>
-        + Message<WriteBatch<(Store<Note>, Store<NextNoteId>)>, Reply = Result<()>>,
+    S: Stores<Note> + Stores<NextNoteId> + Message<WriteBatch<NoteWrites>, Reply = Result<()>>,
 {
     let id = storage_ref
         .ask(Get::<NextNoteId>::default())
@@ -143,10 +148,10 @@ where
         id: id.checked_add(1).expect("Note ids must not run out"),
     });
     storage_ref
-        .ask(WriteBatch((
-            Store::new(BigEndian::new(&id), note(text)),
+        .ask(WriteBatch(NoteWrites {
+            note: Store::new(BigEndian::new(&id), note(text)),
             next,
-        )))
+        }))
         .await
         .expect("Failed to write the batch");
 
@@ -453,18 +458,25 @@ async fn a_write_batch_commits_writes_of_every_type() {
 
 #[tokio::test]
 async fn later_writes_in_a_batch_replace_earlier_ones() {
+    #[derive(Writes)]
+    struct ReplacingWrites {
+        stored: Store<Note>,
+        deleted: Delete<Note>,
+        replaced: Vec<Store<Note>>,
+    }
+
     let dir = tempfile::tempdir().expect("Failed to create temp dir");
     let storage_ref = spawn(&dir);
 
     storage_ref
-        .ask(WriteBatch((
-            Store::new(BigEndian::new(&1), note("put then deleted")),
-            Delete::<Note>::new(BigEndian::new(&1)),
-            vec![
+        .ask(WriteBatch(ReplacingWrites {
+            stored: Store::new(BigEndian::new(&1), note("put then deleted")),
+            deleted: Delete::new(BigEndian::new(&1)),
+            replaced: vec![
                 Store::new(BigEndian::new(&2), note("replaced")),
                 Store::new(BigEndian::new(&2), note("kept")),
             ],
-        )))
+        }))
         .await
         .expect("Failed to write the batch");
 
@@ -475,14 +487,20 @@ async fn later_writes_in_a_batch_replace_earlier_ones() {
 
 #[tokio::test]
 async fn a_batch_with_a_value_failing_to_encode_writes_nothing() {
+    #[derive(Writes)]
+    struct UnencodableWrites {
+        note: Store<Note>,
+        unencodable: Store<Unencodable>,
+    }
+
     let dir = tempfile::tempdir().expect("Failed to create temp dir");
     let storage_ref = spawn(&dir);
 
     let result = storage_ref
-        .ask(WriteBatch((
-            Store::new(BigEndian::new(&1), note("not written")),
-            Store::from_value(Unencodable),
-        )))
+        .ask(WriteBatch(UnencodableWrites {
+            note: Store::new(BigEndian::new(&1), note("not written")),
+            unencodable: Store::from_value(Unencodable),
+        }))
         .await;
 
     assert!(result.is_err(), "Writing an unencodable value must fail");
