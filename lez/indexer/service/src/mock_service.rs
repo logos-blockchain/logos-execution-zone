@@ -14,12 +14,12 @@ use std::{
 
 use indexer_service_protocol::{
     Account, AccountData, AccountId, AccountSummary, Actor, ActorState, ActorStateSummary,
-    BedrockStatus, Block, BlockBody, BlockHeader, BlockId, Commitment, CommitmentSetDigest,
-    EncryptedNote, EventRecord, EventSubscriptionFilter, FeeDeclaration, FeeReceipt,
-    GetEventsFilter, HashType, IndexerStatus, IndexerSyncState, PrivacyPreservingMessage,
-    PrivacyPreservingTransaction, PrivateAction, PublicExecutionContext, PublicMessage,
-    PublicTransaction, RootCall, Selector, Transaction, TransactionReceipt, ValidityWindow,
-    WitnessSet,
+    Authority, BedrockStatus, Block, BlockBody, BlockHeader, BlockId, Commitment,
+    CommitmentSetDigest, DeclaredActor, EncryptedNote, EventRecord, EventSubscriptionFilter,
+    FeeDeclaration, FeeReceipt, GetEventsFilter, HashType, IndexerStatus, IndexerSyncState,
+    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, PublicExecutionContext,
+    PublicMessage, PublicTransaction, RootCall, Selector, Transaction, TransactionReceipt,
+    ValidityWindow, WitnessSet,
 };
 use jsonrpsee::{
     core::{SubscriptionResult, async_trait},
@@ -398,13 +398,13 @@ impl indexer_service_rpc::RpcServer for MockIndexerService {
                         .public_context
                         .actors
                         .iter()
-                        .any(|actor| actor.account_id == account_id),
+                        .any(|declared| declared.actor.account_id == account_id),
                     Transaction::PrivacyPreserving(priv_tx) => priv_tx
                         .message
                         .public_context
                         .actors
                         .iter()
-                        .any(|actor| actor.account_id == account_id),
+                        .any(|declared| declared.actor.account_id == account_id),
                 })
                 .cloned()
                 .collect()
@@ -526,14 +526,21 @@ fn mock_public_tx(
         message: PublicMessage {
             public_context: PublicExecutionContext {
                 actors: vec![
-                    to,
-                    Actor {
-                        account_id: account_ids[(tx_idx as usize + 1) % account_ids.len()],
-                        program_account_id: AccountId::native_token_program(),
+                    DeclaredActor {
+                        actor: to,
+                        authority: Authority::Signer,
+                    },
+                    DeclaredActor {
+                        actor: Actor {
+                            account_id: account_ids[(tx_idx as usize + 1) % account_ids.len()],
+                            program_account_id: AccountId::native_token_program(),
+                        },
+                        authority: Authority::None,
                     },
                 ],
                 authorized_accounts: vec![to.account_id],
                 promotions: vec![],
+                private_signers: vec![],
             },
             root: RootCall {
                 to,
@@ -570,9 +577,13 @@ fn mock_privacy_preserving_tx(
         hash: tx_hash,
         message: PrivacyPreservingMessage {
             public_context: PublicExecutionContext {
-                actors: vec![to],
+                actors: vec![DeclaredActor {
+                    actor: to,
+                    authority: Authority::None,
+                }],
                 authorized_accounts: vec![],
                 promotions: vec![],
+                private_signers: vec![],
             },
             boundary: vec![],
             async_messages: vec![],

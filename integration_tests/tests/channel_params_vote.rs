@@ -107,7 +107,7 @@ fn unfunded_segment_write(bytecode_len: usize) -> Result<LeeTransaction> {
     let segment = Actor::new(segment_id, lee_core::program::PROGRAM_LOADER_ACCOUNT_ID);
     let message = lee::public_transaction::Message::try_new(
         segment,
-        vec![segment],
+        lee::test_utils::signed_by(vec![segment], [segment_id]),
         BTreeMap::from([(segment_id, Nonce(0))]),
         program_loader_core::Message::WriteSegment {
             bytecode: vec![0_u8; bytecode_len],

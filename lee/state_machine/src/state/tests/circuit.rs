@@ -1,6 +1,6 @@
 use lee_core::{
     EncryptionScheme, ProgramImageClaim, SharedSecretKey,
-    execution_state::{BoundaryStep, Delivery},
+    execution_state::{Authority, BoundaryStep, Delivery},
     program::{PrivateAccountKind, ProgramHeader, immutable_mirror_commitment},
 };
 use program_loader_core::Message as LoaderMessage;
@@ -105,13 +105,16 @@ fn a_private_account_may_act_under_two_actor_states_in_one_transaction() {
 
     let (output, _proof) = execute_and_prove(
         ProvingInput {
-            public_context: PublicExecutionContext::new(vec![recipient], []),
+            public_context: PublicExecutionContext::new(signed_by(vec![recipient], []), []),
             private_witnesses: vec![update_witness(&keys, pre_account.clone(), membership_proof)],
             ..proving_input(root(
                 Actor::new(sender_id, program_id),
-                &Script::write(written.clone()).send_sync(
-                    Actor::native_balance(sender_id),
-                    &transfer(recipient.account_id, amount),
+                &Script::write(written.clone()).send(
+                    SyncMessage::new(
+                        Actor::native_balance(sender_id),
+                        &transfer(recipient.account_id, amount),
+                    )
+                    .with_grants([Actor::native_balance(sender_id)]),
                 ),
             ))
         },
@@ -156,8 +159,7 @@ fn a_private_account_may_act_under_two_actor_states_in_one_transaction() {
                     to: recipient,
                     message: credit,
                 },
-                inherited_authorizations: BTreeSet::new(),
-                inherits_entry_authorizations: true,
+                grants: BTreeSet::new(),
                 pda_seeds: BTreeSet::new(),
             }),
             BoundaryStep::EndPublicSubtree,
@@ -292,7 +294,10 @@ fn prove_public_outputs(
     // Assumes each public output delivers nothing back, without running it.
     execute_and_prove_with_cross_messages(
         ProvingInput {
-            public_context: PublicExecutionContext::new(public_actors, signers),
+            public_context: PublicExecutionContext::new(
+                signed_by(public_actors, signers.clone()),
+                signers,
+            ),
             private_witnesses: vec![init_witness(&keys)],
             ..proving_input(root(Actor::new(keys.account_id(), scripted_id()), script))
         },
@@ -327,7 +332,7 @@ fn a_delegated_public_pda_is_authorized_at_settlement_but_not_exported_as_a_gran
         panic!("the statement makes exactly one public call");
     };
     assert_eq!(delegated.envelope.to, callee);
-    assert!(delegated.inherited_authorizations.is_empty());
+    assert!(delegated.grants.is_empty());
     assert_eq!(delegated.pda_seeds, BTreeSet::from([DELEGATED_SEED]));
 
     V03State::new()
@@ -341,15 +346,18 @@ fn a_delegated_public_pda_is_authorized_at_settlement_but_not_exported_as_a_gran
 }
 
 #[test]
-fn a_wrong_seed_leaves_a_signer_on_its_credential() {
+fn a_wrong_seed_leaves_an_attached_signer_grant_in_force() {
     let signer_keys = test_public_account_keys_1();
     let signer_id = signer_keys.account_id();
     let callee = Actor::new(signer_id, TWIN);
     let wrong_seed = PdaSeed::new([88; 32]);
 
     let proven = prove_public_outputs(
-        &Script::default()
-            .send(SyncMessage::new(callee, &authorized()).with_pda_seeds(vec![wrong_seed])),
+        &Script::default().send(
+            SyncMessage::new(callee, &authorized())
+                .with_pda_seeds(vec![wrong_seed])
+                .with_grants([callee]),
+        ),
         vec![callee],
         [signer_id].into(),
     );
@@ -361,7 +369,7 @@ fn a_wrong_seed_leaves_a_signer_on_its_credential() {
             1,
             0,
         )
-        .expect("an unmatched seed must leave the credential in force");
+        .expect("an unmatched seed must leave the attached grant in force");
 }
 
 #[test]
@@ -685,7 +693,10 @@ fn two_private_pda_family_members_receive_and_spend() {
     let shield = |from: Actor, witness: PrivateWitness, pda_id: AccountId| {
         execute_and_prove(
             ProvingInput {
-                public_context: PublicExecutionContext::new(vec![from], [from.account_id]),
+                public_context: PublicExecutionContext::new(
+                    signed_by(vec![from], [from.account_id]),
+                    [from.account_id],
+                ),
                 private_witnesses: vec![witness],
                 ..proving_input(root(from, &transfer(pda_id, amount)))
             },
@@ -704,7 +715,10 @@ fn two_private_pda_family_members_receive_and_spend() {
     let spend = |witness: PrivateWitness, pda_id: AccountId, signers: HashSet<AccountId>| {
         execute_and_prove(
             ProvingInput {
-                public_context: PublicExecutionContext::new(vec![recipient], signers),
+                public_context: PublicExecutionContext::new(
+                    signed_by(vec![recipient], signers.clone()),
+                    signers,
+                ),
                 private_witnesses: vec![witness],
                 ..proving_input(root(
                     Actor::new(pda_id, proxy_id),
@@ -865,6 +879,7 @@ fn a_private_balance_decrease_without_the_credential_is_refused_when_proving() {
                         membership_proof,
                     },
                     address_openings: BTreeSet::new(),
+                    signer_programs: BTreeSet::new(),
                 },
                 PrivateWitness {
                     vpk: recipient_keys.vpk(),
@@ -874,6 +889,7 @@ fn a_private_balance_decrease_without_the_credential_is_refused_when_proving() {
                         commitment_root: DUMMY_COMMITMENT_HASH,
                     },
                     address_openings: BTreeSet::new(),
+                    signer_programs: BTreeSet::new(),
                 },
             ],
             ..proving_input(root(
@@ -906,7 +922,7 @@ fn a_forged_echo_is_caught_before_proving() {
     for field in [
         ForgeField::Receiver,
         ForgeField::Sender,
-        ForgeField::IsAuthorized,
+        ForgeField::Grants,
         ForgeField::PreState,
         ForgeField::Message,
     ] {
@@ -1009,7 +1025,7 @@ fn a_shadow_programs_public_effect_is_refused_at_settlement() {
 
     let (output, proof) = execute_and_prove(
         ProvingInput {
-            public_context: PublicExecutionContext::new(vec![public], []),
+            public_context: PublicExecutionContext::new(signed_by(vec![public], []), []),
             private_witnesses: vec![init_witness(&keys)],
             ..proving_input(root(public, &Script::write(vec![7; 4])))
         },
@@ -1180,10 +1196,10 @@ fn a_disclosed_image_claim_must_name_its_accounts_live_image() {
 fn a_proof_binds_its_messages_context() {
     let mut state = V03State::new().with_programs([crate::test_methods::scripted()]);
     let mut tx = prove_scripted_init(&test_private_account_keys_1(), &Script::default());
-    tx.message
-        .public_context
-        .actors
-        .insert(Actor::native_balance(AccountId::new([1; 32])));
+    tx.message.public_context.actors.insert(
+        Actor::native_balance(AccountId::new([1; 32])),
+        Authority::None,
+    );
 
     assert!(matches!(
         state.transition_from_privacy_preserving_transaction(&tx, 1, 0),

@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    account::{AccountId, Nonce},
-    execution_state::PublicExecutionContext,
+    account::{AccountId, Actor, Nonce},
+    execution_state::{Authority, PublicExecutionContext},
     program::PdaSeed,
     signing_key::SigningKeyState,
 };
@@ -58,6 +58,12 @@ pub enum InvalidTransaction {
     AuthorizedAccounts,
     #[error("A public transaction cannot select promotions")]
     PublicPromotions,
+    #[error("A public transaction cannot declare private signers")]
+    PublicPrivateSigners,
+    #[error("An actor is declared twice")]
+    DuplicateActor,
+    #[error("A declared actor carries signer authority its account does not sign for")]
+    UnsignedAuthority,
     #[error("A witness entry cannot authenticate its signer on any head")]
     AuthData,
 }
@@ -117,6 +123,11 @@ impl<P> TransactionMessage<P> {
         {
             return Err(InvalidTransaction::AuthorizedAccounts);
         }
+        if self.public_context.actors.iter().any(|(actor, authority)| {
+            *authority == Authority::Signer && !self.nonces.contains_key(&actor.account_id)
+        }) {
+            return Err(InvalidTransaction::UnsignedAuthority);
+        }
         Ok(())
     }
 }
@@ -125,6 +136,18 @@ impl From<InvalidTransaction> for LeeError {
     fn from(error: InvalidTransaction) -> Self {
         Self::InvalidInput(error.to_string())
     }
+}
+
+pub fn actor_map(
+    entries: impl IntoIterator<Item = (Actor, Authority)>,
+) -> Result<BTreeMap<Actor, Authority>, InvalidTransaction> {
+    let mut actors = BTreeMap::new();
+    for (actor, authority) in entries {
+        if actors.insert(actor, authority).is_some() {
+            return Err(InvalidTransaction::DuplicateActor);
+        }
+    }
+    Ok(actors)
 }
 
 /// `Sha256(domain || message_hash || next_0 || next_1 || …)`, each next key as
@@ -176,9 +199,18 @@ pub fn nonce_map(
 mod tests {
     use std::collections::BTreeMap;
 
-    use lee_core::account::{AccountId, Nonce};
+    use lee_core::account::{AccountId, Actor, Nonce};
 
-    use super::{InvalidTransaction, nonce_map};
+    use super::{Authority, InvalidTransaction, actor_map, nonce_map};
+
+    #[test]
+    fn an_actor_map_rejects_a_repeated_actor() {
+        let actor = Actor::new(AccountId::new([1; 32]), AccountId::new([2; 32]));
+        assert_eq!(
+            actor_map([(actor, Authority::None), (actor, Authority::Signer)]),
+            Err(InvalidTransaction::DuplicateActor)
+        );
+    }
 
     #[test]
     fn a_nonce_map_rejects_a_repeated_account() {

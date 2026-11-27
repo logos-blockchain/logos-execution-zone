@@ -99,13 +99,14 @@ fn private_account(tag: u8, account: Option<Account>) -> (AccountId, PrivateWitn
         kind: WitnessKind::Regular(RegularKey::Authorized(ask)),
         nullifier,
         address_openings: BTreeSet::new(),
+        signer_programs: BTreeSet::from([lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID]),
     };
     (account_id, witness)
 }
 
 fn proving_input(
     root: TransactionEntry<MessageWitness>,
-    public_actors: Vec<Actor>,
+    public_actors: Vec<(Actor, lee::Authority)>,
     signers: HashSet<AccountId>,
     private_witnesses: Vec<PrivateWitness>,
 ) -> ProvingInput {
@@ -194,7 +195,7 @@ fn prove_native_transfer_with_dummies(count: usize) -> anyhow::Result<Proven> {
                         amount: AMOUNT_TO_TRANSFER,
                     })?,
                 }),
-                vec![sender],
+                vec![(sender, lee::Authority::Signer)],
                 [sender.account_id].into(),
                 vec![recipient_witness],
             )
@@ -284,8 +285,8 @@ fn prove_fee_transfer(case: FeeCase) -> anyhow::Result<Proven> {
         FeeCase::PublicRefundTarget => (Some(fee(Some(REFUND_TARGET_ID))), Vec::new()),
     };
     let public_actors = vec![
-        Actor::native_balance(RECIPIENT_ID),
-        Actor::native_balance(FEE_INBOX_ID),
+        (Actor::native_balance(RECIPIENT_ID), lee::Authority::None),
+        (Actor::native_balance(FEE_INBOX_ID), lee::Authority::None),
     ];
 
     Ok(execute_and_prove_with_stats(
@@ -341,7 +342,8 @@ fn prove_scripted_transfers(num_transfers: u32) -> anyhow::Result<Proven> {
             to: RECIPIENT_ID,
             amount: AMOUNT_TO_TRANSFER,
         },
-    );
+    )
+    .with_grants([Actor::native_balance(sender_id)]);
     let script =
         (0..num_transfers).fold(Script::default(), |script, _| script.send(transfer.clone()));
 
@@ -351,7 +353,7 @@ fn prove_scripted_transfers(num_transfers: u32) -> anyhow::Result<Proven> {
                 to: Actor::new(sender_id, scripted_id),
                 message: to_vec(&script)?,
             }),
-            vec![Actor::native_balance(RECIPIENT_ID)],
+            vec![(Actor::native_balance(RECIPIENT_ID), lee::Authority::None)],
             HashSet::new(),
             vec![sender_witness],
         ),

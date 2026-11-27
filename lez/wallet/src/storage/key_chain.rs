@@ -2116,7 +2116,7 @@ pub(crate) mod tests {
 
         let message = lee::public_transaction::Message::try_new(
             Actor::native_balance(account_id),
-            vec![Actor::native_balance(account_id)],
+            vec![(Actor::native_balance(account_id), lee::Authority::Signer)],
             BTreeMap::from([(account_id, lee_core::account::Nonce(0))]),
             lee_core::native_token::Message::Transfer {
                 to: account_id,

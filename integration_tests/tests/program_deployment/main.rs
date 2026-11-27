@@ -88,7 +88,7 @@ async fn deploy_and_execute_program() -> Result<()> {
 
     // The claimed account holds nothing to fund the reserve with, so `payer_id` co-signs.
     let signers = [target_id, payer_id];
-    let nonces = signers
+    let nonces: std::collections::BTreeMap<_, _> = signers
         .into_iter()
         .zip(ctx.wallet_mut().get_accounts_nonces(&signers).await?)
         .collect();
@@ -96,7 +96,7 @@ async fn deploy_and_execute_program() -> Result<()> {
     let target = lee::Actor::new(target_id, account_id);
     let message = lee::public_transaction::Message::try_new_with_fees(
         target,
-        vec![target],
+        lee::test_utils::signed_by(vec![target], nonces.keys().copied()),
         nonces,
         test_guest_core::Script::write(written.clone()),
         common::test_utils::test_fee_declaration(payer_id),

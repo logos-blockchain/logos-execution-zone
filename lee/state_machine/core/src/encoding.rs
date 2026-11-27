@@ -143,6 +143,7 @@ mod tests {
                 vec![0; 8],
                 vec![2, 0, 0, 0],
                 promotions.map(u64::to_le_bytes).concat(),
+                vec![0; 4],
             ]
             .concat()
         };

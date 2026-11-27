@@ -1,6 +1,7 @@
 //! Fees a send declares, and what a dry run reports instead of sending.
 
-use lee::{AccountId, FeeDeclaration};
+use itertools::Itertools as _;
+use lee::{AccountId, Actor, FeeDeclaration};
 use sequencer_service_rpc::FeeStateQuote;
 
 use crate::account::AccountIdWithPrivacy;
@@ -60,6 +61,8 @@ pub enum DryRunReport {
         reserve_at_head: u128,
         /// Why the action reverts; a reverted action still pays its fee.
         revert_reason: Option<String>,
+        /// The declared public actors the signatures authorize.
+        signer_actors: Vec<Actor>,
     },
     Private {
         fee: PrivateFee,
@@ -80,6 +83,8 @@ pub enum DryRunReport {
         claims: usize,
         /// The part of the claims reaching the payer.
         swept: u128,
+        /// The declared public actors the signatures authorize.
+        signer_actors: Vec<Actor>,
     },
 }
 
@@ -116,6 +121,7 @@ impl std::fmt::Display for DryRunReport {
                 fee_at_head,
                 reserve_at_head,
                 revert_reason,
+                signer_actors,
                 ..
             } => {
                 writeln!(f, "Dry run: nothing sent")?;
@@ -134,6 +140,7 @@ impl std::fmt::Display for DryRunReport {
                     "  reserve at head:  {reserve_at_head} (max fee {})",
                     fee.max_fee
                 )?;
+                writeln!(f, "  signer authority: {}", actor_list(signer_actors))?;
                 match revert_reason {
                     Some(reason) => {
                         write!(f, "  action REVERTS:   {reason} (fee is still charged)")
@@ -152,6 +159,7 @@ impl std::fmt::Display for DryRunReport {
                 headroom_reserve,
                 claims,
                 swept,
+                signer_actors,
                 ..
             } => {
                 writeln!(f, "Dry run: nothing proven or sent")?;
@@ -174,6 +182,7 @@ impl std::fmt::Display for DryRunReport {
                     fee.reserve, fee.tip
                 )?;
                 writeln!(f, "  fee payer:      {}", fee.payer)?;
+                writeln!(f, "  signer authority: {}", actor_list(signer_actors))?;
                 writeln!(
                     f,
                     "  claims:         {claims} pending credit(s), {swept} to the payer"
@@ -187,4 +196,19 @@ impl std::fmt::Display for DryRunReport {
             }
         }
     }
+}
+
+fn actor_list(actors: &[Actor]) -> String {
+    if actors.is_empty() {
+        return "none".to_owned();
+    }
+    actors
+        .iter()
+        .format_with(", ", |actor, f| {
+            f(&format_args!(
+                "{} under {}",
+                actor.account_id, actor.program_account_id
+            ))
+        })
+        .to_string()
 }

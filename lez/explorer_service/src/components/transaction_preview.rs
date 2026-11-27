@@ -38,7 +38,7 @@ pub fn TransactionPreview(
                 .public_context
                 .actors
                 .iter()
-                .map(|actor| actor.account_id)
+                .map(|declared| declared.actor.account_id)
                 .collect();
             format!("{} accounts involved", accounts.len())
         }

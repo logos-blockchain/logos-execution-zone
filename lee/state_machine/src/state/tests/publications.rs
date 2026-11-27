@@ -71,7 +71,10 @@ fn clear_credit(state: &V03State) -> PrivacyPreservingTransaction {
     let funded = Account::funded(FUNDS);
     let proven = execute_and_prove(
         ProvingInput {
-            public_context: PublicExecutionContext::new(vec![Actor::native_balance(INBOX)], []),
+            public_context: PublicExecutionContext::new(
+                signed_by(vec![Actor::native_balance(INBOX)], []),
+                [],
+            ),
             private_witnesses: vec![update_witness(
                 &test_private_account_keys_2(),
                 funded.clone(),
@@ -108,7 +111,7 @@ fn fee_paying_public_root(state: &V03State, script: &Script) -> PrivacyPreservin
     let proven = execute_and_prove(
         ProvingInput {
             public_context: PublicExecutionContext::new(
-                vec![sender(), Actor::native_balance(INBOX)],
+                signed_by(vec![sender(), Actor::native_balance(INBOX)], []),
                 [],
             ),
             private_witnesses: vec![update_witness(

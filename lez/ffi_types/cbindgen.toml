@@ -9,6 +9,7 @@ include = [
   "FfiBoundaryStepList",
   "FfiBytes32",
   "FfiBytes64",
+  "FfiDeclaredActorList",
   "FfiPromotionList",
   "FfiEncryptedAccountData",
   "FfiFeeDeclaration",

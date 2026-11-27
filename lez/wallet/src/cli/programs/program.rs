@@ -18,7 +18,7 @@ pub enum ProgramSubcommand {
     /// Send one public transaction to any program, its message already Borsh-encoded.
     ///
     /// Nothing is inferred: the root actor and every other actor the call touches are named, and
-    /// so is who signs. An actor is `<account>[@program][:sign]`,
+    /// so is which of them the signatures authorize. An actor is `<account>[@program][:sign]`,
     /// `pda:[<owner>/]<seed>[@program]` for a public PDA (admitted by its seed), or
     /// `ik:<hex>[@program]` for an account known by its initial key (admitted by it). `@program`
     /// selects that program's state of the account and defaults to `--program`, as does a PDA's
@@ -37,8 +37,8 @@ pub enum ProgramSubcommand {
         /// Another actor to declare. Repeatable.
         #[arg(long)]
         actor: Vec<CliActor>,
-        /// A funded account to pay the fee; it signs wherever it's declared. If omitted, the
-        /// wallet selects a payer from the transaction's signing accounts.
+        /// A funded account to pay the fee. It signs, but authorizes only actors marked `:sign`.
+        /// If omitted, the wallet selects a payer from the transaction's signing accounts.
         #[arg(long)]
         payer: Option<PublicMention>,
     },
@@ -87,7 +87,7 @@ pub struct CliActor {
     pub account: CliActorAccount,
     /// `@program`; the call's `--program` when absent.
     pub program: Option<String>,
-    /// `:sign`.
+    /// `:sign`: the account signs and authorizes this actor.
     pub sign: bool,
 }
 
@@ -143,7 +143,8 @@ impl FromStr for CliActor {
 }
 
 impl CliActor {
-    // The payer signs wherever it's declared: the wallet won't take a non-signing payer.
+    // The payer signs wherever it's declared, but authorizes only actors marked `:sign`; its
+    // signature authorizes the fee.
     fn mention(
         self,
         program: AccountId,
@@ -198,7 +199,12 @@ impl CliActor {
                 }
             }
         };
-        Ok(identity.select_program_actor_state(actor_program))
+        let mention = identity.select_program_actor_state(actor_program);
+        Ok(if self.sign {
+            mention
+        } else {
+            mention.without_authorization()
+        })
     }
 }
 
@@ -255,6 +261,8 @@ fn parse_seed(text: &str) -> Result<PdaSeed> {
 
 #[cfg(test)]
 mod tests {
+    use lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID;
+
     use super::*;
 
     const ID: &str = "6iArKUXxhUJqS7kCaPNhwMWt3ro71PDyBj7jwAyE2VQV";
@@ -285,6 +293,26 @@ mod tests {
             actor.account,
             CliActorAccount::Mention(CliAccountMention::Label(_))
         ));
+    }
+
+    #[test]
+    fn the_payer_authorizes_only_its_signed_actors() {
+        let (storage, _) = Storage::new();
+        let payer = AccountId::from_str(ID).unwrap();
+        let program = AccountId::new([5; 32]);
+        let mention = |text: String| {
+            text.parse::<CliActor>()
+                .unwrap()
+                .mention(program, Some(payer), &storage)
+                .unwrap()
+        };
+
+        let unsigned = mention(ID.to_owned());
+        assert!(matches!(unsigned.identity, AccountIdentity::Public(id) if id == payer));
+        assert!(!unsigned.authorizes);
+        assert!(!mention(format!("{ID}@{NATIVE_TOKEN_PROGRAM_ID}")).authorizes);
+        assert!(mention(format!("{ID}@{NATIVE_TOKEN_PROGRAM_ID}:sign")).authorizes);
+        assert!(mention(format!("{ID}:sign")).authorizes);
     }
 
     #[test]

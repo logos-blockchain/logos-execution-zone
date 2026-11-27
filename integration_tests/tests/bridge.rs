@@ -64,11 +64,14 @@ async fn public_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
     let receipt = Actor::new(receipt_id, programs::bridge_account_id());
     let message = public_transaction::Message::try_new(
         receipt,
-        vec![
-            receipt,
-            Actor::native_balance(bridge_account_id),
-            Actor::native_balance(recipient_id),
-        ],
+        lee::test_utils::signed_by(
+            vec![
+                receipt,
+                Actor::native_balance(bridge_account_id),
+                Actor::native_balance(recipient_id),
+            ],
+            [],
+        ),
         BTreeMap::new(),
         bridge_core::Message::Deposit {
             l1_deposit_op_id: [0_u8; 32],
@@ -116,11 +119,14 @@ async fn public_bridge_deposit_with_zero_amount_is_rejected() -> anyhow::Result<
     let receipt = Actor::new(receipt_id, programs::bridge_account_id());
     let message = public_transaction::Message::try_new(
         receipt,
-        vec![
-            receipt,
-            Actor::native_balance(bridge_account_id),
-            Actor::native_balance(recipient_id),
-        ],
+        lee::test_utils::signed_by(
+            vec![
+                receipt,
+                Actor::native_balance(bridge_account_id),
+                Actor::native_balance(recipient_id),
+            ],
+            [],
+        ),
         BTreeMap::new(),
         bridge_core::Message::Deposit {
             l1_deposit_op_id: [0_u8; 32],
@@ -206,7 +212,10 @@ async fn private_bridge_deposit_invocation_is_dropped() -> anyhow::Result<()> {
                 to: receipt,
                 message: deposit,
             }),
-            public_context: lee::PublicExecutionContext::new(public_actors, []),
+            public_context: lee::PublicExecutionContext::new(
+                lee::test_utils::signed_by(public_actors, []),
+                [],
+            ),
             private_witnesses: Vec::new(),
             dummy_inputs: Vec::new(),
             ciphertext_padding: None,

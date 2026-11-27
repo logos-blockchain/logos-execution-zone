@@ -15,7 +15,8 @@ use crate::{
 };
 
 /// Bedrock priority fee percent every Cucumber LEZ deployment publishes with.
-const STACK_PRIORITY_FEE_PERCENT: u64 = 12;
+/// Covers the storage price doubling at the devnet's first epoch rotations.
+const STACK_PRIORITY_FEE_PERCENT: u64 = 150;
 
 /// Base sequencer configuration for Cucumber LEZ deployments: framework
 /// defaults plus the stack-wide Bedrock priority fee percent. Scenario configs

@@ -358,8 +358,7 @@ mod tests {
                             message: borsh::to_vec(&native_token::Message::Credit(reserve))
                                 .expect("serializes"),
                         },
-                        inherited_authorizations: BTreeSet::new(),
-                        inherits_entry_authorizations: true,
+                        grants: BTreeSet::new(),
                         pda_seeds: BTreeSet::new(),
                     })
                 })

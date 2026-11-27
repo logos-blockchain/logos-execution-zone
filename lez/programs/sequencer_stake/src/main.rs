@@ -93,7 +93,7 @@ fn stake(
         input,
         "Stake is only invoked as a top-level user transaction",
     );
-    assert!(input.is_authorized, "must sign for the ownership account");
+    assert!(input.is_authorized(), "must sign for the ownership account");
     // The stake actor state remains after a full exit, so presence is what distinguishes a
     // new stake from a top-up.
     assert_eq!(
@@ -121,12 +121,15 @@ fn stake(
                 has_record,
             },
         ))
-        .send_sync(
-            Actor::native_balance(funding),
-            &native_token::Message::Transfer {
-                to: stake_funds_account_id(program, &ownership),
-                amount,
-            },
+        .send(
+            SyncMessage::new(
+                Actor::native_balance(funding),
+                &native_token::Message::Transfer {
+                    to: stake_funds_account_id(program, &ownership),
+                    amount,
+                },
+            )
+            .with_grants([Actor::native_balance(funding)]),
         )
 }
 
@@ -140,7 +143,7 @@ fn unstake_request(
         input,
         "UnstakeRequest is only invoked as a top-level user transaction",
     );
-    assert!(input.is_authorized, "must sign for the ownership account");
+    assert!(input.is_authorized(), "must sign for the ownership account");
     let record = decode_record(&input.pre_state);
     assert_eq!(
         record.sequencer_key, sequencer_key,
@@ -322,7 +325,7 @@ fn vote_channel_params(
         input,
         "VoteChannelParams is only invoked as a top-level user transaction",
     );
-    assert!(input.is_authorized, "must sign for the ownership account");
+    assert!(input.is_authorized(), "must sign for the ownership account");
     let record = decode_record(&input.pre_state);
     assert_eq!(
         record.sequencer_key, sequencer_key,
@@ -387,7 +390,7 @@ fn withdraw_channel_params_vote(input: &ReceiveInput, sequencer_key: SequencerKe
         input,
         "WithdrawChannelParamsVote is only invoked as a top-level user transaction",
     );
-    assert!(input.is_authorized, "must sign for the ownership account");
+    assert!(input.is_authorized(), "must sign for the ownership account");
     let record = decode_record(&input.pre_state);
     assert_eq!(
         record.sequencer_key, sequencer_key,
@@ -716,10 +719,11 @@ mod tests {
         pre_state: &[u8],
         message: &Message,
     ) -> ReceiveInput {
+        let receiver = Actor::new(account, program);
         ReceiveInput {
-            receiver: Actor::new(account, program),
+            receiver,
             from: origin.map(|sender| Actor::new(sender, sender)),
-            is_authorized,
+            grants: is_authorized.then_some(receiver).into_iter().collect(),
             pre_state: ActorState::from(pre_state.to_vec()),
             message: borsh::to_vec(message).unwrap(),
         }
@@ -1032,7 +1036,8 @@ mod tests {
                             to: funds_of(OWNER),
                             amount: MINIMUM,
                         },
-                    ),
+                    )
+                    .with_grants([Actor::native_balance(FUNDING)]),
                 ],
                 Vec::new()
             )

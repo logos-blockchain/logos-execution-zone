@@ -182,7 +182,9 @@ fn staging(upgrade: &Upgrade) -> Actor {
 fn producer_tx(actors: &[Actor], message: &Message) -> PublicTransaction {
     let message = public_transaction::Message::try_new(
         registry_actor(),
-        std::iter::once(registry_actor()).chain(actors.iter().copied()),
+        std::iter::once(registry_actor())
+            .chain(actors.iter().copied())
+            .map(|actor| (actor, lee::Authority::None)),
         BTreeMap::new(),
         message,
     )

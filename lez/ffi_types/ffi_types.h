@@ -83,8 +83,7 @@ typedef struct FfiDelivery {
   struct FfiActor from;
   struct FfiActor to;
   FfiMessageDataList message;
-  FfiAccountIdList inherited_authorizations;
-  bool inherits_entry_authorizations;
+  FfiActorList grants;
   FfiPdaSeedList pda_seeds;
 } FfiDelivery;
 
@@ -111,6 +110,22 @@ typedef struct FfiVec_FfiBoundaryStep FfiBoundaryStepList;
 typedef struct FfiBytes64 {
   uint8_t data[64];
 } FfiBytes64;
+
+/**
+ * A declared public actor and whether the transaction's signatures authorize it.
+ */
+typedef struct FfiDeclaredActor {
+  struct FfiActor actor;
+  bool signer;
+} FfiDeclaredActor;
+
+typedef struct FfiVec_FfiDeclaredActor {
+  struct FfiDeclaredActor *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiDeclaredActor;
+
+typedef struct FfiVec_FfiDeclaredActor FfiDeclaredActorList;
 
 typedef struct FfiVec_u64 {
   uint64_t *entries;
@@ -180,9 +195,10 @@ typedef struct FfiVec_FfiPrivateAction {
 typedef struct FfiVec_FfiPrivateAction FfiPrivateActionList;
 
 typedef struct FfiPublicExecutionContext {
-  FfiActorList actors;
+  FfiDeclaredActorList actors;
   FfiAccountIdList authorized_accounts;
   FfiPromotionList promotions;
+  FfiActorList private_signers;
 } FfiPublicExecutionContext;
 
 /**

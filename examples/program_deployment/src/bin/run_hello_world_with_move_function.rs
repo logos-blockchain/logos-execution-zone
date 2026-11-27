@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use clap::{Parser, Subcommand};
 use common::transaction::LeeTransaction;
 use lee::{
-    AccountId, Actor, PublicTransaction, privacy_preserving_transaction::circuit::ProgramCatalog,
-    program::Program, public_transaction,
+    AccountId, Actor, Authority, PublicTransaction,
+    privacy_preserving_transaction::circuit::ProgramCatalog, program::Program, public_transaction,
 };
 use program_deployment::{admission_evidence, deploy_or_reuse, fee_paid_by};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
@@ -124,7 +124,7 @@ async fn main() {
                     .collect(),
                 ..public_transaction::Message::try_new_with_fees(
                     account,
-                    vec![account],
+                    vec![(account, Authority::None)],
                     nonces,
                     message,
                     fee,
@@ -176,7 +176,7 @@ async fn main() {
                     .collect(),
                 ..public_transaction::Message::try_new_with_fees(
                     source,
-                    vec![source, destination],
+                    vec![(source, Authority::None), (destination, Authority::None)],
                     nonces,
                     message,
                     fee,

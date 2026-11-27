@@ -1,9 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use lee::{
-    AccountId, Actor, BoundaryStep, Delivery, EncryptedNote, EphemeralPublicKey, MessageBody,
-    MessageEnvelope, PublicAccountEvidence, PublicExecutionContext, Publication, RecoveryBinding,
-    RootCall, SealedMessage, error::LeeError, public_transaction::WitnessEntry,
+    AccountId, Actor, Authority, BoundaryStep, Delivery, EncryptedNote, EphemeralPublicKey,
+    MessageBody, MessageEnvelope, PublicAccountEvidence, PublicExecutionContext, Publication,
+    RecoveryBinding, RootCall, SealedMessage, error::LeeError, public_transaction::WitnessEntry,
 };
 use lee_core::{
     Commitment, Nullifier, PrivateAction, account::Nonce, encryption::Ciphertext, program::PdaSeed,
@@ -12,8 +12,8 @@ use lee_core::{
 use crate::primitives::types::{
     FfiAccountId, FfiBytes32, FfiNonce, FfiSigningKeyState,
     vectors::{
-        FfiAccountIdList, FfiActorList, FfiMessageDataList, FfiPdaSeedList, FfiPromotionList,
-        FfiVecU8,
+        FfiAccountIdList, FfiActorList, FfiDeclaredActorList, FfiMessageDataList, FfiPdaSeedList,
+        FfiPromotionList, FfiVecU8,
     },
 };
 
@@ -142,8 +142,7 @@ pub struct FfiDelivery {
     pub from: FfiActor,
     pub to: FfiActor,
     pub message: FfiMessageDataList,
-    pub inherited_authorizations: FfiAccountIdList,
-    pub inherits_entry_authorizations: bool,
+    pub grants: FfiActorList,
     pub pda_seeds: FfiPdaSeedList,
 }
 
@@ -151,8 +150,7 @@ impl From<Delivery<Actor>> for FfiDelivery {
     fn from(value: Delivery<Actor>) -> Self {
         let Delivery {
             envelope: MessageEnvelope { from, to, message },
-            inherited_authorizations,
-            inherits_entry_authorizations,
+            grants,
             pda_seeds,
         } = value;
 
@@ -160,8 +158,7 @@ impl From<Delivery<Actor>> for FfiDelivery {
             from: from.into(),
             to: to.into(),
             message: message.into(),
-            inherited_authorizations: inherited_authorizations_to_ffi(inherited_authorizations),
-            inherits_entry_authorizations,
+            grants: grants_to_ffi(grants),
             pda_seeds: pda_seeds
                 .into_iter()
                 .map(pda_seed_to_ffi)
@@ -179,10 +176,7 @@ impl From<FfiDelivery> for Delivery<Actor> {
                 to: value.to.into(),
                 message: value.message.into(),
             },
-            inherited_authorizations: inherited_authorizations_from_ffi(
-                value.inherited_authorizations,
-            ),
-            inherits_entry_authorizations: value.inherits_entry_authorizations,
+            grants: grants_from_ffi(value.grants),
             pda_seeds: {
                 let std_vec: Vec<_> = value.pda_seeds.into();
                 std_vec.into_iter().map(ffi_to_pda_seed).collect()
@@ -348,11 +342,40 @@ impl From<FfiPublication> for Publication {
     }
 }
 
+/// A declared public actor and whether the transaction's signatures authorize it.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FfiDeclaredActor {
+    pub actor: FfiActor,
+    pub signer: bool,
+}
+
+impl From<(Actor, Authority)> for FfiDeclaredActor {
+    fn from((actor, authority): (Actor, Authority)) -> Self {
+        Self {
+            actor: actor.into(),
+            signer: authority == Authority::Signer,
+        }
+    }
+}
+
+impl From<FfiDeclaredActor> for (Actor, Authority) {
+    fn from(value: FfiDeclaredActor) -> Self {
+        let authority = if value.signer {
+            Authority::Signer
+        } else {
+            Authority::None
+        };
+        (value.actor.into(), authority)
+    }
+}
+
 #[repr(C)]
 pub struct FfiPublicExecutionContext {
-    pub actors: FfiActorList,
+    pub actors: FfiDeclaredActorList,
     pub authorized_accounts: FfiAccountIdList,
     pub promotions: FfiPromotionList,
+    pub private_signers: FfiActorList,
 }
 
 impl From<PublicExecutionContext> for FfiPublicExecutionContext {
@@ -361,6 +384,7 @@ impl From<PublicExecutionContext> for FfiPublicExecutionContext {
             actors,
             authorized_accounts,
             promotions,
+            private_signers,
         } = value;
 
         Self {
@@ -375,21 +399,30 @@ impl From<PublicExecutionContext> for FfiPublicExecutionContext {
                 .collect::<Vec<_>>()
                 .into(),
             promotions: promotions.into_iter().collect::<Vec<_>>().into(),
+            private_signers: private_signers
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into(),
         }
     }
 }
 
-impl From<FfiPublicExecutionContext> for PublicExecutionContext {
-    fn from(value: FfiPublicExecutionContext) -> Self {
-        let actors: Vec<FfiActor> = value.actors.into();
+impl TryFrom<FfiPublicExecutionContext> for PublicExecutionContext {
+    type Error = LeeError;
+
+    fn try_from(value: FfiPublicExecutionContext) -> Result<Self, Self::Error> {
+        let actors: Vec<FfiDeclaredActor> = value.actors.into();
         let authorized_accounts: Vec<FfiAccountId> = value.authorized_accounts.into();
         let promotions: Vec<u64> = value.promotions.into();
+        let private_signers: Vec<FfiActor> = value.private_signers.into();
 
-        Self {
-            actors: actors.into_iter().map(Into::into).collect(),
+        Ok(Self {
+            actors: lee::actor_map(actors.into_iter().map(Into::into))?,
             authorized_accounts: authorized_accounts.into_iter().map(Into::into).collect(),
             promotions: promotions.into_iter().collect(),
-        }
+            private_signers: private_signers.into_iter().map(Into::into).collect(),
+        })
     }
 }
 
@@ -523,8 +556,7 @@ fn empty_delivery() -> FfiDelivery {
         from: FfiActor::default(),
         to: FfiActor::default(),
         message: Vec::new().into(),
-        inherited_authorizations: Vec::new().into(),
-        inherits_entry_authorizations: false,
+        grants: Vec::new().into(),
         pda_seeds: Vec::new().into(),
     }
 }
@@ -545,20 +577,16 @@ fn empty_sealed_message() -> FfiSealedMessage {
     }
 }
 
-fn inherited_authorizations_to_ffi(
-    inherited_authorizations: BTreeSet<AccountId>,
-) -> FfiAccountIdList {
-    inherited_authorizations
+fn grants_to_ffi(grants: BTreeSet<Actor>) -> FfiActorList {
+    grants
         .into_iter()
         .map(Into::into)
         .collect::<Vec<_>>()
         .into()
 }
 
-fn inherited_authorizations_from_ffi(
-    inherited_authorizations: FfiAccountIdList,
-) -> BTreeSet<AccountId> {
-    let std_vec: Vec<FfiAccountId> = inherited_authorizations.into();
+fn grants_from_ffi(grants: FfiActorList) -> BTreeSet<Actor> {
+    let std_vec: Vec<FfiActor> = grants.into();
     std_vec.into_iter().map(Into::into).collect()
 }
 
@@ -620,8 +648,7 @@ mod tests {
                 to: actor(2, 3),
                 message: vec![4],
             },
-            inherited_authorizations: BTreeSet::from([account_id(5)]),
-            inherits_entry_authorizations: true,
+            grants: BTreeSet::from([actor(5, 6)]),
             pda_seeds: BTreeSet::from([PdaSeed::new([6; 32])]),
         };
         let cross_message = Delivery {
@@ -630,8 +657,7 @@ mod tests {
                 to: actor(9, 10),
                 message: vec![11],
             },
-            inherited_authorizations: BTreeSet::from([account_id(12)]),
-            inherits_entry_authorizations: false,
+            grants: BTreeSet::from([actor(4, 70)]),
             pda_seeds: BTreeSet::from([PdaSeed::new([13; 32])]),
         };
 
@@ -668,9 +694,13 @@ mod tests {
     #[test]
     fn each_shared_component_roundtrips_over_the_ffi() {
         let public_context = PublicExecutionContext {
-            actors: BTreeSet::from([actor(1, 2), actor(3, 4)]),
+            actors: BTreeMap::from([
+                (actor(1, 2), Authority::None),
+                (actor(3, 4), Authority::Signer),
+            ]),
             authorized_accounts: BTreeSet::from([account_id(5), account_id(6)]),
             promotions: BTreeSet::from([7, 8]),
+            private_signers: BTreeSet::from([actor(21, 22)]),
         };
         let sealed = SealedMessage {
             commitment: Commitment::from_byte_array([9; 32]),
@@ -693,7 +723,10 @@ mod tests {
         let signer = lee::signature::PublicAccountSecret::new([1; 32]);
 
         assert_eq!(
-            roundtrip::<FfiPublicExecutionContext, _>(public_context.clone()),
+            PublicExecutionContext::try_from(FfiPublicExecutionContext::from(
+                public_context.clone()
+            ))
+            .unwrap(),
             public_context
         );
         assert_eq!(roundtrip::<FfiSealedMessage, _>(sealed.clone()), sealed);

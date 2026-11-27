@@ -1,14 +1,14 @@
 pub use ffi_types::{
-    FfiActor, FfiBoundaryStep, FfiBoundaryStepKind, FfiDelivery, FfiEncryptedAccountData,
-    FfiFeeDeclaration, FfiKeyType, FfiPrivateAction, FfiProvenFee, FfiPublicAccountEvidence,
-    FfiPublicAccountEvidenceKind, FfiPublicExecutionContext, FfiPublication, FfiRecoveryBinding,
-    FfiRootCall, FfiSigningKeyState, FfiWitnessEntry,
+    FfiActor, FfiBoundaryStep, FfiBoundaryStepKind, FfiDeclaredActor, FfiDelivery,
+    FfiEncryptedAccountData, FfiFeeDeclaration, FfiKeyType, FfiPrivateAction, FfiProvenFee,
+    FfiPublicAccountEvidence, FfiPublicAccountEvidenceKind, FfiPublicExecutionContext,
+    FfiPublication, FfiRecoveryBinding, FfiRootCall, FfiSigningKeyState, FfiWitnessEntry,
 };
 use ffi_types::{empty_root_call, proven_fee_from_ffi};
 use indexer_service_protocol::{
-    HashType, PdaSeed, PrivacyPreservingMessage, PrivacyPreservingTransaction, Proof,
-    PublicAccountEvidence, PublicMessage, PublicTransaction, Transaction, ValidityWindow,
-    WitnessSet,
+    DeclaredActor, HashType, PdaSeed, PrivacyPreservingMessage, PrivacyPreservingTransaction,
+    Proof, PublicAccountEvidence, PublicExecutionContext, PublicMessage, PublicTransaction,
+    Transaction, ValidityWindow, WitnessSet,
 };
 
 use crate::api::types::{
@@ -53,8 +53,7 @@ impl From<Box<FfiPublicTransactionBody>> for PublicTransaction {
         Self {
             hash: HashType(value.hash.data),
             message: PublicMessage {
-                public_context: lee::PublicExecutionContext::from(value.message.public_context)
-                    .into(),
+                public_context: context_from_ffi(value.message.public_context),
                 root: lee::RootCall::from(value.message.root).into(),
                 fee: value
                     .message
@@ -104,7 +103,7 @@ impl From<PublicMessage> for FfiPublicMessage {
         } = value;
 
         Self {
-            public_context: lee::PublicExecutionContext::from(public_context).into(),
+            public_context: context_to_ffi(public_context),
             root: lee::RootCall::from(root).into(),
             nonces: nonces
                 .into_iter()
@@ -164,8 +163,7 @@ impl From<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
         Self {
             hash: HashType(value.hash.data),
             message: PrivacyPreservingMessage {
-                public_context: lee::PublicExecutionContext::from(value.message.public_context)
-                    .into(),
+                public_context: context_from_ffi(value.message.public_context),
                 boundary: {
                     let std_vec: Vec<FfiBoundaryStep> = value.message.boundary.into();
                     std_vec
@@ -277,7 +275,7 @@ impl From<PrivacyPreservingMessage> for FfiPrivacyPreservingMessage {
             fee: fee
                 .map(|fee| lee::FeeDeclaration::from(fee).into())
                 .unwrap_or_default(),
-            public_context: lee::PublicExecutionContext::from(public_context).into(),
+            public_context: context_to_ffi(public_context),
             boundary: boundary
                 .into_iter()
                 .map(|step| FfiBoundaryStep::from(lee::BoundaryStep::from(step)))
@@ -516,13 +514,71 @@ const fn cast_ffi_validity_window(ffi_window: [u64; 2]) -> ValidityWindow {
     ValidityWindow((left, right))
 }
 
+// Converts the context as listed, so the protocol sees any duplicate when it maps it onto the
+// state machine.
+fn context_from_ffi(context: FfiPublicExecutionContext) -> PublicExecutionContext {
+    let actors: Vec<FfiDeclaredActor> = context.actors.into();
+    let authorized_accounts: Vec<FfiAccountId> = context.authorized_accounts.into();
+    let private_signers: Vec<FfiActor> = context.private_signers.into();
+    PublicExecutionContext {
+        actors: actors
+            .into_iter()
+            .map(|declared| {
+                let (actor, authority): (lee::Actor, lee::Authority) = declared.into();
+                DeclaredActor {
+                    actor: actor.into(),
+                    authority: authority.into(),
+                }
+            })
+            .collect(),
+        authorized_accounts: authorized_accounts
+            .into_iter()
+            .map(|account_id| lee::AccountId::from(account_id).into())
+            .collect(),
+        promotions: context.promotions.into(),
+        private_signers: private_signers
+            .into_iter()
+            .map(|actor| lee::Actor::from(actor).into())
+            .collect(),
+    }
+}
+
+fn context_to_ffi(context: PublicExecutionContext) -> FfiPublicExecutionContext {
+    let PublicExecutionContext {
+        actors,
+        authorized_accounts,
+        promotions,
+        private_signers,
+    } = context;
+    FfiPublicExecutionContext {
+        actors: actors
+            .into_iter()
+            .map(|DeclaredActor { actor, authority }| {
+                FfiDeclaredActor::from((lee::Actor::from(actor), lee::Authority::from(authority)))
+            })
+            .collect::<Vec<_>>()
+            .into(),
+        authorized_accounts: authorized_accounts
+            .into_iter()
+            .map(|account_id| FfiAccountId::from(lee::AccountId::from(account_id)))
+            .collect::<Vec<_>>()
+            .into(),
+        promotions: promotions.into(),
+        private_signers: private_signers
+            .into_iter()
+            .map(|actor| FfiActor::from(lee::Actor::from(actor)))
+            .collect::<Vec<_>>()
+            .into(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use indexer_service_protocol::{
-        AccountId, Actor, BoundaryStep, Ciphertext, Commitment, CommitmentSetDigest, Delivery,
-        EncryptedNote, EphemeralPublicKey, FeeDeclaration, FeeFallback, KeyType, MessageEnvelope,
-        Nullifier, ProvenFee, PublicExecutionContext, Publication, RootCall, SealedMessage,
-        SigningKeyState,
+        AccountId, Actor, Authority, BoundaryStep, Ciphertext, Commitment, CommitmentSetDigest,
+        DeclaredActor, Delivery, EncryptedNote, EphemeralPublicKey, FeeDeclaration, FeeFallback,
+        KeyType, MessageEnvelope, Nullifier, ProvenFee, PublicExecutionContext, Publication,
+        RootCall, SealedMessage, SigningKeyState,
     };
 
     use super::*;
@@ -558,8 +614,7 @@ mod tests {
                 to,
                 message: vec![message],
             },
-            inherited_authorizations: vec![],
-            inherits_entry_authorizations: true,
+            grants: vec![],
             pda_seeds: vec![],
         }
     }
@@ -579,9 +634,13 @@ mod tests {
                 hash: HashType([4; 32]),
                 message: PublicMessage {
                     public_context: PublicExecutionContext {
-                        actors: vec![actor(6, 7)],
+                        actors: vec![DeclaredActor {
+                            actor: actor(6, 7),
+                            authority: Authority::None,
+                        }],
                         authorized_accounts: vec![account_id(10)],
                         promotions: vec![],
+                        private_signers: vec![],
                     },
                     root: RootCall {
                         to: actor(5, 8),
@@ -618,19 +677,20 @@ mod tests {
             message: PrivacyPreservingMessage {
                 public_context: PublicExecutionContext {
                     promotions: vec![22, 28],
+                    private_signers: vec![actor(23, 24)],
                     ..PublicExecutionContext::default()
                 },
                 boundary: vec![
                     BoundaryStep::PrivateToPublic(repeated.clone()),
                     BoundaryStep::PrivateToPublic(Delivery {
-                        inherited_authorizations: vec![account_id(15)],
+                        grants: vec![actor(15, 90)],
                         pda_seeds: vec![PdaSeed([16; 32])],
                         ..delivery(actor(12, 62), actor(9, 10), 11)
                     }),
                     BoundaryStep::PrivateToPublic(delivery(actor(40, 90), actor(41, 42), 43)),
                     BoundaryStep::PrivateToPublic(repeated.clone()),
                     BoundaryStep::PublicToPrivate(Delivery {
-                        inherits_entry_authorizations: false,
+                        grants: vec![actor(2, 91)],
                         ..delivery(actor(17, 18), actor(19, 20), 21)
                     }),
                     BoundaryStep::EndPrivateSubtree,

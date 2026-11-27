@@ -207,7 +207,7 @@ pub fn handle_message<'state>(
                 "segment target already deployed"
             );
             assert!(
-                input.is_authorized,
+                input.is_authorized(),
                 "WriteSegment target must be an authorized account"
             );
             if let Some(next) = next_segment {
@@ -228,7 +228,7 @@ pub fn handle_message<'state>(
         } => {
             assert!(input.pre_state.is_empty(), "header target already deployed");
             assert!(
-                input.is_authorized,
+                input.is_authorized(),
                 "CreateHeader target must be an authorized account"
             );
             header_write(input, first_segment, immutable, None, &actor_state)
@@ -240,7 +240,7 @@ pub fn handle_message<'state>(
         } => {
             assert!(input.pre_state.is_empty(), "header target already deployed");
             assert!(
-                input.is_authorized,
+                input.is_authorized(),
                 "CreateHeaderOf target must be an authorized account"
             );
             header_write(
@@ -263,7 +263,7 @@ pub fn handle_message<'state>(
                 "UpdateHeader target is immutable and cannot be updated"
             );
             assert!(
-                input.is_authorized,
+                input.is_authorized(),
                 "UpdateHeader target must be authorized by the signer"
             );
             header_write(input, first_segment, immutable, None, &actor_state)

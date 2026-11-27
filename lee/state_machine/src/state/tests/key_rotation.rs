@@ -132,7 +132,10 @@ fn privacy_shield(
     let proven = execute_and_prove(
         ProvingInput {
             public_context: PublicExecutionContext::new(
-                vec![sender],
+                signed_by(
+                    vec![sender],
+                    signers.iter().map(|signer| signer.account_id()),
+                ),
                 signers.iter().map(|signer| signer.account_id()),
             ),
             private_witnesses: vec![init_witness(recipient)],
@@ -175,11 +178,14 @@ fn privacy_transfer_paying_privately(
     let proven = execute_and_prove(
         ProvingInput {
             public_context: PublicExecutionContext::new(
-                vec![
-                    sender,
-                    Actor::native_balance(recipient),
-                    Actor::native_balance(FEE_INBOX),
-                ],
+                signed_by(
+                    vec![
+                        sender,
+                        Actor::native_balance(recipient),
+                        Actor::native_balance(FEE_INBOX),
+                    ],
+                    [signer.account_id()],
+                ),
                 [signer.account_id()],
             ),
             private_witnesses: vec![update_witness(

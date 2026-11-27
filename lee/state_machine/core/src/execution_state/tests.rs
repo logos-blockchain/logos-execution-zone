@@ -16,6 +16,7 @@ const BYSTANDER: Actor = Actor::new(AccountId::new([3; 32]), AccountId::new([9; 
 const ENTER: &[u8] = b"enter";
 const GENERATED_DEPTH: u8 = 3;
 const READ_BACK: u8 = u8::MAX;
+const OPENING: [u8; 32] = [42; 32];
 
 type Handler = Box<dyn FnMut(&ReceiveInput) -> Transition>;
 
@@ -144,15 +145,20 @@ impl Keys {
                 commitment_root: [8; 32],
             },
             address_openings: BTreeSet::new(),
+            signer_programs: BTreeSet::new(),
         }
     }
 
     fn regular(&self, ask: bool) -> PrivateWitness {
-        self.witness(WitnessKind::Regular(if ask {
+        let witness = self.witness(WitnessKind::Regular(if ask {
             RegularKey::Authorized(self.ask)
         } else {
             RegularKey::Nullifying(self.nsk())
-        }))
+        }));
+        PrivateWitness {
+            signer_programs: BTreeSet::from([id(8), native_token::NATIVE_TOKEN_PROGRAM_ID]),
+            ..witness
+        }
     }
 
     fn pda(&self, program: AccountId, seed: PdaSeed) -> PrivateWitness {
@@ -296,6 +302,7 @@ fn send_to(receiver: Actor) -> SyncMessage {
         to: receiver,
         message: Vec::new(),
         pda_seeds: BTreeSet::new(),
+        grants: BTreeSet::new(),
     }
 }
 
@@ -305,6 +312,7 @@ fn enter(message: &[u8]) -> SyncMessage {
         to: holder(&Keys::new(1)),
         message: message.to_vec(),
         pda_seeds: BTreeSet::new(),
+        grants: BTreeSet::new(),
     }
 }
 
@@ -315,8 +323,7 @@ fn delivery<S>(from: S, to: Actor, message: &[u8]) -> Delivery<S> {
             to,
             message: message.to_vec(),
         },
-        inherited_authorizations: BTreeSet::new(),
-        inherits_entry_authorizations: true,
+        grants: BTreeSet::new(),
         pda_seeds: BTreeSet::new(),
     }
 }
@@ -363,7 +370,7 @@ fn root(to: Actor) -> TransactionEntry<MessageBody> {
 }
 
 fn public_context(actors: Vec<Actor>) -> PublicExecutionContext {
-    PublicExecutionContext::new(actors, [])
+    PublicExecutionContext::new(actors.into_iter().map(|actor| (actor, Authority::None)), [])
 }
 
 fn whole(
@@ -416,18 +423,22 @@ fn pipeline(
     to: Actor,
     scripted: impl Fn() -> Script,
 ) -> Pipeline {
+    pipeline_in(&public_context(actors.to_vec()), witnesses, to, scripted)
+}
+
+fn pipeline_in(
+    context: &PublicExecutionContext,
+    witnesses: &[PrivateWitness],
+    to: Actor,
+    scripted: impl Fn() -> Script,
+) -> Pipeline {
     let mut whole_script = scripted();
-    let predicted_cross_messages = whole(
-        public_context(actors.to_vec()),
-        witnesses,
-        root(to),
-        &mut whole_script,
-    )
-    .unwrap()
-    .predicted_cross_messages;
+    let predicted_cross_messages = whole(context.clone(), witnesses, root(to), &mut whole_script)
+        .unwrap()
+        .predicted_cross_messages;
     let mut private_script = scripted();
     let boundary = private_part(
-        public_context(actors.to_vec()),
+        context.clone(),
         witnesses,
         root(to),
         predicted_cross_messages.clone(),
@@ -437,7 +448,7 @@ fn pipeline(
     .boundary;
     let mut public_script = scripted();
     public_part(
-        public_context(actors.to_vec()),
+        context.clone(),
         root_call(to),
         boundary.clone(),
         &mut public_script,
@@ -463,7 +474,7 @@ fn authorized(script: &Script) -> Vec<(Actor, bool)> {
     script
         .log
         .iter()
-        .map(|input| (input.receiver, input.is_authorized))
+        .map(|input| (input.receiver, input.is_authorized()))
         .collect()
 }
 
@@ -665,21 +676,23 @@ fn a_revisited_actor_sees_its_staged_write() {
 }
 
 #[test]
-fn a_seed_grants_its_pda_and_the_grant_is_inherited_downstream() {
+fn a_seed_grant_reaches_only_the_messages_it_is_attached_to() {
     let (owner, forwarder, relay) = (actor(1, 9), actor(2, 7), actor(3, 8));
     let seed = PdaSeed::new([5; 32]);
-    let vault = Actor::new(
-        AccountId::for_public_pda(&owner.program_account_id, &seed),
-        owner.program_account_id,
-    );
-    let seeded = SyncMessage {
-        pda_seeds: BTreeSet::from([seed]),
-        ..send_to(vault)
-    };
+    let vault = public_pda(owner.program_account_id, seed);
     let mut script = Script::default()
-        .on(owner, sending(vec![seeded, send_to(forwarder)]))
-        .on(vault, sending_when(Some(owner), vec![send_to(relay)]))
-        .on(relay, sending(vec![send_to(vault)]))
+        .on(
+            owner,
+            sending(vec![seeded_to(vault, seed), send_to(forwarder)]),
+        )
+        .on(
+            vault,
+            sending_when(Some(owner), vec![send_to(relay).with_grants([vault])]),
+        )
+        .on(
+            relay,
+            sending(vec![send_to(vault).with_grants([vault]), send_to(vault)]),
+        )
         .on(forwarder, sending(vec![send_to(vault)]));
 
     public_transaction(
@@ -696,6 +709,7 @@ fn a_seed_grants_its_pda_and_the_grant_is_inherited_downstream() {
             (vault, true),
             (relay, false),
             (vault, true),
+            (vault, false),
             (forwarder, false),
             (vault, false),
         ]
@@ -703,14 +717,615 @@ fn a_seed_grants_its_pda_and_the_grant_is_inherited_downstream() {
 }
 
 #[test]
-fn a_root_authorized_public_account_is_authorized_from_any_origin() {
-    let (signer, peer) = (actor(1, 9), actor(2, 9));
+fn a_handler_sees_the_grants_its_delivery_carries() {
+    let (owner, peer) = (actor(1, 9), actor(2, 7));
+    let seed = PdaSeed::new([5; 32]);
+    let vault = public_pda(owner.program_account_id, seed);
     let mut script = Script::default()
-        .on(signer, sending_when(None, vec![send_to(peer)]))
-        .on(peer, sending(vec![send_to(signer)]));
+        .on(owner, sending(vec![seeded_to(vault, seed), send_to(peer)]))
+        .on(vault, sending(vec![send_to(peer).with_grants([vault])]))
+        .on(peer, sending(Vec::new()));
+
+    public_transaction(public_context(vec![owner, vault, peer]), owner, &mut script).unwrap();
+
+    let held: Vec<_> = script
+        .log
+        .iter()
+        .map(|input| (input.receiver, input.grants.clone()))
+        .collect();
+    assert_eq!(
+        held,
+        vec![
+            (owner, BTreeSet::new()),
+            (vault, BTreeSet::from([vault])),
+            (peer, BTreeSet::from([vault])),
+            (peer, BTreeSet::new()),
+        ]
+    );
+}
+
+// `signer` signs the root call to `amm`; `feed` is a third party `amm` calls.
+fn signed_amm_call(signer: Actor, amm: Actor, feed: Actor) -> PublicExecutionContext {
+    PublicExecutionContext::new(
+        vec![
+            (signer, Authority::Signer),
+            (amm, Authority::None),
+            (feed, Authority::None),
+        ],
+        [signer.account_id],
+    )
+}
+
+#[test]
+fn a_grant_passes_along_a_chain_of_holders_that_each_attach_it() {
+    let (signer, router, amm) = (actor(1, 9), actor(2, 7), actor(3, 8));
+    let mut script = Script::default()
+        .on(router, sending(vec![send_to(amm).with_grants([signer])]))
+        .on(
+            amm,
+            sending(vec![send_to(signer).with_grants([signer]), send_to(signer)]),
+        )
+        .on(signer, sending(Vec::new()));
+
+    public_transaction(signed_amm_call(signer, router, amm), router, &mut script).unwrap();
+
+    assert_eq!(
+        authorized(&script),
+        vec![
+            (router, false),
+            (amm, false),
+            (signer, true),
+            (signer, false)
+        ]
+    );
+}
+
+#[test]
+fn a_program_the_root_never_handed_a_grant_cannot_attach_it() {
+    let (signer, amm, feed) = (actor(1, 9), actor(2, 7), actor(3, 8));
+    let mut script = Script::default()
+        .on(amm, sending(vec![send_to(feed)]))
+        .on(feed, sending(vec![send_to(signer).with_grants([signer])]));
+
+    let result = public_transaction(signed_amm_call(signer, amm, feed), amm, &mut script);
+
+    assert!(matches!(
+        result,
+        Err(ExecutionError::UnheldGrant { actor }) if actor == signer
+    ));
+}
+
+#[test]
+fn an_async_root_to_a_signer_actor_carries_no_grant() {
+    let (signer, sender) = (actor(1, 9), actor(2, 7));
+    let mut script = Script::default().on(signer, sending(Vec::new()));
+
+    whole(
+        PublicExecutionContext::new(vec![(signer, Authority::Signer)], [signer.account_id]),
+        &[],
+        TransactionEntry::Async(stored(sender, signer, b"stored")),
+        &mut script,
+    )
+    .unwrap();
+
+    assert_eq!(authorized(&script), vec![(signer, false)]);
+}
+
+#[test]
+fn a_private_root_grants_only_the_actors_its_witness_marks() {
+    let keys = Keys::new(1);
+    let (marked, unmarked) = (holder(&keys), Actor::new(keys.regular_id(), id(7)));
+    let mut script = Script::default().on(
+        marked,
+        sending(vec![send_to(unmarked).with_grants([unmarked])]),
+    );
+
+    let result = private_part(
+        PublicExecutionContext::default(),
+        &[keys.regular(true)],
+        root(marked),
+        Vec::new(),
+        &mut script,
+    );
+
+    assert!(matches!(
+        result,
+        Err(ExecutionError::UnheldGrant { actor }) if actor == unmarked
+    ));
+    assert_eq!(authorized(&script), vec![(marked, true)]);
+
+    let mut root_script = Script::default().on(unmarked, sending(Vec::new()));
+    private_part(
+        PublicExecutionContext::default(),
+        &[keys.regular(true)],
+        root(unmarked),
+        Vec::new(),
+        &mut root_script,
+    )
+    .unwrap();
+    assert_eq!(authorized(&root_script), vec![(unmarked, false)]);
+}
+
+fn blinded(actor: Actor) -> Actor {
+    alias(actor, OPENING)
+}
+
+fn private_signers(
+    actors: Vec<Actor>,
+    signers: impl IntoIterator<Item = Actor>,
+) -> PublicExecutionContext {
+    PublicExecutionContext {
+        private_signers: signers.into_iter().collect(),
+        ..public_context(actors)
+    }
+}
+
+// Forwards every grant it holds to `to`.
+fn forwarding(to: Actor) -> impl Fn(&ReceiveInput) -> Transition {
+    move |input| {
+        echo(
+            input,
+            Response::keep_state().send(send_to(to).with_grants(input.grants.iter().copied())),
+        )
+    }
+}
+
+// Debits every actor whose grant it holds.
+fn debiting(input: &ReceiveInput) -> Transition {
+    let debits = input
+        .grants
+        .iter()
+        .map(|&grant| send_to(grant).with_grants([grant]))
+        .collect();
+    echo(
+        input,
+        Response {
+            sync_messages: debits,
+            ..Response::keep_state()
+        },
+    )
+}
+
+// The public `router` root holds alice's grant under the alias its message names, hands it to
+// `pool`, which debits alice: the chain a public signer's grant takes.
+#[test]
+fn a_private_signer_grant_passes_along_public_holders_under_its_alias() {
+    let keys = Keys::new(1);
+    let alice = holder(&keys);
+    let (router, pool) = (actor(2, 9), actor(3, 7));
+    let context = private_signers(vec![router, pool], [blinded(alice)]);
+    let scripted = || {
+        Script::default()
+            .on(router, forwarding(pool))
+            .on(pool, debiting)
+            .on(alice, sending(Vec::new()))
+    };
+
+    let Pipeline {
+        whole,
+        private,
+        boundary,
+        public,
+        ..
+    } = pipeline_in(
+        &context,
+        &[opened(keys.regular(true), &[OPENING])],
+        router,
+        scripted,
+    );
+
+    assert_eq!(
+        authorized(&whole),
+        vec![(router, false), (pool, false), (alice, true)]
+    );
+    assert_eq!(authorized(&private), vec![(alice, true)]);
+    assert_eq!(
+        public
+            .log
+            .iter()
+            .map(|input| input.grants.clone())
+            .collect::<Vec<_>>(),
+        vec![BTreeSet::from([blinded(alice)]); 2]
+    );
+    assert!(matches!(
+        boundary.as_slice(),
+        [PublicToPrivate(debit), EndPrivateSubtree]
+            if debit.envelope.to == blinded(alice)
+                && debit.grants == BTreeSet::from([blinded(alice)])
+    ));
+}
+
+#[test]
+fn a_public_root_holds_no_private_grant_it_does_not_declare() {
+    let keys = Keys::new(1);
+    let alice = holder(&keys);
+    let (router, pool) = (actor(2, 9), actor(3, 7));
+    let mut script = Script::default().on(
+        router,
+        sending(vec![send_to(pool).with_grants([blinded(alice)])]),
+    );
+
+    let result = whole(
+        public_context(vec![router, pool]),
+        &[opened(keys.regular(true), &[OPENING])],
+        root(router),
+        &mut script,
+    );
+
+    assert!(matches!(
+        result,
+        Err(ExecutionError::UnheldGrant { actor }) if actor == blinded(alice)
+    ));
+}
+
+// Without a witness, nothing vouches for a declared private signer, so execution refuses it even
+// where `check_stateless` does not run, as in simulation.
+#[test]
+fn a_private_signer_declared_without_a_witness_is_refused() {
+    let (router, signer) = (actor(2, 9), actor(1, 8));
+
+    let result = public_transaction(
+        private_signers(vec![router], [signer]),
+        router,
+        &mut Script::default(),
+    );
+
+    assert!(matches!(
+        result,
+        Err(ExecutionError::UnmarkedPrivateSigner { actor }) if actor == signer
+    ));
+}
+
+#[test]
+fn a_declared_private_signer_must_be_an_actor_an_authorized_witness_marks() {
+    let keys = Keys::new(1);
+    let alice = holder(&keys);
+    let router = actor(2, 9);
+    let unmarked = Actor::new(alice.account_id, id(7));
+    for (witness, signer) in [
+        (opened(keys.regular(false), &[OPENING]), blinded(alice)),
+        (opened(keys.regular(true), &[OPENING]), blinded(unmarked)),
+        (keys.regular(true), blinded(alice)),
+    ] {
+        let context = private_signers(vec![router], [signer]);
+        let witnesses = [witness];
+
+        assert!(matches!(
+            whole(context.clone(), &witnesses, root(router), &mut Script::default()),
+            Err(ExecutionError::UnmarkedPrivateSigner { actor }) if actor == signer
+        ));
+        assert!(matches!(
+            private_part(context, &witnesses, root(router), vec![Vec::new()], &mut Script::default()),
+            Err(ExecutionError::UnmarkedPrivateSigner { actor }) if actor == signer
+        ));
+    }
+}
+
+// Alice's private root hands its grant to the public `router`, which hands it on to `pool`; the
+// grant crosses under the address alice calls from, which `pool` debits.
+#[test]
+fn a_private_root_grant_crossing_out_passes_along_public_holders() {
+    let keys = Keys::new(1);
+    let alice = holder(&keys);
+    let (router, pool) = (actor(2, 9), actor(3, 7));
+    let scripted = || {
+        Script::default()
+            .presenting([SenderPresentation::Blinded(OPENING)])
+            .on(
+                alice,
+                sending_when(None, vec![send_to(router).with_grants([alice])]),
+            )
+            .on(router, forwarding(pool))
+            .on(pool, debiting)
+    };
+
+    let Pipeline {
+        whole,
+        private,
+        boundary,
+        ..
+    } = pipeline(&[router, pool], &[keys.regular(true)], alice, scripted);
+
+    let alice_authorized = vec![(alice, true), (alice, true)];
+    assert_eq!(
+        authorized(&whole)
+            .into_iter()
+            .filter(|(actor, _)| *actor == alice)
+            .collect::<Vec<_>>(),
+        alice_authorized
+    );
+    assert_eq!(authorized(&private), alice_authorized);
+    assert!(boundary.iter().all(|step| match step {
+        PrivateToPublic(delivery) | PublicToPrivate(delivery) => {
+            delivery.grants == BTreeSet::from([blinded(alice)])
+        }
+        EndPrivateSubtree | EndPublicSubtree => true,
+    }));
+}
+
+// A vault returns its sender's grant by `from` alone; a private vault runs the same code as a
+// public one, seeing the grant under the address the sender calls from.
+#[test]
+fn a_private_and_a_public_receiver_see_a_senders_grant_under_its_address() {
+    let (alice_keys, vault_keys) = (Keys::new(1), Keys::new(2));
+    let alice = holder(&alice_keys);
+    let public_vault = actor(3, 9);
+    for vault in [holder(&vault_keys), public_vault] {
+        let mut script = Script::default()
+            .presenting([SenderPresentation::Blinded(OPENING)])
+            .on(
+                alice,
+                sending_when(None, vec![send_to(vault).with_grants([alice])]),
+            )
+            .on(vault, |input| {
+                let from = input.from.expect("the vault is called");
+                echo(
+                    input,
+                    Response::keep_state().send(send_to(from).with_grants([from])),
+                )
+            });
+
+        whole(
+            public_context(vec![public_vault]),
+            &[alice_keys.regular(true), vault_keys.regular(false)],
+            root(alice),
+            &mut script,
+        )
+        .unwrap();
+
+        let received = &script.log[1];
+        assert_eq!(received.from, Some(blinded(alice)), "vault {vault:?}");
+        assert_eq!(
+            received.grants,
+            BTreeSet::from([blinded(alice)]),
+            "vault {vault:?}"
+        );
+        assert_eq!(
+            authorized(&script),
+            vec![(alice, true), (vault, false), (alice, true)],
+            "vault {vault:?}"
+        );
+    }
+}
+
+// An actor calls another actor of its own account with its grant; the callee sees the grant under
+// `from`, on a private account as on a public one.
+#[test]
+fn a_call_within_an_account_shows_the_callee_the_callers_grant_under_from() {
+    let keys = Keys::new(1);
+    let private = (holder(&keys), Actor::new(keys.regular_id(), id(7)));
+    let public = (actor(5, 8), actor(5, 7));
+    for (caller, callee) in [private, public] {
+        let mut script = Script::default()
+            .presenting([SenderPresentation::Blinded(OPENING)])
+            .on(
+                caller,
+                sending_when(None, vec![send_to(callee).with_grants([caller])]),
+            )
+            .on(callee, sending(Vec::new()));
+
+        whole(
+            PublicExecutionContext::new(
+                vec![(public.0, Authority::Signer), (public.1, Authority::None)],
+                [public.0.account_id],
+            ),
+            &[keys.regular(true)],
+            root(caller),
+            &mut script,
+        )
+        .unwrap();
+
+        let received = &script.log[1];
+        assert_eq!(received.from, Some(caller), "caller {caller:?}");
+        assert_eq!(
+            received.grants,
+            BTreeSet::from([caller]),
+            "caller {caller:?}"
+        );
+    }
+}
+
+// Alice's private root also hands the public `router` its grant over bob, which crosses out under
+// bob's own presentation rather than alice's address.
+#[test]
+fn a_grant_over_another_private_account_crosses_out_under_its_own_presentation() {
+    let (alice_keys, bob_keys) = (Keys::new(1), Keys::new(2));
+    let (alice, bob) = (holder(&alice_keys), holder(&bob_keys));
+    let (router, pool) = (actor(3, 9), actor(4, 7));
+    let bob_opening = [43; 32];
+    let scripted = || {
+        Script::default()
+            .presenting([
+                SenderPresentation::Blinded(OPENING),
+                SenderPresentation::Blinded(bob_opening),
+            ])
+            .on(
+                alice,
+                sending_when(None, vec![send_to(router).with_grants([alice, bob])]),
+            )
+            .on(router, forwarding(pool))
+            .on(pool, debiting)
+            .on(bob, sending(Vec::new()))
+    };
+
+    let Pipeline {
+        private, boundary, ..
+    } = pipeline(
+        &[router, pool],
+        &[alice_keys.regular(true), bob_keys.regular(true)],
+        alice,
+        scripted,
+    );
+
+    let mut debited = authorized(&private).split_off(1);
+    debited.sort();
+    let mut expected = vec![(alice, true), (bob, true)];
+    expected.sort();
+    assert_eq!(debited, expected);
+    assert_eq!(
+        public_calls(&boundary)[0].grants,
+        BTreeSet::from([blinded(alice), alias(bob, bob_opening)])
+    );
+}
+
+// A private PDA's seed grant crosses out under the address custody calls from; `peer` hands it to
+// `relay`, whose debit of custody is authorized.
+#[test]
+fn a_private_pda_grant_crossing_out_passes_along_public_holders() {
+    let (keys, pda_keys) = (Keys::new(1), Keys::new(2));
+    let owner = holder(&keys);
+    let seed = PdaSeed::new([5; 32]);
+    let custody = Actor::new(pda_keys.pda_id(owner.program_account_id, seed), id(8));
+    let (peer, relay) = (actor(3, 9), actor(4, 7));
+    let scripted = || {
+        Script::default()
+            .presenting([
+                SenderPresentation::Canonical,
+                SenderPresentation::Blinded(OPENING),
+            ])
+            .on(owner, sending(vec![seeded_to(custody, seed)]))
+            .on(
+                custody,
+                sending_when(Some(owner), vec![send_to(peer).with_grants([custody])]),
+            )
+            .on(peer, forwarding(relay))
+            .on(relay, debiting)
+    };
+
+    let Pipeline {
+        whole,
+        private,
+        boundary,
+        ..
+    } = pipeline(
+        &[peer, relay],
+        &[
+            keys.regular(false),
+            pda_keys.pda(owner.program_account_id, seed),
+        ],
+        owner,
+        scripted,
+    );
+
+    let expected = vec![(owner, false), (custody, true), (custody, true)];
+    assert_eq!(
+        authorized(&whole)
+            .into_iter()
+            .filter(|(actor, _)| *actor == owner || *actor == custody)
+            .collect::<Vec<_>>(),
+        expected
+    );
+    assert_eq!(authorized(&private), expected);
+    assert!(boundary.iter().all(|step| match step {
+        PrivateToPublic(delivery) | PublicToPrivate(delivery) => {
+            delivery.grants == BTreeSet::from([blinded(custody)])
+        }
+        EndPrivateSubtree | EndPublicSubtree => true,
+    }));
+}
+
+#[test]
+fn a_seeded_program_cannot_debit_another_actor_of_the_pda() {
+    let pool = actor(1, 9);
+    let seed = PdaSeed::new([5; 32]);
+    let (scam_token, token) = (id(6), id(7));
+    let vault = AccountId::for_public_pda(&pool.program_account_id, &seed);
+    let (scam_holding, holding) = (Actor::new(vault, scam_token), Actor::new(vault, token));
+    let mut script = Script::default()
+        .on(pool, sending(vec![seeded_to(scam_holding, seed)]))
+        .on(
+            scam_holding,
+            sending(vec![send_to(holding).with_grants([holding])]),
+        );
+
+    let result = public_transaction(
+        public_context(vec![pool, scam_holding, holding]),
+        pool,
+        &mut script,
+    );
+
+    assert!(matches!(
+        result,
+        Err(ExecutionError::UnheldGrant { actor }) if actor == holding
+    ));
+}
+
+#[test]
+fn a_seeded_program_cannot_debit_another_actor_of_a_private_pda() {
+    let (keys, pda_keys) = (Keys::new(1), Keys::new(2));
+    let owner = holder(&keys);
+    let seed = PdaSeed::new([5; 32]);
+    let custody = Actor::new(pda_keys.pda_id(owner.program_account_id, seed), id(8));
+    let sibling = Actor::new(custody.account_id, id(7));
+    let mut script = Script::default()
+        .on(owner, sending(vec![seeded_to(custody, seed)]))
+        .on(
+            custody,
+            sending(vec![send_to(sibling).with_grants([sibling])]),
+        );
+
+    let result = private_part(
+        PublicExecutionContext::default(),
+        &[
+            keys.regular(false),
+            pda_keys.pda(owner.program_account_id, seed),
+        ],
+        root(owner),
+        Vec::new(),
+        &mut script,
+    );
+
+    assert!(matches!(
+        result,
+        Err(ExecutionError::UnheldGrant { actor }) if actor == sibling
+    ));
+}
+
+#[test]
+fn a_program_seeds_each_actor_of_its_pda_it_needs() {
+    let pool = actor(1, 9);
+    let seed = PdaSeed::new([5; 32]);
+    let vault = AccountId::for_public_pda(&pool.program_account_id, &seed);
+    let (holding_a, holding_b) = (Actor::new(vault, id(6)), Actor::new(vault, id(7)));
+    let mut script = Script::default()
+        .on(
+            pool,
+            sending(vec![seeded_to(holding_a, seed), seeded_to(holding_b, seed)]),
+        )
+        .on(holding_a, sending(Vec::new()))
+        .on(holding_b, sending(Vec::new()));
 
     public_transaction(
-        PublicExecutionContext::new(vec![signer, peer], [signer.account_id]),
+        public_context(vec![pool, holding_a, holding_b]),
+        pool,
+        &mut script,
+    )
+    .unwrap();
+
+    assert_eq!(
+        authorized(&script),
+        vec![(pool, false), (holding_a, true), (holding_b, true)]
+    );
+}
+
+#[test]
+fn a_signer_grant_reaches_its_actor_only_where_attached() {
+    let (signer, peer) = (actor(1, 9), actor(2, 9));
+    let mut script = Script::default()
+        .on(
+            signer,
+            sending_when(None, vec![send_to(peer).with_grants([signer])]),
+        )
+        .on(
+            peer,
+            sending(vec![send_to(signer).with_grants([signer]), send_to(signer)]),
+        );
+
+    public_transaction(
+        PublicExecutionContext::new(
+            vec![(signer, Authority::Signer), (peer, Authority::None)],
+            [signer.account_id],
+        ),
         signer,
         &mut script,
     )
@@ -718,8 +1333,70 @@ fn a_root_authorized_public_account_is_authorized_from_any_origin() {
 
     assert_eq!(
         authorized(&script),
-        vec![(signer, true), (peer, false), (signer, true)]
+        vec![
+            (signer, true),
+            (peer, false),
+            (signer, true),
+            (signer, false)
+        ]
     );
+}
+
+#[test]
+fn a_signature_authorizes_only_the_actors_marked_signer() {
+    let (marked, unmarked) = (actor(1, 9), actor(1, 8));
+    let mut script = Script::default().on(
+        marked,
+        sending(vec![send_to(unmarked).with_grants([unmarked])]),
+    );
+
+    let result = public_transaction(
+        PublicExecutionContext::new(
+            vec![(marked, Authority::Signer), (unmarked, Authority::None)],
+            [marked.account_id],
+        ),
+        marked,
+        &mut script,
+    );
+
+    assert!(matches!(
+        result,
+        Err(ExecutionError::UnheldGrant { actor }) if actor == unmarked
+    ));
+    assert_eq!(authorized(&script), vec![(marked, true)]);
+}
+
+#[test]
+fn a_root_call_to_an_unmarked_actor_of_a_signer_is_not_authorized() {
+    let (marked, unmarked) = (actor(1, 9), actor(1, 8));
+    let mut script = Script::default().on(unmarked, sending(vec![]));
+
+    public_transaction(
+        PublicExecutionContext::new(
+            vec![(marked, Authority::Signer), (unmarked, Authority::None)],
+            [marked.account_id],
+        ),
+        unmarked,
+        &mut script,
+    )
+    .unwrap();
+
+    assert_eq!(authorized(&script), vec![(unmarked, false)]);
+}
+
+#[test]
+fn a_signer_mark_without_a_signature_authorizes_nothing() {
+    let marked = actor(1, 9);
+    let mut script = Script::default().on(marked, sending(vec![]));
+
+    public_transaction(
+        PublicExecutionContext::new(vec![(marked, Authority::Signer)], []),
+        marked,
+        &mut script,
+    )
+    .unwrap();
+
+    assert_eq!(authorized(&script), vec![(marked, false)]);
 }
 
 #[test]
@@ -827,6 +1504,7 @@ fn a_private_root_records_its_public_call_and_the_predicted_reply() {
         to: vault,
         message: b"credit".to_vec(),
         pda_seeds: BTreeSet::new(),
+        grants: BTreeSet::new(),
     };
     let reply = delivery(vault, owner, b"credit");
     let event = ProgramEvent {
@@ -945,36 +1623,44 @@ fn predicted_cross_messages_must_match_the_recorded_public_deliveries() {
 }
 
 #[test]
-fn a_private_credential_holds_from_any_origin_beside_a_seed_grant() {
+fn a_private_signer_grant_returns_from_a_public_actor_beside_a_seed_grant() {
     let keys = Keys::new(1);
     let owner = holder(&keys);
     let vault = actor(2, 9);
     let seed = PdaSeed::new([5; 32]);
     let custody = Actor::new(keys.pda_id(vault.program_account_id, seed), id(8));
     let mut script = Script::default()
-        .on(owner, sending_when(None, vec![send_to(vault)]))
+        .on(
+            owner,
+            sending_when(None, vec![send_to(vault).with_grants([owner])]),
+        )
         .on(custody, sending(Vec::new()));
     let predicted = vec![vec![
-        delivery(vault, owner, &[]),
+        Delivery {
+            grants: BTreeSet::from([owner]),
+            ..delivery(vault, owner, &[])
+        },
         Delivery {
             pda_seeds: BTreeSet::from([seed]),
             ..delivery(vault, custody, &[])
         },
     ]];
 
-    private_part(
+    let boundary = private_part(
         public_context(vec![vault]),
         &[keys.regular(true), keys.pda(vault.program_account_id, seed)],
         root(owner),
         predicted,
         &mut script,
     )
-    .unwrap();
+    .unwrap()
+    .boundary;
 
     assert_eq!(
         authorized(&script),
         vec![(owner, true), (owner, true), (custody, true)]
     );
+    assert_eq!(public_calls(&boundary)[0].grants, BTreeSet::from([owner]));
 }
 
 #[test]
@@ -1120,7 +1806,7 @@ fn a_private_part_refuses_an_explicit_delivery_to_the_loader() {
 // The public owner seeds two PDAs; the first enters the private relay, whose call back to it
 // carries its grant. `predicted_authorizations` is what the proof claims the relay received.
 fn relayed_grant(
-    predicted_authorizations: BTreeSet<AccountId>,
+    predicted_authorizations: BTreeSet<Actor>,
 ) -> (Result<PublicOutcome, ExecutionError>, Script) {
     let keys = Keys::new(1);
     let relay = holder(&keys);
@@ -1130,14 +1816,17 @@ fn relayed_grant(
     let sibling = public_pda(owner.program_account_id, sibling_seed);
     let actors = vec![owner, sibling, vault];
 
-    let mut private_script = Script::default().on(relay, sending(vec![send_to(vault)]));
+    let mut private_script = Script::default().on(relay, move |input| {
+        let reply = send_to(vault).with_grants(input.grants.get(&vault).copied());
+        echo(input, Response::keep_state().send(reply))
+    });
     let private_outcome = private_part(
         public_context(actors.clone()),
         &[keys.regular(false)],
         root(owner),
         vec![
             vec![Delivery {
-                inherited_authorizations: predicted_authorizations,
+                grants: predicted_authorizations,
                 ..delivery(vault, relay, ENTER)
             }],
             Vec::new(),
@@ -1155,7 +1844,10 @@ fn relayed_grant(
             ]),
         )
         .on(sibling, sending(Vec::new()))
-        .on(vault, sending_when(Some(owner), vec![enter(ENTER)]));
+        .on(
+            vault,
+            sending_when(Some(owner), vec![enter(ENTER).with_grants([vault])]),
+        );
     let result = public_part(
         public_context(actors),
         root_call(owner),
@@ -1170,7 +1862,7 @@ fn a_public_grant_crosses_a_private_relay_and_authorizes_the_reply() {
     let vault = public_pda(ENTRY.program_account_id, PdaSeed::new([5; 32]));
     let sibling = public_pda(ENTRY.program_account_id, PdaSeed::new([6; 32]));
 
-    let (result, script) = relayed_grant(BTreeSet::from([vault.account_id]));
+    let (result, script) = relayed_grant(BTreeSet::from([vault]));
 
     assert!(result.is_ok());
     assert_eq!(
@@ -1188,7 +1880,7 @@ fn a_public_grant_crosses_a_private_relay_and_authorizes_the_reply() {
 fn a_predicted_cross_message_must_claim_exactly_the_delivered_grants() {
     let sibling = public_pda(ENTRY.program_account_id, PdaSeed::new([6; 32]));
 
-    for claimed in [BTreeSet::from([sibling.account_id]), BTreeSet::new()] {
+    for claimed in [BTreeSet::from([sibling]), BTreeSet::new()] {
         assert!(matches!(
             relayed_grant(claimed).0,
             Err(ExecutionError::CrossMessageMismatch { index: 0 })
@@ -1197,7 +1889,7 @@ fn a_predicted_cross_message_must_claim_exactly_the_delivered_grants() {
 }
 
 #[test]
-fn a_withheld_private_grant_authorizes_the_return_through_a_public_actor() {
+fn a_private_pda_grant_authorizes_the_return_through_a_public_actor() {
     let (keys, pda_keys) = (Keys::new(1), Keys::new(2));
     let owner = holder(&keys);
     let seed = PdaSeed::new([5; 32]);
@@ -1206,7 +1898,10 @@ fn a_withheld_private_grant_authorizes_the_return_through_a_public_actor() {
     let peer_vault = public_pda(peer.program_account_id, seed);
     let mut private_script = Script::default()
         .on(owner, sending(vec![seeded_to(custody, seed)]))
-        .on(custody, sending_when(Some(owner), vec![send_to(peer)]));
+        .on(
+            custody,
+            sending_when(Some(owner), vec![send_to(peer).with_grants([custody])]),
+        );
 
     let private_outcome = private_part(
         public_context(vec![peer, peer_vault]),
@@ -1215,7 +1910,10 @@ fn a_withheld_private_grant_authorizes_the_return_through_a_public_actor() {
             pda_keys.pda(owner.program_account_id, seed),
         ],
         root(owner),
-        vec![vec![delivery(peer, custody, &[])]],
+        vec![vec![Delivery {
+            grants: BTreeSet::from([custody]),
+            ..delivery(peer, custody, &[])
+        }]],
         &mut private_script,
     )
     .unwrap();
@@ -1225,16 +1923,15 @@ fn a_withheld_private_grant_authorizes_the_return_through_a_public_actor() {
         vec![(owner, false), (custody, true), (custody, true)]
     );
     let boundary = private_outcome.boundary;
-    assert!(
-        public_calls(&boundary)[0]
-            .inherited_authorizations
-            .is_empty()
-    );
+    assert_eq!(public_calls(&boundary)[0].grants, BTreeSet::from([custody]));
 
     let mut public_script = Script::default()
         .on(
             peer,
-            sending(vec![send_to(custody), seeded_to(peer_vault, seed)]),
+            sending(vec![
+                send_to(custody).with_grants([custody]),
+                seeded_to(peer_vault, seed),
+            ]),
         )
         .on(peer_vault, sending(Vec::new()));
     assert!(
@@ -1253,12 +1950,11 @@ fn a_withheld_private_grant_authorizes_the_return_through_a_public_actor() {
 }
 
 #[test]
-fn a_private_seed_grant_reaches_its_subtree_but_not_a_sibling_call() {
+fn a_private_seed_grant_reaches_only_the_messages_it_is_attached_to() {
     let (keys, pda_keys, relay_keys) = (Keys::new(1), Keys::new(2), Keys::new(3));
     let owner = holder(&keys);
     let seed = PdaSeed::new([5; 32]);
     let custody = Actor::new(pda_keys.pda_id(owner.program_account_id, seed), id(8));
-    let forwarded = Actor::new(custody.account_id, id(7));
     let relay = holder(&relay_keys);
     let mut visited = false;
     let mut script = Script::default()
@@ -1270,7 +1966,7 @@ fn a_private_seed_grant_reaches_its_subtree_but_not_a_sibling_call() {
             let sync_messages = if std::mem::replace(&mut visited, true) {
                 Vec::new()
             } else {
-                vec![send_to(forwarded), send_to(relay)]
+                vec![send_to(relay).with_grants([custody])]
             };
             echo(
                 input,
@@ -1280,8 +1976,13 @@ fn a_private_seed_grant_reaches_its_subtree_but_not_a_sibling_call() {
                 },
             )
         })
-        .on(forwarded, sending(Vec::new()))
-        .on(relay, sending(vec![send_to(custody)]));
+        .on(
+            relay,
+            sending(vec![
+                send_to(custody).with_grants([custody]),
+                send_to(custody),
+            ]),
+        );
 
     private_part(
         PublicExecutionContext::default(),
@@ -1301,9 +2002,9 @@ fn a_private_seed_grant_reaches_its_subtree_but_not_a_sibling_call() {
         vec![
             (owner, false),
             (custody, true),
-            (forwarded, true),
             (relay, false),
             (custody, true),
+            (custody, false),
             (custody, false),
         ]
     );
@@ -1334,7 +2035,7 @@ fn a_private_grant_survives_its_own_public_detour_but_not_a_sibling_call() {
                 let sync_messages = if std::mem::replace(&mut detoured, true) {
                     Vec::new()
                 } else {
-                    vec![send_to(relay)]
+                    vec![send_to(relay).with_grants([custody])]
                 };
                 echo(
                     input,
@@ -1344,7 +2045,10 @@ fn a_private_grant_survives_its_own_public_detour_but_not_a_sibling_call() {
                     },
                 )
             })
-            .on(relay, sending(vec![send_to(custody)]))
+            .on(
+                relay,
+                sending(vec![send_to(custody).with_grants([custody])]),
+            )
     };
     let expected = vec![
         (owner, false),
@@ -1356,7 +2060,6 @@ fn a_private_grant_survives_its_own_public_detour_but_not_a_sibling_call() {
     let Pipeline {
         whole: whole_script,
         private: private_script,
-        boundary,
         ..
     } = pipeline(&[peer, relay], &witnesses, owner, script);
     let private_transitions: Vec<_> = authorized(&whole_script)
@@ -1365,25 +2068,22 @@ fn a_private_grant_survives_its_own_public_detour_but_not_a_sibling_call() {
         .collect();
     assert_eq!(private_transitions, expected);
     assert_eq!(authorized(&private_script), expected);
-    assert!(boundary.iter().all(|step| match step {
-        PrivateToPublic(delivery) | PublicToPrivate(delivery) => {
-            !delivery
-                .inherited_authorizations
-                .contains(&custody.account_id)
-        }
-        EndPrivateSubtree | EndPublicSubtree => true,
-    }));
 }
+// The proof may claim any grant on a cross message; settlement refuses one its sender never held.
 #[test]
-fn a_predicted_grant_over_a_private_account_authorizes_nothing() {
+fn settlement_refuses_a_predicted_grant_its_public_sender_never_held() {
     let (keys, pda_keys) = (Keys::new(1), Keys::new(2));
     let owner = holder(&keys);
     let peer = actor(3, 9);
     let seed = PdaSeed::new([5; 32]);
     let custody = Actor::new(pda_keys.pda_id(peer.program_account_id, seed), id(8));
-    let mut script = Script::default()
-        .on(owner, sending(vec![send_to(peer)]))
-        .on(custody, sending(Vec::new()));
+    let scripted = || {
+        Script::default()
+            .on(owner, sending(vec![send_to(peer)]))
+            .on(peer, sending(vec![send_to(custody)]))
+            .on(custody, sending(Vec::new()))
+    };
+    let mut private_script = scripted();
 
     let boundary = private_part(
         public_context(vec![peer]),
@@ -1393,18 +2093,26 @@ fn a_predicted_grant_over_a_private_account_authorizes_nothing() {
         ],
         root(owner),
         vec![vec![Delivery {
-            inherited_authorizations: BTreeSet::from([custody.account_id]),
+            grants: BTreeSet::from([custody]),
             ..delivery(peer, custody, &[])
         }]],
-        &mut script,
+        &mut private_script,
     )
     .unwrap()
     .boundary;
 
-    assert_eq!(authorized(&script), vec![(owner, false), (custody, false)]);
+    assert_eq!(
+        authorized(&private_script),
+        vec![(owner, false), (custody, true)]
+    );
     assert!(matches!(
-        boundary.as_slice(),
-        [PrivateToPublic(_), PublicToPrivate(forged), EndPrivateSubtree, EndPublicSubtree] if forged.inherited_authorizations.is_empty()
+        public_part(
+            public_context(vec![peer]),
+            root_call(owner),
+            boundary,
+            &mut scripted()
+        ),
+        Err(ExecutionError::CrossMessageMismatch { index: 1 })
     ));
 }
 
@@ -1455,10 +2163,59 @@ fn a_public_part_publishes_live_events() {
     assert_eq!(events, vec![(ENTRY, event)]);
 }
 
-// A public transition asks a private account's native balance to pay: the private transition runs
-// under the account's own credential, and without it the debit is refused.
+// A signer reads its native balance's state; the reply returns the grant it lent, so its handler is
+// authorized only when it lent it.
 #[test]
-fn a_public_transition_requests_a_private_debit_that_the_private_credential_authorizes() {
+fn a_state_read_reply_returns_the_grant_its_reader_lent() {
+    let reader = actor(1, 9);
+    let balance = Actor::native_balance(id(2));
+    for lend in [true, false] {
+        let mut script = Script::default()
+            .on(reader, move |input| {
+                let read = SyncMessage::new(balance, &native_token::Message::ReadState);
+                let sync_messages = if input.from.is_none() {
+                    vec![if lend {
+                        read.with_grants([reader])
+                    } else {
+                        read
+                    }]
+                } else {
+                    Vec::new()
+                };
+                echo(
+                    input,
+                    Response {
+                        sync_messages,
+                        ..Response::keep_state()
+                    },
+                )
+            })
+            .on(balance, |input| {
+                native_token::handle_message(input).unwrap_or_else(|error| panic!("{error}"))
+            });
+
+        public_transaction(
+            PublicExecutionContext::new(
+                vec![(reader, Authority::Signer), (balance, Authority::None)],
+                [reader.account_id],
+            ),
+            reader,
+            &mut script,
+        )
+        .unwrap();
+
+        assert_eq!(
+            authorized(&script),
+            vec![(reader, true), (balance, false), (reader, lend)],
+            "lend {lend}"
+        );
+    }
+}
+
+// A public root asks a private account's native balance to pay, attaching the payer's declared
+// signer grant; only a payer whose witness authorizes it can be declared.
+#[test]
+fn a_public_root_attaches_a_declared_private_signer_grant_to_a_private_debit() {
     let keys = Keys::new(1);
     let (requester, payee) = (actor(2, 9), Actor::native_balance(id(3)));
     let payer = Actor::native_balance(keys.regular_id());
@@ -1467,19 +2224,22 @@ fn a_public_transition_requests_a_private_debit_that_the_private_credential_auth
             native_token::handle_message(input).unwrap_or_else(|error| panic!("{error}"))
         });
         private_part(
-            public_context(vec![requester, payee]),
+            private_signers(vec![requester, payee], [payer]),
             &[keys.regular(credential)],
             root(requester),
             vec![
-                vec![delivery(
-                    requester,
-                    payer,
-                    &borsh::to_vec(&native_token::Message::Transfer {
-                        to: payee.account_id,
-                        amount: 0,
-                    })
-                    .unwrap(),
-                )],
+                vec![Delivery {
+                    grants: BTreeSet::from([payer]),
+                    ..delivery(
+                        requester,
+                        payer,
+                        &borsh::to_vec(&native_token::Message::Transfer {
+                            to: payee.account_id,
+                            amount: 0,
+                        })
+                        .unwrap(),
+                    )
+                }],
                 Vec::new(),
             ],
             &mut script,
@@ -1494,16 +2254,10 @@ fn a_public_transition_requests_a_private_debit_that_the_private_credential_auth
             &borsh::to_vec(&native_token::Message::Credit(0)).unwrap(),
         )
     );
-    let Err(refused) =
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_private(false)))
-    else {
-        panic!("a debit without the payer's credential must not prove");
-    };
-    assert!(
-        refused
-            .downcast_ref::<String>()
-            .is_some_and(|message| message.contains("is not authorized"))
-    );
+    assert!(matches!(
+        run_private(false),
+        Err(ExecutionError::UnmarkedPrivateSigner { actor }) if actor == payer
+    ));
 }
 
 // Claims are entries before the root, run by the modes executing private roots; settlement
@@ -1690,7 +2444,10 @@ fn a_fee_only_payer_authorizes_the_fee_entry_alone() {
             root(payer),
             Vec::new(),
             Some(fee),
-            &[keys.witness(WitnessKind::Regular(kind))],
+            &[PrivateWitness {
+                signer_programs: BTreeSet::from([native_token::NATIVE_TOKEN_PROGRAM_ID]),
+                ..keys.witness(WitnessKind::Regular(kind))
+            }],
         )?
         .execute(&mut script)?;
         Ok::<_, ExecutionError>(authorized(&script))
@@ -1938,6 +2695,7 @@ fn sync_message(to: Actor, message: &[u8]) -> SyncMessage {
         to,
         message: message.to_vec(),
         pda_seeds: BTreeSet::new(),
+        grants: BTreeSet::new(),
     }
 }
 
@@ -2579,7 +3337,7 @@ fn an_async_message_to_a_declared_but_unadmitted_account_is_refused() {
 // `relay`, whose call back does not, though relay's own seed grants afresh. The signer keeps its
 // credential.
 #[test]
-fn a_promoted_async_message_delegates_no_authorization_but_keeps_transaction_credentials() {
+fn a_promoted_async_message_carries_no_grant_not_even_a_signers() {
     let (owner, sibling, relay, signer) = (actor(1, 9), actor(2, 7), actor(3, 8), actor(4, 7));
     let (seed, relay_seed) = (PdaSeed::new([5; 32]), PdaSeed::new([6; 32]));
     let vault = public_pda(owner.program_account_id, seed);
@@ -2600,14 +3358,14 @@ fn a_promoted_async_message_delegates_no_authorization_but_keeps_transaction_cre
         .on(vault, move |input| {
             let response = if input.message == b"seeded" {
                 Response::keep_state()
-                    .send(send_to(sibling))
+                    .send(send_to(sibling).with_grants([vault]))
                     .send(async_message(relay, &[]))
             } else {
                 Response::keep_state()
             };
             echo(input, response)
         })
-        .on(sibling, sending(vec![send_to(vault)]))
+        .on(sibling, sending(vec![send_to(vault).with_grants([vault])]))
         .on(
             relay,
             sending(vec![send_to(vault), seeded_to(relay_vault, relay_seed)]),
@@ -2616,10 +3374,13 @@ fn a_promoted_async_message_delegates_no_authorization_but_keeps_transaction_cre
         .on(signer, sending(Vec::new()));
 
     public_transaction(
-        PublicExecutionContext {
-            authorized_accounts: BTreeSet::from([signer.account_id]),
-            ..public_context(vec![owner, vault, sibling, relay, relay_vault, signer])
-        },
+        PublicExecutionContext::new(
+            [owner, vault, sibling, relay, relay_vault]
+                .into_iter()
+                .map(|actor| (actor, Authority::None))
+                .chain([(signer, Authority::Signer)]),
+            [signer.account_id],
+        ),
         owner,
         &mut script,
     )
@@ -2636,15 +3397,16 @@ fn a_promoted_async_message_delegates_no_authorization_but_keeps_transaction_cre
             (vault, false),
             (relay_vault, true),
             (vault, false),
-            (signer, true),
+            (signer, false),
         ]
     );
 }
 
-// The private `owner` seeds its PDA `custody`, which calls public `peer`; peer calls custody and
-// reaches public `relay`, asynchronously when `asynchronous` and otherwise by a call, whose call
-// back reseeds custody when `regrant`. `forge` flips the inheritance the proof claims for that
-// callback.
+// The private `owner` seeds its PDA `custody`, which calls public `peer` with its grant; peer
+// calls custody back with it and reaches public `relay`, asynchronously when `asynchronous` and
+// otherwise by a call, whose call back reseeds custody when `regrant` and otherwise carries no
+// grant, as relay never held custody's. `forge` flips whether the proof claims custody's grant for
+// that callback.
 fn custody_callbacks(
     asynchronous: bool,
     regrant: bool,
@@ -2672,9 +3434,12 @@ fn custody_callbacks(
     let script = || {
         Script::default()
             .on(owner, sending(vec![seeded_to(custody, seed)]))
-            .on(custody, sending_when(Some(owner), vec![send_to(peer)]))
+            .on(
+                custody,
+                sending_when(Some(owner), vec![send_to(peer).with_grants([custody])]),
+            )
             .on(peer, move |input| {
-                let response = Response::keep_state().send(send_to(custody));
+                let response = Response::keep_state().send(send_to(custody).with_grants([custody]));
                 echo(
                     input,
                     if asynchronous {
@@ -2706,8 +3471,9 @@ fn custody_callbacks(
         let forged = predicted_cross_messages[0]
             .last_mut()
             .expect("relay's callback is the last cross message of peer's call");
-        assert!(forged.inherited_authorizations.is_empty());
-        forged.inherits_entry_authorizations = !forged.inherits_entry_authorizations;
+        if !forged.grants.remove(&custody) {
+            forged.grants.insert(custody);
+        }
     }
     let mut private_script = script();
     let boundary = private_part(
@@ -2722,7 +3488,7 @@ fn custody_callbacks(
     let inheritance = boundary
         .iter()
         .filter_map(|step| match step {
-            PublicToPrivate(delivery) => Some(delivery.inherits_entry_authorizations),
+            PublicToPrivate(delivery) => Some(delivery.grants.contains(&custody)),
             PrivateToPublic(_) | EndPrivateSubtree | EndPublicSubtree => None,
         })
         .collect();
@@ -2741,10 +3507,11 @@ fn custody_callbacks(
 }
 
 #[test]
-fn a_withheld_private_grant_returns_along_calls_but_not_across_a_promoted_async_message() {
+fn a_private_grant_returns_only_from_a_public_actor_that_holds_it() {
     for (asynchronous, regrant, expected) in [
-        (false, false, [true, true, true]),
+        (false, false, [true, true, false]),
         (true, false, [true, true, false]),
+        (false, true, [true, true, true]),
         (true, true, [true, true, true]),
     ] {
         let (in_whole, in_private, inheritance, settled) =
@@ -2758,11 +3525,7 @@ fn a_withheld_private_grant_returns_along_calls_but_not_across_a_promoted_async_
             in_private, expected,
             "asynchronous {asynchronous}, regrant {regrant}"
         );
-        assert_eq!(
-            inheritance,
-            [true, !asynchronous],
-            "asynchronous {asynchronous}"
-        );
+        assert_eq!(inheritance, [true, false], "asynchronous {asynchronous}");
         settled.unwrap_or_else(|error| {
             panic!("asynchronous {asynchronous}, regrant {regrant}: {error:?}")
         });
@@ -2770,16 +3533,12 @@ fn a_withheld_private_grant_returns_along_calls_but_not_across_a_promoted_async_
 }
 
 #[test]
-fn settlement_refuses_a_forged_inheritance_bit_beside_matching_authorizations() {
+fn settlement_refuses_a_forged_private_grant() {
     for asynchronous in [false, true] {
         let (_, in_private, inheritance, settled) = custody_callbacks(asynchronous, false, true);
 
-        assert_eq!(in_private[2], asynchronous, "asynchronous {asynchronous}");
-        assert_eq!(
-            inheritance,
-            [true, asynchronous],
-            "asynchronous {asynchronous}"
-        );
+        assert!(in_private[2], "asynchronous {asynchronous}");
+        assert_eq!(inheritance, [true, true], "asynchronous {asynchronous}");
         assert!(
             matches!(
                 settled,
@@ -2812,7 +3571,7 @@ fn private_authorizations(
 // Custody's first call from `peer` detours through public `relay`, whose promoted async message
 // reaches `back`, which calls custody without the grant; peer's later call still carries it.
 #[test]
-fn a_promoted_async_message_inside_a_nested_detour_clears_only_its_own_callbacks() {
+fn a_promoted_async_message_inside_a_detour_carries_no_grant() {
     let (keys, pda_keys) = (Keys::new(1), Keys::new(2));
     let owner = holder(&keys);
     let seed = PdaSeed::new([5; 32]);
@@ -2827,9 +3586,9 @@ fn a_promoted_async_message_inside_a_nested_detour_clears_only_its_own_callbacks
             .on(owner, sending(vec![seeded_to(custody, seed)]))
             .on(custody, move |input| {
                 let sync_messages = if input.from == Some(owner) {
-                    vec![send_to(peer)]
+                    vec![send_to(peer).with_grants([custody])]
                 } else if input.message == ENTER {
-                    vec![send_to(relay)]
+                    vec![send_to(relay).with_grants([custody])]
                 } else {
                     Vec::new()
                 };
@@ -2846,9 +3605,9 @@ fn a_promoted_async_message_inside_a_nested_detour_clears_only_its_own_callbacks
                 sending(vec![
                     SyncMessage {
                         message: ENTER.to_vec(),
-                        ..send_to(custody)
+                        ..send_to(custody).with_grants([custody])
                     },
-                    send_to(custody),
+                    send_to(custody).with_grants([custody]),
                 ]),
             )
             .on(relay, move |input| {
@@ -2875,7 +3634,7 @@ fn a_promoted_async_message_inside_a_nested_detour_clears_only_its_own_callbacks
 // `peer` starts a new entry: peer's call back restores custody's grant although the path began with
 // a promoted async message.
 #[test]
-fn a_public_detour_after_a_promoted_async_message_still_returns_what_its_entry_withheld() {
+fn a_public_detour_after_a_promoted_async_message_returns_an_attached_grant() {
     let (keys, pda_keys) = (Keys::new(1), Keys::new(2));
     let owner = holder(&keys);
     let seed = PdaSeed::new([5; 32]);
@@ -2896,8 +3655,11 @@ fn a_public_detour_after_a_promoted_async_message_still_returns_what_its_entry_w
                 };
                 echo(input, response)
             })
-            .on(custody, sending_when(Some(owner), vec![send_to(peer)]))
-            .on(peer, sending(vec![send_to(custody)]))
+            .on(
+                custody,
+                sending_when(Some(owner), vec![send_to(peer).with_grants([custody])]),
+            )
+            .on(peer, sending(vec![send_to(custody).with_grants([custody])]))
     };
     let expected = vec![
         (owner, false),
@@ -3002,10 +3764,7 @@ fn a_selected_public_async_message_into_a_private_account_is_a_predicted_cross_m
     } = pipeline(&[ENTRY], &[keys.regular(false)], ENTRY, || scripted(b"m"));
     assert_eq!(
         predicted_cross_messages,
-        vec![vec![Delivery {
-            inherits_entry_authorizations: false,
-            ..delivery(ENTRY, owner, b"m")
-        }]]
+        vec![vec![delivery(ENTRY, owner, b"m")]]
     );
     assert!(matches!(
         public_part(
@@ -3350,11 +4109,72 @@ fn a_receipt_root_to_a_private_pda_grants_its_receiver_nothing() {
         vec![ReceiveInput {
             receiver: custody,
             from: Some(actor(4, 5)),
-            is_authorized: false,
+            grants: BTreeSet::new(),
             pre_state: ActorState::empty(),
             message: b"stored".to_vec(),
         }]
     );
+}
+
+// An async message carries no grant, so a private PDA's program acts on its own PDA in the
+// claiming turn by seeding again.
+#[test]
+fn a_private_pda_acts_on_an_async_message_by_reseeding_in_the_claiming_turn() {
+    let (keys, seed) = (Keys::new(1), PdaSeed::new([5; 32]));
+    let custody = Actor::new(keys.pda_id(id(5), seed), id(5));
+    let sender = actor(4, 5);
+    let mut script = Script::default().on(
+        custody,
+        sending_when(Some(sender), vec![seeded_to(custody, seed)]),
+    );
+
+    private_part(
+        PublicExecutionContext::default(),
+        &[keys.pda(id(5), seed)],
+        TransactionEntry::Async(stored(sender, custody, b"stored")),
+        Vec::new(),
+        &mut script,
+    )
+    .unwrap();
+
+    assert_eq!(authorized(&script), vec![(custody, false), (custody, true)]);
+}
+
+// The root hands the signer's grant to a counterparty for a round trip: it comes back on the
+// callback only if the counterparty attaches it, and the counterparty could have used it meanwhile.
+#[test]
+fn a_grant_handed_to_a_counterparty_returns_only_if_the_counterparty_attaches_it() {
+    let (signer, amm, lender) = (actor(1, 9), actor(2, 7), actor(3, 8));
+    for (returns, expected) in [(true, true), (false, false)] {
+        let mut script = Script::default()
+            .on(amm, move |input| {
+                let response = if input.from.is_none() {
+                    Response::keep_state().send(send_to(lender).with_grants([signer]))
+                } else {
+                    Response::keep_state()
+                        .send(send_to(signer).with_grants(input.grants.get(&signer).copied()))
+                };
+                echo(input, response)
+            })
+            .on(lender, move |input| {
+                let callback = send_to(amm);
+                let callback = if returns {
+                    callback.with_grants([signer])
+                } else {
+                    callback
+                };
+                echo(input, Response::keep_state().send(callback))
+            })
+            .on(signer, sending(Vec::new()));
+
+        public_transaction(signed_amm_call(signer, amm, lender), amm, &mut script).unwrap();
+
+        assert_eq!(
+            authorized(&script).last(),
+            Some(&(signer, expected)),
+            "returns {returns}"
+        );
+    }
 }
 
 #[test]
@@ -3392,11 +4212,7 @@ fn a_selected_async_message_whose_boundary_step_misstates_its_sender_destination
             ..selected.envelope.clone()
         }),
         Delivery {
-            inherited_authorizations: BTreeSet::from([ENTRY.account_id]),
-            ..selected.clone()
-        },
-        Delivery {
-            inherits_entry_authorizations: true,
+            grants: BTreeSet::from([ENTRY]),
             ..selected.clone()
         },
     ] {

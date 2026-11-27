@@ -296,6 +296,7 @@ fn a_sent_transitions_nonzero_exit_adds_its_cycles_to_its_senders() {
                 to: exiting,
                 message: Vec::new(),
                 pda_seeds: BTreeSet::new(),
+                grants: BTreeSet::new(),
             })
         });
         let tx = public_tx(
@@ -567,7 +568,7 @@ fn charged_alike(
             .message()
             .public_context
             .actors
-            .iter()
+            .keys()
             .map(|actor| {
                 let account = state.get_account_by_id(actor.account_id);
                 (

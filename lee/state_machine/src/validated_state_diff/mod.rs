@@ -10,8 +10,8 @@ use lee_core::{
     RecoveryBinding, RootCall, Timestamp,
     account::{Account, AccountId, Actor, ActorState, Cycles, Nonce},
     execution_state::{
-        BoundaryStep, PublicExecutionContext, PublicOutcome, PublicPart, TransactionEntry,
-        TransitionView, WholeExecution,
+        Authority, BoundaryStep, PublicExecutionContext, PublicOutcome, PublicPart,
+        TransactionEntry, TransitionView, WholeExecution,
     },
     program::{PROGRAM_LOADER_ACCOUNT_ID, Publication, ReceiveInput, TransactionEvent, Transition},
     signing_key::{SigningKeyState, signature_program_id},
@@ -223,7 +223,7 @@ impl ValidatedStateDiff {
     pub fn from_fee_settlement_invocation(
         to: Actor,
         message: &[u8],
-        public_actors: &BTreeSet<Actor>,
+        public_actors: impl IntoIterator<Item = (Actor, Authority)>,
         authorized: &HashSet<AccountId>,
         state: &V03State,
         block_id: BlockId,
@@ -235,7 +235,7 @@ impl ValidatedStateDiff {
                 to,
                 message: message.to_vec(),
             },
-            PublicExecutionContext::new(public_actors.iter().copied(), authorized.iter().copied()),
+            PublicExecutionContext::new(public_actors, authorized.iter().copied()),
             authorized.iter().copied().collect(),
             Vec::new(), // no nonces to advance nor keys to rotate!
             state,

@@ -426,9 +426,15 @@ pub fn build_slash_tx(
         ..LeeMessage::try_new(
             config,
             vec![
-                config,
-                Actor::native_balance(system_accounts::stake_funds_account_id(&ownership_id)),
-                Actor::native_balance(sequencer_stake_core::slash_sink_account_id(program_id)),
+                (config, lee::Authority::None),
+                (
+                    Actor::native_balance(system_accounts::stake_funds_account_id(&ownership_id)),
+                    lee::Authority::None,
+                ),
+                (
+                    Actor::native_balance(sequencer_stake_core::slash_sink_account_id(program_id)),
+                    lee::Authority::None,
+                ),
             ],
             std::collections::BTreeMap::new(),
             sequencer_stake_core::Message::Slash {

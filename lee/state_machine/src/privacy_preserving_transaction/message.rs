@@ -34,7 +34,7 @@ impl Message {
         let mut seen = HashSet::new();
         self.public_context
             .actors
-            .iter()
+            .keys()
             .map(|actor| actor.account_id)
             .filter(|account_id| seen.insert(*account_id))
             .collect()
@@ -63,7 +63,9 @@ pub mod tests {
     use sha2::{Digest as _, Sha256};
 
     use super::{EncryptedNote, KEYED_PREFIX, Message, PREFIX};
-    use crate::{PublicAccountEvidence, public_transaction, transaction_message::hash_with_keys};
+    use crate::{
+        Authority, PublicAccountEvidence, public_transaction, transaction_message::hash_with_keys,
+    };
 
     fn key(commitment: u8) -> SigningKeyState {
         SigningKeyState {
@@ -146,6 +148,7 @@ pub mod tests {
             &[0, 0, 0, 0][..], // public_context.actors: none
             &[0, 0, 0, 0],     // public_context.authorized_accounts: none
             &[0, 0, 0, 0],     // public_context.promotions: none
+            &[0, 0, 0, 0],     // public_context.private_signers: none
             &[0, 0, 0, 0],     // execution.boundary: no steps
             &[0, 0, 0, 0],     // execution.async_messages: none
             &[0, 0, 0, 0],     // execution.recovery_bindings: none
@@ -176,11 +179,11 @@ pub mod tests {
         let message = pinned_message();
         assert_eq!(
             message.message_with_keys(&[key(7)]),
-            hex!("390a36696914cfd5b87712afb7f9d5929fb5f3fd8c74c2e3c5a55abaadec1830")
+            hex!("2c2b3dc299c78e6295c07d79be857b89b7c136d0b951bbf3cb60b0576bac039e")
         );
         assert_eq!(
             message.message_with_keys(&[key(1), key(2), key(3)]),
-            hex!("f0ea4896789f552b61b37171c6e8ff96c88f0f86137c691796eaca3b35bfd829")
+            hex!("793768ee23f3dfe964b7ffc3015e7842a6903f45191bd608f2f00058d19328b9")
         );
     }
 
@@ -190,7 +193,7 @@ pub mod tests {
         let public = public_transaction::Message::new_preserialized(
             to,
             vec![0],
-            [to],
+            [(to, Authority::Signer)],
             BTreeMap::from([(to.account_id, Nonce(1))]),
             None,
         );
@@ -200,7 +203,7 @@ pub mod tests {
 
         assert_eq!(
             as_privacy,
-            hex!("8686fa31b68baaf8ee7b1d66d00f03a86c5f02e4571da6c7d922a8d2405ba2c5")
+            hex!("fa0f92a59ce95c6054aff7667dd68882b859b259eda8af872aa51872022e2571")
         );
         assert_ne!(public.message_with_keys(&next), as_privacy);
     }
