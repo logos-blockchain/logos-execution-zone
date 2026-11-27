@@ -598,6 +598,22 @@ fn validate_bridge_account_modification(
     diff: &ValidatedStateDiff,
     is_public_tx: bool,
 ) -> Result<(), lee::error::LeeError> {
+    // Bridge state, deposit receipts included, is written only by an injected deposit.
+    let bridge_program = programs::bridge_account_id();
+    if let Some(account_id) = diff.public_diff().iter().find_map(|(account_id, post)| {
+        (state
+            .get_account_by_id(*account_id)
+            .data
+            .actor_states
+            .get(&bridge_program)
+            != post.data.actor_states.get(&bridge_program))
+        .then_some(account_id)
+    }) {
+        return Err(lee::error::LeeError::InvalidInput(format!(
+            "Transaction writes bridge state on {account_id}"
+        )));
+    }
+
     let bridge_account_id = system_accounts::bridge_account_id();
     let pre = state.get_account_by_id(bridge_account_id);
     let Some(post) = diff.public_diff().get(&bridge_account_id) else {
@@ -817,6 +833,31 @@ mod tests {
             validate_bridge_account_modification(&state, &diff, false).is_err(),
             "a non-public transaction must not be allowed to modify the bridge account",
         );
+    }
+
+    #[test]
+    fn bridge_guard_rejects_writing_a_deposit_receipt() {
+        let receipt_id =
+            bridge_core::deposit_receipt_account_id(programs::bridge_account_id(), [3; 32]);
+        let pre = Account::default();
+        let post = Account {
+            nonce: pre.nonce,
+            data: pre
+                .data
+                .clone()
+                .with_actor_state(programs::bridge_account_id(), vec![1].into()),
+        };
+        let (state, diff) = state_and_diff(receipt_id, pre, post);
+
+        for is_public_tx in [true, false] {
+            assert!(
+                validate_bridge_account_modification(&state, &diff, is_public_tx).is_err(),
+                "only an injected deposit may write a receipt",
+            );
+        }
+        validate_user_state_modification(&injected_deposit(), &state, &diff)
+            .expect("an injected deposit writes its receipt");
+        assert!(validate_user_state_modification(&signed_transfer(), &state, &diff).is_err());
     }
 
     #[test]
