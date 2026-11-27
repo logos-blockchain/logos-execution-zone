@@ -1,12 +1,7 @@
-use std::{
-    ffi::c_char,
-    net::{Ipv4Addr, SocketAddr},
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{ffi::c_char, sync::Arc};
 
 use clap::Parser as _;
-use sequencer_service::{SequencerConfig, StartArgs, ops::OpsServer};
+use sequencer_service::{StartArgs, ops::OpsServer};
 
 use crate::{
     error::FfiOperationError,
@@ -23,97 +18,6 @@ pub type InitializedSequencerServiceFFIResult =
 struct StartCommand {
     #[clap(flatten)]
     args: StartArgs,
-}
-
-/// Creates and starts an sequencer based on the provided
-/// configuration file path.
-///
-/// # Arguments
-///
-/// - `runtime`: A runtime for the sequencer to run on, or null to have the sequencer create and own
-///   one.
-/// - `config_path`: A pointer to a string representing the path to the configuration file.
-///
-/// # Returns
-///
-/// An `InitializedSequencerServiceFFIResult` containing either a pointer to the
-/// initialized `SequencerServiceFFI` or an error code.
-///
-/// # Safety
-/// The caller must ensure that:
-/// - `runtime` is either null or a valid pointer to a [`Runtime`] that outlives the sequencer.
-/// - `config_path` is a valid pointer to a null-terminated C string.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn sequencer_ffi_start_sequencer(
-    runtime: *const Runtime,
-    config_path: *const c_char,
-) -> InitializedSequencerServiceFFIResult {
-    // SAFETY: The caller must ensure the validness of the pointer arguments.
-    unsafe { setup_sequencer(runtime, config_path) }.map_or_else(
-        InitializedSequencerServiceFFIResult::from_error,
-        InitializedSequencerServiceFFIResult::from_value,
-    )
-}
-
-/// Initializes and starts an sequencer based on the provided
-/// configuration file path.
-///
-/// # Arguments
-///
-/// - `runtime`: A runtime for the sequencer to run on, or null to create and own one.
-/// - `config_path`: A pointer to a string representing the path to the configuration file.
-///
-/// # Returns
-///
-/// A `Result` containing either the initialized `SequencerServiceFFI` or an
-/// error code.
-///
-/// # Safety
-/// The caller must ensure that:
-/// - `runtime` is either null or a valid pointer to a [`Runtime`] that outlives the sequencer.
-/// - `config_path` is a valid pointer to a null-terminated C string.
-pub unsafe fn setup_sequencer(
-    runtime: *const Runtime,
-    config_path: *const c_char,
-) -> Result<SequencerServiceFFI, FfiOperationError> {
-    if config_path.is_null() {
-        tracing::error!("Attempted to give a null config_path pointer. This is a bug. Aborting.");
-        return Err(FfiOperationError::NullPointer);
-    }
-
-    let user_config_path = PathBuf::from(
-        unsafe { std::ffi::CStr::from_ptr(config_path) }
-            .to_str()
-            .map_err(|e| {
-                tracing::error!(error = %e, "Could not convert the config path to string");
-                FfiOperationError::SequencerInitializationError
-            })?,
-    );
-    let config = SequencerConfig::from_path(&user_config_path).map_err(|e| {
-        tracing::error!(error = %e, "Failed to read config");
-        FfiOperationError::SequencerInitializationError
-    })?;
-
-    // SAFETY: the caller guarantees `runtime` is null or valid and outlives the sequencer.
-    let runtime = unsafe { runtime_or_new(runtime) }?;
-
-    // This crate leaves the service's `rpc` feature off, so nothing binds this
-    // and queries reach the executor through the FFI instead. A workspace build
-    // can unify the feature back on, so keep it a loopback port the kernel
-    // picks, which can collide with nothing.
-    let rpc_addr = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
-
-    let handle = runtime
-        .block_on(sequencer_service::run(config, rpc_addr))
-        .map_err(|e| {
-            tracing::error!(
-                error = format_args!("{e:#}"),
-                "Could not start the sequencer"
-            );
-            FfiOperationError::SequencerInitializationError
-        })?;
-
-    Ok(SequencerServiceFFI::new(handle, runtime))
 }
 
 /// Creates and starts a sequencer the way `sequencer_service start` does, taking the same
@@ -145,13 +49,13 @@ pub unsafe fn setup_sequencer(
 /// - `runtime` is either null or a valid pointer to a [`Runtime`] that outlives the sequencer.
 /// - `args` points to `args_len` valid pointers to null-terminated C strings.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn sequencer_ffi_start_sequencer_with_args(
+pub unsafe extern "C" fn sequencer_ffi_start_sequencer(
     runtime: *const Runtime,
     args: *const *const c_char,
     args_len: usize,
 ) -> InitializedSequencerServiceFFIResult {
     // SAFETY: The caller must ensure the validness of the pointer arguments.
-    unsafe { setup_sequencer_with_args(runtime, args, args_len) }.map_or_else(
+    unsafe { setup_sequencer(runtime, args, args_len) }.map_or_else(
         InitializedSequencerServiceFFIResult::from_error,
         InitializedSequencerServiceFFIResult::from_value,
     )
@@ -176,11 +80,11 @@ unsafe fn runtime_or_new(runtime: *const Runtime) -> Result<Runtime, FfiOperatio
     }
 }
 
-/// See [`sequencer_ffi_start_sequencer_with_args`].
+/// See [`sequencer_ffi_start_sequencer`].
 ///
 /// # Safety
-/// As for [`sequencer_ffi_start_sequencer_with_args`].
-unsafe fn setup_sequencer_with_args(
+/// As for [`sequencer_ffi_start_sequencer`].
+unsafe fn setup_sequencer(
     runtime: *const Runtime,
     args: *const *const c_char,
     args_len: usize,
@@ -259,7 +163,7 @@ unsafe fn setup_sequencer_with_args(
             FfiOperationError::SequencerInitializationError
         })?;
 
-    Ok(SequencerServiceFFI::with_ops(handle, ops, runtime))
+    Ok(SequencerServiceFFI::new(handle, ops, runtime))
 }
 
 /// Whether every task of the sequencer is still running, as its `/health` reports.

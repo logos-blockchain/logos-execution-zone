@@ -582,7 +582,7 @@ fn public_call(tx: &FfiTransaction) -> Option<(Actor, &[FfiDeclaredActor], &[u8]
 
 /// A node started like `sequencer_service start` serves its RPC and ops server where told to.
 #[test]
-fn sequencer_ffi_start_with_args_serves_rpc_and_ops() -> Result<()> {
+fn sequencer_ffi_serves_rpc_and_ops() -> Result<()> {
     let rpc_addr = free_local_addr()?;
     let metrics_addr = free_local_addr()?;
     let sequencer_ffi_helpers::JoiningSetup {
@@ -590,15 +590,10 @@ fn sequencer_ffi_start_with_args_serves_rpc_and_ops() -> Result<()> {
         sequencer_ffi: sequencer_ffi_res,
         sequencer_home: _sequencer_home,
         ..
-    } = sequencer_ffi_helpers::joining_setup_no_stake_with_args(&[
-        "--rpc-listen-address".to_owned(),
-        rpc_addr.to_string(),
-        "--metrics-listen-address".to_owned(),
-        metrics_addr.to_string(),
-    ])?;
+    } = sequencer_ffi_helpers::joining_setup_no_stake_on(rpc_addr, metrics_addr)?;
 
     let sequencer_ffi =
-    // SAFETY: sequencer_ffi_helpers::joining_setup_no_stake_with_args guarantees validity.
+    // SAFETY: sequencer_ffi_helpers::joining_setup_no_stake_on guarantees validity.
     unsafe { &*sequencer_ffi_res.value };
 
     // SAFETY: sequencer_ffi created by FFI, it is valid.

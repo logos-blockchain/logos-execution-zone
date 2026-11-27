@@ -1531,29 +1531,6 @@ void primitives_ffi_free_ffi_transaction_opt(struct FfiOption_FfiTransaction *va
 void primitives_ffi_free_ffi_transaction_vec(struct FfiVec_FfiTransaction *val);
 
 /**
- * Creates and starts an sequencer based on the provided
- * configuration file path.
- *
- * # Arguments
- *
- * - `runtime`: A runtime for the sequencer to run on, or null to have the sequencer create and own
- *   one.
- * - `config_path`: A pointer to a string representing the path to the configuration file.
- *
- * # Returns
- *
- * An `InitializedSequencerServiceFFIResult` containing either a pointer to the
- * initialized `SequencerServiceFFI` or an error code.
- *
- * # Safety
- * The caller must ensure that:
- * - `runtime` is either null or a valid pointer to a [`Runtime`] that outlives the sequencer.
- * - `config_path` is a valid pointer to a null-terminated C string.
- */
-InitializedSequencerServiceFFIResult sequencer_ffi_start_sequencer(const struct Runtime *runtime,
-                                                                   const char *config_path);
-
-/**
  * Creates and starts a sequencer the way `sequencer_service start` does, taking the same
  * options.
  *
@@ -1583,9 +1560,9 @@ InitializedSequencerServiceFFIResult sequencer_ffi_start_sequencer(const struct 
  * - `runtime` is either null or a valid pointer to a [`Runtime`] that outlives the sequencer.
  * - `args` points to `args_len` valid pointers to null-terminated C strings.
  */
-InitializedSequencerServiceFFIResult sequencer_ffi_start_sequencer_with_args(const struct Runtime *runtime,
-                                                                             const char *const *args,
-                                                                             uintptr_t args_len);
+InitializedSequencerServiceFFIResult sequencer_ffi_start_sequencer(const struct Runtime *runtime,
+                                                                   const char *const *args,
+                                                                   uintptr_t args_len);
 
 /**
  * Whether every task of the sequencer is still running, as its `/health` reports.

@@ -26,18 +26,9 @@ struct Inner {
 }
 
 impl SequencerServiceFFI {
+    /// Owns the sequencer behind `handle`, and the ops server serving its health and metrics.
     #[must_use]
-    pub fn new(handle: SequencerHandle, runtime: Runtime) -> Self {
-        Self::with_ops(Arc::new(handle), None, runtime)
-    }
-
-    /// Like [`Self::new`], also owning the ops server that serves `handle`'s health and metrics.
-    #[must_use]
-    pub fn with_ops(
-        handle: Arc<SequencerHandle>,
-        ops: Option<OpsServer>,
-        runtime: Runtime,
-    ) -> Self {
+    pub fn new(handle: Arc<SequencerHandle>, ops: Option<OpsServer>, runtime: Runtime) -> Self {
         Self {
             handle: Box::into_raw(Box::new(Inner { handle, ops })).cast::<c_void>(),
             runtime,
