@@ -2312,6 +2312,7 @@ dependencies = [
  "sequencer_stake_core",
  "serde",
  "serde_json",
+ "signature_core",
  "system_upgrader_core",
  "test_guest_core",
  "test_programs",
@@ -9448,11 +9449,15 @@ dependencies = [
  "build_utils",
  "clock_core",
  "fee_core",
+ "hex-literal 1.1.0",
+ "k256",
  "lee",
  "lee_core",
  "program_loader_core",
  "risc0-binfmt",
  "sequencer_stake_core",
+ "sha2 0.10.9",
+ "signature_core",
  "system_upgrader_core",
  "test_guest_core",
  "test_programs",
@@ -11753,6 +11758,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28d567dcbaf0049cb8ac2608a76cd95ff9e4412e1899d389ee400918ca7537f5"
 
 [[package]]
+name = "signature_core"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "lee_core",
+]
+
+[[package]]
+name = "signature_program"
+version = "0.1.0"
+dependencies = [
+ "borsh",
+ "hex-literal 1.1.0",
+ "k256",
+ "lee_core",
+ "sha2 0.10.9",
+ "signature_core",
+]
+
+[[package]]
 name = "simd-adler32"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -13711,6 +13736,7 @@ dependencies = [
  "sequencer_stake_core",
  "serde",
  "serde_json",
+ "signature_core",
  "system_accounts",
  "tempfile",
  "test_guest_core",

@@ -7,16 +7,17 @@ pub use public_key::PublicKey;
 use rand::{RngCore as _, rngs::OsRng};
 pub use scheme::{
     AuthError, KeyScheme, SignatureError, SignatureScheme, authenticate, current_key,
-    is_well_formed,
+    is_allowed_rotation_target, is_well_formed,
 };
 pub use schnorr::{Schnorr, SchnorrAuthData};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 pub use signing_keys::{
-    INITIAL_KEY_TYPE, PublicAccountSecret, Signer, initial_key, key_state, public_account_id,
-    signing_key,
+    INITIAL_KEY_TYPE, PublicAccountSecret, Signer, initial_key, key_state, key_state_with_counter,
+    public_account_id, signing_key, signing_key_with_counter,
 };
 
 mod private_key;
+pub mod program;
 mod public_key;
 mod scheme;
 mod schnorr;

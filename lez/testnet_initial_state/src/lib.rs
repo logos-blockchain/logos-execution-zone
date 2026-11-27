@@ -263,8 +263,8 @@ mod tests {
         66, 136, 209, 158, 243, 254, 168, 14, 19, 222, 8, 97,
     ];
 
-    const PUB_ACC_A_TEXT_ADDR: &str = "7VDm7YRPvimbZgCzuFqCGf6RwPsTV3XY5W9DzT71oain";
-    const PUB_ACC_B_TEXT_ADDR: &str = "6AtC7ekAeMXh9QgiBoUnsb69SVEnCy9DMhCy4nmJDbkh";
+    const PUB_ACC_A_TEXT_ADDR: &str = "8EBjKBe6VuFaVvqvapjFPVvGbRXKbJ8XqyQsUXGpGLKf";
+    const PUB_ACC_B_TEXT_ADDR: &str = "C9rb1MjdEzhFxHy3wxN2gnZQmuLE4eaVDFKxbcVG2eVq";
 
     const PRIV_ACC_A_TEXT_ADDR: &str = "44KVvzvh2ephQU9aR5snboGUXKgS1FnPYh1W4KZKwmhm";
     const PRIV_ACC_B_TEXT_ADDR: &str = "478hD6LXFTYu5gRRkWkCyXPRsWgCwAfRredoCUfxr5b9";
@@ -463,5 +463,36 @@ mod tests {
             .unwrap();
             assert!(!header.immutable);
         }
+    }
+
+    #[test]
+    fn genesis_seeds_the_signature_program_at_its_address() {
+        let state = initial_state();
+        let signature = lee_core::signing_key::signature_program_id();
+        assert_eq!(
+            state.get_program_image_id(signature),
+            Some(programs::signature_program().id())
+        );
+        let header = lee_core::program::ProgramHeader::from_loader_actor_state(
+            state
+                .get_account_by_id(signature)
+                .data
+                .actor_state(lee_core::program::PROGRAM_LOADER_ACCOUNT_ID),
+        )
+        .unwrap();
+        assert!(!header.immutable);
+        let registry = system_upgrader_core::Registry::from_bytes(
+            state
+                .get_account_by_id(system_upgrader_core::registry_account_id())
+                .data
+                .actor_state(system_upgrader_core::SYSTEM_UPGRADER_ACCOUNT_ID),
+        )
+        .unwrap();
+        assert_eq!(
+            registry
+                .programs
+                .get(&lee_core::signing_key::SIGNATURE_PROGRAM_NAME),
+            Some(&None)
+        );
     }
 }

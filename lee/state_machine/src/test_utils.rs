@@ -27,9 +27,20 @@ use crate::{
     privacy_preserving_transaction::{self, circuit::Proof},
     public_transaction::{self, WitnessEntry},
     signature::{
-        INITIAL_KEY_TYPE, PublicAccountSecret, Signer, initial_key, key_state, public_account_id,
+        INITIAL_KEY_TYPE, PublicAccountSecret, Signer, initial_key, key_state,
+        key_state_with_counter, public_account_id,
     },
 };
+
+/// A public account secret whose account id is pinned as [`PINNED_ACCOUNT_ID`]. `lee`, the wallet
+/// and the signature guest each derive the id their own way and compare it with the pin.
+pub const PINNED_SECRET: [u8; 32] = [7; 32];
+
+/// The account id [`PINNED_SECRET`] owns.
+pub const PINNED_ACCOUNT_ID: AccountId = AccountId::new([
+    44, 60, 87, 174, 238, 36, 19, 198, 23, 200, 44, 245, 149, 242, 227, 139, 140, 107, 135, 61, 55,
+    106, 169, 227, 249, 114, 119, 51, 156, 195, 236, 5,
+]);
 
 /// A public account's signing key material, as tests sign with it: its initial key type at
 /// nonce 0, and any rotations to other types from given nonces on.
@@ -92,6 +103,30 @@ impl TestSigner {
             self.key_type(nonce),
             self.key_type(next_nonce(nonce)),
         )
+    }
+
+    /// The key state of type `key_type` at `(nonce, counter)`: a manually rotated key.
+    #[must_use]
+    pub fn key_state_with_counter(
+        &self,
+        key_type: KeyType,
+        nonce: Nonce,
+        counter: u32,
+    ) -> SigningKeyState {
+        key_state_with_counter(&self.secret, key_type, nonce, counter)
+    }
+
+    /// The account as a signer with the manually rotated key of type `current` at
+    /// `(nonce, counter)`, rotating to the key of type `next` at the next nonce.
+    #[must_use]
+    pub fn signer_with_counter(
+        &self,
+        nonce: Nonce,
+        counter: u32,
+        current: KeyType,
+        next: KeyType,
+    ) -> Signer {
+        Signer::new_with_counter(&self.secret, nonce, counter, current, next)
     }
 
     /// One witness entry signing `message_with_keys` with the key at `nonce` and rotating to the

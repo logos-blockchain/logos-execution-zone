@@ -49,7 +49,7 @@ pub const SHIELD_FEE: u128 = 5_163_400;
 pub const FIRST_SHIELD_FEE: u128 = 5_163_664;
 
 /// The public account for funding the private accounts' balances at genesis.
-pub(crate) const PRIVATE_FUNDER_INDEX: usize = 0;
+pub(crate) const PRIVATE_FUNDER_INDEX: usize = 1;
 
 /// Secret of the account holding the sequencer's genesis stake.
 pub const SEQUENCER_STAKE_KEY: [u8; 32] = [55; 32];

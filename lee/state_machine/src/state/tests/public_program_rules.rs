@@ -1,7 +1,7 @@
-use lee_core::signing_key::signature_program_id;
+use lee_core::signing_key::{SignatureMessage, SigningKeyState, signature_program_id};
 
 use super::*;
-use crate::{Authority, ValidatedStateDiff};
+use crate::{Authority, ValidatedStateDiff, signature::program::SetKeyError};
 
 fn native_transfer_tx(
     sender: AccountId,
@@ -302,6 +302,8 @@ fn a_declared_account_no_transition_changes_stays_out_of_the_diff_and_the_state(
     assert!(state.get_account_by_id_ref(bystander.account_id).is_none());
 }
 
+/// A guest planted at the signature address never runs publicly: every public message there goes
+/// to the native handler, as it does once the real guest is deployed.
 fn planted_signature_program() -> V03State {
     V03State::new()
         .with_programs([crate::test_methods::scripted()])
@@ -312,14 +314,28 @@ fn planted_signature_program() -> V03State {
         )])
 }
 
-fn assert_charged_as_an_unknown_callee(tx: &PublicTransaction, signer: &TestSigner) {
-    let mut state = planted_signature_program();
+fn set_key(next: SigningKeyState) -> SignatureMessage {
+    SignatureMessage::SetKey { next }
+}
+
+/// Refused as a foreign sender, charged and reverted: the signer's nonce advances and its own
+/// witness rotation still applies.
+fn assert_charged_as_a_foreign_sender(
+    mut state: V03State,
+    tx: &PublicTransaction,
+    signer: &TestSigner,
+) -> V03State {
     let error = ValidatedStateDiff::from_public_transaction(tx, &state, 1, 0)
         .err()
-        .expect("a message to the signature program must fail");
+        .expect("a message to the signature program from a foreign sender must fail");
     assert!(
-        matches!(error, LeeError::UnknownProgram { at_root: false }),
-        "expected the signature program to be unknown past the root, got {error:?}"
+        matches!(
+            error,
+            LeeError::InvalidProgramBehavior(InvalidProgramBehaviorError::SetKeyFailed(
+                SetKeyError::ForeignSender
+            ))
+        ),
+        "expected a foreign sender, got {error:?}"
     );
 
     let (charge, result) = ValidatedStateDiff::from_public_transaction_metered(
@@ -341,10 +357,11 @@ fn assert_charged_as_an_unknown_callee(tx: &PublicTransaction, signer: &TestSign
         }
         .with_actor_state(signature_program_id(), signer.key_state(Nonce(1)).encode())
     );
+    state
 }
 
 #[test]
-fn a_root_call_to_the_signature_program_is_unknown_and_not_charged() {
+fn a_root_call_to_the_signature_program_is_charged_and_reverted() {
     let key = TestSigner::new(1);
     let signature = Actor::new(key.account_id(), signature_program_id());
     let tx = public_tx(
@@ -355,21 +372,7 @@ fn a_root_call_to_the_signature_program_is_unknown_and_not_charged() {
         &[&key],
     );
 
-    let (_, result) = ValidatedStateDiff::from_public_transaction_metered(
-        &tx,
-        &planted_signature_program(),
-        1,
-        0,
-        crate::program::DEFAULT_PUBLIC_CYCLE_BUDGET,
-    );
-
-    let Err(error) = result else {
-        panic!("a root call to the signature program must reject the block");
-    };
-    assert!(
-        matches!(error, LeeError::UnknownProgram { at_root: true }),
-        "expected the signature program to be unknown at the root, got {error:?}"
-    );
+    assert_charged_as_a_foreign_sender(planted_signature_program(), &tx, &key);
 }
 
 #[test]
@@ -385,7 +388,7 @@ fn a_chained_call_to_the_signature_program_is_charged_and_reverted() {
         &[&key],
     );
 
-    assert_charged_as_an_unknown_callee(&tx, &key);
+    assert_charged_as_a_foreign_sender(planted_signature_program(), &tx, &key);
 }
 
 #[test]
@@ -401,5 +404,55 @@ fn an_async_message_to_the_signature_program_is_charged_and_reverted() {
         &[&key],
     );
 
-    assert_charged_as_an_unknown_callee(&tx, &key);
+    assert_charged_as_a_foreign_sender(planted_signature_program(), &tx, &key);
+}
+
+#[test]
+fn a_public_program_cannot_send_set_key() {
+    let key = TestSigner::new(1);
+    let victim = TestSigner::new(2);
+    let victim_key = victim.key_state(Nonce(3));
+    let state = planted_signature_program().with_public_accounts([(
+        victim.account_id(),
+        Account {
+            nonce: Nonce(3),
+            ..Account::default()
+        }
+        .with_actor_state(signature_program_id(), victim_key.encode()),
+    )]);
+    let sender = Actor::new(key.account_id(), scripted_id());
+    let target = Actor::new(victim.account_id(), signature_program_id());
+    let tx = public_tx(
+        sender,
+        vec![sender, target],
+        vec![Nonce(0)],
+        Script::default().send_sync(target, &set_key(key.key_state(Nonce(0)))),
+        &[&key],
+    );
+
+    let state = assert_charged_as_a_foreign_sender(state, &tx, &key);
+    assert_eq!(
+        state
+            .get_account_by_id(victim.account_id())
+            .data
+            .actor_state(signature_program_id()),
+        &victim_key.encode()
+    );
+}
+
+#[test]
+fn an_account_cannot_set_its_own_key_by_message() {
+    let key = TestSigner::new(1);
+    let sender = Actor::new(key.account_id(), scripted_id());
+    let signature = Actor::new(key.account_id(), signature_program_id());
+    let other_key = TestSigner::new(2).key_state(Nonce(0));
+    let tx = public_tx(
+        sender,
+        vec![sender, signature],
+        vec![Nonce(0)],
+        Script::default().send_sync(signature, &set_key(other_key)),
+        &[&key],
+    );
+
+    assert_charged_as_a_foreign_sender(planted_signature_program(), &tx, &key);
 }

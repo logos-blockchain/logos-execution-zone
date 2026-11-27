@@ -10,6 +10,13 @@ use crate::{
 
 pub const SIGNATURE_PROGRAM_NAME: SystemProgramName = SystemProgramName::new(b"signature");
 
+/// Messages to an account's signature actor. Append only.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum SignatureMessage {
+    /// Replaces the account's key state with `next`, without advancing its nonce.
+    SetKey { next: SigningKeyState },
+}
+
 /// Append only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 #[borsh(use_discriminant = true)]
@@ -86,8 +93,11 @@ impl SigningKeyState {
     }
 }
 
-/// The address of `signature_program`, the `system_upgrader` PDA for its name. Its actor state
-/// holds each account's signing key.
+/// The address of `signature_program`, the `system_upgrader` PDA for its name.
+///
+/// Its actor state holds each account's signing key. A public message there is handled natively:
+/// only `SetKey`, from the signature program itself. Run privately, its guest performs a manual
+/// rotation.
 #[must_use]
 pub fn signature_program_id() -> AccountId {
     AccountId::from_system_program_name(&SIGNATURE_PROGRAM_NAME)
@@ -145,6 +155,22 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             "Not all bytes read"
+        );
+    }
+
+    #[test]
+    fn signature_message_encoding_is_pinned() {
+        let message = SignatureMessage::SetKey {
+            next: SigningKeyState {
+                key_type: KeyType::Schnorr,
+                key_commitment: [7; 32],
+            },
+        };
+        let bytes = borsh::to_vec(&message).unwrap();
+        assert_eq!(bytes, [&[0, 0][..], &[7; 32][..]].concat());
+        assert_eq!(
+            borsh::from_slice::<SignatureMessage>(&bytes).unwrap(),
+            message
         );
     }
 
