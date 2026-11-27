@@ -1969,6 +1969,7 @@ dependencies = [
  "anyhow",
  "bip39",
  "cbindgen",
+ "clap",
  "common",
  "kameo",
  "key_protocol",

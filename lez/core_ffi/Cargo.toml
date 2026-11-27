@@ -25,6 +25,7 @@ kameo.workspace = true
 logging.workspace = true
 bip39.workspace = true
 anyhow.workspace = true
+clap.workspace = true
 zeroize.workspace = true
 thiserror.workspace = true
 

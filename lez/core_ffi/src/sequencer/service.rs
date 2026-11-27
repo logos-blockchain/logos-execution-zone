@@ -1,15 +1,16 @@
-use std::ffi::c_void;
+use std::{ffi::c_void, sync::Arc};
 
 use kameo::actor::ActorRef;
 use sequencer_gossip_actor::GossipActor;
-use sequencer_service::{ExecutorActor, SequencerHandle};
+use sequencer_service::{ExecutorActor, SequencerHandle, ops::OpsServer};
 use sequencer_storage_actor::StorageActor;
 
 use crate::primitives::runtime::Runtime;
 
 /// FFI-owned sequencer.
 ///
-/// - `handle`: a [`SequencerHandle`] owning every actor the sequencer runs.
+/// - `handle`: the [`SequencerHandle`] owning every actor the sequencer runs, with the ops server
+///   serving its health and metrics, if any.
 /// - `runtime`: the [`Runtime`] used to run async queries against the node (either owned or
 ///   borrowed), already FFI-safe.
 #[repr(C)]
@@ -18,18 +19,40 @@ pub struct SequencerServiceFFI {
     runtime: Runtime,
 }
 
+/// What `SequencerServiceFFI::handle` points to.
+struct Inner {
+    handle: Arc<SequencerHandle>,
+    ops: Option<OpsServer>,
+}
+
 impl SequencerServiceFFI {
     #[must_use]
     pub fn new(handle: SequencerHandle, runtime: Runtime) -> Self {
+        Self::with_ops(Arc::new(handle), None, runtime)
+    }
+
+    /// Like [`Self::new`], also owning the ops server that serves `handle`'s health and metrics.
+    #[must_use]
+    pub fn with_ops(
+        handle: Arc<SequencerHandle>,
+        ops: Option<OpsServer>,
+        runtime: Runtime,
+    ) -> Self {
         Self {
-            handle: Box::into_raw(Box::new(handle)).cast::<c_void>(),
+            handle: Box::into_raw(Box::new(Inner { handle, ops })).cast::<c_void>(),
             runtime,
         }
     }
 
+    /// Whether every task of the sequencer is still running.
+    #[must_use]
+    pub fn is_healthy(&self) -> bool {
+        self.handle().is_healthy()
+    }
+
     /// Borrow the [`Executor`] to run a query against the node.
     #[must_use]
-    pub const fn executor_ref(&self) -> &ActorRef<ExecutorActor> {
+    pub fn executor_ref(&self) -> &ActorRef<ExecutorActor> {
         self.handle().executor_ref()
     }
 
@@ -41,7 +64,7 @@ impl SequencerServiceFFI {
 
     /// Borrow the [`Storage`] to run a query against the node's db.
     #[must_use]
-    pub const fn storage_ref(&self) -> &ActorRef<StorageActor> {
+    pub fn storage_ref(&self) -> &ActorRef<StorageActor> {
         self.handle().storage_ref()
     }
 
@@ -51,12 +74,14 @@ impl SequencerServiceFFI {
         &self.runtime
     }
 
-    const fn handle(&self) -> &SequencerHandle {
+    fn handle(&self) -> &SequencerHandle {
         unsafe {
-            self.handle
-                .cast::<SequencerHandle>()
+            &self
+                .handle
+                .cast::<Inner>()
                 .as_ref()
                 .expect("SequencerHandle must be a non-null pointer")
+                .handle
         }
     }
 }
@@ -64,9 +89,18 @@ impl SequencerServiceFFI {
 impl Drop for SequencerServiceFFI {
     fn drop(&mut self) {
         if !self.handle.is_null() {
-            let handle = unsafe { Box::from_raw(self.handle.cast::<SequencerHandle>()) };
-            // The handle stops the actors in dependency order and waits for each.
-            self.runtime.block_on(handle.shutdown());
+            let Inner { handle, ops } = *unsafe { Box::from_raw(self.handle.cast::<Inner>()) };
+            self.runtime.block_on(async move {
+                // The ops server holds the handle too, so it goes first.
+                if let Some(ops) = ops {
+                    ops.stop().await;
+                }
+                // The handle stops the actors in dependency order and waits for each.
+                Arc::into_inner(handle)
+                    .expect("the ops server, the only other holder, has stopped")
+                    .shutdown()
+                    .await;
+            });
         }
 
         // `runtime` field is dropped automatically on return here:

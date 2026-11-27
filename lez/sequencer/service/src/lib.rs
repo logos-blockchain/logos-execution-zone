@@ -31,9 +31,12 @@ use sharding_pool_actor::ShardingPoolActor;
 use tokio::select;
 use tracing::info;
 
+pub use crate::start::{CONFIG_FILE, StartArgs, channel_public_key};
 use crate::{actor_handle::ActorHandle, supervisor::SequencerSupervisor};
 
 mod actor_handle;
+pub mod ops;
+mod start;
 mod supervisor;
 
 /// Depth of the slasher-to-gossip approval channel; it only absorbs bursts.

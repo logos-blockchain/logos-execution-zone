@@ -103,6 +103,14 @@ unsafe extern "C" {
         selector: *const FfiSelector,
     ) -> PointerResult<FfiVec<FfiEventRecord>, FfiOperationError>;
 
+    pub unsafe fn sequencer_ffi_start_sequencer_with_args(
+        runtime: *const Runtime,
+        args: *const *const c_char,
+        args_len: usize,
+    ) -> InitializedSequencerServiceFFIResult;
+
+    pub unsafe fn sequencer_ffi_is_healthy(sequencer: *const SequencerServiceFFI) -> bool;
+
     pub unsafe fn sequencer_ffi_stop_sequencer(sequencer: *mut SequencerServiceFFI);
 }
 
@@ -401,6 +409,54 @@ pub fn joining_setup_with_stake() -> Result<JoiningSetup> {
 /// Sets up blocking context with one leader node
 /// and joins FFI node without staking flow.
 pub fn joining_setup_no_stake() -> Result<JoiningSetup> {
+    no_stake_join(|runtime, _home, config_path| {
+        let config_c_string = CString::new(config_path.to_str().unwrap())?;
+
+        let raw_config_path = config_c_string.into_raw();
+
+        let sequencer_ffi_res =
+            // SAFETY: Runtime borrowed from context is valid.
+            unsafe { sequencer_ffi_start_sequencer(runtime, raw_config_path) };
+
+        // SAFETY: cstring was constructed from valid string.
+        unsafe {
+            primitives_ffi_free_cstring(raw_config_path);
+        }
+        Ok(sequencer_ffi_res)
+    })
+}
+
+/// Like [`joining_setup_no_stake`], but starts the FFI node the way `sequencer_service start`
+/// does: `<home> --config <config>`, followed by `extra_args`.
+pub fn joining_setup_no_stake_with_args(extra_args: &[String]) -> Result<JoiningSetup> {
+    no_stake_join(|runtime, home, config_path| {
+        let args = [
+            home.to_str().unwrap().to_owned(),
+            "--config".to_owned(),
+            config_path.to_str().unwrap().to_owned(),
+        ]
+        .into_iter()
+        .chain(extra_args.iter().cloned())
+        .map(CString::new)
+        .collect::<Result<Vec<_>, _>>()?;
+        let arg_ptrs: Vec<*const c_char> = args.iter().map(|arg| arg.as_ptr()).collect();
+
+        // SAFETY: Runtime borrowed from context is valid, and `args` outlives the call.
+        Ok(unsafe {
+            sequencer_ffi_start_sequencer_with_args(runtime, arg_ptrs.as_ptr(), arg_ptrs.len())
+        })
+    })
+}
+
+/// Sets up blocking context with one leader node, and joins an FFI node that `start` starts from
+/// its home and config, without staking flow.
+fn no_stake_join(
+    start: impl FnOnce(
+        *const Runtime,
+        &std::path::Path,
+        &std::path::Path,
+    ) -> Result<InitializedSequencerServiceFFIResult>,
+) -> Result<JoiningSetup> {
     let ctx = Box::new(
         MultiZoneTestContextBuilder::default()
             .with_zone(
@@ -434,22 +490,15 @@ pub fn joining_setup_no_stake() -> Result<JoiningSetup> {
     file.write_all(&config_json)?;
     file.flush()?;
 
-    let config_c_string = CString::new(config_path.to_str().unwrap())?;
-
-    let raw_config_path = config_c_string.into_raw();
-
     let borrowed_runtime =
         // SAFETY: Runtime from context is valid.
         unsafe { core_ffi::primitives::runtime::Runtime::from_borrowed(ctx.runtime()) };
 
-    let sequencer_ffi_res =
-        // SAFETY: Runtime borrowed from context is valid.
-        unsafe { sequencer_ffi_start_sequencer(&raw const borrowed_runtime, raw_config_path) };
-
-    // SAFETY: cstring was constructed from valid string.
-    unsafe {
-        primitives_ffi_free_cstring(raw_config_path);
-    }
+    let sequencer_ffi_res = start(
+        &raw const borrowed_runtime,
+        temp_sequencer_dir.path(),
+        &config_path,
+    )?;
 
     if sequencer_ffi_res.error.is_error() {
         anyhow::bail!("Sequencer FFI error {:?}", sequencer_ffi_res.error);

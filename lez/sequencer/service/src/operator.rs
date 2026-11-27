@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use lee::{AccountId, Actor, Balance};
 use sequencer_core::config::GenesisAction;
-use sequencer_service::SequencerConfig;
+use sequencer_service::{CONFIG_FILE, SequencerConfig};
 use sequencer_service_rpc::SequencerClient;
 use sequencer_stake_core::{
     ChannelParams, SequencerKey, SequencerStakeConfig, params_vote_threshold,
@@ -18,9 +18,6 @@ use wallet::{
     AccountIdentity, WalletCore, account::AccountIdWithPrivacy, cli::CliAccountMention,
     program_facades::sequencer_stake::SequencerStake,
 };
-
-/// The node's config, read by `start`.
-pub const CONFIG_FILE: &str = "sequencer_config.json";
 
 /// Channel params to vote for; each one left out keeps the value in force.
 #[derive(Debug, clap::Args)]

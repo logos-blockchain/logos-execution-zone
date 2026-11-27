@@ -751,7 +751,8 @@ typedef struct Runtime {
 /**
  * FFI-owned sequencer.
  *
- * - `handle`: a [`SequencerHandle`] owning every actor the sequencer runs.
+ * - `handle`: the [`SequencerHandle`] owning every actor the sequencer runs, with the ops server
+ *   serving its health and metrics, if any.
  * - `runtime`: the [`Runtime`] used to run async queries against the node (either owned or
  *   borrowed), already FFI-safe.
  */
@@ -1551,6 +1552,51 @@ void primitives_ffi_free_ffi_transaction_vec(struct FfiVec_FfiTransaction *val);
  */
 InitializedSequencerServiceFFIResult sequencer_ffi_start_sequencer(const struct Runtime *runtime,
                                                                    const char *config_path);
+
+/**
+ * Creates and starts a sequencer the way `sequencer_service start` does, taking the same
+ * options.
+ *
+ * `args` are `start`'s arguments without the program name, e.g. `["/var/lib/sequencer",
+ * "--config", "/etc/sequencer/config.json"]`. Each option left out falls back to its
+ * `SEQUENCER_<OPTION>` env var, then to the config, exactly as for `start`. That includes
+ * serving the RPC on `--rpc-listen-address` and `/ping`, `/health` and `/metrics` on the
+ * config's `metrics_listen_address`.
+ *
+ * Blocks until the sequencer has started, which with `--wait-for-channel` lasts until the
+ * channel exists.
+ *
+ * # Arguments
+ *
+ * - `runtime`: A runtime for the sequencer to run on, or null to have the sequencer create and own
+ *   one.
+ * - `args`: Pointer to `args_len` null-terminated strings, or null when `args_len` is zero.
+ * - `args_len`: The number of strings in `args`.
+ *
+ * # Returns
+ *
+ * An `InitializedSequencerServiceFFIResult` containing either a pointer to the
+ * initialized `SequencerServiceFFI` or an error code.
+ *
+ * # Safety
+ * The caller must ensure that:
+ * - `runtime` is either null or a valid pointer to a [`Runtime`] that outlives the sequencer.
+ * - `args` points to `args_len` valid pointers to null-terminated C strings.
+ */
+InitializedSequencerServiceFFIResult sequencer_ffi_start_sequencer_with_args(const struct Runtime *runtime,
+                                                                             const char *const *args,
+                                                                             uintptr_t args_len);
+
+/**
+ * Whether every task of the sequencer is still running, as its `/health` reports.
+ *
+ * Gossip is not part of it: without gossip the node keeps running on L1 alone. A sequencer that
+ * is no longer healthy stays so; stop it and start a new one.
+ *
+ * # Safety
+ * `sequencer` must be a valid pointer to a `SequencerServiceFFI` created by this library.
+ */
+bool sequencer_ffi_is_healthy(const struct SequencerServiceFFI *sequencer);
 
 /**
  * Stops and frees the resources associated with the given sequencer service.
