@@ -9,7 +9,7 @@ use sequencer_service::{DEFAULT_RPC_LISTEN_ADDRESS, StartArgs, ops::OpsServer};
 
 use crate::{
     error::FfiOperationError,
-    primitives::{result::PointerResult, runtime::Runtime},
+    primitives::{result::PointerResult, runtime::Runtime, types::FfiBytes32},
     sequencer::SequencerServiceFFI,
 };
 
@@ -170,6 +170,85 @@ unsafe fn optional_addr(
             })
         })
         .transpose()
+}
+
+/// Prepares `home` for [`sequencer_ffi_start_sequencer`] the way `sequencer_service setup` does:
+/// creates it with its config, channel signing key and Bedrock funding public key.
+///
+/// The config is the one at `config` with `home` filled in, keeping its genesis only with
+/// `create_channel`. An existing channel signing key is kept, as it may already be staked. A home
+/// that is already set up is refused.
+///
+/// # Arguments
+///
+/// - `home`: The home to create.
+/// - `config`: Path of the config to copy into it.
+/// - `funding_public_key`: In hex, a funded key in the Bedrock node's wallet; it pays the node's
+///   inscriptions.
+/// - `create_channel`: Keeps the config's genesis, so starting creates the channel if it does not
+///   exist.
+/// - `out_channel_public_key`: Receives the channel signing public key, which is the key to stake;
+///   null to skip it.
+///
+/// # Returns
+///
+/// `Success`; `NullPointer` or `InvalidUtf8` for a bad string; `ConfigError` when the home cannot
+/// be set up: an unreadable or invalid config, an invalid funding key, or a home already set up.
+///
+/// # Safety
+/// The caller must ensure that:
+/// - `home`, `config` and `funding_public_key` are valid pointers to null-terminated UTF-8 strings.
+/// - `out_channel_public_key` is null or a valid pointer to an `FfiBytes32`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn sequencer_ffi_setup(
+    home: *const c_char,
+    config: *const c_char,
+    funding_public_key: *const c_char,
+    create_channel: bool,
+    out_channel_public_key: *mut FfiBytes32,
+) -> FfiOperationError {
+    let required = |ptr, name| {
+        // SAFETY: the caller guarantees each argument is null or a valid C string.
+        unsafe { optional_str(ptr, name) }?.ok_or_else(|| {
+            tracing::error!("Attempted to give a null {name} pointer. This is a bug. Aborting.");
+            FfiOperationError::NullPointer
+        })
+    };
+    let (home, config, funding_public_key) = match (
+        required(home, "home"),
+        required(config, "config"),
+        required(funding_public_key, "funding_public_key"),
+    ) {
+        (Ok(home), Ok(config), Ok(funding_public_key)) => (home, config, funding_public_key),
+        (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => return e,
+    };
+
+    let set_up = std::fs::read_to_string(&config)
+        .map_err(anyhow::Error::from)
+        .and_then(|template| {
+            sequencer_service::setup(
+                home.as_ref(),
+                &template,
+                &funding_public_key,
+                create_channel,
+            )
+        });
+    match set_up {
+        Ok(set_up) => {
+            // SAFETY: the caller guarantees `out_channel_public_key` is null or valid.
+            if let Some(out) = unsafe { out_channel_public_key.as_mut() } {
+                *out = set_up.channel_public_key.to_bytes().into();
+            }
+            FfiOperationError::Success
+        }
+        Err(e) => {
+            tracing::error!(
+                error = format_args!("{e:#}"),
+                "Failed to set up the sequencer home"
+            );
+            FfiOperationError::ConfigError
+        }
+    }
 }
 
 /// Creates and starts a sequencer out of `home` the way `sequencer_service start` does, with
@@ -349,4 +428,67 @@ pub unsafe extern "C" fn sequencer_ffi_stop_sequencer(
     drop(sequencer);
 
     FfiOperationError::Success
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::CString;
+
+    use super::*;
+
+    /// `docker-compose.yml`'s default funding key.
+    const FUNDING_PUBLIC_KEY: &str =
+        "2e03b2eff5a45478e7e79668d2a146cf2c5c7925bce927f2b1c67f2ab4fc0d26";
+
+    fn c_string(s: &str) -> CString {
+        CString::new(s).unwrap()
+    }
+
+    #[test]
+    fn setup_prepares_a_home_start_accepts() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let config = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../sequencer/service/networks/local.json"
+        );
+        let setup = |out: *mut FfiBytes32| unsafe {
+            sequencer_ffi_setup(
+                c_string(home.to_str().unwrap()).as_ptr(),
+                c_string(config).as_ptr(),
+                c_string(FUNDING_PUBLIC_KEY).as_ptr(),
+                false,
+                out,
+            )
+        };
+
+        let mut channel_public_key = FfiBytes32::from([0; 32]);
+        assert_eq!(
+            setup(&raw mut channel_public_key),
+            FfiOperationError::Success
+        );
+
+        // What `start` needs is all there: no explicit config, keys from the home.
+        let args =
+            unsafe { SequencerStartOverrides::default().to_start_args(home.clone()) }.unwrap();
+        let loaded = args.load_config().unwrap();
+        assert!(
+            loaded.genesis.is_none(),
+            "a joiner's home drops the genesis"
+        );
+        assert_eq!(
+            FfiBytes32::from(
+                sequencer_service::channel_public_key(&loaded)
+                    .unwrap()
+                    .to_bytes()
+            ),
+            channel_public_key
+        );
+
+        assert_eq!(
+            setup(std::ptr::null_mut()),
+            FfiOperationError::ConfigError,
+            "already set up"
+        );
+    }
 }

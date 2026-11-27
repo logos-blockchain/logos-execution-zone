@@ -31,11 +31,15 @@ use sharding_pool_actor::ShardingPoolActor;
 use tokio::select;
 use tracing::info;
 
-pub use crate::start::{CONFIG_FILE, DEFAULT_RPC_LISTEN_ADDRESS, StartArgs, channel_public_key};
 use crate::{actor_handle::ActorHandle, supervisor::SequencerSupervisor};
+pub use crate::{
+    setup::{SetUp, setup},
+    start::{CONFIG_FILE, DEFAULT_RPC_LISTEN_ADDRESS, StartArgs, channel_public_key},
+};
 
 mod actor_handle;
 pub mod ops;
+mod setup;
 mod start;
 mod supervisor;
 

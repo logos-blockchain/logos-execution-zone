@@ -1592,6 +1592,41 @@ void primitives_ffi_free_ffi_transaction_opt(struct FfiOption_FfiTransaction *va
 void primitives_ffi_free_ffi_transaction_vec(struct FfiVec_FfiTransaction *val);
 
 /**
+ * Prepares `home` for [`sequencer_ffi_start_sequencer`] the way `sequencer_service setup` does:
+ * creates it with its config, channel signing key and Bedrock funding public key.
+ *
+ * The config is the one at `config` with `home` filled in, keeping its genesis only with
+ * `create_channel`. An existing channel signing key is kept, as it may already be staked. A home
+ * that is already set up is refused.
+ *
+ * # Arguments
+ *
+ * - `home`: The home to create.
+ * - `config`: Path of the config to copy into it.
+ * - `funding_public_key`: In hex, a funded key in the Bedrock node's wallet; it pays the node's
+ *   inscriptions.
+ * - `create_channel`: Keeps the config's genesis, so starting creates the channel if it does not
+ *   exist.
+ * - `out_channel_public_key`: Receives the channel signing public key, which is the key to stake;
+ *   null to skip it.
+ *
+ * # Returns
+ *
+ * `Success`; `NullPointer` or `InvalidUtf8` for a bad string; `ConfigError` when the home cannot
+ * be set up: an unreadable or invalid config, an invalid funding key, or a home already set up.
+ *
+ * # Safety
+ * The caller must ensure that:
+ * - `home`, `config` and `funding_public_key` are valid pointers to null-terminated UTF-8 strings.
+ * - `out_channel_public_key` is null or a valid pointer to an `FfiBytes32`.
+ */
+enum FfiOperationError sequencer_ffi_setup(const char *home,
+                                           const char *config,
+                                           const char *funding_public_key,
+                                           bool create_channel,
+                                           struct FfiBytes32 *out_channel_public_key);
+
+/**
  * Creates and starts a sequencer out of `home` the way `sequencer_service start` does, with
  * `overrides` over its defaults.
  *
