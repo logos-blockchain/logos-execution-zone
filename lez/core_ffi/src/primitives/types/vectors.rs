@@ -1,0 +1,42 @@
+use crate::primitives::types::{
+    FfiAccountId, FfiBytes32, FfiVec,
+    actor::{
+        FfiActor, FfiBoundaryStep, FfiDeclaredActor, FfiNonceEntry, FfiPrivateAction,
+        FfiPublicAccountEvidence, FfiPublication, FfiRecoveryBinding, FfiWitnessEntry,
+    },
+    transaction::FfiTransaction,
+};
+
+pub type FfiVecU8 = FfiVec<u8>;
+
+pub type FfiBlockBody = FfiVec<FfiTransaction>;
+
+pub type FfiProof = FfiVecU8;
+
+pub type FfiProgramDeploymentMessage = FfiVecU8;
+
+pub type FfiActorList = FfiVec<FfiActor>;
+
+pub type FfiDeclaredActorList = FfiVec<FfiDeclaredActor>;
+
+pub type FfiAccountIdList = FfiVec<FfiAccountId>;
+
+pub type FfiNonceList = FfiVec<FfiNonceEntry>;
+
+pub type FfiMessageDataList = FfiVec<u8>;
+
+pub type FfiWitnessEntryList = FfiVec<FfiWitnessEntry>;
+
+pub type FfiBoundaryStepList = FfiVec<FfiBoundaryStep>;
+
+pub type FfiPublicationList = FfiVec<FfiPublication>;
+
+pub type FfiPublicAccountEvidenceList = FfiVec<FfiPublicAccountEvidence>;
+
+pub type FfiPrivateActionList = FfiVec<FfiPrivateAction>;
+
+pub type FfiRecoveryBindingList = FfiVec<FfiRecoveryBinding>;
+
+pub type FfiPdaSeedList = FfiVec<FfiBytes32>;
+
+pub type FfiPromotionList = FfiVec<u64>;

@@ -1,7 +1,8 @@
 use std::time::Duration;
 
 use cucumber::{gherkin::Step, given, when};
-use logos_blockchain_key_management_system_service::keys::Ed25519Key;
+use lee::test_utils::TestSigner;
+use logos_blockchain_zone_sdk::key_management_system_service::keys::Ed25519Key;
 use sequencer_bedrock_actor::protocol::GetAccreditedKeys;
 use sequencer_core::Ed25519PublicKey;
 use sequencer_service_rpc::RpcClient as _;
@@ -225,17 +226,14 @@ async fn committee_is_active(
             Ok(Ed25519Key::from_bytes(&signing_key).public_key().to_bytes())
         })
         .collect::<Result<Vec<_>, StepError>>()?;
-    let observer = spawn_channel_observer(
-        context.bedrock().primary_api_addr(),
-        config::bedrock_channel_id(),
-    )
-    .await
-    .map_err(|source| StepError::QueryFailedSource { source })?;
+    let channel_id = config::bedrock_channel_id();
+    let observer = spawn_channel_observer(context.bedrock().primary_api_addr(), channel_id)
+        .map_err(|source| StepError::QueryFailedSource { source })?;
     let timeout = Duration::from_secs(timeout_seconds);
     let wait = async {
         loop {
             let accredited = observer
-                .ask(GetAccreditedKeys)
+                .ask(GetAccreditedKeys { channel_id })
                 .await
                 .map_err(|err| StepError::QueryFailedSource { source: err.into() })?;
             let active = accredited.is_some_and(|accredited| {
@@ -286,17 +284,14 @@ async fn sequencer_becomes_posting_turn(
                 message: format!("sequencer '{alias}' is not registered"),
             })?;
     let expected_key = Ed25519Key::from_bytes(&signing_key).public_key();
-    let observer = spawn_channel_observer(
-        context.bedrock().primary_api_addr(),
-        config::bedrock_channel_id(),
-    )
-    .await
-    .map_err(|source| StepError::QueryFailedSource { source })?;
+    let channel_id = config::bedrock_channel_id();
+    let observer = spawn_channel_observer(context.bedrock().primary_api_addr(), channel_id)
+        .map_err(|source| StepError::QueryFailedSource { source })?;
     let timeout = Duration::from_secs(timeout_seconds);
     let wait = async {
         loop {
             let is_turn = observer
-                .ask(GetAccreditedKeys)
+                .ask(GetAccreditedKeys { channel_id })
                 .await
                 .map_err(|err| StepError::QueryFailedSource { source: err.into() })?
                 .and_then(|accredited| accredited.whose_turn())
@@ -423,19 +418,16 @@ async fn submit_committee_transfer(
         .get_account_balance(sender)
         .await
         .map_err(StepError::query_failed)?;
-    let signing_key = initial_pub_accounts_private_keys()
-        .get(sender_index)
-        .ok_or_else(|| StepError::InvalidArgument {
-            message: format!("sender account index {sender_index} has no signing key"),
-        })?
-        .pub_sign_key
-        .clone();
+    let signer = TestSigner::from(
+        &initial_pub_accounts_private_keys()
+            .get(sender_index)
+            .ok_or_else(|| StepError::InvalidArgument {
+                message: format!("sender account index {sender_index} has no signing key"),
+            })?
+            .secret,
+    );
     let transaction = common::test_utils::create_transaction_native_token_transfer(
-        sender,
-        nonce.0,
-        receiver,
-        amount,
-        &signing_key,
+        sender, nonce.0, receiver, amount, &signer,
     );
     let transaction_hash = sequencer
         .client()

@@ -5,12 +5,14 @@ name = "indexer_ffi"
 version = "0.1.0"
 
 [dependencies]
+ffi_types.workspace = true
 lee.workspace = true
+lee_core.workspace = true
 indexer_core.workspace = true
 indexer_service_protocol = { workspace = true, features = ["convert"] }
 
-env_logger.workspace = true
-log = { workspace = true }
+logging.workspace = true
+tracing.workspace = true
 tokio = { features = ["rt-multi-thread"], workspace = true }
 futures.workspace = true
 serde_json.workspace = true

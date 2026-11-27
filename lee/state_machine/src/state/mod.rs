@@ -1,23 +1,28 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    BlockId, Commitment, CommitmentSetDigest, DUMMY_COMMITMENT, MembershipProof, Nullifier,
-    Timestamp,
-    account::{Account, AccountId, ShardData},
-    program::{
-        PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ProgramId, ProgramSegment, TransactionEvent,
-        get_program_via, immutable_mirror_commitment,
-    },
+    BlockId, Commitment, CommitmentPosition, CommitmentSetDigest, DUMMY_COMMITMENT, EncryptedNote,
+    MembershipProof, Nullifier, RecoveryBinding, Timestamp,
+    account::{Account, AccountId, ActorState},
+    program::{PROGRAM_LOADER_ACCOUNT_ID, ProgramId, Publication, TransactionEvent},
+    signing_key::signature_program_id,
 };
-use rpds::{HashTrieMapSync, HashTrieSetSync, RedBlackTreeSetSync};
+use program_loader_core::get_program_via;
+use rpds::{HashTrieMapSync, HashTrieSetSync, RedBlackTreeMapSync, RedBlackTreeSetSync};
 
+pub use self::genesis::GenesisBuilder;
 use crate::{
+    encoding::persistent::{serialize_map, serialize_ordered_map},
+    ensure,
     error::LeeError,
     merkle_tree::MerkleTree,
     privacy_preserving_transaction::PrivacyPreservingTransaction,
-    program::Program,
     public_transaction::PublicTransaction,
     validated_state_diff::{StateDiff, ValidatedStateDiff},
 };
+
+mod genesis;
 
 #[derive(Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(test, derive(Debug))]
@@ -46,16 +51,46 @@ impl CommitmentSet {
 
         self.merkle_tree
             .get_authentication_path_for(index)
-            .map(|path| (index, path))
+            .map(|path| {
+                (
+                    CommitmentPosition::try_from(index).expect("a leaf position fits in u64"),
+                    path,
+                )
+            })
     }
 
     /// Inserts a list of commitments to the `CommitmentSet`.
     pub(crate) fn extend(&mut self, commitments: &[Commitment]) {
+        self.append(commitments, &[]);
+    }
+
+    // One transaction's leaves under one recorded root. A message leaf is found by its position
+    // alone: one body may be published at several.
+    pub(crate) fn append(
+        &mut self,
+        commitments: &[Commitment],
+        messages: &[Commitment],
+    ) -> Vec<CommitmentPosition> {
         for commitment in commitments.iter().copied() {
             let index = self.merkle_tree.insert(commitment.to_byte_array());
             self.commitments.insert_mut(commitment, index);
         }
+        let positions = messages
+            .iter()
+            .map(|message| {
+                CommitmentPosition::try_from(self.merkle_tree.insert(message.to_byte_array()))
+                    .expect("a leaf position fits in u64")
+            })
+            .collect();
         self.root_history.insert_mut(self.digest());
+        positions
+    }
+
+    fn get_proof_at(&self, position: CommitmentPosition) -> Option<MembershipProof> {
+        let index = usize::try_from(position).ok()?;
+        self.merkle_tree
+            .get_authentication_path_for(index)
+            .map(|path| (position, path))
     }
 
     fn contains(&self, commitment: &Commitment) -> bool {
@@ -128,6 +163,22 @@ pub struct V03State {
     )]
     public_state: HashTrieMapSync<AccountId, Account>,
     private_state: (CommitmentSet, NullifierSet),
+    #[borsh(
+        serialize_with = "crate::encoding::persistent::serialize_ordered_map",
+        deserialize_with = "crate::encoding::persistent::deserialize_ordered_map"
+    )]
+    publications: RedBlackTreeMapSync<CommitmentPosition, Publication>,
+    #[borsh(
+        serialize_with = "crate::encoding::persistent::serialize_ordered_map",
+        deserialize_with = "crate::encoding::persistent::deserialize_ordered_map"
+    )]
+    recovery_bindings: RedBlackTreeMapSync<AccountId, EncryptedNote>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PublicationsPage {
+    pub publications: Vec<(CommitmentPosition, Publication)>,
+    pub recovery_bindings: BTreeMap<AccountId, EncryptedNote>,
 }
 
 impl Default for V03State {
@@ -140,6 +191,8 @@ impl Default for V03State {
         Self {
             public_state: HashTrieMapSync::new_sync(),
             private_state,
+            publications: RedBlackTreeMapSync::new_sync(),
+            recovery_bindings: RedBlackTreeMapSync::new_sync(),
         }
     }
 }
@@ -155,20 +208,6 @@ impl V03State {
         self.private_state.0.digest()
     }
 
-    /// Initializes state with given public account balances leaving other account fields at their
-    /// default values.
-    #[must_use]
-    pub fn with_public_account_balances(
-        mut self,
-        balances: impl IntoIterator<Item = (AccountId, u128)>,
-    ) -> Self {
-        for (account_id, balance) in balances {
-            self.public_state
-                .insert_mut(account_id, Account::funded(balance));
-        }
-        self
-    }
-
     /// Initializes state with given public accounts.
     #[must_use]
     pub fn with_public_accounts(
@@ -182,6 +221,7 @@ impl V03State {
     }
 
     /// Initializes state with given private accounts.
+    #[cfg(any(test, feature = "test-utils"))]
     #[must_use]
     pub fn with_private_accounts(
         mut self,
@@ -194,104 +234,56 @@ impl V03State {
         self
     }
 
+    /// Initializes state with given recovery bindings, under which durable async messages to their
+    /// addresses publish.
     #[must_use]
-    pub fn with_named_programs(
+    pub fn with_recovery_bindings(
         mut self,
-        programs: impl IntoIterator<Item = (AccountId, Program)>,
+        bindings: impl IntoIterator<Item = RecoveryBinding>,
     ) -> Self {
-        for (account_id, program) in programs {
-            self.insert_program_at(account_id, &program, true);
+        for binding in bindings {
+            self.recovery_bindings
+                .insert_mut(binding.address, binding.note);
         }
         self
     }
 
-    #[must_use]
-    pub fn with_programs(self, programs: impl IntoIterator<Item = Program>) -> Self {
-        self.with_genesis_programs(programs.into_iter().map(|program| (program, true)))
-    }
-
-    #[must_use]
-    pub fn with_genesis_programs(
-        mut self,
-        programs: impl IntoIterator<Item = (Program, bool)>,
-    ) -> Self {
-        for (program, immutable) in programs {
-            self.insert_program(&program, immutable);
-        }
-        self
-    }
-
-    /// Seeds a builtin as a loader-owned header pointing at a segment chain holding its
-    /// `user_elf`, chunked the same way a live `program_loader` deploy would.
-    pub(crate) fn insert_program(&mut self, program: &Program, immutable: bool) {
-        self.insert_program_at(
-            AccountId::from_builtin_program(program.id()),
-            program,
-            immutable,
-        );
-    }
-
-    fn insert_program_at(
+    pub fn apply_state_diff(
         &mut self,
-        header_account_id: AccountId,
-        program: &Program,
-        immutable: bool,
-    ) {
-        let user_elf = risc0_binfmt::ProgramBinary::decode(program.elf())
-            .expect("builtin program must be a valid ProgramBinary")
-            .user_elf
-            .to_vec();
-
-        let chunks: Vec<&[u8]> = user_elf
-            .chunks(program_loader_core::MAX_SEGMENT_DATA_LEN)
-            .collect();
-        let segment_account_ids: Vec<AccountId> = (0..chunks.len())
-            .map(|i| genesis_segment_account_id(header_account_id, i))
-            .collect();
-
-        for (i, chunk) in chunks.iter().enumerate() {
-            let segment = Account::default().with_shard(
-                PROGRAM_LOADER_ACCOUNT_ID,
-                ShardData::try_from(
-                    ProgramSegment {
-                        bytecode: chunk.to_vec(),
-                        next_segment: segment_account_ids.get(i.saturating_add(1)).copied(),
-                    }
-                    .to_bytes(),
-                )
-                .expect("segment fits under DATA_MAX_LENGTH"),
-            );
-            self.public_state
-                .insert_mut(segment_account_ids[i], segment);
-        }
-
-        let program_header = ProgramHeader {
-            image_id: program.id(),
-            program_first_segment: segment_account_ids[0],
-            immutable,
-        };
-        let header = Account::default().with_shard(
-            PROGRAM_LOADER_ACCOUNT_ID,
-            ShardData::try_from(program_header.to_bytes())
-                .expect("program header fits under DATA_MAX_LENGTH"),
-        );
-        self.public_state.insert_mut(header_account_id, header);
-
-        if immutable {
-            let commitment = immutable_mirror_commitment(header_account_id, &program_header);
-            self.private_state.0.extend(&[commitment]);
-        }
-    }
-
-    #[must_use]
-    pub fn apply_state_diff(&mut self, diff: ValidatedStateDiff) -> Vec<TransactionEvent> {
+        diff: ValidatedStateDiff,
+    ) -> Result<Vec<TransactionEvent>, LeeError> {
         let StateDiff {
-            signer_account_ids,
+            signers,
             public_diff,
             new_commitments,
             new_nullifiers,
             events,
+            published,
+            recovery_bindings,
         } = diff.into_state_diff();
+        // A diff validated against an earlier or another branch's state must still spend each
+        // nullifier once, under a root this state knows.
+        self.check_nullifiers_are_valid(&new_nullifiers)?;
+        let spent: Vec<Nullifier> = new_nullifiers
+            .iter()
+            .map(|(nullifier, _)| *nullifier)
+            .collect();
+        ensure!(
+            spent.iter().collect::<BTreeSet<_>>().len() == spent.len(),
+            LeeError::InvalidInput("Duplicate nullifiers found in state diff".into())
+        );
+        self.check_recovery_bindings_are_new(&recovery_bindings)?;
+        for publication in &published {
+            if let Publication::Clear(body) = publication {
+                let address = body.to.account_id;
+                ensure!(
+                    self.bound_note(&recovery_bindings, address).is_some(),
+                    LeeError::InvalidInput(format!(
+                        "The recovery binding for {address} is missing"
+                    ))
+                );
+            }
+        }
         #[expect(
             clippy::iter_over_hash_type,
             reason = "Iteration order doesn't matter here"
@@ -299,14 +291,25 @@ impl V03State {
         for (account_id, account) in public_diff {
             self.public_state.insert_mut(account_id, account);
         }
-        for account_id in signer_account_ids {
-            self.get_account_by_id_mut(account_id)
-                .nonce
-                .public_account_nonce_increment();
+        // After `public_diff`, whose accounts carry their pre-transaction keys.
+        for (account_id, next) in signers {
+            let account = self.get_account_by_id_mut(account_id);
+            account.nonce.public_account_nonce_increment();
+            account
+                .data
+                .set_actor_state(signature_program_id(), next.encode());
         }
-        self.private_state.0.extend(&new_commitments);
-        self.private_state.1.extend(&new_nullifiers);
-        events
+        let messages: Vec<Commitment> = published.iter().map(Publication::commitment).collect();
+        let positions = self.private_state.0.append(&new_commitments, &messages);
+        self.private_state.1.extend(&spent);
+        for (position, publication) in positions.into_iter().zip(published) {
+            self.publications.insert_mut(position, publication);
+        }
+        for binding in recovery_bindings {
+            self.recovery_bindings
+                .insert_mut(binding.address, binding.note);
+        }
+        Ok(events)
     }
 
     pub fn transition_from_public_transaction(
@@ -316,7 +319,7 @@ impl V03State {
         timestamp: Timestamp,
     ) -> Result<Vec<TransactionEvent>, LeeError> {
         let diff = ValidatedStateDiff::from_public_transaction(tx, self, block_id, timestamp)?;
-        Ok(self.apply_state_diff(diff))
+        self.apply_state_diff(diff)
     }
 
     pub fn transition_from_privacy_preserving_transaction(
@@ -327,7 +330,7 @@ impl V03State {
     ) -> Result<(), LeeError> {
         let diff =
             ValidatedStateDiff::from_privacy_preserving_transaction(tx, self, block_id, timestamp)?;
-        drop(self.apply_state_diff(diff));
+        self.apply_state_diff(diff)?;
         Ok(())
     }
 
@@ -354,11 +357,63 @@ impl V03State {
         self.public_state.get(&account_id)
     }
 
+    #[must_use]
+    pub fn recovery_binding(&self, address: AccountId) -> Option<&EncryptedNote> {
+        self.recovery_bindings.get(&address)
+    }
+
+    pub(crate) fn bound_note<'binding>(
+        &'binding self,
+        introduced: &'binding [RecoveryBinding],
+        address: AccountId,
+    ) -> Option<&'binding EncryptedNote> {
+        introduced
+            .iter()
+            .find(|binding| binding.address == address)
+            .map(|binding| &binding.note)
+            .or_else(|| self.recovery_binding(address))
+    }
+
+    pub fn publications_from(
+        &self,
+        from_position: CommitmentPosition,
+    ) -> impl Iterator<Item = (CommitmentPosition, Publication)> {
+        self.publications
+            .range(from_position..)
+            .map(|(position, publication)| (*position, publication.clone()))
+    }
+
+    #[must_use]
+    pub fn publications_page(
+        &self,
+        from_position: CommitmentPosition,
+        limit: usize,
+    ) -> PublicationsPage {
+        let publications: Vec<_> = self.publications_from(from_position).take(limit).collect();
+        let recovery_bindings = publications
+            .iter()
+            .filter_map(|(_, publication)| match publication {
+                Publication::Clear(body) => Some(body.to.account_id),
+                Publication::Sealed(_) => None,
+            })
+            .map(|address| {
+                let note = self
+                    .recovery_binding(address)
+                    .expect("a clear publication's address was bound when it was applied");
+                (address, note.clone())
+            })
+            .collect();
+        PublicationsPage {
+            publications,
+            recovery_bindings,
+        }
+    }
+
     /// Reconstructs a genesis-seeded builtin's bytecode from its header and segment chain at
     /// `account_id` — a program deployed elsewhere via `program_loader` won't be found here.
     #[must_use]
     pub fn get_builtin_program(&self, account_id: AccountId) -> Option<(ProgramId, Vec<u8>)> {
-        crate::program::resolve_program(account_id, |id| self.loader_shard(id))
+        crate::program::resolve_program(account_id, |id| self.loader_actor_state(id))
     }
 
     /// The real `image_id` of whatever program is deployed at `account_id`, or `None` if there
@@ -368,12 +423,12 @@ impl V03State {
     /// [`ProgramImageClaim`]: lee_core::ProgramImageClaim
     #[must_use]
     pub fn get_program_image_id(&self, account_id: AccountId) -> Option<ProgramId> {
-        get_program_via(account_id, |id| self.loader_shard(id)).map(|(image_id, _)| image_id)
+        get_program_via(account_id, |id| self.loader_actor_state(id)).map(|(image_id, _)| image_id)
     }
 
-    pub(crate) fn loader_shard(&self, account_id: AccountId) -> Option<&ShardData> {
+    pub(crate) fn loader_actor_state(&self, account_id: AccountId) -> Option<&ActorState> {
         self.get_account_by_id_ref(account_id)
-            .map(|account| account.data.shard(PROGRAM_LOADER_ACCOUNT_ID))
+            .map(|account| account.data.actor_state(PROGRAM_LOADER_ACCOUNT_ID))
     }
 
     #[must_use]
@@ -382,12 +437,23 @@ impl V03State {
     }
 
     #[must_use]
+    pub fn get_proof_for_position(&self, position: CommitmentPosition) -> Option<MembershipProof> {
+        self.private_state.0.get_proof_at(position)
+    }
+
+    #[must_use]
+    pub fn is_spent(&self, nullifier: &Nullifier) -> bool {
+        self.private_state.1.contains(nullifier)
+    }
+
+    #[must_use]
     pub fn commitment_set_digest(&self) -> CommitmentSetDigest {
         self.private_state.0.digest()
     }
 
     /// Order-independent fingerprint of the genesis-relevant state: the public account set
-    /// (which includes deployed programs' storage accounts) and the commitment-set digest.
+    /// (which includes deployed programs' storage accounts), the commitment-set digest, the
+    /// commitments, the nullifiers, the publications and the recovery bindings.
     ///
     /// The sequencer and the indexer build the directly-seeded part of genesis
     /// (base builtins plus any directly-seeded accounts) separately from their own
@@ -402,7 +468,9 @@ impl V03State {
         // whether it belongs in the genesis fingerprint.
         let Self {
             public_state,
-            private_state,
+            private_state: (commitment_set, nullifier_set),
+            publications,
+            recovery_bindings,
         } = self;
 
         let mut accounts: Vec<(&AccountId, &Account)> = public_state.iter().collect();
@@ -418,7 +486,14 @@ impl V03State {
             hasher.update(len.to_le_bytes());
             hasher.update(&bytes);
         }
-        hasher.update(private_state.0.digest());
+        hasher.update(commitment_set.digest());
+        let mut encoded = Vec::new();
+        serialize_map(&commitment_set.commitments, &mut encoded)
+            .and_then(|()| nullifier_set.serialize(&mut encoded))
+            .and_then(|()| serialize_ordered_map(publications, &mut encoded))
+            .and_then(|()| serialize_ordered_map(recovery_bindings, &mut encoded))
+            .expect("borsh serialization is infallible");
+        hasher.update(encoded);
 
         let mut out = [0_u8; 32];
         out.copy_from_slice(&hasher.finalize());
@@ -431,7 +506,9 @@ impl V03State {
     ) -> Result<(), LeeError> {
         for commitment in new_commitments {
             if self.private_state.0.contains(commitment) {
-                return Err(LeeError::InvalidInput("Commitment already seen".to_owned()));
+                return Err(LeeError::InvalidInput(format!(
+                    "Commitment {commitment:?} already seen"
+                )));
             }
         }
         Ok(())
@@ -458,30 +535,58 @@ impl V03State {
     pub(crate) fn is_known_commitment_root(&self, digest: &CommitmentSetDigest) -> bool {
         self.private_state.0.root_history.contains(digest)
     }
+
+    pub(crate) fn check_recovery_bindings_are_new(
+        &self,
+        bindings: &[RecoveryBinding],
+    ) -> Result<(), LeeError> {
+        let mut addresses = BTreeSet::new();
+        for binding in bindings {
+            ensure!(
+                addresses.insert(binding.address)
+                    && !self.recovery_bindings.contains_key(&binding.address),
+                LeeError::InvalidInput(format!(
+                    "A recovery binding for {} already exists",
+                    binding.address
+                ))
+            );
+        }
+        Ok(())
+    }
 }
 
 #[cfg(any(test, feature = "test-utils"))]
 impl V03State {
+    /// Initializes state with given public account balances leaving other account fields at their
+    /// default values.
+    #[must_use]
+    pub fn with_public_account_balances(
+        self,
+        balances: impl IntoIterator<Item = (AccountId, u128)>,
+    ) -> Self {
+        self.with_public_accounts(
+            balances
+                .into_iter()
+                .map(|(account_id, balance)| (account_id, Account::funded(balance))),
+        )
+    }
+
     pub fn force_insert_account(&mut self, account_id: AccountId, account: Account) {
         self.public_state.insert_mut(account_id, account);
     }
-}
 
-/// The deterministic `AccountId` a genesis-seeded builtin's `index`-th segment lives at.
-/// Only `insert_program` needs this — a live deploy has a real signer to pick addresses instead.
-fn genesis_segment_account_id(header_account_id: AccountId, index: usize) -> AccountId {
-    use sha2::{Digest as _, Sha256};
-    const GENESIS_SEGMENT_ID_PREFIX: &[u8; 32] = b"/LEE/v0.3/AccountId/GenesisSeg/\x00";
-
-    let mut hasher = Sha256::new();
-    hasher.update(GENESIS_SEGMENT_ID_PREFIX);
-    hasher.update(header_account_id.as_ref());
-    hasher.update(
-        u32::try_from(index)
-            .expect("segment count fits in u32")
-            .to_le_bytes(),
-    );
-    AccountId::new(hasher.finalize().into())
+    #[must_use]
+    pub fn with_empty_public_accounts(
+        mut self,
+        account_ids: impl IntoIterator<Item = AccountId>,
+    ) -> Self {
+        for account_id in account_ids {
+            if !self.public_state.contains_key(&account_id) {
+                self.public_state.insert_mut(account_id, Account::default());
+            }
+        }
+        self
+    }
 }
 
 #[cfg(test)]

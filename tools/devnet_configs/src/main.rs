@@ -1,12 +1,12 @@
 //! Regenerate what the four-node docker devnet runs on
-//! (`lez/sequencer/service/docker-compose.devnet.yml`): one sequencer config
+//! (the root `docker-compose.yml`): one sequencer config
 //! all four nodes share, and a key directory per node.
 //!
-//! The shared config carries the genesis that stakes all four Bedrock signing
+//! The shared config carries the genesis that stakes all four channel signing
 //! keys, so the leader opens the channel already accrediting the whole
 //! committee and the followers replay the same chain — the arrangement
 //! `integration_tests/tests/multi_sequencer.rs` drives in-process. What is left
-//! per node is its Bedrock signing key, mounted into its home.
+//! per node is its channel signing key, mounted into its home.
 //!
 //! Run via `just regenerate-devnet-configs`, then commit the result. See this
 //! crate's README for what is safe to edit by hand instead.
@@ -16,12 +16,13 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result};
-use lee::{PrivateKey, PublicKey};
-use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-use sequencer_core::{
-    config::{ChannelParams, GenesisAction, GossipConfig, SequencerConfig},
-    sign_genesis_stake,
+use lee::{
+    PrivateKey,
+    signature::{PublicAccountSecret, public_account_id},
 };
+use logos_blockchain_zone_sdk::key_management_system_service::keys::Ed25519Key;
+use sequencer_core::config::{ChannelParams, GenesisAction, GossipConfig, SequencerConfig};
+use sequencer_genesis::sign_genesis_stake;
 use sequencer_stake_core::SequencerKey;
 
 /// Committee size the devnet compose file runs.
@@ -56,21 +57,30 @@ fn main() -> Result<()> {
         )
     })?;
 
-    // Nothing here may differ between the nodes: they build this genesis
-    // independently and have to arrive at the same chain.
-    config.bedrock_config.channel_params.posting_timeframe = POSTING_TIMEFRAME;
+    let genesis = config
+        .genesis
+        .as_mut()
+        .context("The template config has no genesis")?;
+    genesis.channel_params.posting_timeframe = POSTING_TIMEFRAME;
     config.gossip = Some(GossipConfig {
         listen_addr: GOSSIP_LISTEN_ADDR
             .parse()
             .expect("hardcoded gossip listen multiaddr is valid"),
         bootstrap_peers: vec![],
     });
-    let signing_keys: Vec<[u8; 32]> = std::iter::repeat_with(random_key).take(NODES).collect();
-    let stakes = genesis_sequencer_stakes(&signing_keys, config.bedrock_config.channel_params)
+    // A node keeps its key, so a regeneration forced by a stake layout change moves only the
+    // stakes; delete a key file to roll it.
+    let signing_keys: Vec<[u8; 32]> = (0..NODES)
+        .map(|index| existing_key(&devnet_dir, index).unwrap_or_else(random_key))
+        .collect();
+    let stakes = genesis_sequencer_stakes(&signing_keys, genesis.channel_params)
         .context("Failed to build the founding sequencer stakes")?;
     // Ahead of the template's supplies: the stakes are funded by their own
     // genesis deposit, and the accounts they credit are not the supplied ones.
-    config.genesis = stakes.into_iter().chain(config.genesis).collect();
+    genesis.actions = stakes
+        .into_iter()
+        .chain(std::mem::take(&mut genesis.actions))
+        .collect();
 
     write_config(&devnet_dir, &config)?;
     println!("✅ Wrote {}", devnet_dir.join(CONFIG_NAME).display());
@@ -83,6 +93,18 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// The channel signing key node `index` already has, if any.
+fn existing_key(devnet_dir: &Path, index: usize) -> Option<[u8; 32]> {
+    std::fs::read(
+        devnet_dir
+            .join(format!("seq-{index}"))
+            .join(sequencer_core::CHANNEL_SIGNING_KEY_FILE),
+    )
+    .ok()?
+    .try_into()
+    .ok()
 }
 
 /// Fresh 32 bytes for one identity.
@@ -109,13 +131,13 @@ fn genesis_sequencer_stakes(
                 .context("Sequencer signing key is not a valid Ed25519 point")?;
             // Separate from the signing key: posting and stake control are
             // distinct roles.
-            let owner = PrivateKey::new_os_random();
+            let owner = PublicAccountSecret::new_os_random();
             Ok(GenesisAction::StakeSequencer {
                 sequencer_key,
-                ownership_public_key: PublicKey::new_from_private_key(&owner),
+                ownership_id: public_account_id(&owner),
                 // The index is signed over too, so these must stay in the order
                 // they are written to the genesis list.
-                stake_signature: sign_genesis_stake(index, sequencer_key, &owner, minimum_stake),
+                stake_entry: sign_genesis_stake(index, sequencer_key, &owner, minimum_stake),
             })
         })
         .collect()
@@ -136,12 +158,15 @@ fn write_config(dir: &Path, config: &SequencerConfig) -> Result<()> {
     Ok(())
 }
 
-/// Writes one node's Bedrock identity, the key the stake in the shared genesis
+/// Writes one node's channel signing key, the key the stake in the shared genesis
 /// accredits.
-fn write_key(dir: &Path, bedrock_key: [u8; 32]) -> Result<()> {
+fn write_key(dir: &Path, channel_key: [u8; 32]) -> Result<()> {
     std::fs::create_dir_all(dir).with_context(|| format!("Failed to create {}", dir.display()))?;
-    std::fs::write(dir.join("bedrock_signing_key"), bedrock_key)
-        .context("Failed to write bedrock_signing_key")
+    std::fs::write(
+        dir.join(sequencer_core::CHANNEL_SIGNING_KEY_FILE),
+        channel_key,
+    )
+    .context("Failed to write channel_signing_key")
 }
 
 /// This crate sits two levels down, at `tools/devnet_configs`.
@@ -151,8 +176,8 @@ fn repo_root() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use lee::AccountId;
-    use sequencer_core::genesis_stake_message;
+    use lee::signature::{authenticate, current_key};
+    use sequencer_genesis::{genesis_stake_message, genesis_stake_message_with_keys};
 
     use super::*;
 
@@ -164,28 +189,34 @@ mod tests {
             .join(CONFIGS_DIR)
             .join("devnet")
             .join(CONFIG_NAME);
-        let config = SequencerConfig::from_path(&path)?;
-        let minimum_stake = config.bedrock_config.channel_params.minimum_sequencer_stake;
+        let genesis = SequencerConfig::from_path(&path)?
+            .genesis
+            .context("The devnet config has no genesis")?;
+        let minimum_stake = genesis.channel_params.minimum_sequencer_stake;
 
-        let stakes = config.genesis.iter().filter_map(|action| match action {
+        let stakes = genesis.actions.iter().filter_map(|action| match action {
             GenesisAction::StakeSequencer {
                 sequencer_key,
-                ownership_public_key,
-                stake_signature,
-            } => Some((sequencer_key, ownership_public_key, stake_signature)),
-            GenesisAction::SupplyAccount { .. } | GenesisAction::SupplyBridgeLockHolding { .. } => {
+                ownership_id,
+                stake_entry,
+            } => Some((sequencer_key, *ownership_id, stake_entry)),
+            GenesisAction::SupplyAccount { .. } | GenesisAction::SupplyPrivateAccount { .. } => {
                 None
             }
         });
-        for (index, (sequencer_key, ownership_public_key, stake_signature)) in stakes.enumerate() {
-            let message = genesis_stake_message(
-                index,
-                *sequencer_key,
-                AccountId::from(ownership_public_key),
-                minimum_stake,
-            );
+        for (index, (sequencer_key, ownership_id, stake_entry)) in stakes.enumerate() {
+            let message = genesis_stake_message(index, *sequencer_key, ownership_id, minimum_stake);
+            let message_with_keys =
+                genesis_stake_message_with_keys(&message, ownership_id, stake_entry.next);
             anyhow::ensure!(
-                stake_signature.is_valid_for(&message.hash(), ownership_public_key),
+                current_key(None, ownership_id, &stake_entry.auth_data)
+                    .and_then(|(current, signature)| authenticate(
+                        &current,
+                        &message_with_keys,
+                        signature,
+                        &stake_entry.next
+                    ))
+                    .is_ok(),
                 "Stake signature of founding sequencer {index} is stale, run `just regenerate-devnet-configs`"
             );
         }

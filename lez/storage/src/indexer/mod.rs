@@ -2,10 +2,10 @@ use std::{path::Path, sync::Arc};
 
 use common::block::Block;
 use lee::V03State;
-use log::warn;
 use rocksdb::{
     BoundColumnFamily, ColumnFamilyDescriptor, DBWithThreadMode, MultiThreaded, Options,
 };
+use tracing::warn;
 
 use crate::{BREAKPOINT_INTERVAL, CF_BLOCK_NAME, CF_META_NAME, DBIO, DbResult, error::DbError};
 
@@ -22,8 +22,6 @@ pub const DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY: &str =
 pub const DB_META_ZONE_SDK_INDEXER_CURSOR_KEY: &str = "zone_sdk_indexer_cursor";
 /// Key base for storing the persisted `Option<StallReason>` diagnostic record (opaque JSON bytes).
 pub const DB_META_STALL_REASON_KEY: &str = "stall_reason";
-/// Key base for storing the persisted cross-zone halt record (opaque JSON bytes).
-pub const DB_META_CROSS_ZONE_HALT_KEY: &str = "cross_zone_halt";
 /// Key base for storing the L1 inscription slot of the tip block.
 pub const DB_META_TIP_SLOT_KEY: &str = "tip_slot";
 /// Key base for storing the applied event-filter segments (opaque borsh bytes).
@@ -197,7 +195,10 @@ impl RocksDBIO {
         };
         if br_id < target {
             warn!(
-                "Breakpoint {target} missing; replaying from breakpoint {br_id} for block {block_id}"
+                missing_breakpoint = target,
+                replay_breakpoint = br_id,
+                block_id,
+                "Breakpoint missing, replaying from an earlier one"
             );
         }
 

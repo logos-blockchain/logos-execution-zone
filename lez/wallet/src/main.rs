@@ -6,9 +6,11 @@
 use anyhow::{Context as _, Result};
 use clap::{CommandFactory as _, Parser as _};
 use wallet::{
-    WalletCore,
-    cli::{Args, execute_continuous_run, execute_subcommand, read_password_from_stdin},
-    helperfunctions::{fetch_config_path, fetch_persistent_storage_path},
+    ExecutionFailureKind, FeeParams, WalletCore,
+    cli::{Args, execute_continuous_run, execute_subcommand},
+    utils::{
+        fetch_config_path, fetch_persistent_storage_path, read_new_password, read_password, warn,
+    },
 };
 
 // TODO #169: We have sample configs for sequencer, but not for wallet
@@ -20,10 +22,26 @@ use wallet::{
 async fn main() -> Result<()> {
     let Args {
         continuous_run,
+        dry_run,
+        allow_revert,
+        gas_limit,
+        max_fee,
+        tip,
+        fee_headroom,
+        fee_payer,
+        refund_to,
         command,
     } = Args::parse();
+    let fee_params = FeeParams {
+        gas_limit,
+        max_fee,
+        tip,
+        headroom_blocks: fee_headroom,
+        payer: fee_payer,
+        refund_to,
+    };
 
-    env_logger::init();
+    logging::init();
 
     let config_path = fetch_config_path().context("Could not fetch config path")?;
     let storage_path =
@@ -31,15 +49,23 @@ async fn main() -> Result<()> {
 
     if let Some(command) = command {
         let mut wallet = if storage_path.exists() {
-            WalletCore::new_update_chain(config_path, storage_path, None)?
+            let password = read_password(&storage_path)?;
+            WalletCore::new_update_chain(config_path, storage_path, None, &password)?
         } else {
             // TODO: Maybe move to `WalletCore::from_env()` or similar?
 
             println!("Persistent storage not found, need to execute setup");
 
-            let password = read_password_from_stdin()?;
-            let (wallet, mnemonic) =
+            let password = read_new_password()?;
+            let (mut wallet, mnemonic) =
                 WalletCore::new_init_storage(config_path, storage_path, None, &password)?;
+
+            match wallet.start_at_chain_tip().await {
+                Ok(chain_tip) => println!("New wallet starts synced at block {chain_tip}"),
+                Err(err) => warn(&format!(
+                    "Could not read the chain tip, syncing from block 0: {err:#}"
+                )),
+            }
 
             println!();
             println!("IMPORTANT: Write down your recovery phrase and store it securely.");
@@ -52,10 +78,28 @@ async fn main() -> Result<()> {
             wallet.store_persistent_data()?;
             wallet
         };
-        let _output = execute_subcommand(&mut wallet, command).await?;
-        Ok(())
+        wallet.set_dry_run(dry_run);
+        wallet.set_allow_revert(allow_revert);
+        wallet.set_fee_params(fee_params);
+        match execute_subcommand(&mut wallet, command).await {
+            // A dry run stops the command with its report; that is its success.
+            //
+            // TODO: a dry run travels on the error channel to stop the command deep inside
+            // `WalletCore` without touching every send caller. Rework it into a typed send
+            // outcome (sent hash or dry-run report) so that we dont need this ugly error to success
+            // case.
+            Err(err) => match err.root_cause().downcast_ref() {
+                Some(ExecutionFailureKind::DryRun(report)) => {
+                    println!("{report}");
+                    Ok(())
+                }
+                _ => Err(err),
+            },
+            result => result.map(drop),
+        }
     } else if continuous_run {
-        let mut wallet = WalletCore::new_update_chain(config_path, storage_path, None)?;
+        let password = read_password(&storage_path)?;
+        let mut wallet = WalletCore::new_update_chain(config_path, storage_path, None, &password)?;
         execute_continuous_run(&mut wallet).await
     } else {
         let help = Args::command().render_long_help();

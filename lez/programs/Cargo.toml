@@ -10,6 +10,11 @@ path = "bridge/src/main.rs"
 required-features = ["programs"]
 
 [[bin]]
+name = "system_upgrader"
+path = "system_upgrader/src/main.rs"
+required-features = ["programs"]
+
+[[bin]]
 name = "clock"
 path = "clock/src/main.rs"
 required-features = ["programs"]
@@ -17,36 +22,6 @@ required-features = ["programs"]
 [[bin]]
 name = "fee"
 path = "fee/src/main.rs"
-required-features = ["programs"]
-
-[[bin]]
-name = "cross_zone_outbox"
-path = "cross_zone_outbox/src/main.rs"
-required-features = ["programs"]
-
-[[bin]]
-name = "cross_zone_inbox"
-path = "cross_zone_inbox/src/main.rs"
-required-features = ["programs"]
-
-[[bin]]
-name = "ping_sender"
-path = "ping_sender/src/main.rs"
-required-features = ["programs"]
-
-[[bin]]
-name = "ping_receiver"
-path = "ping_receiver/src/main.rs"
-required-features = ["programs"]
-
-[[bin]]
-name = "bridge_lock"
-path = "bridge_lock/src/main.rs"
-required-features = ["programs"]
-
-[[bin]]
-name = "wrapped_token"
-path = "wrapped_token/src/main.rs"
 required-features = ["programs"]
 
 [[bin]]
@@ -64,13 +39,9 @@ artifacts = [
   "dep:build_utils",
   "dep:lee",
   "dep:clock_core",
+  "dep:system_upgrader_core",
   "dep:bridge_core",
   "dep:fee_core",
-  "dep:cross_zone_inbox_core",
-  "dep:cross_zone_outbox_core",
-  "dep:bridge_lock_core",
-  "dep:wrapped_token_core",
-  "dep:ping_core",
   "dep:sequencer_stake_core",
 ]
 
@@ -78,15 +49,11 @@ artifacts = [
 # You don't need this if you only want to use the library target.
 programs = [
   "dep:lee_core",
+  "dep:program_loader_core",
   "dep:bridge_core",
   "dep:clock_core",
+  "dep:system_upgrader_core",
   "dep:fee_core",
-  "dep:cross_zone_inbox_core",
-  "dep:cross_zone_marker_core",
-  "dep:cross_zone_outbox_core",
-  "dep:bridge_lock_core",
-  "dep:wrapped_token_core",
-  "dep:ping_core",
   "dep:sequencer_stake_core",
 ]
 
@@ -94,20 +61,21 @@ programs = [
 borsh.workspace = true
 lee = { workspace = true, optional = true }
 lee_core = { workspace = true, optional = true }
+program_loader_core = { workspace = true, optional = true }
 bridge_core = { workspace = true, optional = true }
 clock_core = { workspace = true, optional = true }
+system_upgrader_core = { workspace = true, optional = true }
 fee_core = { workspace = true, optional = true }
-cross_zone_inbox_core = { workspace = true, optional = true }
-cross_zone_marker_core = { workspace = true, optional = true }
-cross_zone_outbox_core = { workspace = true, optional = true }
-bridge_lock_core = { workspace = true, optional = true }
-wrapped_token_core = { workspace = true, optional = true }
-ping_core = { workspace = true, optional = true }
 sequencer_stake_core = { workspace = true, optional = true }
 
 [build-dependencies]
 build_utils = { workspace = true, optional = true }
 
 [dev-dependencies]
+lee = { workspace = true, features = ["test-utils"] }
 lee_core = { workspace = true, features = ["test_utils"] }
 bridge_core = { workspace = true }
+program_loader_core = { workspace = true }
+risc0-binfmt = { workspace = true }
+test_guest_core = { workspace = true }
+test_programs = { workspace = true }

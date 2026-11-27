@@ -6,8 +6,10 @@ use std::{
 };
 
 use cucumber::World;
-use testing_framework_app::{AppHostEnv, AppHostTopology, DeployContext};
-use testing_framework_core::scenario::NodeClients;
+use logos_blockchain_zone_sdk::{
+    testing_framework_app::{AppHostEnv, AppHostTopology, DeployContext},
+    testing_framework_core::scenario::NodeClients,
+};
 
 use crate::{
     cucumber::{

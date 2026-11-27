@@ -8,55 +8,6 @@ impl From<crate::actor::db::Error> for crate::error::Error {
     }
 }
 
-impl From<protocol::DispatchOrigin> for entities::DispatchOrigin {
-    fn from(origin: protocol::DispatchOrigin) -> Self {
-        Self {
-            zone: origin.src_zone,
-            block_id: origin.src_block_id,
-            tx_index: origin.src_tx_index,
-        }
-    }
-}
-
-impl From<entities::DispatchOrigin> for protocol::DispatchOrigin {
-    fn from(origin: entities::DispatchOrigin) -> Self {
-        Self {
-            src_zone: origin.zone,
-            src_block_id: origin.block_id,
-            src_tx_index: origin.tx_index,
-        }
-    }
-}
-
-impl From<entities::DeadLetterDispatch> for protocol::DeadLetterDispatch {
-    fn from(dispatch: entities::DeadLetterDispatch) -> Self {
-        Self {
-            message_key: dispatch.message_key,
-            origin: dispatch.origin.into(),
-            failed_attempts: dispatch.failed_attempts,
-            transaction: dispatch.transaction.unwrap_or_default(),
-        }
-    }
-}
-
-impl From<protocol::ZoneCheckpointRecord> for entities::ZoneCheckpoint {
-    fn from(checkpoint: protocol::ZoneCheckpointRecord) -> Self {
-        Self {
-            bytes: checkpoint.bytes,
-            seq: checkpoint.seq,
-        }
-    }
-}
-
-impl From<entities::ZoneCheckpoint> for protocol::ZoneCheckpointRecord {
-    fn from(checkpoint: entities::ZoneCheckpoint) -> Self {
-        Self {
-            bytes: checkpoint.bytes,
-            seq: checkpoint.seq,
-        }
-    }
-}
-
 impl From<protocol::ZoneAnchorRecord> for entities::ZoneAnchor {
     fn from(anchor: protocol::ZoneAnchorRecord) -> Self {
         Self {

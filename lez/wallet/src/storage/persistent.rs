@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use key_protocol::key_management::{
     group_key_holder::GroupKeyHolder,
@@ -20,6 +20,8 @@ pub struct PersistentStorage {
     pub key_chain: KeyChainPersistentData,
     pub last_synced_block: u64,
     #[serde(default)]
+    pub synced_from_block: u64,
+    #[serde(default)]
     pub labels: BTreeMap<Label, AccountIdWithPrivacy>,
 }
 
@@ -32,6 +34,8 @@ pub struct KeyChainPersistentData {
     pub group_key_holders: BTreeMap<Label, GroupKeyHolder>,
     #[serde(default)]
     pub shared_private_accounts: BTreeMap<lee::AccountId, SharedAccountEntry>,
+    #[serde(default)]
+    pub locally_created_groups: BTreeSet<Label>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1,14 +1,14 @@
 use std::{
-    collections::HashMap, fmt::Display, fs::File, io::BufReader, num::NonZeroU32, path::Path,
+    collections::HashMap, fmt::Display, fs::File, io::BufReader, num::NonZero, path::Path,
     str::FromStr, time::Duration,
 };
 
 use anyhow::{Context as _, Result, ensure};
-use common::{HashType, config::BasicAuth};
-use cross_zone_inbox_core::CrossZoneConfig;
+use chain_state::zone_indexer::DEFAULT_BACKFILL_BATCH_SLOTS;
+use common::config::BasicAuth;
 use humantime_serde;
 use lee::AccountId;
-pub use logos_blockchain_core::mantle::ops::channel::ChannelId;
+pub use logos_blockchain_zone_sdk::core::mantle::ops::channel::ChannelId;
 use serde::{Deserialize, Serialize};
 use serde_with::{DeserializeFromStr, SerializeDisplay};
 use url::Url;
@@ -23,33 +23,15 @@ pub struct ClientConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct IndexerConfig {
     #[serde(with = "humantime_serde")]
     pub consensus_info_polling_interval: Duration,
     pub bedrock_config: ClientConfig,
     pub channel_id: ChannelId,
-    /// Presence selects the genesis program set, must match the sequencer's, and
-    /// cannot change on an existing chain. `None` also disables the verifier; a
-    /// source-only zone declares `"cross_zone": {}`.
-    #[serde(default)]
-    pub cross_zone: Option<CrossZoneConfig>,
-    /// Hex hashes of local blocks accepted without cross-zone verification: a
-    /// listed block skips verification entirely, so listing a hash clears a
-    /// dead-peer retry loop as well as a forged verdict. This accepts the
-    /// sequencer's word for the listed blocks only; every other block stays
-    /// verified. Acceptance can permanently consume the real message's
-    /// delivery slot if the sequencer forged under true source coordinates,
-    /// and the unverified marks are memory only, so an unlisted replay of the
-    /// same dispatch after a restart halts again.
-    #[serde(default)]
-    pub cross_zone_accept_unverified: Vec<HashType>,
-    /// Peer-block bodies the cross-zone verifier keeps behind each peer's
-    /// verified tip. Omitted means 1024. `u32::MAX` is effectively unbounded:
-    /// the escape hatch for a deployment whose dispatches routinely reach
-    /// further back than any fixed window, paid for in unbounded memory. Zero
-    /// is unrepresentable and rejected at config parse.
-    #[serde(default = "default_peer_block_cache_window")]
-    pub peer_block_cache_window: NonZeroU32,
+    /// Slots of finalized history each channel read covers.
+    #[serde(default = "default_backfill_batch_slots")]
+    pub backfill_batch_slots: NonZero<u64>,
     /// Whether to wipe the indexer store and re-index from scratch when the startup
     /// chain-identity check finds the channel serving a different block than the one
     /// stored at the same id.
@@ -155,9 +137,9 @@ impl EventFilterConfig {
     }
 }
 
-/// The window applied when the config omits `peer_block_cache_window`.
-pub(crate) const fn default_peer_block_cache_window() -> NonZeroU32 {
-    NonZeroU32::new(1024).expect("1024 is nonzero")
+#[must_use]
+pub const fn default_backfill_batch_slots() -> NonZero<u64> {
+    DEFAULT_BACKFILL_BATCH_SLOTS
 }
 
 #[cfg(test)]
@@ -248,5 +230,19 @@ mod tests {
             ] }}"#
         );
         assert!(serde_json::from_str::<EventFilterConfig>(&json).is_err());
+    }
+
+    #[test]
+    fn unknown_indexer_field_is_rejected() {
+        let json = r#"{
+            "consensus_info_polling_interval": "1s",
+            "bedrock_config": { "addr": "http://localhost:18080" },
+            "channel_id": "0101010101010101010101010101010101010101010101010101010101010101",
+            "cross_zone": { "lock_target_zones": [] }
+        }"#;
+        let err = serde_json::from_str::<IndexerConfig>(json)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("unknown field `cross_zone`"), "{err}");
     }
 }

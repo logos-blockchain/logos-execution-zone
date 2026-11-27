@@ -12,13 +12,13 @@ use sequencer_stake_core::{SequencerEntry, SequencerKey, StakeRecord};
 use super::{
     super::log_step,
     helpers::{
-        assert_not_included, config_entry, get_account, native_balance, stake_shard,
+        assert_not_included, config_entry, get_account, native_balance, stake_state,
         wait_for_inclusion,
     },
 };
 use crate::cucumber::{
     error::{StepError, StepResult},
-    stake_scenario::{AccountRole, raw_key_instruction_fails_to_decode},
+    stake_scenario::{AccountRole, raw_key_message_fails_to_decode},
     world::CucumberWorld,
 };
 
@@ -84,11 +84,11 @@ async fn entry_tracks_staked_amount(world: &mut CucumberWorld, step: &Step) -> S
     log_step(step);
     let amount = world.stake()?.last_submission()?.amount;
     let entry = required_entry(world).await?;
-    if entry.total_staked != amount || entry.total_pending_unstake != 0 {
+    if entry.total_staked != amount || entry.pending_unstake.is_some() {
         return Err(StepError::AssertionFailed {
             message: format!(
-                "the entry tracks {} staked with {} pending unstake, expected {amount} and 0",
-                entry.total_staked, entry.total_pending_unstake
+                "the entry tracks {} staked with pending unstake {:?}, expected {amount} and none",
+                entry.total_staked, entry.pending_unstake
             ),
         });
     }
@@ -123,31 +123,25 @@ async fn config_has_no_entry(world: &mut CucumberWorld, step: &Step) -> StepResu
     Ok(())
 }
 
-#[then(
-    "the ownership account is claimed by sequencer_stake backing the sequencer key with no \
-     pending unstake"
-)]
+#[then("the ownership account is claimed by sequencer_stake backing the sequencer key")]
 async fn ownership_account_is_claimed(world: &mut CucumberWorld, step: &Step) -> StepResult {
     log_step(step);
     let scenario = world.stake()?;
     let account = get_account(world.lez()?, scenario.ownership_id()?).await?;
-    let shard = stake_shard(&account);
-    if shard.is_empty() {
+    let state = stake_state(&account);
+    if state.is_empty() {
         return Err(StepError::AssertionFailed {
             message: "the ownership account holds no sequencer_stake record".to_owned(),
         });
     }
     let record =
-        StakeRecord::from_bytes(shard.as_ref()).ok_or_else(|| StepError::AssertionFailed {
-            message: "the ownership account's stake shard does not decode as a StakeRecord"
+        StakeRecord::from_bytes(state.as_ref()).ok_or_else(|| StepError::AssertionFailed {
+            message: "the ownership account's stake actor state does not decode as a StakeRecord"
                 .to_owned(),
         })?;
-    if record.sequencer_key != scenario.sequencer_key() || record.pending_unstake.is_some() {
+    if record.sequencer_key != scenario.sequencer_key() {
         return Err(StepError::AssertionFailed {
-            message: format!(
-                "the StakeRecord does not carry the sequencer key with no pending unstake: \
-                 {record:?}"
-            ),
+            message: format!("the StakeRecord does not carry the sequencer key: {record:?}"),
         });
     }
     Ok(())
@@ -158,7 +152,7 @@ async fn ownership_account_is_not_claimed(world: &mut CucumberWorld, step: &Step
     log_step(step);
     let ownership_id = world.stake()?.ownership_id()?;
     let account = get_account(world.lez()?, ownership_id).await?;
-    if !stake_shard(&account).is_empty() {
+    if !stake_state(&account).is_empty() {
         return Err(StepError::AssertionFailed {
             message: "the ownership account holds a sequencer_stake record, expected none"
                 .to_owned(),
@@ -194,7 +188,7 @@ async fn account_balance_increased(
 }
 
 /// Asserts that the `role` account's balance equals its pre-submission
-/// snapshot, whatever happened to its other shards.
+/// snapshot, whatever happened to its other actor states.
 #[then(regex = "^the ([a-z ]+) account balance is unchanged$")]
 async fn account_balance_unchanged(
     world: &mut CucumberWorld,
@@ -279,10 +273,7 @@ fn bytes_are_not_a_sequencer_key(world: &mut CucumberWorld, step: &Step) -> Step
 fn stake_record_with_bytes_fails_to_decode(world: &mut CucumberWorld, step: &Step) -> StepResult {
     log_step(step);
     let key_bytes = world.stake()?.off_curve_bytes()?;
-    // 32 key bytes then a `None` discriminant: a `StakeRecord` with no
-    // pending unstake.
-    let record_bytes = [&key_bytes[..], &[0_u8][..]].concat();
-    if StakeRecord::from_bytes(&record_bytes).is_some() {
+    if StakeRecord::from_bytes(&key_bytes).is_some() {
         return Err(StepError::AssertionFailed {
             message: "a StakeRecord carrying the off-curve bytes decodes".to_owned(),
         });
@@ -290,17 +281,18 @@ fn stake_record_with_bytes_fails_to_decode(world: &mut CucumberWorld, step: &Ste
     Ok(())
 }
 
-#[then("an Instruction carrying the bytes fails to deserialize")]
-fn instruction_with_bytes_fails_to_deserialize(
-    world: &mut CucumberWorld,
-    step: &Step,
-) -> StepResult {
+#[then("a Stake message carrying the bytes fails to deserialize")]
+fn message_with_bytes_fails_to_deserialize(world: &mut CucumberWorld, step: &Step) -> StepResult {
     log_step(step);
     let scenario = world.stake()?;
     let key_bytes = scenario.off_curve_bytes()?;
-    if !raw_key_instruction_fails_to_decode(key_bytes, scenario.minimum_stake())? {
+    if !raw_key_message_fails_to_decode(
+        key_bytes,
+        scenario.minimum_stake(),
+        scenario.funding_id()?,
+    )? {
         return Err(StepError::AssertionFailed {
-            message: "a Stake instruction carrying the off-curve bytes deserializes".to_owned(),
+            message: "a Stake message carrying the off-curve bytes deserializes".to_owned(),
         });
     }
     Ok(())

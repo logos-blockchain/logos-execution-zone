@@ -15,10 +15,13 @@ use integration_tests::{
         wait_for_indexer_to_catch_up,
     },
 };
+use lee::test_utils::TestSigner;
+use logos_blockchain_zone_sdk::{
+    testing_framework_app::{AppHostEnv, AppHostTopology, DeployContext},
+    testing_framework_core::scenario::NodeClients,
+};
 use sequencer_service_rpc::RpcClient as _;
 use tempfile::tempdir;
-use testing_framework_app::{AppHostEnv, AppHostTopology, DeployContext};
-use testing_framework_core::scenario::NodeClients;
 
 #[tokio::test]
 #[ignore = "Blocked until LEZ's Logos revision includes logos-blockchain#3467 (fixes logos-blockchain#3431 port-allocation race)"]
@@ -153,12 +156,7 @@ async fn assert_lez_stack_works(deployment: &DeployContext<AppHostEnv>) -> Resul
         .map_err(anyhow::Error::from_boxed)?;
     let expected_public_accounts = default_public_accounts_for_wallet()
         .into_iter()
-        .map(|(private_key, balance)| {
-            (
-                lee::AccountId::from(&lee::PublicKey::new_from_private_key(&private_key)),
-                balance,
-            )
-        })
+        .map(|(private_key, balance)| (TestSigner::from(&private_key).account_id(), balance))
         .collect::<Vec<_>>();
     for (account, _) in &expected_public_accounts {
         assert!(public_accounts.contains(account));

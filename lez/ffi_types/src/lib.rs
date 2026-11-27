@@ -1,0 +1,1192 @@
+#![allow(clippy::undocumented_unsafe_blocks, reason = "It is an FFI")]
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use common::HashType;
+use indexer_service_protocol as protocol;
+use lee::{
+    AccountId, Actor, Authority, BoundaryStep, Delivery, EphemeralPublicKey, FeeDeclaration,
+    MessageBody, MessageEnvelope, PublicAccountEvidence, PublicExecutionContext, PublicKey,
+    Publication, RootCall, Signature, error::LeeError,
+};
+use lee_core::{
+    Commitment, EncryptedNote, FeeFallback, Nullifier, PrivateAction, ProvenFee, RecoveryBinding,
+    SealedMessage,
+    account::Nonce,
+    encryption::Ciphertext,
+    program::PdaSeed,
+    signing_key::{KeyType, SigningKeyState},
+};
+
+/// 32-byte array type for `AccountId`, keys, hashes, etc.
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug)]
+pub struct FfiBytes32 {
+    pub data: [u8; 32],
+}
+
+/// 64-byte array type for signatures, etc.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct FfiBytes64 {
+    pub data: [u8; 64],
+}
+
+/// U128 - 16 bytes little endian.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FfiU128 {
+    pub data: [u8; 16],
+}
+
+impl FfiBytes32 {
+    /// Create from a 32-byte array.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self { data: bytes }
+    }
+
+    /// Create from an `AccountId`.
+    #[must_use]
+    pub const fn from_account_id(id: &lee::AccountId) -> Self {
+        Self { data: *id.value() }
+    }
+}
+
+impl From<u128> for FfiU128 {
+    fn from(value: u128) -> Self {
+        Self {
+            data: value.to_le_bytes(),
+        }
+    }
+}
+
+impl From<FfiU128> for u128 {
+    fn from(value: FfiU128) -> Self {
+        Self::from_le_bytes(value.data)
+    }
+}
+
+impl From<Nonce> for FfiU128 {
+    fn from(value: Nonce) -> Self {
+        value.0.into()
+    }
+}
+
+impl From<FfiU128> for Nonce {
+    fn from(value: FfiU128) -> Self {
+        Self(value.into())
+    }
+}
+
+pub type FfiSignature = FfiBytes64;
+pub type FfiAccountId = FfiBytes32;
+pub type FfiNonce = FfiU128;
+pub type FfiPublicKey = FfiBytes32;
+
+impl From<AccountId> for FfiBytes32 {
+    fn from(value: AccountId) -> Self {
+        Self {
+            data: value.to_bytes(),
+        }
+    }
+}
+
+impl From<&lee::AccountId> for FfiBytes32 {
+    fn from(id: &lee::AccountId) -> Self {
+        Self::from_account_id(id)
+    }
+}
+
+impl From<HashType> for FfiBytes32 {
+    fn from(value: HashType) -> Self {
+        Self { data: value.0 }
+    }
+}
+
+impl From<FfiBytes32> for HashType {
+    fn from(value: FfiBytes32) -> Self {
+        Self(value.data)
+    }
+}
+
+impl From<FfiBytes32> for AccountId {
+    fn from(value: FfiBytes32) -> Self {
+        Self::new(value.data)
+    }
+}
+
+impl From<Signature> for FfiSignature {
+    fn from(value: Signature) -> Self {
+        Self { data: value.value }
+    }
+}
+
+impl From<PublicKey> for FfiPublicKey {
+    fn from(value: PublicKey) -> Self {
+        Self {
+            data: *value.value(),
+        }
+    }
+}
+
+impl From<protocol::HashType> for FfiBytes32 {
+    fn from(value: protocol::HashType) -> Self {
+        Self { data: value.0 }
+    }
+}
+
+impl From<protocol::Signature> for FfiSignature {
+    fn from(value: protocol::Signature) -> Self {
+        Self { data: value.0 }
+    }
+}
+
+impl From<protocol::AccountId> for FfiBytes32 {
+    fn from(value: protocol::AccountId) -> Self {
+        Self { data: value.value }
+    }
+}
+
+impl From<FfiBytes32> for protocol::AccountId {
+    fn from(value: FfiBytes32) -> Self {
+        Self { value: value.data }
+    }
+}
+
+impl From<protocol::PublicKey> for FfiBytes32 {
+    fn from(value: protocol::PublicKey) -> Self {
+        Self { data: value.0 }
+    }
+}
+
+#[repr(C)]
+#[derive(Debug)]
+pub struct FfiVec<T> {
+    pub entries: *mut T,
+    pub len: usize,
+    pub capacity: usize,
+}
+
+impl<T> From<Vec<T>> for FfiVec<T> {
+    fn from(value: Vec<T>) -> Self {
+        let (entries, len, capacity) = value.into_raw_parts();
+        Self {
+            entries,
+            len,
+            capacity,
+        }
+    }
+}
+
+impl<T> From<FfiVec<T>> for Vec<T> {
+    fn from(value: FfiVec<T>) -> Self {
+        if value.entries.is_null() {
+            debug_assert!(
+                value.len == 0 && value.capacity == 0,
+                "a null `FfiVec` must be empty"
+            );
+            return Self::new();
+        }
+        unsafe { Self::from_raw_parts(value.entries, value.len, value.capacity) }
+    }
+}
+
+impl<T> FfiVec<T> {
+    /// # Safety
+    ///
+    /// `index` must be lesser than `self.len`.
+    #[must_use]
+    pub unsafe fn get(&self, index: usize) -> &T {
+        let ptr = unsafe { self.entries.add(index) };
+        unsafe { &*ptr }
+    }
+}
+
+pub type FfiVecU8 = FfiVec<u8>;
+
+pub type FfiActorList = FfiVec<FfiActor>;
+
+pub type FfiDeclaredActorList = FfiVec<FfiDeclaredActor>;
+
+pub type FfiAccountIdList = FfiVec<FfiAccountId>;
+
+pub type FfiNonceList = FfiVec<FfiNonceEntry>;
+
+pub type FfiMessageDataList = FfiVec<u8>;
+
+pub type FfiWitnessEntryList = FfiVec<FfiWitnessEntry>;
+
+pub type FfiBoundaryStepList = FfiVec<FfiBoundaryStep>;
+
+pub type FfiPublicationList = FfiVec<FfiPublication>;
+
+pub type FfiPublicAccountEvidenceList = FfiVec<FfiPublicAccountEvidence>;
+
+pub type FfiPrivateActionList = FfiVec<FfiPrivateAction>;
+
+pub type FfiRecoveryBindingList = FfiVec<FfiRecoveryBinding>;
+
+pub type FfiPdaSeedList = FfiVec<FfiBytes32>;
+
+pub type FfiPromotionList = FfiVec<u64>;
+
+/// Fee declaration of a public transaction. Held inline (not behind a
+/// pointer): a fee-exempt transaction carries `has_fee == false` and a zeroed
+/// declaration.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FfiFeeDeclaration {
+    pub payer: FfiAccountId,
+    pub gas_limit: u64,
+    pub tip: u64,
+    pub max_fee: FfiU128,
+}
+
+impl From<FeeDeclaration> for FfiFeeDeclaration {
+    fn from(value: FeeDeclaration) -> Self {
+        let FeeDeclaration {
+            payer,
+            gas_limit,
+            tip,
+            max_fee,
+        } = value;
+
+        Self {
+            payer: payer.into(),
+            gas_limit,
+            tip,
+            max_fee: max_fee.into(),
+        }
+    }
+}
+
+impl From<FfiFeeDeclaration> for FeeDeclaration {
+    fn from(value: FfiFeeDeclaration) -> Self {
+        Self {
+            payer: AccountId::new(value.payer.data),
+            gas_limit: value.gas_limit,
+            tip: value.tip,
+            max_fee: value.max_fee.into(),
+        }
+    }
+}
+
+/// Identifies one of an account's program actor states.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FfiActor {
+    pub account_id: FfiAccountId,
+    pub program_account_id: FfiAccountId,
+}
+
+impl From<Actor> for FfiActor {
+    fn from(value: Actor) -> Self {
+        let Actor {
+            account_id,
+            program_account_id,
+        } = value;
+
+        Self {
+            account_id: account_id.into(),
+            program_account_id: program_account_id.into(),
+        }
+    }
+}
+
+impl From<FfiActor> for Actor {
+    fn from(value: FfiActor) -> Self {
+        Self {
+            account_id: value.account_id.into(),
+            program_account_id: value.program_account_id.into(),
+        }
+    }
+}
+
+/// One signer's replay nonce.
+#[repr(C)]
+pub struct FfiNonceEntry {
+    pub account_id: FfiAccountId,
+    pub nonce: FfiNonce,
+}
+
+impl From<(AccountId, Nonce)> for FfiNonceEntry {
+    fn from((account_id, nonce): (AccountId, Nonce)) -> Self {
+        Self {
+            account_id: account_id.into(),
+            nonce: nonce.into(),
+        }
+    }
+}
+
+impl From<(protocol::AccountId, u128)> for FfiNonceEntry {
+    fn from((account_id, nonce): (protocol::AccountId, u128)) -> Self {
+        Self {
+            account_id: account_id.into(),
+            nonce: nonce.into(),
+        }
+    }
+}
+
+impl From<FfiNonceEntry> for (protocol::AccountId, u128) {
+    fn from(value: FfiNonceEntry) -> Self {
+        (value.account_id.into(), value.nonce.into())
+    }
+}
+
+/// How a proven transaction starts, as far as its proof discloses: a call to a public actor.
+#[repr(C)]
+pub struct FfiRootCall {
+    pub to: FfiActor,
+    pub message: FfiMessageDataList,
+}
+
+impl From<RootCall> for FfiRootCall {
+    fn from(value: RootCall) -> Self {
+        Self {
+            to: value.to.into(),
+            message: value.message.into(),
+        }
+    }
+}
+
+impl From<FfiRootCall> for RootCall {
+    fn from(value: FfiRootCall) -> Self {
+        Self {
+            to: value.to.into(),
+            message: value.message.into(),
+        }
+    }
+}
+
+#[repr(C)]
+pub enum FfiPublicAccountEvidenceKind {
+    Key = 0x0,
+    Pda,
+}
+
+#[repr(C)]
+pub struct FfiPublicAccountEvidence {
+    pub kind: FfiPublicAccountEvidenceKind,
+    /// The account's initial key, for `Key` evidence.
+    pub key: FfiSigningKeyState,
+    pub program: FfiAccountId,
+    pub seed: FfiBytes32,
+}
+
+impl From<PublicAccountEvidence> for FfiPublicAccountEvidence {
+    fn from(value: PublicAccountEvidence) -> Self {
+        match value {
+            PublicAccountEvidence::Key(key) => Self {
+                kind: FfiPublicAccountEvidenceKind::Key,
+                key: key.into(),
+                program: FfiAccountId::default(),
+                seed: FfiBytes32::default(),
+            },
+            PublicAccountEvidence::Pda { program, seed } => Self {
+                kind: FfiPublicAccountEvidenceKind::Pda,
+                key: FfiSigningKeyState::default(),
+                program: program.into(),
+                seed: pda_seed_to_ffi(seed),
+            },
+        }
+    }
+}
+
+impl TryFrom<FfiPublicAccountEvidence> for PublicAccountEvidence {
+    type Error = LeeError;
+
+    fn try_from(value: FfiPublicAccountEvidence) -> Result<Self, Self::Error> {
+        match value.kind {
+            FfiPublicAccountEvidenceKind::Key => Ok(Self::Key(value.key.into())),
+            FfiPublicAccountEvidenceKind::Pda => Ok(Self::Pda {
+                program: value.program.into(),
+                seed: ffi_to_pda_seed(value.seed),
+            }),
+        }
+    }
+}
+
+#[repr(C)]
+pub struct FfiDelivery {
+    pub from: FfiActor,
+    pub to: FfiActor,
+    pub message: FfiMessageDataList,
+    pub grants: FfiActorList,
+    pub pda_seeds: FfiPdaSeedList,
+}
+
+impl From<Delivery<Actor>> for FfiDelivery {
+    fn from(value: Delivery<Actor>) -> Self {
+        let Delivery {
+            envelope: MessageEnvelope { from, to, message },
+            grants,
+            pda_seeds,
+        } = value;
+
+        Self {
+            from: from.into(),
+            to: to.into(),
+            message: message.into(),
+            grants: grants_to_ffi(grants),
+            pda_seeds: pda_seeds
+                .into_iter()
+                .map(pda_seed_to_ffi)
+                .collect::<Vec<_>>()
+                .into(),
+        }
+    }
+}
+
+impl From<FfiDelivery> for Delivery<Actor> {
+    fn from(value: FfiDelivery) -> Self {
+        Self {
+            envelope: MessageEnvelope {
+                from: value.from.into(),
+                to: value.to.into(),
+                message: value.message.into(),
+            },
+            grants: grants_from_ffi(value.grants),
+            pda_seeds: {
+                let std_vec: Vec<_> = value.pda_seeds.into();
+                std_vec.into_iter().map(ffi_to_pda_seed).collect()
+            },
+        }
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub enum FfiBoundaryStepKind {
+    PrivateToPublic = 0,
+    PublicToPrivate,
+    EndPrivateSubtree,
+    EndPublicSubtree,
+}
+
+/// One step of a proof's boundary trace. `delivery` is read and freed for every kind, so an
+/// `EndPrivateSubtree` or `EndPublicSubtree` step must carry an initialized, empty one.
+#[repr(C)]
+pub struct FfiBoundaryStep {
+    pub kind: FfiBoundaryStepKind,
+    pub delivery: FfiDelivery,
+}
+
+impl From<BoundaryStep> for FfiBoundaryStep {
+    fn from(value: BoundaryStep) -> Self {
+        let (kind, delivery) = match value {
+            BoundaryStep::PrivateToPublic(delivery) => {
+                (FfiBoundaryStepKind::PrivateToPublic, delivery.into())
+            }
+            BoundaryStep::PublicToPrivate(delivery) => {
+                (FfiBoundaryStepKind::PublicToPrivate, delivery.into())
+            }
+            BoundaryStep::EndPrivateSubtree => {
+                (FfiBoundaryStepKind::EndPrivateSubtree, empty_delivery())
+            }
+            BoundaryStep::EndPublicSubtree => {
+                (FfiBoundaryStepKind::EndPublicSubtree, empty_delivery())
+            }
+        };
+        Self { kind, delivery }
+    }
+}
+
+impl From<FfiBoundaryStep> for BoundaryStep {
+    fn from(value: FfiBoundaryStep) -> Self {
+        let delivery = Delivery::from(value.delivery);
+        match value.kind {
+            FfiBoundaryStepKind::PrivateToPublic => Self::PrivateToPublic(delivery),
+            FfiBoundaryStepKind::PublicToPrivate => Self::PublicToPrivate(delivery),
+            FfiBoundaryStepKind::EndPrivateSubtree => Self::EndPrivateSubtree,
+            FfiBoundaryStepKind::EndPublicSubtree => Self::EndPublicSubtree,
+        }
+    }
+}
+
+#[repr(C)]
+pub struct FfiSealedMessage {
+    pub commitment: FfiBytes32,
+    pub epk: FfiVecU8,
+    pub ciphertext: FfiVecU8,
+}
+
+impl From<SealedMessage> for FfiSealedMessage {
+    fn from(value: SealedMessage) -> Self {
+        let SealedMessage {
+            commitment,
+            note: EncryptedNote { epk, ciphertext },
+        } = value;
+
+        Self {
+            commitment: FfiBytes32::from_bytes(commitment.to_byte_array()),
+            epk: epk.0.into(),
+            ciphertext: ciphertext.into_inner().into(),
+        }
+    }
+}
+
+impl From<FfiSealedMessage> for SealedMessage {
+    fn from(value: FfiSealedMessage) -> Self {
+        Self {
+            commitment: Commitment::from_byte_array(value.commitment.data),
+            note: EncryptedNote {
+                epk: EphemeralPublicKey(value.epk.into()),
+                ciphertext: Ciphertext::from_inner(value.ciphertext.into()),
+            },
+        }
+    }
+}
+
+/// cbindgen:prefix-with-name
+#[expect(
+    clippy::doc_paragraphs_missing_punctuation,
+    reason = "a cbindgen annotation takes no punctuation"
+)]
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub enum FfiPublicationKind {
+    Clear = 0,
+    Sealed,
+}
+
+#[repr(C)]
+pub struct FfiMessageBody {
+    pub from: FfiActor,
+    pub to: FfiActor,
+    pub message: FfiMessageDataList,
+}
+
+impl From<MessageBody> for FfiMessageBody {
+    fn from(value: MessageBody) -> Self {
+        let MessageEnvelope { from, to, message } = value;
+
+        Self {
+            from: from.into(),
+            to: to.into(),
+            message: message.into(),
+        }
+    }
+}
+
+impl From<FfiMessageBody> for MessageBody {
+    fn from(value: FfiMessageBody) -> Self {
+        Self {
+            from: value.from.into(),
+            to: value.to.into(),
+            message: value.message.into(),
+        }
+    }
+}
+
+/// One async message a proof publishes. Both `body` and `sealed` are read and freed for every
+/// kind, so the part `kind` does not select must be empty, not uninitialized.
+#[repr(C)]
+pub struct FfiPublication {
+    pub kind: FfiPublicationKind,
+    pub body: FfiMessageBody,
+    pub sealed: FfiSealedMessage,
+}
+
+impl From<Publication> for FfiPublication {
+    fn from(value: Publication) -> Self {
+        let (kind, body, sealed) = match value {
+            Publication::Clear(body) => (
+                FfiPublicationKind::Clear,
+                body.into(),
+                empty_sealed_message(),
+            ),
+            Publication::Sealed(sealed) => (
+                FfiPublicationKind::Sealed,
+                empty_message_body(),
+                sealed.into(),
+            ),
+        };
+        Self { kind, body, sealed }
+    }
+}
+
+impl From<FfiPublication> for Publication {
+    fn from(value: FfiPublication) -> Self {
+        let body = MessageBody::from(value.body);
+        let sealed = SealedMessage::from(value.sealed);
+        match value.kind {
+            FfiPublicationKind::Clear => Self::Clear(body),
+            FfiPublicationKind::Sealed => Self::Sealed(sealed),
+        }
+    }
+}
+
+/// A declared public actor and whether the transaction's signatures authorize it.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FfiDeclaredActor {
+    pub actor: FfiActor,
+    pub signer: bool,
+}
+
+impl From<(Actor, Authority)> for FfiDeclaredActor {
+    fn from((actor, authority): (Actor, Authority)) -> Self {
+        Self {
+            actor: actor.into(),
+            signer: authority == Authority::Signer,
+        }
+    }
+}
+
+impl From<FfiDeclaredActor> for (Actor, Authority) {
+    fn from(value: FfiDeclaredActor) -> Self {
+        let authority = if value.signer {
+            Authority::Signer
+        } else {
+            Authority::None
+        };
+        (value.actor.into(), authority)
+    }
+}
+
+#[repr(C)]
+pub struct FfiPublicExecutionContext {
+    pub actors: FfiDeclaredActorList,
+    pub authorized_accounts: FfiAccountIdList,
+    pub promotions: FfiPromotionList,
+    pub private_signers: FfiActorList,
+}
+
+impl From<PublicExecutionContext> for FfiPublicExecutionContext {
+    fn from(value: PublicExecutionContext) -> Self {
+        let PublicExecutionContext {
+            actors,
+            authorized_accounts,
+            promotions,
+            private_signers,
+        } = value;
+
+        Self {
+            actors: actors
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into(),
+            authorized_accounts: authorized_accounts
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into(),
+            promotions: promotions.into_iter().collect::<Vec<_>>().into(),
+            private_signers: private_signers
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into(),
+        }
+    }
+}
+
+impl TryFrom<FfiPublicExecutionContext> for PublicExecutionContext {
+    type Error = LeeError;
+
+    fn try_from(value: FfiPublicExecutionContext) -> Result<Self, Self::Error> {
+        let actors: Vec<FfiDeclaredActor> = value.actors.into();
+        let authorized_accounts: Vec<FfiAccountId> = value.authorized_accounts.into();
+        let promotions: Vec<u64> = value.promotions.into();
+        let private_signers: Vec<FfiActor> = value.private_signers.into();
+
+        Ok(Self {
+            actors: lee::actor_map(actors.into_iter().map(Into::into))?,
+            authorized_accounts: authorized_accounts.into_iter().map(Into::into).collect(),
+            promotions: promotions.into_iter().collect(),
+            private_signers: private_signers.into_iter().map(Into::into).collect(),
+        })
+    }
+}
+
+#[repr(C)]
+pub struct FfiPrivateAction {
+    pub nullifier: FfiBytes32,
+    pub root: FfiBytes32,
+    pub commitment: FfiBytes32,
+    pub encrypted_post_state: FfiEncryptedAccountData,
+}
+
+impl From<PrivateAction> for FfiPrivateAction {
+    fn from(value: PrivateAction) -> Self {
+        Self {
+            nullifier: FfiBytes32 {
+                data: value.nullifier.to_byte_array(),
+            },
+            root: FfiBytes32 { data: value.root },
+            commitment: FfiBytes32 {
+                data: value.commitment.to_byte_array(),
+            },
+            encrypted_post_state: value.encrypted_post_state.into(),
+        }
+    }
+}
+
+impl From<FfiPrivateAction> for PrivateAction {
+    fn from(value: FfiPrivateAction) -> Self {
+        Self {
+            nullifier: Nullifier::from_byte_array(value.nullifier.data),
+            root: value.root.data,
+            commitment: Commitment::from_byte_array(value.commitment.data),
+            encrypted_post_state: EncryptedNote {
+                ciphertext: Ciphertext::from_inner(value.encrypted_post_state.ciphertext.into()),
+                epk: EphemeralPublicKey(value.encrypted_post_state.epk.into()),
+            },
+        }
+    }
+}
+
+/// What a proof commits about its in-proof fee. The `has_*` flags mark which parts are present;
+/// an absent part holds an empty value.
+#[repr(C)]
+pub struct FfiProvenFee {
+    pub has_refund_to: bool,
+    pub refund_to: FfiAccountId,
+    pub tip: u64,
+    pub has_fallback: bool,
+    pub fallback_nullifier: FfiBytes32,
+    pub fallback_root: FfiBytes32,
+    pub fallback_commitment: FfiBytes32,
+    /// Under the ephemeral key of the private action spending `fallback_nullifier`.
+    pub fallback_ciphertext: FfiVecU8,
+    pub fallback_boundary: FfiBoundaryStepList,
+}
+
+impl From<Option<ProvenFee>> for FfiProvenFee {
+    fn from(value: Option<ProvenFee>) -> Self {
+        let (refund_to, tip, fallback) = value.map_or((None, 0, None), |fee| {
+            (fee.refund_to, fee.tip, fee.fallback)
+        });
+        let has_fallback = fallback.is_some();
+        let FeeFallback {
+            nullifier,
+            root,
+            commitment,
+            ciphertext,
+            boundary,
+        } = fallback.unwrap_or_default();
+        Self {
+            has_refund_to: refund_to.is_some(),
+            refund_to: refund_to.unwrap_or_default().into(),
+            tip,
+            has_fallback,
+            fallback_nullifier: FfiBytes32 {
+                data: nullifier.to_byte_array(),
+            },
+            fallback_root: FfiBytes32 { data: root },
+            fallback_commitment: FfiBytes32 {
+                data: commitment.to_byte_array(),
+            },
+            fallback_ciphertext: ciphertext.into_inner().into(),
+            fallback_boundary: boundary
+                .into_iter()
+                .map(Into::into)
+                .collect::<Vec<_>>()
+                .into(),
+        }
+    }
+}
+
+#[repr(C)]
+pub struct FfiRecoveryBinding {
+    pub address: FfiAccountId,
+    pub epk: FfiVecU8,
+    pub ciphertext: FfiVecU8,
+}
+
+impl From<RecoveryBinding> for FfiRecoveryBinding {
+    fn from(value: RecoveryBinding) -> Self {
+        let RecoveryBinding {
+            address,
+            note: EncryptedNote { epk, ciphertext },
+        } = value;
+
+        Self {
+            address: address.into(),
+            epk: epk.0.into(),
+            ciphertext: ciphertext.into_inner().into(),
+        }
+    }
+}
+
+impl From<FfiRecoveryBinding> for RecoveryBinding {
+    fn from(value: FfiRecoveryBinding) -> Self {
+        Self {
+            address: value.address.into(),
+            note: EncryptedNote {
+                epk: EphemeralPublicKey(value.epk.into()),
+                ciphertext: Ciphertext::from_inner(value.ciphertext.into()),
+            },
+        }
+    }
+}
+
+#[repr(C)]
+pub struct FfiEncryptedAccountData {
+    pub ciphertext: FfiVecU8,
+    pub epk: FfiVecU8,
+}
+
+impl From<EncryptedNote> for FfiEncryptedAccountData {
+    fn from(value: EncryptedNote) -> Self {
+        let EncryptedNote { ciphertext, epk } = value;
+
+        Self {
+            ciphertext: ciphertext.into_inner().into(),
+            epk: epk.0.into(),
+        }
+    }
+}
+
+/// A signing key's type.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub enum FfiKeyType {
+    #[default]
+    Schnorr = 0,
+}
+
+/// A signing key's type and 32-byte commitment.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct FfiSigningKeyState {
+    pub key_type: FfiKeyType,
+    pub key_commitment: FfiBytes32,
+}
+
+impl From<SigningKeyState> for FfiSigningKeyState {
+    fn from(value: SigningKeyState) -> Self {
+        Self {
+            key_type: match value.key_type {
+                KeyType::Schnorr => FfiKeyType::Schnorr,
+            },
+            key_commitment: FfiBytes32::from_bytes(value.key_commitment),
+        }
+    }
+}
+
+impl From<protocol::SigningKeyState> for FfiSigningKeyState {
+    fn from(value: protocol::SigningKeyState) -> Self {
+        SigningKeyState::from(value).into()
+    }
+}
+
+impl From<FfiSigningKeyState> for protocol::SigningKeyState {
+    fn from(value: FfiSigningKeyState) -> Self {
+        SigningKeyState::from(value).into()
+    }
+}
+
+impl From<FfiSigningKeyState> for SigningKeyState {
+    fn from(value: FfiSigningKeyState) -> Self {
+        Self {
+            key_type: match value.key_type {
+                FfiKeyType::Schnorr => KeyType::Schnorr,
+            },
+            key_commitment: value.key_commitment.data,
+        }
+    }
+}
+
+/// One signer's authentication data, and the key it rotates to.
+#[repr(C)]
+pub struct FfiWitnessEntry {
+    pub auth_data: FfiVecU8,
+    pub next: FfiSigningKeyState,
+}
+
+impl From<protocol::WitnessEntry> for FfiWitnessEntry {
+    fn from(value: protocol::WitnessEntry) -> Self {
+        let protocol::WitnessEntry {
+            auth_data,
+            next:
+                protocol::SigningKeyState {
+                    key_type,
+                    key_commitment,
+                },
+        } = value;
+
+        Self {
+            auth_data: auth_data.into(),
+            next: FfiSigningKeyState {
+                key_type: match key_type {
+                    protocol::KeyType::Schnorr => FfiKeyType::Schnorr,
+                },
+                key_commitment: FfiBytes32::from_bytes(key_commitment),
+            },
+        }
+    }
+}
+
+impl From<FfiWitnessEntry> for protocol::WitnessEntry {
+    fn from(value: FfiWitnessEntry) -> Self {
+        let FfiWitnessEntry {
+            auth_data,
+            next:
+                FfiSigningKeyState {
+                    key_type,
+                    key_commitment,
+                },
+        } = value;
+
+        Self {
+            auth_data: auth_data.into(),
+            next: protocol::SigningKeyState {
+                key_type: match key_type {
+                    FfiKeyType::Schnorr => protocol::KeyType::Schnorr,
+                },
+                key_commitment: key_commitment.data,
+            },
+        }
+    }
+}
+
+/// The fee `has_fee` and `fee` describe. Every part is taken back, present or not, so that
+/// dropping the result frees it.
+#[must_use]
+pub fn proven_fee_from_ffi(has_fee: bool, fee: FfiProvenFee) -> Option<ProvenFee> {
+    let FfiProvenFee {
+        has_refund_to,
+        refund_to,
+        tip,
+        has_fallback,
+        fallback_nullifier,
+        fallback_root,
+        fallback_commitment,
+        fallback_ciphertext,
+        fallback_boundary,
+    } = fee;
+    let fallback = FeeFallback {
+        nullifier: Nullifier::from_byte_array(fallback_nullifier.data),
+        root: fallback_root.data,
+        commitment: Commitment::from_byte_array(fallback_commitment.data),
+        ciphertext: Ciphertext::from_inner(fallback_ciphertext.into()),
+        boundary: Vec::from(fallback_boundary)
+            .into_iter()
+            .map(BoundaryStep::from)
+            .collect(),
+    };
+    has_fee.then(|| ProvenFee {
+        refund_to: has_refund_to.then(|| AccountId::from(refund_to)),
+        tip,
+        fallback: has_fallback.then_some(fallback),
+    })
+}
+
+#[must_use]
+pub fn empty_root_call() -> FfiRootCall {
+    FfiRootCall {
+        to: FfiActor::default(),
+        message: Vec::new().into(),
+    }
+}
+
+fn empty_delivery() -> FfiDelivery {
+    FfiDelivery {
+        from: FfiActor::default(),
+        to: FfiActor::default(),
+        message: Vec::new().into(),
+        grants: Vec::new().into(),
+        pda_seeds: Vec::new().into(),
+    }
+}
+
+fn empty_message_body() -> FfiMessageBody {
+    FfiMessageBody {
+        from: FfiActor::default(),
+        to: FfiActor::default(),
+        message: Vec::new().into(),
+    }
+}
+
+fn empty_sealed_message() -> FfiSealedMessage {
+    FfiSealedMessage {
+        commitment: FfiBytes32::default(),
+        epk: Vec::new().into(),
+        ciphertext: Vec::new().into(),
+    }
+}
+
+fn grants_to_ffi(grants: BTreeSet<Actor>) -> FfiActorList {
+    grants
+        .into_iter()
+        .map(Into::into)
+        .collect::<Vec<_>>()
+        .into()
+}
+
+fn grants_from_ffi(grants: FfiActorList) -> BTreeSet<Actor> {
+    let std_vec: Vec<FfiActor> = grants.into();
+    std_vec.into_iter().map(Into::into).collect()
+}
+
+pub fn nonces_from_ffi(
+    entries: Vec<FfiNonceEntry>,
+) -> Result<BTreeMap<AccountId, Nonce>, LeeError> {
+    Ok(lee::nonce_map(entries.into_iter().map(|entry| {
+        (entry.account_id.into(), entry.nonce.into())
+    }))?)
+}
+
+const fn pda_seed_to_ffi(seed: PdaSeed) -> FfiBytes32 {
+    FfiBytes32::from_bytes(*seed.as_bytes())
+}
+
+const fn ffi_to_pda_seed(seed: FfiBytes32) -> PdaSeed {
+    PdaSeed::new(seed.data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn account_id(tag: u8) -> AccountId {
+        AccountId::new([tag; 32])
+    }
+
+    fn actor(account_tag: u8, program_tag: u8) -> Actor {
+        Actor {
+            account_id: account_id(account_tag),
+            program_account_id: account_id(program_tag),
+        }
+    }
+
+    fn note(epk_tag: u8, ciphertext_tag: u8) -> EncryptedNote {
+        EncryptedNote {
+            epk: EphemeralPublicKey(vec![epk_tag; 2]),
+            ciphertext: Ciphertext::from_inner(vec![ciphertext_tag; 3]),
+        }
+    }
+
+    fn roundtrip<C, T>(value: T) -> T
+    where
+        T: Into<C>,
+        C: Into<T>,
+    {
+        let ffi: C = value.into();
+        ffi.into()
+    }
+
+    #[test]
+    fn a_context_declaring_an_actor_twice_is_refused() {
+        let context = FfiPublicExecutionContext {
+            actors: vec![
+                FfiDeclaredActor::from((actor(1, 2), Authority::None)),
+                FfiDeclaredActor::from((actor(1, 2), Authority::Signer)),
+            ]
+            .into(),
+            authorized_accounts: Vec::new().into(),
+            promotions: Vec::new().into(),
+            private_signers: Vec::new().into(),
+        };
+
+        assert!(PublicExecutionContext::try_from(context).is_err());
+    }
+
+    #[test]
+    fn boundary_steps_decode_only_the_payload_their_kind_selects() {
+        let delivery = Delivery {
+            envelope: MessageEnvelope {
+                from: actor(1, 51),
+                to: actor(2, 3),
+                message: vec![4],
+            },
+            grants: BTreeSet::from([actor(5, 6)]),
+            pda_seeds: BTreeSet::from([PdaSeed::new([6; 32])]),
+        };
+        let cross_message = Delivery {
+            envelope: MessageEnvelope {
+                from: actor(7, 8),
+                to: actor(9, 10),
+                message: vec![11],
+            },
+            grants: BTreeSet::from([actor(4, 70)]),
+            pda_seeds: BTreeSet::from([PdaSeed::new([13; 32])]),
+        };
+        let zeroed = || unsafe { std::mem::zeroed::<FfiBoundaryStep>() };
+        let steps = [
+            FfiBoundaryStep {
+                kind: FfiBoundaryStepKind::PrivateToPublic,
+                delivery: delivery.clone().into(),
+            },
+            FfiBoundaryStep {
+                kind: FfiBoundaryStepKind::PublicToPrivate,
+                delivery: cross_message.clone().into(),
+            },
+            FfiBoundaryStep {
+                kind: FfiBoundaryStepKind::EndPrivateSubtree,
+                ..zeroed()
+            },
+            FfiBoundaryStep {
+                kind: FfiBoundaryStepKind::EndPublicSubtree,
+                ..zeroed()
+            },
+        ];
+
+        assert_eq!(
+            steps.map(BoundaryStep::from),
+            [
+                BoundaryStep::PrivateToPublic(delivery),
+                BoundaryStep::PublicToPrivate(cross_message),
+                BoundaryStep::EndPrivateSubtree,
+                BoundaryStep::EndPublicSubtree,
+            ]
+        );
+    }
+
+    #[test]
+    fn each_shared_component_roundtrips_over_the_ffi() {
+        let public_context = PublicExecutionContext {
+            actors: BTreeMap::from([
+                (actor(1, 2), Authority::None),
+                (actor(3, 4), Authority::Signer),
+            ]),
+            authorized_accounts: BTreeSet::from([account_id(5), account_id(6)]),
+            promotions: BTreeSet::from([7, 8]),
+            private_signers: BTreeSet::from([actor(21, 22)]),
+        };
+        let sealed = SealedMessage {
+            commitment: Commitment::from_byte_array([9; 32]),
+            note: note(10, 11),
+        };
+        let binding = RecoveryBinding {
+            address: account_id(12),
+            note: note(13, 14),
+        };
+        let root = RootCall {
+            to: actor(15, 16),
+            message: vec![17; 2],
+        };
+        let fee = FeeDeclaration {
+            payer: account_id(18),
+            gas_limit: 5,
+            tip: 1,
+            max_fee: 42,
+        };
+        let signer = lee::signature::PublicAccountSecret::new([1; 32]);
+
+        assert_eq!(
+            PublicExecutionContext::try_from(FfiPublicExecutionContext::from(
+                public_context.clone()
+            ))
+            .unwrap(),
+            public_context
+        );
+        assert_eq!(roundtrip::<FfiSealedMessage, _>(sealed.clone()), sealed);
+        assert_eq!(roundtrip::<FfiRecoveryBinding, _>(binding.clone()), binding);
+        assert_eq!(roundtrip::<FfiRootCall, _>(root.clone()), root);
+        assert_eq!(roundtrip::<FfiFeeDeclaration, _>(fee), fee);
+        for evidence in [
+            PublicAccountEvidence::Key(lee::signature::initial_key(&signer)),
+            PublicAccountEvidence::Pda {
+                program: account_id(19),
+                seed: PdaSeed::new([20; 32]),
+            },
+        ] {
+            let ffi = FfiPublicAccountEvidence::from(evidence.clone());
+            assert_eq!(PublicAccountEvidence::try_from(ffi).unwrap(), evidence);
+        }
+    }
+}

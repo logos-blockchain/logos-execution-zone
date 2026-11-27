@@ -1,15 +1,19 @@
 //! Conversions between `indexer_service_protocol` types and `lee/lee_core` types.
 
+use std::collections::BTreeMap;
+
 use lee_core::account::Nonce;
 
 use crate::{
-    Account, AccountData, AccountId, BedrockStatus, Block, BlockBody, BlockHeader, BlockId,
-    BlockIngestError, Ciphertext, Commitment, CommitmentSetDigest, CrossZoneHalt,
-    DeferredPublicEffect, EncryptedAccountData, EphemeralPublicKey, EventRecord, FeeDeclaration,
-    HashType, IndexerStatus, IndexerSyncState, Nullifier, PeerHealth, PeerStatus,
-    PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction, ProgramShardSelector,
-    Proof, PublicActionWithID, PublicKey, PublicMessage, PublicTransaction, Selector, ShardData,
-    Signature, StallReason, Transaction, ValidityWindow, WitnessSet,
+    Account, AccountData, AccountId, Actor, ActorState, Authority, BedrockStatus, Block, BlockBody,
+    BlockHeader, BlockId, BlockIngestError, BoundaryStep, Ciphertext, Commitment,
+    CommitmentSetDigest, DeclaredActor, Delivery, EncryptedNote, EphemeralPublicKey, EventRecord,
+    FeeDeclaration, FeeFallback, FeeReceipt, HashType, IndexerStatus, IndexerSyncState, KeyType,
+    MessageEnvelope, Nullifier, PdaSeed, PrivacyPreservingMessage, PrivacyPreservingTransaction,
+    PrivateAction, Proof, ProvenFee, PublicAccountEvidence, PublicExecutionContext, PublicKey,
+    PublicMessage, PublicTransaction, Publication, RecoveryBinding, RootCall, SealedMessage,
+    Selector, Signature, SigningKeyState, StallReason, Transaction, TransactionReceipt,
+    ValidityWindow, WitnessEntry, WitnessSet,
 };
 
 // ============================================================================
@@ -42,25 +46,23 @@ impl From<lee_core::account::Account> for Account {
     }
 }
 
-impl TryFrom<Account> for lee_core::account::Account {
-    type Error = lee_core::account::data::DataTooBigError;
-
-    fn try_from(value: Account) -> Result<Self, Self::Error> {
+impl From<Account> for lee_core::account::Account {
+    fn from(value: Account) -> Self {
         let Account { nonce, data } = value;
 
-        Ok(Self {
+        Self {
             nonce: Nonce(nonce),
-            data: data.try_into()?,
-        })
+            data: data.into(),
+        }
     }
 }
 
 impl From<lee_core::account::AccountData> for AccountData {
     fn from(value: lee_core::account::AccountData) -> Self {
-        let lee_core::account::AccountData { shards } = value;
+        let lee_core::account::AccountData { actor_states } = value;
 
         Self {
-            shards: shards
+            actor_states: actor_states
                 .into_iter()
                 .map(|(program, data)| (program.into(), data.into()))
                 .collect(),
@@ -68,24 +70,22 @@ impl From<lee_core::account::AccountData> for AccountData {
     }
 }
 
-impl TryFrom<AccountData> for lee_core::account::AccountData {
-    type Error = lee_core::account::data::DataTooBigError;
+impl From<AccountData> for lee_core::account::AccountData {
+    fn from(value: AccountData) -> Self {
+        let AccountData { actor_states } = value;
 
-    fn try_from(value: AccountData) -> Result<Self, Self::Error> {
-        let AccountData { shards } = value;
-
-        Ok(Self {
-            shards: shards
+        Self {
+            actor_states: actor_states
                 .into_iter()
-                .map(|(program, data)| Ok((program.into(), data.try_into()?)))
-                .collect::<Result<_, Self::Error>>()?,
-        })
+                .map(|(program, data)| (program.into(), data.into()))
+                .collect(),
+        }
     }
 }
 
-impl From<lee_core::account::ProgramShardSelector> for ProgramShardSelector {
-    fn from(value: lee_core::account::ProgramShardSelector) -> Self {
-        let lee_core::account::ProgramShardSelector {
+impl From<lee_core::account::Actor> for Actor {
+    fn from(value: lee_core::account::Actor) -> Self {
+        let lee_core::account::Actor {
             account_id,
             program_account_id,
         } = value;
@@ -97,9 +97,9 @@ impl From<lee_core::account::ProgramShardSelector> for ProgramShardSelector {
     }
 }
 
-impl From<ProgramShardSelector> for lee_core::account::ProgramShardSelector {
-    fn from(value: ProgramShardSelector) -> Self {
-        let ProgramShardSelector {
+impl From<Actor> for lee_core::account::Actor {
+    fn from(value: Actor) -> Self {
+        let Actor {
             account_id,
             program_account_id,
         } = value;
@@ -111,17 +111,15 @@ impl From<ProgramShardSelector> for lee_core::account::ProgramShardSelector {
     }
 }
 
-impl From<lee_core::account::ShardData> for ShardData {
-    fn from(value: lee_core::account::ShardData) -> Self {
+impl From<lee_core::account::ActorState> for ActorState {
+    fn from(value: lee_core::account::ActorState) -> Self {
         Self(value.into_inner())
     }
 }
 
-impl TryFrom<ShardData> for lee_core::account::ShardData {
-    type Error = lee_core::account::data::DataTooBigError;
-
-    fn try_from(value: ShardData) -> Result<Self, Self::Error> {
-        Self::try_from(value.0)
+impl From<ActorState> for lee_core::account::ActorState {
+    fn from(value: ActorState) -> Self {
+        Self::from(value.0)
     }
 }
 
@@ -242,29 +240,23 @@ impl From<Proof> for lee::privacy_preserving_transaction::circuit::Proof {
 }
 
 // ============================================================================
-// EncryptedAccountData conversions
+// EncryptedNote conversions
 // ============================================================================
 
-impl From<lee::privacy_preserving_transaction::message::EncryptedAccountData>
-    for EncryptedAccountData
-{
-    fn from(value: lee::privacy_preserving_transaction::message::EncryptedAccountData) -> Self {
+impl From<lee_core::EncryptedNote> for EncryptedNote {
+    fn from(value: lee_core::EncryptedNote) -> Self {
         Self {
             ciphertext: value.ciphertext.into(),
             epk: value.epk.into(),
-            view_tag: value.view_tag,
         }
     }
 }
 
-impl From<EncryptedAccountData>
-    for lee::privacy_preserving_transaction::message::EncryptedAccountData
-{
-    fn from(value: EncryptedAccountData) -> Self {
+impl From<EncryptedNote> for lee_core::EncryptedNote {
+    fn from(value: EncryptedNote) -> Self {
         Self {
             ciphertext: value.ciphertext.into(),
             epk: value.epk.into(),
-            view_tag: value.view_tag,
         }
     }
 }
@@ -304,81 +296,246 @@ impl From<FeeDeclaration> for lee::FeeDeclaration {
 
 impl From<lee::public_transaction::Message> for PublicMessage {
     fn from(value: lee::public_transaction::Message) -> Self {
-        let lee::public_transaction::Message {
-            program_account_id,
-            shard_selectors,
+        let lee::TransactionMessage {
+            public_context,
+            execution: lee::public_transaction::PublicExecution { root },
             nonces,
-            instruction_data,
             fee,
+            admission_evidence,
         } = value;
         Self {
-            program_account_id: program_account_id.into(),
-            shard_selectors: shard_selectors.into_iter().map(Into::into).collect(),
-            nonces: nonces.iter().map(|x| x.0).collect(),
-            instruction_data,
+            public_context: public_context.into(),
+            root: root.into(),
             fee: fee.map(Into::into),
+            nonces: nonce_entries(nonces),
+            admission_evidence: admission_evidence.into_iter().map(Into::into).collect(),
         }
     }
 }
 
-impl From<PublicMessage> for lee::public_transaction::Message {
-    fn from(value: PublicMessage) -> Self {
+impl TryFrom<PublicMessage> for lee::public_transaction::Message {
+    type Error = lee::error::LeeError;
+
+    fn try_from(value: PublicMessage) -> Result<Self, Self::Error> {
         let PublicMessage {
-            program_account_id,
-            shard_selectors,
-            nonces,
-            instruction_data,
+            public_context,
+            root,
             fee,
+            nonces,
+            admission_evidence,
         } = value;
-        Self::new_preserialized(
-            program_account_id.into(),
-            shard_selectors.into_iter().map(Into::into).collect(),
-            nonces
-                .iter()
-                .map(|x| lee_core::account::Nonce(*x))
+        Ok(Self {
+            public_context: public_context.try_into()?,
+            execution: lee::public_transaction::PublicExecution { root: root.into() },
+            nonces: nonce_map(nonces)?,
+            fee: fee.map(Into::into),
+            admission_evidence: admission_evidence
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, Self::Error>>()?,
+        })
+    }
+}
+
+impl From<lee_core::RootCall> for RootCall {
+    fn from(value: lee_core::RootCall) -> Self {
+        let lee_core::RootCall { to, message } = value;
+        Self {
+            to: to.into(),
+            message,
+        }
+    }
+}
+
+impl From<RootCall> for lee_core::RootCall {
+    fn from(value: RootCall) -> Self {
+        let RootCall { to, message } = value;
+        Self {
+            to: to.into(),
+            message,
+        }
+    }
+}
+
+impl From<lee::PublicAccountEvidence> for PublicAccountEvidence {
+    fn from(value: lee::PublicAccountEvidence) -> Self {
+        match value {
+            lee::PublicAccountEvidence::Key(key) => Self::Key(key.into()),
+            lee::PublicAccountEvidence::Pda { program, seed } => Self::Pda {
+                program: program.into(),
+                seed: seed.into(),
+            },
+        }
+    }
+}
+
+impl TryFrom<PublicAccountEvidence> for lee::PublicAccountEvidence {
+    type Error = lee::error::LeeError;
+
+    fn try_from(value: PublicAccountEvidence) -> Result<Self, Self::Error> {
+        match value {
+            PublicAccountEvidence::Key(key) => Ok(Self::Key(key.into())),
+            PublicAccountEvidence::Pda { program, seed } => Ok(Self::Pda {
+                program: program.into(),
+                seed: seed.into(),
+            }),
+        }
+    }
+}
+
+impl From<lee_core::program::PdaSeed> for PdaSeed {
+    fn from(value: lee_core::program::PdaSeed) -> Self {
+        Self(*value.as_bytes())
+    }
+}
+
+impl From<PdaSeed> for lee_core::program::PdaSeed {
+    fn from(value: PdaSeed) -> Self {
+        Self::new(value.0)
+    }
+}
+
+impl<S: Into<T>, T> From<lee_core::program::MessageEnvelope<S>> for MessageEnvelope<T> {
+    fn from(value: lee_core::program::MessageEnvelope<S>) -> Self {
+        let lee_core::program::MessageEnvelope { from, to, message } = value;
+        Self {
+            from: from.into(),
+            to: to.into(),
+            message,
+        }
+    }
+}
+
+impl<S: Into<T>, T> From<MessageEnvelope<S>> for lee_core::program::MessageEnvelope<T> {
+    fn from(value: MessageEnvelope<S>) -> Self {
+        let MessageEnvelope { from, to, message } = value;
+        Self {
+            from: from.into(),
+            to: to.into(),
+            message,
+        }
+    }
+}
+
+impl<S: Into<T>, T> From<lee_core::execution_state::Delivery<S>> for Delivery<T> {
+    fn from(value: lee_core::execution_state::Delivery<S>) -> Self {
+        let lee_core::execution_state::Delivery {
+            envelope,
+            grants,
+            pda_seeds,
+        } = value;
+        Self {
+            envelope: envelope.into(),
+            grants: grants.into_iter().map(Into::into).collect(),
+            pda_seeds: pda_seeds.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl<S: Into<T>, T> From<Delivery<S>> for lee_core::execution_state::Delivery<T> {
+    fn from(value: Delivery<S>) -> Self {
+        let Delivery {
+            envelope,
+            grants,
+            pda_seeds,
+        } = value;
+        Self {
+            envelope: envelope.into(),
+            grants: grants.into_iter().map(Into::into).collect(),
+            pda_seeds: pda_seeds.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<lee_core::execution_state::BoundaryStep> for BoundaryStep {
+    fn from(value: lee_core::execution_state::BoundaryStep) -> Self {
+        match value {
+            lee_core::execution_state::BoundaryStep::PrivateToPublic(delivery) => {
+                Self::PrivateToPublic(delivery.into())
+            }
+            lee_core::execution_state::BoundaryStep::PublicToPrivate(cross_message) => {
+                Self::PublicToPrivate(cross_message.into())
+            }
+            lee_core::execution_state::BoundaryStep::EndPrivateSubtree => Self::EndPrivateSubtree,
+            lee_core::execution_state::BoundaryStep::EndPublicSubtree => Self::EndPublicSubtree,
+        }
+    }
+}
+
+impl From<BoundaryStep> for lee_core::execution_state::BoundaryStep {
+    fn from(value: BoundaryStep) -> Self {
+        match value {
+            BoundaryStep::PrivateToPublic(delivery) => Self::PrivateToPublic(delivery.into()),
+            BoundaryStep::PublicToPrivate(cross_message) => {
+                Self::PublicToPrivate(cross_message.into())
+            }
+            BoundaryStep::EndPrivateSubtree => Self::EndPrivateSubtree,
+            BoundaryStep::EndPublicSubtree => Self::EndPublicSubtree,
+        }
+    }
+}
+
+impl From<lee_core::execution_state::Authority> for Authority {
+    fn from(value: lee_core::execution_state::Authority) -> Self {
+        match value {
+            lee_core::execution_state::Authority::None => Self::None,
+            lee_core::execution_state::Authority::Signer => Self::Signer,
+        }
+    }
+}
+
+impl From<Authority> for lee_core::execution_state::Authority {
+    fn from(value: Authority) -> Self {
+        match value {
+            Authority::None => Self::None,
+            Authority::Signer => Self::Signer,
+        }
+    }
+}
+
+impl From<lee_core::execution_state::PublicExecutionContext> for PublicExecutionContext {
+    fn from(value: lee_core::execution_state::PublicExecutionContext) -> Self {
+        let lee_core::execution_state::PublicExecutionContext {
+            actors,
+            authorized_accounts,
+            promotions,
+            private_signers,
+        } = value;
+        Self {
+            actors: actors
+                .into_iter()
+                .map(|(actor, authority)| DeclaredActor {
+                    actor: actor.into(),
+                    authority: authority.into(),
+                })
                 .collect(),
-            instruction_data,
-            fee.map(Into::into),
-        )
+            authorized_accounts: authorized_accounts.into_iter().map(Into::into).collect(),
+            promotions: promotions.into_iter().collect(),
+            private_signers: private_signers.into_iter().map(Into::into).collect(),
+        }
     }
 }
 
-impl From<lee_core::execution_state::DeferredPublicEffect> for DeferredPublicEffect {
-    fn from(value: lee_core::execution_state::DeferredPublicEffect) -> Self {
-        let lee_core::execution_state::DeferredPublicEffect {
-            program_account_id,
-            shard_program_account_id,
-            data,
+impl TryFrom<PublicExecutionContext> for lee_core::execution_state::PublicExecutionContext {
+    type Error = lee::error::LeeError;
+
+    fn try_from(value: PublicExecutionContext) -> Result<Self, Self::Error> {
+        let PublicExecutionContext {
+            actors,
+            authorized_accounts,
+            promotions,
+            private_signers,
         } = value;
-        Self {
-            program_account_id: program_account_id.into(),
-            shard_program_account_id: shard_program_account_id.into(),
-            data,
-        }
-    }
-}
-
-impl From<DeferredPublicEffect> for lee_core::execution_state::DeferredPublicEffect {
-    fn from(value: DeferredPublicEffect) -> Self {
-        let DeferredPublicEffect {
-            program_account_id,
-            shard_program_account_id,
-            data,
-        } = value;
-        Self {
-            program_account_id: program_account_id.into(),
-            shard_program_account_id: shard_program_account_id.into(),
-            data,
-        }
-    }
-}
-
-impl From<lee::privacy_preserving_transaction::message::PublicActionWithID> for PublicActionWithID {
-    fn from(value: lee::privacy_preserving_transaction::message::PublicActionWithID) -> Self {
-        Self {
-            account_id: value.account_id.into(),
-            effects: value.effects.into_iter().map(Into::into).collect(),
-        }
+        Ok(Self {
+            actors: lee::actor_map(
+                actors
+                    .into_iter()
+                    .map(|DeclaredActor { actor, authority }| (actor.into(), authority.into())),
+            )?,
+            authorized_accounts: authorized_accounts.into_iter().map(Into::into).collect(),
+            promotions: promotions.into_iter().collect(),
+            private_signers: private_signers.into_iter().map(Into::into).collect(),
+        })
     }
 }
 
@@ -393,34 +550,141 @@ impl From<lee_core::PrivateAction> for PrivateAction {
     }
 }
 
-impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPreservingMessage {
-    fn from(value: lee::privacy_preserving_transaction::message::Message) -> Self {
-        let lee::privacy_preserving_transaction::message::Message {
-            public_actions,
-            nonces,
-            private_actions,
-            block_validity_window,
-            timestamp_validity_window,
-            // Not yet part of this wire protocol; see the `program_image_claims` field doc on
-            // `lee::privacy_preserving_transaction::message::Message`. FFI/wallet plumbing for
-            // address-flexible program dispatch is tracked separately.
-            program_image_claims: _,
-        } = value;
+impl From<lee_core::RecoveryBinding> for RecoveryBinding {
+    fn from(value: lee_core::RecoveryBinding) -> Self {
+        let lee_core::RecoveryBinding { address, note } = value;
         Self {
-            public_actions: public_actions.into_iter().map(Into::into).collect(),
-            nonces: nonces.iter().map(|x| x.0).collect(),
-            private_actions: private_actions.into_iter().map(Into::into).collect(),
-            block_validity_window: block_validity_window.into(),
-            timestamp_validity_window: timestamp_validity_window.into(),
+            address: address.into(),
+            note: note.into(),
         }
     }
 }
 
-impl From<PublicActionWithID> for lee::privacy_preserving_transaction::message::PublicActionWithID {
-    fn from(value: PublicActionWithID) -> Self {
+impl From<RecoveryBinding> for lee_core::RecoveryBinding {
+    fn from(value: RecoveryBinding) -> Self {
+        let RecoveryBinding { address, note } = value;
         Self {
-            account_id: value.account_id.into(),
-            effects: value.effects.into_iter().map(Into::into).collect(),
+            address: address.into(),
+            note: note.into(),
+        }
+    }
+}
+
+impl From<lee_core::SealedMessage> for SealedMessage {
+    fn from(value: lee_core::SealedMessage) -> Self {
+        let lee_core::SealedMessage { commitment, note } = value;
+        Self {
+            commitment: commitment.into(),
+            note: note.into(),
+        }
+    }
+}
+
+impl From<SealedMessage> for lee_core::SealedMessage {
+    fn from(value: SealedMessage) -> Self {
+        let SealedMessage { commitment, note } = value;
+        Self {
+            commitment: commitment.into(),
+            note: note.into(),
+        }
+    }
+}
+
+impl From<lee_core::program::Publication> for Publication {
+    fn from(value: lee_core::program::Publication) -> Self {
+        match value {
+            lee_core::program::Publication::Clear(body) => Self::Clear(body.into()),
+            lee_core::program::Publication::Sealed(sealed) => Self::Sealed(sealed.into()),
+        }
+    }
+}
+
+impl From<Publication> for lee_core::program::Publication {
+    fn from(value: Publication) -> Self {
+        match value {
+            Publication::Clear(body) => Self::Clear(body.into()),
+            Publication::Sealed(sealed) => Self::Sealed(sealed.into()),
+        }
+    }
+}
+
+impl From<lee::privacy_preserving_transaction::message::Message> for PrivacyPreservingMessage {
+    fn from(value: lee::privacy_preserving_transaction::message::Message) -> Self {
+        let lee::TransactionMessage {
+            public_context,
+            execution:
+                lee_core::ProvenExecution {
+                    boundary,
+                    async_messages,
+                    recovery_bindings,
+                    public_root,
+                    private_actions,
+                    validity,
+                    // Not yet part of this wire protocol; see the `program_image_claims` field doc
+                    // on `lee_core::ProvenExecution`. FFI/wallet plumbing for address-flexible
+                    // program dispatch is tracked separately.
+                    program_image_claims: _,
+                    proven_fee,
+                },
+            nonces,
+            fee,
+            admission_evidence,
+        } = value;
+        Self {
+            public_context: public_context.into(),
+            boundary: boundary.into_iter().map(Into::into).collect(),
+            async_messages: async_messages.into_iter().map(Into::into).collect(),
+            recovery_bindings: recovery_bindings.into_iter().map(Into::into).collect(),
+            public_root: public_root.map(Into::into),
+            nonces: nonce_entries(nonces),
+            private_actions: private_actions.into_iter().map(Into::into).collect(),
+            block_validity_window: validity.blocks.into(),
+            timestamp_validity_window: validity.timestamps.into(),
+            admission_evidence: admission_evidence.into_iter().map(Into::into).collect(),
+            proven_fee: proven_fee.map(Into::into),
+            fee: fee.map(Into::into),
+        }
+    }
+}
+
+impl From<lee_core::ProvenFee> for ProvenFee {
+    fn from(value: lee_core::ProvenFee) -> Self {
+        let lee_core::ProvenFee {
+            refund_to,
+            tip,
+            fallback,
+        } = value;
+        Self {
+            refund_to: refund_to.map(Into::into),
+            tip,
+            fallback: fallback.map(|fallback| FeeFallback {
+                nullifier: fallback.nullifier.into(),
+                root: fallback.root.into(),
+                commitment: fallback.commitment.into(),
+                ciphertext: fallback.ciphertext.into(),
+                boundary: fallback.boundary.into_iter().map(Into::into).collect(),
+            }),
+        }
+    }
+}
+
+impl From<ProvenFee> for lee_core::ProvenFee {
+    fn from(value: ProvenFee) -> Self {
+        let ProvenFee {
+            refund_to,
+            tip,
+            fallback,
+        } = value;
+        Self {
+            refund_to: refund_to.map(Into::into),
+            tip,
+            fallback: fallback.map(|fallback| lee_core::FeeFallback {
+                nullifier: fallback.nullifier.into(),
+                root: fallback.root.into(),
+                commitment: fallback.commitment.into(),
+                ciphertext: fallback.ciphertext.into(),
+                boundary: fallback.boundary.into_iter().map(Into::into).collect(),
+            }),
         }
     }
 }
@@ -441,33 +705,50 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
 
     fn try_from(value: PrivacyPreservingMessage) -> Result<Self, Self::Error> {
         let PrivacyPreservingMessage {
-            public_actions,
+            public_context,
+            boundary,
+            async_messages,
+            recovery_bindings,
+            public_root,
             nonces,
             private_actions,
             block_validity_window,
             timestamp_validity_window,
+            admission_evidence,
+            proven_fee,
+            fee,
         } = value;
 
-        let public_actions = public_actions.into_iter().map(Into::into).collect();
         let private_actions = private_actions.into_iter().map(Into::into).collect();
 
         Ok(Self {
-            public_actions,
-            nonces: nonces
-                .iter()
-                .map(|x| lee_core::account::Nonce(*x))
-                .collect(),
-            private_actions,
-            block_validity_window: block_validity_window
-                .try_into()
-                .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
-            timestamp_validity_window: timestamp_validity_window
-                .try_into()
-                .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
-            // Not yet part of this wire protocol; see the corresponding destructure above.
-            // A privacy-preserving tx submitted through this protocol will fail proof
-            // verification for any program not at its bijection address until this is wired.
-            program_image_claims: Vec::new(),
+            public_context: public_context.try_into()?,
+            execution: lee_core::ProvenExecution {
+                boundary: boundary.into_iter().map(Into::into).collect(),
+                async_messages: async_messages.into_iter().map(Into::into).collect(),
+                recovery_bindings: recovery_bindings.into_iter().map(Into::into).collect(),
+                public_root: public_root.map(Into::into),
+                private_actions,
+                validity: lee_core::program::ValidityWindows {
+                    blocks: block_validity_window
+                        .try_into()
+                        .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
+                    timestamps: timestamp_validity_window
+                        .try_into()
+                        .map_err(|e| lee::error::LeeError::InvalidInput(format!("{e}")))?,
+                },
+                // Not yet part of this wire protocol; see the corresponding destructure above.
+                // A privacy-preserving tx submitted through this protocol will fail proof
+                // verification for any program not at its bijection address until this is wired.
+                program_image_claims: Vec::new(),
+                proven_fee: proven_fee.map(Into::into),
+            },
+            nonces: nonce_map(nonces)?,
+            fee: fee.map(Into::into),
+            admission_evidence: admission_evidence
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<Vec<_>, Self::Error>>()?,
         })
     }
 }
@@ -476,14 +757,72 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
 // WitnessSet conversions
 // ============================================================================
 
+impl From<lee_core::signing_key::KeyType> for KeyType {
+    fn from(value: lee_core::signing_key::KeyType) -> Self {
+        match value {
+            lee_core::signing_key::KeyType::Schnorr => Self::Schnorr,
+        }
+    }
+}
+
+impl From<KeyType> for lee_core::signing_key::KeyType {
+    fn from(value: KeyType) -> Self {
+        match value {
+            KeyType::Schnorr => Self::Schnorr,
+        }
+    }
+}
+
+impl From<lee_core::signing_key::SigningKeyState> for SigningKeyState {
+    fn from(value: lee_core::signing_key::SigningKeyState) -> Self {
+        let lee_core::signing_key::SigningKeyState {
+            key_type,
+            key_commitment,
+        } = value;
+        Self {
+            key_type: key_type.into(),
+            key_commitment,
+        }
+    }
+}
+
+impl From<SigningKeyState> for lee_core::signing_key::SigningKeyState {
+    fn from(value: SigningKeyState) -> Self {
+        let SigningKeyState {
+            key_type,
+            key_commitment,
+        } = value;
+        Self {
+            key_type: key_type.into(),
+            key_commitment,
+        }
+    }
+}
+
+impl From<lee::public_transaction::WitnessEntry> for WitnessEntry {
+    fn from(value: lee::public_transaction::WitnessEntry) -> Self {
+        let lee::public_transaction::WitnessEntry { auth_data, next } = value;
+        Self {
+            auth_data,
+            next: next.into(),
+        }
+    }
+}
+
+impl From<WitnessEntry> for lee::public_transaction::WitnessEntry {
+    fn from(value: WitnessEntry) -> Self {
+        let WitnessEntry { auth_data, next } = value;
+        Self {
+            auth_data,
+            next: next.into(),
+        }
+    }
+}
+
 impl From<lee::public_transaction::WitnessSet> for WitnessSet {
     fn from(value: lee::public_transaction::WitnessSet) -> Self {
         Self {
-            signatures_and_public_keys: value
-                .signatures_and_public_keys()
-                .iter()
-                .map(|(sig, pk)| (sig.clone().into(), pk.clone().into()))
-                .collect(),
+            entries: value.into_raw_parts().into_iter().map(Into::into).collect(),
             proof: None,
         }
     }
@@ -491,12 +830,9 @@ impl From<lee::public_transaction::WitnessSet> for WitnessSet {
 
 impl From<lee::privacy_preserving_transaction::witness_set::WitnessSet> for WitnessSet {
     fn from(value: lee::privacy_preserving_transaction::witness_set::WitnessSet) -> Self {
-        let (sigs_and_pks, proof) = value.into_raw_parts();
+        let (entries, proof) = value.into_raw_parts();
         Self {
-            signatures_and_public_keys: sigs_and_pks
-                .into_iter()
-                .map(|(sig, pk)| (sig.into(), pk.into()))
-                .collect(),
+            entries: entries.into_iter().map(Into::into).collect(),
             proof: Some(proof.into()),
         }
     }
@@ -506,17 +842,10 @@ impl TryFrom<WitnessSet> for lee::privacy_preserving_transaction::witness_set::W
     type Error = lee::error::LeeError;
 
     fn try_from(value: WitnessSet) -> Result<Self, Self::Error> {
-        let WitnessSet {
-            signatures_and_public_keys,
-            proof,
-        } = value;
-        let signatures_and_public_keys = signatures_and_public_keys
-            .into_iter()
-            .map(|(sig, pk)| Ok((sig.into(), pk.try_into()?)))
-            .collect::<Result<Vec<_>, Self::Error>>()?;
+        let WitnessSet { entries, proof } = value;
 
         Ok(Self::from_raw_parts(
-            signatures_and_public_keys,
+            entries.into_iter().map(Into::into).collect(),
             proof
                 .map(Into::into)
                 .ok_or_else(|| lee::error::LeeError::InvalidInput("Missing proof".to_owned()))?,
@@ -553,18 +882,12 @@ impl TryFrom<PublicTransaction> for lee::PublicTransaction {
             message,
             witness_set,
         } = value;
-        let WitnessSet {
-            signatures_and_public_keys,
-            proof: _,
-        } = witness_set;
+        let WitnessSet { entries, proof: _ } = witness_set;
 
         Ok(Self::new(
-            message.into(),
+            message.try_into()?,
             lee::public_transaction::WitnessSet::from_raw_parts(
-                signatures_and_public_keys
-                    .into_iter()
-                    .map(|(sig, pk)| Ok((sig.into(), pk.try_into()?)))
-                    .collect::<Result<Vec<_>, Self::Error>>()?,
+                entries.into_iter().map(Into::into).collect(),
             ),
         ))
     }
@@ -660,9 +983,70 @@ impl From<BlockHeader> for common::block::BlockHeader {
     }
 }
 
+impl From<common::block::FeeReceipt> for FeeReceipt {
+    fn from(value: common::block::FeeReceipt) -> Self {
+        let common::block::FeeReceipt {
+            gas_exec,
+            gas_stor,
+            fee_base,
+            tip,
+            refund,
+        } = value;
+        Self {
+            gas_exec,
+            gas_stor,
+            fee_base,
+            tip,
+            refund,
+        }
+    }
+}
+
+impl From<FeeReceipt> for common::block::FeeReceipt {
+    fn from(value: FeeReceipt) -> Self {
+        let FeeReceipt {
+            gas_exec,
+            gas_stor,
+            fee_base,
+            tip,
+            refund,
+        } = value;
+        Self {
+            gas_exec,
+            gas_stor,
+            fee_base,
+            tip,
+            refund,
+        }
+    }
+}
+
+impl From<common::block::TransactionReceipt> for TransactionReceipt {
+    fn from(value: common::block::TransactionReceipt) -> Self {
+        let common::block::TransactionReceipt { success, fee } = value;
+        Self {
+            success,
+            fee: fee.into(),
+        }
+    }
+}
+
+impl From<TransactionReceipt> for common::block::TransactionReceipt {
+    fn from(value: TransactionReceipt) -> Self {
+        let TransactionReceipt { success, fee } = value;
+        Self {
+            success,
+            fee: fee.into(),
+        }
+    }
+}
+
 impl From<common::block::BlockBody> for BlockBody {
     fn from(value: common::block::BlockBody) -> Self {
-        let common::block::BlockBody { transactions } = value;
+        let common::block::BlockBody {
+            transactions,
+            receipts,
+        } = value;
 
         let transactions = transactions
             .into_iter()
@@ -674,7 +1058,10 @@ impl From<common::block::BlockBody> for BlockBody {
             })
             .collect();
 
-        Self { transactions }
+        Self {
+            transactions,
+            receipts: receipts.into_iter().map(Into::into).collect(),
+        }
     }
 }
 
@@ -682,7 +1069,10 @@ impl TryFrom<BlockBody> for common::block::BlockBody {
     type Error = lee::error::LeeError;
 
     fn try_from(value: BlockBody) -> Result<Self, Self::Error> {
-        let BlockBody { transactions } = value;
+        let BlockBody {
+            transactions,
+            receipts,
+        } = value;
 
         let transactions = transactions
             .into_iter()
@@ -692,7 +1082,10 @@ impl TryFrom<BlockBody> for common::block::BlockBody {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(Self { transactions })
+        Ok(Self {
+            transactions,
+            receipts: receipts.into_iter().map(Into::into).collect(),
+        })
     }
 }
 
@@ -794,61 +1187,6 @@ impl From<indexer_core::status::IndexerSyncState> for IndexerSyncState {
             indexer_core::status::IndexerSyncState::CaughtUp => Self::CaughtUp,
             indexer_core::status::IndexerSyncState::Error => Self::Error,
             indexer_core::status::IndexerSyncState::Stalled => Self::Stalled,
-            indexer_core::status::IndexerSyncState::Halted => Self::Halted,
-        }
-    }
-}
-
-impl From<indexer_core::status::CrossZoneHalt> for CrossZoneHalt {
-    fn from(value: indexer_core::status::CrossZoneHalt) -> Self {
-        let indexer_core::status::CrossZoneHalt {
-            block_id,
-            block_hash,
-            src_zone,
-            src_block_id,
-            src_tx_index,
-            verdict,
-        } = value;
-
-        Self {
-            block_id,
-            block_hash: block_hash.into(),
-            src_zone,
-            src_block_id,
-            src_tx_index,
-            verdict,
-        }
-    }
-}
-
-impl From<indexer_core::status::PeerHealth> for PeerHealth {
-    fn from(value: indexer_core::status::PeerHealth) -> Self {
-        match value {
-            indexer_core::status::PeerHealth::Live => Self::Live,
-            indexer_core::status::PeerHealth::Lagging => Self::Lagging,
-            indexer_core::status::PeerHealth::Holed => Self::Holed,
-            indexer_core::status::PeerHealth::Suspended => Self::Suspended,
-            indexer_core::status::PeerHealth::Halted => Self::Halted,
-        }
-    }
-}
-
-impl From<indexer_core::status::PeerStatus> for PeerStatus {
-    fn from(value: indexer_core::status::PeerStatus) -> Self {
-        let indexer_core::status::PeerStatus {
-            zone,
-            verified_tip_block_id,
-            cursor_slot,
-            stuck_slot_attempts,
-            health,
-        } = value;
-
-        Self {
-            zone,
-            verified_tip_block_id,
-            cursor_slot,
-            stuck_slot_attempts,
-            health: health.into(),
         }
     }
 }
@@ -881,6 +1219,12 @@ impl From<indexer_core::BlockIngestError> for BlockIngestError {
             indexer_core::BlockIngestError::InvalidRewardTarget { reason } => {
                 Self::InvalidRewardTarget { reason }
             }
+            indexer_core::BlockIngestError::MisplacedSystemUpgraderTransaction { tx_index } => {
+                Self::MisplacedSystemUpgraderTransaction { tx_index }
+            }
+            indexer_core::BlockIngestError::MissedSystemUpgrade { name } => {
+                Self::MissedSystemUpgrade { name }
+            }
             indexer_core::BlockIngestError::InvalidFeeClass { tx_index, reason } => {
                 Self::InvalidFeeClass { tx_index, reason }
             }
@@ -896,8 +1240,23 @@ impl From<indexer_core::BlockIngestError> for BlockIngestError {
             indexer_core::BlockIngestError::NonPublicGenesisTransaction => {
                 Self::NonPublicGenesisTransaction
             }
+            indexer_core::BlockIngestError::ReceiptMismatch {
+                tx_index,
+                listed,
+                settled,
+            } => Self::ReceiptMismatch {
+                tx_index,
+                listed: listed.map(|receipt| (*receipt).into()),
+                settled: settled.map(|receipt| (*receipt).into()),
+            },
+            indexer_core::BlockIngestError::UnfinalizedRelease { tx_index, key } => {
+                Self::UnfinalizedRelease { tx_index, key }
+            }
             indexer_core::BlockIngestError::StateTransition { tx_index, reason } => {
                 Self::StateTransition { tx_index, reason }
+            }
+            indexer_core::BlockIngestError::UndecodableSystemRegistry => {
+                Self::UndecodableSystemRegistry
             }
         }
     }
@@ -933,8 +1292,6 @@ impl From<indexer_core::status::IndexerStatus> for IndexerStatus {
             sync,
             indexed_block_id,
             stall_reason,
-            cross_zone_halt,
-            cross_zone_peers,
         } = value;
 
         Self {
@@ -942,8 +1299,6 @@ impl From<indexer_core::status::IndexerStatus> for IndexerStatus {
             last_error: sync.last_error,
             indexed_block_id,
             stall_reason: stall_reason.map(Into::into),
-            cross_zone_halt: cross_zone_halt.map(Into::into),
-            cross_zone_peers: cross_zone_peers.into_iter().map(Into::into).collect(),
         }
     }
 }
@@ -985,9 +1340,46 @@ impl EventRecord {
     }
 }
 
+fn nonce_entries(nonces: BTreeMap<lee::AccountId, Nonce>) -> Vec<(AccountId, u128)> {
+    nonces
+        .into_iter()
+        .map(|(account_id, nonce)| (account_id.into(), nonce.0))
+        .collect()
+}
+
+fn nonce_map(
+    entries: Vec<(AccountId, u128)>,
+) -> Result<BTreeMap<lee::AccountId, Nonce>, lee::error::LeeError> {
+    Ok(lee::nonce_map(entries.into_iter().map(
+        |(account_id, nonce)| (account_id.into(), Nonce(nonce)),
+    ))?)
+}
+
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
+    use lee::test_utils::{TestSigner, witness_for};
+
     use super::*;
+
+    #[test]
+    fn a_context_declaring_an_actor_twice_is_refused() {
+        let declared = |authority| DeclaredActor {
+            actor: lee_core::account::Actor::new(
+                lee_core::account::AccountId::new([1; 32]),
+                lee_core::account::AccountId::new([2; 32]),
+            )
+            .into(),
+            authority,
+        };
+        let context = PublicExecutionContext {
+            actors: vec![declared(Authority::None), declared(Authority::Signer)],
+            ..PublicExecutionContext::default()
+        };
+
+        assert!(lee_core::execution_state::PublicExecutionContext::try_from(context).is_err());
+    }
 
     #[test]
     fn a_nested_account_round_trips_through_the_indexer_mirror() {
@@ -996,7 +1388,7 @@ mod tests {
             nonce: lee_core::account::Nonce(u128::MAX),
             data: lee_core::account::Account::funded(u128::MAX)
                 .data
-                .with_shard(program, b"record".to_vec().try_into().unwrap()),
+                .with_actor_state(program, b"record".to_vec().into()),
         };
 
         let mirrored = Account::from(account.clone());
@@ -1005,34 +1397,7 @@ mod tests {
 
         assert_eq!(restored.nonce, u128::MAX);
         assert_eq!(restored.data.balance(), Some(u128::MAX));
-        assert_eq!(
-            lee_core::account::Account::try_from(restored).unwrap(),
-            account
-        );
-    }
-
-    #[test]
-    fn public_action_effects_keep_their_order_through_the_mirror() {
-        // A repeated write to one shard, and not a palindrome: a set would collapse the
-        // sequence and a reversal would show, and settlement folds them in emission order.
-        let apply = |data: u8| lee_core::execution_state::DeferredPublicEffect {
-            program_account_id: lee_core::account::AccountId::new([1; 32]),
-            shard_program_account_id: lee_core::account::AccountId::new([2; 32]),
-            data: vec![data],
-        };
-        let action = lee::privacy_preserving_transaction::message::PublicActionWithID {
-            account_id: lee_core::account::AccountId::new([3; 32]),
-            effects: vec![apply(7), apply(8), apply(9), apply(7)],
-        };
-
-        let mirrored = PublicActionWithID::from(action.clone());
-        let json = serde_json::to_string(&mirrored).unwrap();
-        let restored: PublicActionWithID = serde_json::from_str(&json).unwrap();
-
-        assert_eq!(
-            lee::privacy_preserving_transaction::message::PublicActionWithID::from(restored),
-            action
-        );
+        assert_eq!(lee_core::account::Account::from(restored), account);
     }
 
     #[test]
@@ -1067,19 +1432,20 @@ mod tests {
     /// protocol recomputes to a different hash than the one on chain.
     #[test]
     fn public_fee_declaration_survives_roundtrip() {
-        let signer = lee::PrivateKey::try_new([1_u8; 32]).expect("valid key");
-        let signer_id = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&signer));
+        let signer = TestSigner::new(1);
+        let signer_id = signer.account_id();
 
         let fee = lee::FeeDeclaration::new(signer_id, 2_000_000, 0, u128::MAX >> 1);
+        let to = lee::Actor::new(signer_id, lee::AccountId::new([7; 32]));
         let message = lee::public_transaction::Message::try_new_with_fees(
-            lee::AccountId::new([7; 32]),
-            vec![lee::ProgramShardSelector::native_balance(signer_id)],
-            vec![0_u128.into()],
+            to,
+            lee::test_utils::signed_by(vec![to], [signer_id]),
+            BTreeMap::from([(signer_id, 0_u128.into())]),
             0_u32,
             fee,
         )
         .expect("message builds");
-        let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&signer]);
+        let witness_set = witness_for(&message, &[&signer]);
         let tx = lee::PublicTransaction::new(message, witness_set);
         let original_hash = tx.hash();
         assert_eq!(tx.message().fee, Some(fee));
@@ -1102,17 +1468,18 @@ mod tests {
     /// A fee-exempt public transaction round-trips with `fee: None`.
     #[test]
     fn public_exempt_message_survives_roundtrip() {
-        let signer = lee::PrivateKey::try_new([1_u8; 32]).expect("valid key");
-        let signer_id = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&signer));
+        let signer = TestSigner::new(1);
+        let signer_id = signer.account_id();
 
+        let to = lee::Actor::new(signer_id, lee::AccountId::new([7; 32]));
         let message = lee::public_transaction::Message::try_new(
-            lee::AccountId::new([7; 32]),
-            vec![lee::ProgramShardSelector::native_balance(signer_id)],
-            vec![0_u128.into()],
+            to,
+            lee::test_utils::signed_by(vec![to], [signer_id]),
+            BTreeMap::from([(signer_id, 0_u128.into())]),
             0_u32,
         )
         .expect("message builds");
-        let witness_set = lee::public_transaction::WitnessSet::for_message(&message, &[&signer]);
+        let witness_set = witness_for(&message, &[&signer]);
         let tx = lee::PublicTransaction::new(message, witness_set);
         let original_hash = tx.hash();
 
@@ -1121,5 +1488,201 @@ mod tests {
 
         assert_eq!(restored.message().fee, None);
         assert_eq!(restored.hash(), original_hash);
+    }
+
+    fn account_id(tag: u8) -> lee_core::account::AccountId {
+        lee_core::account::AccountId::new([tag; 32])
+    }
+
+    fn actor(account_tag: u8, program_tag: u8) -> lee_core::account::Actor {
+        lee_core::account::Actor::new(account_id(account_tag), account_id(program_tag))
+    }
+
+    fn admission_evidence() -> Vec<lee::PublicAccountEvidence> {
+        vec![
+            TestSigner::new(1).evidence(),
+            lee::PublicAccountEvidence::Pda {
+                program: account_id(2),
+                seed: lee_core::program::PdaSeed::new([3; 32]),
+            },
+        ]
+    }
+
+    #[test]
+    fn a_public_message_with_admission_evidence_round_trips_through_the_mirror() {
+        let message = lee::public_transaction::Message::new(
+            actor(3, 4),
+            vec![12],
+            lee::test_utils::signed_by(vec![actor(5, 6)], [account_id(13)]),
+            BTreeMap::from([(account_id(13), lee_core::account::Nonce(7))]),
+            Some(lee::FeeDeclaration::new(account_id(8), 9, 10, 11)),
+            admission_evidence(),
+        );
+
+        let mirrored = PublicMessage::from(message.clone());
+        let json = serde_json::to_string(&mirrored).unwrap();
+        let restored: PublicMessage = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(
+            lee::public_transaction::Message::try_from(restored).unwrap(),
+            message
+        );
+    }
+
+    #[test]
+    fn a_public_message_repeating_a_signer_nonce_does_not_convert() {
+        let mut mirrored = PublicMessage::from(lee::public_transaction::Message::new(
+            actor(1, 2),
+            vec![3],
+            lee::test_utils::signed_by(vec![actor(1, 2)], [account_id(1)]),
+            BTreeMap::from([(account_id(1), lee_core::account::Nonce(4))]),
+            None,
+            Vec::new(),
+        ));
+        let (repeated, _) = mirrored.nonces[0];
+        mirrored.nonces.push((repeated, 5));
+
+        assert!(lee::public_transaction::Message::try_from(mirrored).is_err());
+    }
+
+    #[test]
+    fn a_private_message_with_a_public_root_round_trips_through_the_mirror() {
+        // A repeated send to one actor, and not a palindrome: a set would collapse the
+        // sequence and a reversal would show, and execution replays them in emission order.
+        let repeated = lee_core::execution_state::Delivery {
+            envelope: lee_core::program::MessageEnvelope {
+                from: actor(3, 53),
+                to: actor(4, 5),
+                message: vec![6],
+            },
+            grants: BTreeSet::new(),
+            pda_seeds: BTreeSet::new(),
+        };
+        let clear = lee_core::program::Publication::Clear(lee_core::program::MessageEnvelope {
+            from: actor(44, 94),
+            to: actor(45, 46),
+            message: vec![47],
+        });
+        let message = lee::privacy_preserving_transaction::message::Message {
+            public_context: lee_core::execution_state::PublicExecutionContext {
+                promotions: BTreeSet::from([27, 28]),
+                private_signers: BTreeSet::from([actor(29, 92)]),
+                ..lee_core::execution_state::PublicExecutionContext::default()
+            },
+            execution: lee_core::ProvenExecution {
+                // The proof commits to its fee, so a mirror dropping it breaks verification.
+                proven_fee: Some(lee_core::ProvenFee {
+                    refund_to: Some(account_id(70)),
+                    tip: 9,
+                    fallback: Some(lee_core::FeeFallback {
+                        nullifier: lee_core::Nullifier::default(),
+                        root: [0; 32],
+                        commitment: lee_core::Commitment::default(),
+                        ciphertext: lee_core::encryption::Ciphertext::from_inner(vec![24; 3]),
+                        boundary: vec![
+                            lee_core::execution_state::BoundaryStep::PrivateToPublic(
+                                repeated.clone(),
+                            ),
+                            lee_core::execution_state::BoundaryStep::EndPublicSubtree,
+                        ],
+                    }),
+                }),
+                boundary: vec![
+                    lee_core::execution_state::BoundaryStep::PrivateToPublic(repeated.clone()),
+                    lee_core::execution_state::BoundaryStep::PrivateToPublic(
+                        lee_core::execution_state::Delivery {
+                            envelope: lee_core::program::MessageEnvelope {
+                                from: actor(11, 61),
+                                to: actor(8, 9),
+                                message: vec![10],
+                            },
+                            grants: BTreeSet::from([actor(14, 90), actor(3, 91)]),
+                            pda_seeds: BTreeSet::from([lee_core::program::PdaSeed::new([15; 32])]),
+                        },
+                    ),
+                    lee_core::execution_state::BoundaryStep::PrivateToPublic(
+                        lee_core::execution_state::Delivery {
+                            envelope: lee_core::program::MessageEnvelope {
+                                from: actor(40, 90),
+                                to: actor(41, 42),
+                                message: vec![43],
+                            },
+                            grants: BTreeSet::new(),
+                            pda_seeds: BTreeSet::new(),
+                        },
+                    ),
+                    lee_core::execution_state::BoundaryStep::PrivateToPublic(repeated),
+                    lee_core::execution_state::BoundaryStep::PublicToPrivate(
+                        lee_core::execution_state::Delivery {
+                            envelope: lee_core::program::MessageEnvelope {
+                                from: actor(16, 17),
+                                to: actor(18, 19),
+                                message: vec![20],
+                            },
+                            grants: BTreeSet::new(),
+                            pda_seeds: BTreeSet::new(),
+                        },
+                    ),
+                    lee_core::execution_state::BoundaryStep::EndPrivateSubtree,
+                    lee_core::execution_state::BoundaryStep::EndPublicSubtree,
+                ],
+                async_messages: vec![
+                    lee_core::program::Publication::Sealed(lee_core::SealedMessage {
+                        commitment: lee_core::Commitment::from_byte_array([22; 32]),
+                        note: lee_core::EncryptedNote {
+                            epk: lee_core::EphemeralPublicKey(vec![23; 2]),
+                            ciphertext: lee_core::encryption::Ciphertext::from_inner(vec![24; 3]),
+                        },
+                    }),
+                    clear.clone(),
+                    clear,
+                ],
+                recovery_bindings: vec![],
+                public_root: Some(lee_core::RootCall {
+                    to: lee_core::account::Actor::new(
+                        lee_core::account::AccountId::new([25; 32]),
+                        lee_core::account::AccountId::new([26; 32]),
+                    ),
+                    message: vec![27; 2],
+                }),
+                private_actions: vec![],
+                validity: lee_core::program::ValidityWindows::new_unbounded(),
+                program_image_claims: vec![],
+            },
+            nonces: BTreeMap::new(),
+            fee: Some(lee::FeeDeclaration::new(
+                account_id(71),
+                500_000,
+                3,
+                9_000_000,
+            )),
+            admission_evidence: admission_evidence(),
+        };
+
+        let mirrored = PrivacyPreservingMessage::from(message.clone());
+        let json = serde_json::to_string(&mirrored).unwrap();
+        let restored: PrivacyPreservingMessage = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(
+            lee::privacy_preserving_transaction::message::Message::try_from(restored).unwrap(),
+            message
+        );
+    }
+
+    #[test]
+    fn a_sealed_message_round_trips_through_the_mirror() {
+        let sealed = lee_core::SealedMessage {
+            commitment: lee_core::Commitment::from_byte_array([0; 32]),
+            note: lee_core::EncryptedNote {
+                epk: lee_core::EphemeralPublicKey(vec![1; 2]),
+                ciphertext: lee_core::encryption::Ciphertext::from_inner(vec![2; 3]),
+            },
+        };
+
+        let mirrored = SealedMessage::from(sealed.clone());
+        let json = serde_json::to_string(&mirrored).unwrap();
+        let restored: SealedMessage = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(lee_core::SealedMessage::from(restored), sealed);
     }
 }

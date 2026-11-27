@@ -25,13 +25,13 @@ The verifier microbenchmark (`G_verify`) lives in a criterion bench under `bench
 cargo bench -p cycle_bench --features ppe --bench verify
 ```
 
-`RISC0_DEV_MODE=1` skips proving entirely and is only useful for the executor path. The bin writes to `target/cycle_bench.json`; criterion writes per-bench estimates under `target/criterion/`.
+`RISC0_DEV_MODE=1` skips proving entirely and is only useful for the executor path and for the PPE cycle counts. The bin writes to `target/cycle_bench.json`; criterion writes per-bench estimates under `target/criterion/`.
 
 ## What you'll see
 
-- Per-program executor cycles and segments, plus exec wall time as `best / mean ± stdev (n=N)`.
+- Executor cycles and segments per transition (one `handle_message` row for each guest transition an operation takes), plus exec wall time as `best / mean ± stdev (n=N)`.
 - With `--prove`: prover total cycles, paging cycles, segments, and wall time.
-- With `--ppe`: end-to-end `execute_and_prove` wall time and `S_agg` (the borsh-serialized InnerReceipt length) for one auth-transfer-in-PPE case and a chain-caller depth sweep.
+- With `--ppe`: the privacy circuit's user cycles, total cycles and segments, end-to-end `execute_and_prove` wall time and `S_agg` (the borsh-serialized InnerReceipt length) for a native transfer in PPE at several dummy-input counts, a sweep over the number of native transfers a scripted actor sends, and a deshielding transfer under each way of paying its fee. `--ppe-fee-case N` runs one fee case alone.
 - From the `verify` criterion bench: `ppe/verify_native_transfer` slope-regression point estimate with 95% CI bounds.
 
 ## Baseline comparison (verify bench)

@@ -3,13 +3,15 @@
     reason = "This is an example program, it's fine to print to stdout"
 )]
 
+use std::collections::BTreeMap;
+
 use common::transaction::LeeTransaction;
 use lee::{
-    AccountId, ProgramShardSelector, PublicTransaction,
+    AccountId, Actor, Authority, PublicAccountEvidence, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
 use lee_core::program::PdaSeed;
-use program_deployment::deploy_program;
+use program_deployment::{deploy_program, fee_paid_by};
 use sequencer_service_rpc::RpcClient as _;
 use wallet::WalletCore;
 
@@ -57,7 +59,7 @@ async fn main() {
         .unwrap();
 
     // Deploy both programs through `program_loader`; `tail_call_with_pda` reads the callee's
-    // address from its own instruction data.
+    // address from its own message.
     let caller_bytecode: Vec<u8> = std::fs::read(caller_path).unwrap();
     let caller_account_id = deploy_program(&mut wallet_core, caller_bytecode, payer)
         .await
@@ -69,14 +71,25 @@ async fn main() {
 
     // Compute the PDA to pass as the input account.
     let pda = AccountId::for_public_pda(&caller_account_id, &PDA_SEED);
-    // The caller only needs the account ID; the callee selects its shard.
-    let shard_selectors = vec![ProgramShardSelector::native_balance(pda)];
-    let instruction_data = callee_account_id;
-    let nonces = vec![];
-    let signing_keys = [];
-    let message =
-        Message::try_new(caller_account_id, shard_selectors, nonces, instruction_data).unwrap();
-    let witness_set = WitnessSet::for_message(&message, &signing_keys);
+    // The caller's actor on the PDA receives the message and sends the greeting, with the PDA seed,
+    // to the callee's actor on the same account, so both are declared.
+    let caller = Actor::new(pda, caller_account_id);
+    let public_actors = vec![
+        (caller, Authority::None),
+        (Actor::new(pda, callee_account_id), Authority::None),
+    ];
+    // The fee is charged to `payer`, so the payer's nonce is listed and its key signs the message.
+    let (fee, payer_nonce, payer_signer) = fee_paid_by(&wallet_core, payer).await.unwrap();
+    let nonces = BTreeMap::from([(payer, payer_nonce)]);
+    let signing_keys = [payer_signer];
+    let message = Message {
+        admission_evidence: vec![PublicAccountEvidence::Pda {
+            program: caller_account_id,
+            seed: PDA_SEED,
+        }],
+        ..Message::try_new_with_fees(caller, public_actors, nonces, callee_account_id, fee).unwrap()
+    };
+    let witness_set = WitnessSet::sign(&message, &signing_keys);
     let tx = PublicTransaction::new(message, witness_set);
 
     // Submit the transaction

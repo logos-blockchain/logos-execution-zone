@@ -2,7 +2,7 @@
 
 use std::str::FromStr;
 
-use logos_blockchain_common_http_client::BasicAuthCredentials;
+use logos_blockchain_zone_sdk::common_http_client::BasicAuthCredentials;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

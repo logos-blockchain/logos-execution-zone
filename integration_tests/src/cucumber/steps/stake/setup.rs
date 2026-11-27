@@ -4,13 +4,13 @@
 )]
 
 use cucumber::{gherkin::Step, given};
-use lee::Account;
+use sequencer_service_rpc::RpcClient as _;
 
 use super::{
     super::log_step,
     helpers::{
         config_entry, first_configured_public_account, get_account, native_balance, stake_config,
-        stake_shard, submit_accepted_stake,
+        stake_state, submit_accepted_stake,
     },
 };
 use crate::cucumber::{
@@ -69,8 +69,12 @@ async fn ownership_account_is_unclaimed(world: &mut CucumberWorld, step: &Step) 
     log_step(step);
     let context = world.lez()?;
     let ownership_id = context.new_public_account().await?;
-    let account = get_account(context, ownership_id).await?;
-    if account != Account::default() {
+    let account = context
+        .sequencer_client()
+        .get_account(ownership_id)
+        .await
+        .map_err(StepError::query_failed)?;
+    if account.is_some() {
         return Err(StepError::AssertionFailed {
             message: "the ownership account does not start out fresh and unclaimed".to_owned(),
         });
@@ -123,7 +127,7 @@ async fn stake_second_sequencer_key(world: &mut CucumberWorld, step: &Step) -> S
         timeout,
     )
     .await?;
-    if stake_shard(&get_account(context, second_ownership_id).await?).is_empty() {
+    if stake_state(&get_account(context, second_ownership_id).await?).is_empty() {
         return Err(StepError::AssertionFailed {
             message: "staking the second sequencer key did not claim its ownership account"
                 .to_owned(),

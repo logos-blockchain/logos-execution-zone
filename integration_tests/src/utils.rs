@@ -4,16 +4,24 @@ use anyhow::{Context as _, Result, ensure};
 use common::HashType;
 use kameo::actor::ActorRef;
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
-use lee_core::account::{AccountId, ProgramShardSelector};
-use log::info;
-use sequencer_bedrock_actor::{BedrockActor, protocol::GetAccreditedKeys};
+use lee_core::{
+    PublicationMode,
+    account::{AccountId, Actor},
+    program::MessageBody,
+};
+use sequencer_bedrock_actor::protocol::{ChannelId, GetAccreditedKeys};
 use sequencer_core::Ed25519PublicKey;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
-use test_fixtures::{TestContext, verify_commitment_is_in_state};
+use test_fixtures::{
+    StandaloneBedrockActor, TestContext, private_mention, public_mention,
+    verify_commitment_is_in_state,
+};
+use tracing::info;
 use wallet::{
     cli::{
         CliAccountMention, Command, SubcommandReturnValue,
         account::{AccountSubcommand, NewSubcommand},
+        pending::PendingSubcommand,
         programs::native_token_transfer::AuthTransferSubcommand,
     },
     storage::key_chain::FoundPrivateAccount,
@@ -23,7 +31,20 @@ use wallet::{
 pub const L2_TO_L1_TIMEOUT: Duration = Duration::from_mins(6);
 /// Maximum time a single [`wait_until`] may poll before giving up.
 const PHASE_TIMEOUT: Duration = Duration::from_secs(360);
+/// Bound on the indexer's status snapshot: it goes into an error message, so it cannot wait long.
+const INDEXER_STATUS_TIMEOUT: Duration = Duration::from_secs(5);
 const POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// Maximum time two sequencers may disagree at their unfinalized tips.
+const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(60);
+
+pub fn no_seal(bodies: &[MessageBody]) -> Result<Vec<PublicationMode>, lee::error::LeeError> {
+    if bodies.is_empty() {
+        return Ok(Vec::new());
+    }
+    Err(lee::error::LeeError::InvalidInput(
+        "No durable async message is sealed".to_owned(),
+    ))
+}
 
 /// Polls `check` until it reports ready, failing with `what` on timeout.
 pub async fn wait_until<F, Fut>(what: &str, mut check: F) -> Result<()>
@@ -56,10 +77,11 @@ pub async fn wait_for_inclusion(ctx: &TestContext, tx_hash: HashType) -> Result<
 
 /// The channel's accredited keys, sorted, plus whose turn the tip was written on.
 pub async fn committee(
-    observer: &ActorRef<BedrockActor>,
+    observer: &ActorRef<StandaloneBedrockActor>,
+    channel_id: ChannelId,
 ) -> Result<(Vec<[u8; 32]>, Option<Ed25519PublicKey>)> {
     let Some(accredited) = observer
-        .ask(GetAccreditedKeys)
+        .ask(GetAccreditedKeys { channel_id })
         .await
         .context("Failed to read the channel's accredited keys")?
     else {
@@ -100,6 +122,21 @@ pub async fn assert_same_chain(a: &SequencerClient, b: &SequencerClient) -> Resu
     Ok(())
 }
 
+/// Waits for A and B to agree over their common prefix, since both may build the same height at a
+/// turn boundary until Bedrock keeps one of them.
+pub async fn wait_for_same_chain(a: &SequencerClient, b: &SequencerClient) -> Result<()> {
+    let started = tokio::time::Instant::now();
+    loop {
+        match assert_same_chain(a, b).await {
+            Ok(()) => return Ok(()),
+            Err(err) if started.elapsed() >= CONVERGENCE_TIMEOUT => {
+                return Err(err.context("A and B never converged on one chain"));
+            }
+            Err(_) => tokio::time::sleep(POLL_INTERVAL).await,
+        }
+    }
+}
+
 /// Create a private or public account at the given chain index and return its ID.
 /// Pass `cci: None` to use the wallet's next available chain index.
 pub async fn new_account(
@@ -123,24 +160,59 @@ pub async fn new_account(
     Ok(account_id)
 }
 
-/// Send `amount` from `from` to `to` via an authenticated transfer (identifier 0).
+/// Send `amount` from `from` to `to` via an authenticated transfer.
 pub async fn send(
     ctx: &mut TestContext,
     from: CliAccountMention,
     to: CliAccountMention,
     amount: u128,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<HashType> {
     let command = Command::AuthTransfer(AuthTransferSubcommand::Send {
         from,
         to: Some(to),
         to_npk: None,
         to_vpk: None,
         to_keys: None,
-        to_identifier: Some(lee_core::Identifier::ZERO),
+        to_initial_key: None,
         amount,
     });
-    wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
-    Ok(())
+    let SubcommandReturnValue::TransactionExecuted { tx_hash } =
+        wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?
+    else {
+        anyhow::bail!("a send returns its transaction hash");
+    };
+    Ok(tx_hash)
+}
+
+/// A fresh private account holding `amount`, funded from the context's first public account and
+/// committed on chain.
+pub async fn funded_private_account(ctx: &mut TestContext, amount: u128) -> Result<AccountId> {
+    let account = new_account(ctx, true, None).await?;
+    let funder = ctx.existing_public_accounts()[0];
+    send(
+        ctx,
+        public_mention(funder),
+        private_mention(account),
+        amount,
+    )
+    .await?;
+    let commitment = ctx
+        .wallet()
+        .get_private_account_commitment(account)
+        .context("the funded account is unknown to the wallet")?;
+    wait_until("the funded account to be committed", || async {
+        Ok(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await)
+    })
+    .await?;
+    Ok(account)
+}
+
+/// The native balance of a private account the wallet records.
+pub fn private_balance(ctx: &TestContext, account_id: AccountId) -> Result<u128> {
+    Ok(restored_private_account(ctx, account_id, "private account")
+        .account
+        .data
+        .native_balance()?)
 }
 
 /// Retrieve the native token balance for `account_id`.
@@ -153,17 +225,22 @@ pub async fn account_balance(ctx: &TestContext, account_id: AccountId) -> anyhow
 
 /// Fetch the full account state for `account_id` from the sequencer.
 pub async fn get_account(ctx: &TestContext, account_id: AccountId) -> anyhow::Result<lee::Account> {
-    Ok(ctx.sequencer_client().get_account(account_id).await?)
+    Ok(ctx
+        .sequencer_client()
+        .get_account(account_id)
+        .await?
+        .unwrap_or_default())
 }
 
 pub async fn get_account_view(
     ctx: &TestContext,
-    shard_selector: ProgramShardSelector,
+    actor_state_selector: Actor,
 ) -> anyhow::Result<lee::Account> {
     Ok(ctx
         .sequencer_client()
-        .get_account_view(shard_selector)
-        .await?)
+        .get_account_view(actor_state_selector)
+        .await?
+        .unwrap_or_default())
 }
 
 /// Fetch the current commitment for `account_id` and assert it is present in the sequencer state.
@@ -184,10 +261,38 @@ pub async fn assert_private_commitment_in_state(
 pub async fn sync_private(ctx: &mut TestContext) -> anyhow::Result<()> {
     wallet::cli::execute_subcommand(
         ctx.wallet_mut(),
-        Command::Account(AccountSubcommand::SyncPrivate {}),
+        Command::Account(AccountSubcommand::SyncPrivate {
+            rescan: false,
+            yes: true,
+        }),
     )
     .await?;
     Ok(())
+}
+
+/// Receive every message pending for the wallet's accounts through `wallet pending receive`, which
+/// waits for each receipt and stores the account it credits.
+pub async fn receive_pending(ctx: &mut TestContext) -> anyhow::Result<()> {
+    for pending in ctx.wallet_mut().owned_pending_messages().await? {
+        wallet::cli::execute_subcommand(
+            ctx.wallet_mut(),
+            Command::Pending(PendingSubcommand::Receive {
+                position: pending.position,
+                inputs: Box::default(),
+            }),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// The bytes the included privacy-preserving transaction `tx_hash` is charged storage for.
+pub async fn charged_bytes(ctx: &TestContext, tx_hash: HashType) -> u64 {
+    common::transaction::LeeTransaction::PrivacyPreserving(
+        test_fixtures::fetch_privacy_preserving_tx(ctx.sequencer_client(), tx_hash).await,
+    )
+    .charged_bytes()
+    .expect("a transaction serializes")
 }
 
 /// Look up a restored private account for `account_id`, panicking with `label` if absent.
@@ -209,7 +314,7 @@ pub fn assert_public_account_restored(ctx: &TestContext, account_id: AccountId, 
     ctx.wallet()
         .storage()
         .key_chain()
-        .pub_account_signing_key(account_id)
+        .pub_account_initial_key(account_id)
         .unwrap_or_else(|| panic!("{label} should be restored"));
 }
 
@@ -221,7 +326,9 @@ pub async fn wait_for_indexer_to_catch_up(ctx: &TestContext) -> anyhow::Result<u
 
     let block_id_to_catch_up =
         sequencer_service_rpc::RpcClient::get_last_block_id(ctx.sequencer_client()).await?;
-    let mut last_ind: u64 = 1;
+    let mut last_ind: u64 = 0;
+    let mut first_ind: Option<u64> = None;
+    let mut last_moved = std::time::Instant::now();
     let inner = async {
         loop {
             let ind = ctx
@@ -229,24 +336,55 @@ pub async fn wait_for_indexer_to_catch_up(ctx: &TestContext) -> anyhow::Result<u
                 .get_last_finalized_block_id()
                 .await?
                 .unwrap_or(0);
+            match first_ind {
+                None => first_ind = Some(ind),
+                // Only a forward move counts, so a flat or regressed reading reads as stuck.
+                Some(_) if ind > last_ind => last_moved = std::time::Instant::now(),
+                Some(_) => {}
+            }
             last_ind = ind;
             if ind >= block_id_to_catch_up {
                 let last_seq =
                     sequencer_service_rpc::RpcClient::get_last_block_id(ctx.sequencer_client())
                         .await?;
                 info!(
-                    "Indexer caught up. Indexer last block id: {ind}. Current sequencer last block id: {last_seq}"
+                    indexer_last_block_id = ind,
+                    sequencer_last_block_id = last_seq,
+                    "Indexer caught up"
                 );
-                return Ok(ind);
+                return anyhow::Ok(ind);
             }
             tokio::time::sleep(Duration::from_secs(2)).await;
         }
     };
-    tokio::time::timeout(L2_TO_L1_TIMEOUT, inner)
-        .await
-        .with_context(|| {
-            format!(
-                "Indexer failed to catch up within {L2_TO_L1_TIMEOUT:?}. Last indexer block id observed: {last_ind}, but needed to catch up to at least {block_id_to_catch_up}"
+    match tokio::time::timeout(L2_TO_L1_TIMEOUT, inner).await {
+        Ok(Ok(reached)) => Ok(reached),
+        Ok(Err(err)) => Err(err.context(format!(
+            "Indexer polling failed before catching up. Last indexer block id observed: {last_ind}, needed at least {block_id_to_catch_up}. {}",
+            indexer_diagnosis(ctx).await
+        ))),
+        Err(_elapsed) => {
+            let started_at = first_ind.unwrap_or(last_ind);
+            let unchanged_for = last_moved.elapsed();
+            let diagnosis = indexer_diagnosis(ctx).await;
+            anyhow::bail!(
+                "Indexer failed to catch up within {L2_TO_L1_TIMEOUT:?}. Last indexer block id observed: {last_ind}, but needed to catch up to at least {block_id_to_catch_up}. \
+                 Height when the wait began: {started_at}, unchanged over the last {unchanged_for:?} of the wait. {diagnosis}"
             )
-        })?
+        }
+    }
+}
+
+/// The indexer's own account of ingestion, for a wait that did not finish.
+async fn indexer_diagnosis(ctx: &TestContext) -> String {
+    use indexer_service_rpc::RpcClient as _;
+
+    match tokio::time::timeout(INDEXER_STATUS_TIMEOUT, ctx.indexer_client().get_status()).await {
+        Ok(Ok(status)) => format!(
+            "Indexer state {:?}, last error {:?}, stall reason {:?}",
+            status.state, status.last_error, status.stall_reason
+        ),
+        Ok(Err(err)) => format!("Indexer status unavailable: {err}"),
+        Err(_elapsed) => format!("Indexer status did not answer within {INDEXER_STATUS_TIMEOUT:?}"),
+    }
 }

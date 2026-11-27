@@ -31,6 +31,7 @@ use wallet::{
         group::GroupSubcommand,
         programs::native_token_transfer::AuthTransferSubcommand,
     },
+    storage::key_chain::SharedAccountDerivation,
 };
 
 /// Create a group, create a shared account from it, and verify registration.
@@ -60,7 +61,7 @@ async fn group_create_and_shared_account_registration() -> Result<()> {
         pda: false,
         seed: None,
         program_id: None,
-        identifier: None,
+        derivation_id: None,
     }));
 
     let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -79,9 +80,12 @@ async fn group_create_and_shared_account_registration() -> Result<()> {
         .shared_private_account(shared_account_id)
         .context("Shared account not found in storage")?;
     assert_eq!(entry.group_label, Label::new("test-group"));
-    assert!(entry.pda_seed.is_none());
+    assert!(matches!(
+        entry.derivation,
+        SharedAccountDerivation::Regular { .. }
+    ));
 
-    log::info!("Shared account registered: {shared_account_id}");
+    tracing::info!(%shared_account_id, "Shared account registered");
     Ok(())
 }
 
@@ -156,7 +160,7 @@ async fn group_invite_join_key_agreement() -> Result<()> {
         "Key agreement: same GMS produces same keys"
     );
 
-    log::info!("Key agreement verified via invite/join");
+    tracing::info!("Key agreement verified via invite/join");
     Ok(())
 }
 
@@ -177,7 +181,7 @@ async fn fund_shared_account_from_public() -> Result<()> {
         pda: false,
         seed: None,
         program_id: None,
-        identifier: None,
+        derivation_id: None,
     }));
     let result = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
     let SubcommandReturnValue::RegisterAccount {
@@ -198,7 +202,7 @@ async fn fund_shared_account_from_public() -> Result<()> {
         to_npk: None,
         to_vpk: None,
         to_keys: None,
-        to_identifier: None,
+        to_initial_key: None,
         amount: 100,
     });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
@@ -216,9 +220,9 @@ async fn fund_shared_account_from_public() -> Result<()> {
         .shared_private_account(shared_id)
         .context("Shared account not found after sync")?;
 
-    log::info!(
-        "Shared account balance after funding: {}",
-        entry.account.data.native_balance().unwrap()
+    tracing::info!(
+        balance = entry.account.data.native_balance().unwrap(),
+        "Shared account funded"
     );
     assert_eq!(
         entry.account.data.native_balance().unwrap(),

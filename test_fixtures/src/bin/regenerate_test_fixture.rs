@@ -7,7 +7,7 @@ use std::{collections::HashSet, path::Path, sync::Arc};
 
 use anyhow::{Context as _, Result};
 use kameo::actor::Spawn as _;
-use logos_blockchain_key_management_system_service::keys::UnsecuredEd25519Key;
+use logos_blockchain_zone_sdk::key_management_system_service::keys::UnsecuredEd25519Key;
 use sequencer_storage_actor::{
     StorageActor,
     protocol::{
@@ -27,7 +27,7 @@ use wallet::config::WalletConfigOverrides;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::init();
+    logging::init();
 
     let dest = prebuilt_sequencer_db_dump_path();
     println!(
@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
         dest.display()
     );
 
-    generate_prebuilt_fixture(&dest)
+    Box::pin(generate_prebuilt_fixture(&dest))
         .await
         .context("Failed to regenerate prebuilt sequencer database fixture")?;
 
@@ -55,14 +55,14 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
     let initial_private_accounts = config::default_private_accounts_for_wallet();
     let genesis = config::genesis_from_accounts(
         &initial_public_accounts,
-        config::private_total(&initial_private_accounts),
+        config::private_funding_cost(&initial_private_accounts),
     );
 
     let (sequencer_handle, temp_sequencer_dir) =
         SequencerSetup::new(config::SequencerPartialConfig::default(), bedrock_addr)
             .with_genesis(genesis)
-            .with_bedrock_signing_key(UnsecuredEd25519Key::from_bytes(
-                &config::BEDROCK_SIGNING_KEY,
+            .with_channel_signing_key(UnsecuredEd25519Key::from_bytes(
+                &config::CHANNEL_SIGNING_KEY,
             ))
             .setup()
             .await
@@ -123,7 +123,6 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
     let state = Arc::new(state);
     storage_ref
         .ask(AtomicUpdate {
-            checkpoint: None,
             blocks: vec![],
             channel_view: None,
             head_tip: Some(tip.clone()),
@@ -133,7 +132,6 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
             finalized_up_to: None,
             new_deposit_events: vec![],
             finalized_deposit_records: HashSet::new(),
-            finalized_dispatch_records: HashSet::new(),
             consumed_withdrawals: HashSet::new(),
             new_withdraw_intents: HashSet::new(),
             zone_anchor: None,

@@ -5,13 +5,26 @@ pub use jsonrpsee::types::ErrorObjectOwned;
 #[cfg(feature = "client")]
 pub use jsonrpsee::{core::ClientError, http_client::HttpClientBuilder as SequencerClientBuilder};
 use sequencer_service_protocol::{
-    Account, AccountId, Block, BlockId, ChannelId, Commitment, CommitmentSetDigest,
-    CrossZoneDeadLetterReport, CrossZoneDeadLetterRequeue, FeeStateQuote, HashType, LeeTransaction,
-    MembershipProof, Nonce, ProgramId, ProgramShardSelector,
+    Account, AccountId, Actor, Block, BlockId, ChannelId, Commitment, CommitmentPosition,
+    CommitmentSetDigest, EncryptedNote, HashType, LeeTransaction, MembershipProof, Nonce,
+    PageLimit, ProgramId, PublicationsPage, SequencerStatus, SystemProposalReport,
+    TransactionReceipt,
 };
+pub use sequencer_service_protocol::{FeeStateQuote, HexBytes};
 
 #[cfg(all(not(feature = "server"), not(feature = "client")))]
 compile_error!("At least one of `server` or `client` features must be enabled.");
+
+/// Error code of a transaction turned away because the mempool is full.
+pub const MEMPOOL_IS_FULL_ERROR_CODE: i32 = -31900;
+
+/// Error code of a privacy-preserving transaction turned away because its fee reserve is below
+/// the fee at the head: priced again off a fresh quote, it may pass.
+pub const PRIVATE_FEE_BELOW_HEAD_ERROR_CODE: i32 = -31901;
+
+/// Error code the sequencer replies with while it is not online yet, e.g. still bootstrapping
+/// from the channel.
+pub const SEQUENCER_IS_NOT_ONLINE_ERROR_CODE: i32 = -31902;
 
 /// Type alias for RPC client. Only available when `client` feature is enabled.
 ///
@@ -75,28 +88,65 @@ pub trait Rpc {
         tx_hash: HashType,
     ) -> Result<Option<(LeeTransaction, BlockId)>, ErrorObjectOwned>;
 
+    /// `None` for an unknown transaction, and for a block's trailing fee and clock transactions.
+    #[method(name = "getTransactionReceipt")]
+    async fn get_transaction_receipt(
+        &self,
+        tx_hash: HashType,
+    ) -> Result<Option<TransactionReceipt>, ErrorObjectOwned>;
+
     #[method(name = "getAccountsNonces")]
     async fn get_accounts_nonces(
         &self,
         account_ids: Vec<AccountId>,
     ) -> Result<Vec<Nonce>, ErrorObjectOwned>;
 
-    /// Returns the account's nonce and the selected shard; its balance is the shard at the
-    /// native token program.
+    /// Returns the account's nonce and the selected actor state; its balance is the actor state at
+    /// the native token program.
     #[method(name = "getAccountView")]
     async fn get_account_view(
         &self,
-        shard_selector: ProgramShardSelector,
-    ) -> Result<Account, ErrorObjectOwned>;
+        actor_state_selector: Actor,
+    ) -> Result<Option<Account>, ErrorObjectOwned>;
 
+    #[method(name = "getPublications")]
+    async fn get_publications(
+        &self,
+        from_position: CommitmentPosition,
+        limit: PageLimit,
+    ) -> Result<PublicationsPage, ErrorObjectOwned>;
+
+    #[method(name = "getMessagePath")]
+    async fn get_message_path(
+        &self,
+        position: CommitmentPosition,
+    ) -> Result<Option<MembershipProof>, ErrorObjectOwned>;
+
+    #[method(name = "getRecoveryBinding")]
+    async fn get_recovery_binding(
+        &self,
+        address: AccountId,
+    ) -> Result<Option<EncryptedNote>, ErrorObjectOwned>;
+
+    /// The membership paths of `commitments` and of the message leaves at `message_positions`,
+    /// all under the root returned with them.
     #[method(name = "getProofsAndRoot")]
     async fn get_proofs_and_root(
         &self,
         commitments: Vec<Commitment>,
-    ) -> Result<(Vec<Option<MembershipProof>>, CommitmentSetDigest), ErrorObjectOwned>;
+        message_positions: Vec<CommitmentPosition>,
+    ) -> Result<
+        (
+            Vec<Option<MembershipProof>>,
+            Vec<Option<MembershipProof>>,
+            CommitmentSetDigest,
+        ),
+        ErrorObjectOwned,
+    >;
 
     #[method(name = "getAccount")]
-    async fn get_account(&self, account_id: AccountId) -> Result<Account, ErrorObjectOwned>;
+    async fn get_account(&self, account_id: AccountId)
+    -> Result<Option<Account>, ErrorObjectOwned>;
 
     #[method(name = "getProgramIds")]
     async fn get_program_ids(&self) -> Result<BTreeMap<String, ProgramId>, ErrorObjectOwned>;
@@ -104,28 +154,15 @@ pub trait Rpc {
     #[method(name = "getChannelId")]
     async fn get_channel_id(&self) -> Result<ChannelId, ErrorObjectOwned>;
 
-    /// The cross-zone deliveries this sequencer has given up on.
-    ///
-    /// Its own method rather than folded into `checkHealth`: one undeliverable
-    /// peer message must not read as an unhealthy node.
-    #[method(name = "getCrossZoneDeadLetters")]
-    async fn get_cross_zone_dead_letters(
-        &self,
-    ) -> Result<CrossZoneDeadLetterReport, ErrorObjectOwned>;
+    /// What the sequencer is doing: bootstrapping from the channel, or online.
+    #[method(name = "getSequencerStatus")]
+    async fn get_sequencer_status(&self) -> Result<SequencerStatus, ErrorObjectOwned>;
 
-    /// Restores a dead-lettered cross-zone delivery to the pending list, with a
-    /// clean attempt count.
-    ///
-    /// The operator move once the cause of the failures has cleared: a raised
-    /// mint cap, a fixed target program. A delivery that fails again is
-    /// dead-lettered again.
-    ///
-    /// Like the rest of this surface it carries no authentication, so anyone
-    /// who can reach the RPC can requeue; the blast radius is bounded to
-    /// re-attempting deliveries this node already accepted from a peer.
-    #[method(name = "requeueCrossZoneDeadLetter")]
-    async fn requeue_cross_zone_dead_letter(
-        &self,
-        message_key: HashType,
-    ) -> Result<CrossZoneDeadLetterRequeue, ErrorObjectOwned>;
+    /// Hands the node a committee member's approval of a `system_upgrader` change: a borsh
+    /// `SignedApproval`, as `approve_system_change` prints it.
+    #[method(name = "submitSystemApproval")]
+    async fn submit_system_approval(&self, approval: HexBytes) -> Result<(), ErrorObjectOwned>;
+
+    #[method(name = "getSystemProposals")]
+    async fn get_system_proposals(&self) -> Result<SystemProposalReport, ErrorObjectOwned>;
 }

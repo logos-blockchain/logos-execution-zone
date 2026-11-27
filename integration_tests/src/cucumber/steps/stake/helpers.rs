@@ -5,19 +5,17 @@ use std::time::Duration;
 
 use common::HashType;
 use futures::future::try_join_all;
-use lee::{Account, AccountId, PublicKey};
-use lee_core::{
-    account::ShardData, native_token::NATIVE_TOKEN_PROGRAM_ID, program::InstructionData,
-};
+use lee::{Account, AccountId, test_utils::TestSigner};
+use lee_core::{account::ActorState, program::MessageData};
 use sequencer_service_rpc::RpcClient as _;
-use sequencer_stake_core::{SequencerEntry, SequencerKey, SequencerStakeConfig};
+use sequencer_stake_core::{SequencerEntry, SequencerKey, SequencerStakeConfig, stake_funds_seed};
 use wallet::{AccountIdentity, AccountMention};
 
 use super::super::wait_until;
 use crate::cucumber::{
     context::LezScenarioContext,
     error::{StepError, StepResult},
-    stake_scenario::{AccountsSnapshot, SubmissionRecord, stake_instruction, transfer_instruction},
+    stake_scenario::{AccountsSnapshot, SubmissionRecord, stake_message, transfer_message},
     world::CucumberWorld,
 };
 
@@ -38,12 +36,15 @@ pub(super) async fn get_account(
         .sequencer_client()
         .get_account(account_id)
         .await
+        .map(Option::unwrap_or_default)
         .map_err(StepError::query_failed)
 }
 
-/// The `sequencer_stake` shard of `account`.
-pub(super) fn stake_shard(account: &Account) -> &ShardData {
-    account.data.shard(programs::sequencer_stake_account_id())
+/// The `sequencer_stake` actor state of `account`.
+pub(super) fn stake_state(account: &Account) -> &ActorState {
+    account
+        .data
+        .actor_state(programs::sequencer_stake_account_id())
 }
 
 /// The native balance of `account`.
@@ -61,24 +62,27 @@ pub(super) async fn has_stake_record(
     context: &LezScenarioContext,
     ownership_id: AccountId,
 ) -> Result<bool, StepError> {
-    Ok(!stake_shard(&get_account(context, ownership_id).await?).is_empty())
+    Ok(!stake_state(&get_account(context, ownership_id).await?).is_empty())
 }
 
-/// The standard `Stake` account list: signing funding and ownership accounts,
-/// then the unsigned stake funds PDA of the ownership account and the unsigned
-/// config account.
+/// The accounts a `Stake` reaches, as the wallet's staking facade declares them: the signing
+/// ownership account's stake actor, which the message is delivered to, the stake funds PDA of the
+/// ownership account, the signing funding account and the unsigned config account.
 pub(super) fn stake_accounts(
     funding_id: AccountId,
     ownership_id: AccountId,
 ) -> Vec<AccountMention> {
     let stake_id = programs::sequencer_stake_account_id();
     vec![
+        AccountIdentity::Public(ownership_id).select_program_actor_state(stake_id),
+        AccountIdentity::PublicPda {
+            program: stake_id,
+            seed: stake_funds_seed(&ownership_id),
+        }
+        .balance(),
         AccountIdentity::Public(funding_id).balance(),
-        AccountIdentity::Public(ownership_id).select_program_shard(stake_id),
-        AccountIdentity::PublicNoSign(system_accounts::stake_funds_account_id(&ownership_id))
-            .balance(),
         AccountIdentity::PublicNoSign(system_accounts::sequencer_stake_config_account_id())
-            .select_program_shard(stake_id),
+            .select_program_actor_state(stake_id),
     ]
 }
 
@@ -91,7 +95,7 @@ pub(super) async fn stake_config(
         system_accounts::sequencer_stake_config_account_id(),
     )
     .await?;
-    SequencerStakeConfig::from_bytes(stake_shard(&account).as_ref()).ok_or_else(|| {
+    SequencerStakeConfig::from_bytes(stake_state(&account).as_ref()).ok_or_else(|| {
         StepError::LogicalError {
             message: "the config account does not decode as a SequencerStakeConfig".to_owned(),
         }
@@ -119,9 +123,7 @@ async fn configured_public_accounts(
     let existing = context.existing_public_accounts().await?;
     Ok(crate::config::default_public_accounts_for_wallet()
         .iter()
-        .map(|(private_key, _balance)| {
-            AccountId::from(&PublicKey::new_from_private_key(private_key))
-        })
+        .map(|(private_key, _balance)| TestSigner::from(private_key).account_id())
         .filter(|account_id| existing.contains(account_id))
         .collect())
 }
@@ -169,19 +171,19 @@ pub(super) async fn scenario_snapshot(
     Ok(AccountsSnapshot::new(accounts))
 }
 
-/// Snapshots the touchable accounts, submits one transaction through the
-/// scenario wallet and records it for the inclusion/non-inclusion assertions.
+/// Snapshots the touchable accounts, submits one transaction delivering
+/// `message` to the first of `accounts` through the scenario wallet and records
+/// it for the inclusion/non-inclusion assertions.
 pub(super) async fn submit_and_record(
     world: &mut CucumberWorld,
     accounts: Vec<AccountMention>,
-    instruction_data: InstructionData,
-    program_id: AccountId,
+    message: MessageData,
     amount: u128,
 ) -> StepResult {
     let snapshot = scenario_snapshot(world).await?;
     let context = world.lez()?;
     let hash = context
-        .send_program_transaction(accounts, instruction_data, program_id)
+        .send_program_transaction(accounts, 0, message)
         .await?;
     // Mempool admission is synchronous with the send reply, so a tip read
     // here is at or past the admission point and the non-inclusion window is
@@ -242,8 +244,8 @@ async fn submit_canary(context: &LezScenarioContext) -> Result<HashType, StepErr
                 AccountIdentity::Public(donor).balance(),
                 AccountIdentity::PublicNoSign(recipient).balance(),
             ],
-            transfer_instruction(CANARY_AMOUNT)?,
-            NATIVE_TOKEN_PROGRAM_ID,
+            0,
+            transfer_message(recipient, CANARY_AMOUNT)?,
         )
         .await
 }
@@ -313,8 +315,8 @@ pub(super) async fn submit_accepted_stake(
     let hash = context
         .send_program_transaction(
             stake_accounts(funding_id, ownership_id),
-            stake_instruction(sequencer_key, amount, has_record)?,
-            programs::sequencer_stake_account_id(),
+            0,
+            stake_message(sequencer_key, amount, has_record, funding_id)?,
         )
         .await?;
     wait_for_inclusion(context, hash, timeout).await?;

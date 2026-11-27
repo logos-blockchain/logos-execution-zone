@@ -8,11 +8,14 @@ use std::{
 use anyhow::{Context as _, anyhow};
 use async_trait::async_trait;
 use common::HashType;
-use lee::{AccountId, PrivateKey, PublicKey};
-use lee_core::program::InstructionData;
+use lee::{AccountId, signature::PublicAccountSecret};
+use lee_core::{program::MessageData, signing_key::SigningKeyState};
+use logos_blockchain_zone_sdk::{
+    testing_framework_app::{AppDeployment, AppHostEnv, DeployContext},
+    testing_framework_core::scenario::DynError,
+};
+use sequencer_service_rpc::SequencerClient;
 use tempfile::TempDir;
-use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext};
-use testing_framework_core::scenario::DynError;
 use tokio::sync::{mpsc, oneshot};
 use wallet::{
     AccountIdentity, AccountMention, WalletCore,
@@ -22,7 +25,7 @@ use wallet::{
         programs::native_token_transfer::AuthTransferSubcommand,
     },
     config::WalletConfigOverrides,
-    program_facades::native_token_transfer::NativeTokenTransfer,
+    program_facades::{CreditDelivery, native_token_transfer::NativeTokenTransfer},
 };
 
 use super::LezSequencerClient;
@@ -32,7 +35,7 @@ use crate::{
 };
 
 struct WalletComponents {
-    wallet: WalletCore,
+    wallet: WalletCore<SequencerClient>,
     _state_dir: Option<TempDir>,
     password: String,
 }
@@ -52,9 +55,9 @@ enum WalletRequest {
         account_id: AccountId,
         response: oneshot::Sender<Result<Option<lee_core::Commitment>, String>>,
     },
-    PublicAccountSigningKey {
+    PublicAccountInitialKey {
         account_id: AccountId,
-        response: oneshot::Sender<Result<Option<PublicKey>, String>>,
+        response: oneshot::Sender<Result<Option<SigningKeyState>, String>>,
     },
     FirstPublicAccount {
         response: oneshot::Sender<Result<Option<AccountId>, String>>,
@@ -102,8 +105,8 @@ enum WalletRequest {
     },
     SendProgramTransaction {
         accounts: Vec<AccountMention>,
-        instruction_data: InstructionData,
-        program_id: AccountId,
+        root: usize,
+        message: MessageData,
         response: oneshot::Sender<Result<HashType, String>>,
     },
     WalletPassword {
@@ -173,15 +176,13 @@ impl WalletActor {
                                     .get_private_account_commitment(account_id);
                                 let _unused = response.send(Ok(commitment));
                             }
-                            WalletRequest::PublicAccountSigningKey {
+                            WalletRequest::PublicAccountInitialKey {
                                 account_id,
                                 response,
                             } => {
-                                let public_key = components
-                                    .wallet
-                                    .get_account_public_signing_key(account_id)
-                                    .map(PublicKey::new_from_private_key);
-                                let _unused = response.send(Ok(public_key));
+                                let initial_key =
+                                    components.wallet.get_account_initial_key(account_id);
+                                let _unused = response.send(Ok(initial_key));
                             }
                             WalletRequest::FirstPublicAccount { response } => {
                                 let account = components
@@ -211,7 +212,7 @@ impl WalletActor {
                                         to_npk: None,
                                         to_vpk: None,
                                         to_keys: None,
-                                        to_identifier: Some(lee_core::Identifier::ZERO),
+                                        to_initial_key: None,
                                         amount,
                                     }),
                                 )
@@ -242,12 +243,14 @@ impl WalletActor {
                                 response,
                             } => {
                                 let result = NativeTokenTransfer(&components.wallet)
-                                    .send_public_transfer(
+                                    .transfer(
                                         AccountIdentity::Public(from),
                                         AccountIdentity::Public(to),
                                         amount,
+                                        CreditDelivery::Automatic,
                                     )
-                                    .await;
+                                    .await
+                                    .map(|(tx_hash, _)| tx_hash);
                                 let _unused = response.send(result);
                             }
                             WalletRequest::PrivateTransfer {
@@ -268,7 +271,7 @@ impl WalletActor {
                                         to_npk: None,
                                         to_vpk: None,
                                         to_keys: None,
-                                        to_identifier: Some(lee_core::Identifier::ZERO),
+                                        to_initial_key: None,
                                         amount,
                                     }),
                                 )
@@ -318,11 +321,12 @@ impl WalletActor {
                                 response,
                             } => {
                                 let result = async {
-                                    let tx_hash = NativeTokenTransfer(&components.wallet)
-                                        .send_public_transfer(
+                                    let (tx_hash, _) = NativeTokenTransfer(&components.wallet)
+                                        .transfer(
                                             AccountIdentity::Public(from),
                                             AccountIdentity::Public(to),
                                             amount,
+                                            CreditDelivery::Automatic,
                                         )
                                         .await
                                         .map_err(|error| anyhow!(error.to_string()))?;
@@ -374,7 +378,7 @@ impl WalletActor {
                                         to_npk: None,
                                         to_vpk: None,
                                         to_keys: None,
-                                        to_identifier: Some(lee_core::Identifier::ZERO),
+                                        to_initial_key: None,
                                         amount,
                                     }),
                                 )
@@ -400,13 +404,13 @@ impl WalletActor {
                             }
                             WalletRequest::SendProgramTransaction {
                                 accounts,
-                                instruction_data,
-                                program_id,
+                                root,
+                                message,
                                 response,
                             } => {
                                 let result = components
                                     .wallet
-                                    .send_pub_tx(accounts, instruction_data, program_id)
+                                    .send_pub_tx(accounts, root, message)
                                     .await
                                     .map_err(|error| format!("{error:?}"));
                                 let _unused = response.send(result);
@@ -439,7 +443,7 @@ pub struct LezRuntime {
 
 impl LezRuntime {
     fn new(
-        wallet: WalletCore,
+        wallet: WalletCore<SequencerClient>,
         state_dir: Option<TempDir>,
         password: String,
     ) -> Result<Self, DynError> {
@@ -511,12 +515,12 @@ impl LezRuntime {
         .await
     }
 
-    /// Returns the public signing key for an imported public account.
-    pub async fn public_account_signing_key(
+    /// Returns the initial key of a held public account.
+    pub async fn public_account_initial_key(
         &self,
         account_id: AccountId,
-    ) -> Result<Option<PublicKey>, DynError> {
-        self.request(|response| WalletRequest::PublicAccountSigningKey {
+    ) -> Result<Option<SigningKeyState>, DynError> {
+        self.request(|response| WalletRequest::PublicAccountInitialKey {
             account_id,
             response,
         })
@@ -643,13 +647,13 @@ impl LezRuntime {
     pub async fn send_program_transaction(
         &self,
         accounts: Vec<AccountMention>,
-        instruction_data: InstructionData,
-        program_id: AccountId,
+        root: usize,
+        message: MessageData,
     ) -> Result<HashType, DynError> {
         self.request(|response| WalletRequest::SendProgramTransaction {
             accounts,
-            instruction_data,
-            program_id,
+            root,
+            message,
             response,
         })
         .await
@@ -702,7 +706,7 @@ impl LezRuntime {
 #[derive(Clone)]
 pub struct WalletApp {
     sequencer_addr: SocketAddr,
-    public_accounts: Vec<(PrivateKey, u128)>,
+    public_accounts: Vec<(PublicAccountSecret, u128)>,
     private_accounts: Vec<InitialPrivateAccountForWallet>,
     state_dir: Option<PathBuf>,
     initialize_private_accounts: bool,
@@ -757,7 +761,7 @@ impl AppDeployment<AppHostEnv> for WalletApp {
         // dedicated blocking thread/runtime; scenario operations use the
         // actor below and never create nested runtimes.
         let (wallet, state_dir, password) = tokio::task::spawn_blocking(
-            move || -> anyhow::Result<(WalletCore, Option<TempDir>, String)> {
+            move || -> anyhow::Result<(WalletCore<SequencerClient>, Option<TempDir>, String)> {
                 let runtime = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
@@ -792,6 +796,8 @@ impl AppDeployment<AppHostEnv> for WalletApp {
                             },
                         )?;
                     let mut wallet = wallet;
+                    // Scenarios submit invalid transactions on purpose, for the chain to reject.
+                    wallet.set_allow_revert(true);
                     if initialize_private_account_funding {
                         fund_private_accounts(&mut wallet, &public_accounts, &private_accounts)
                             .await

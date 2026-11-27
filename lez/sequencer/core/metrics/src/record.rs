@@ -47,8 +47,6 @@ impl From<common::transaction::TxKind> for TxKind {
 pub fn init() {
     blocks_produced_total_counter().increment(0);
     mempool_failed_transactions_total_counter().increment(0);
-    cross_zone_dispatches_retired_total_counter().increment(0);
-    record_cross_zone_dead_letter_dispatches(0);
     record_mempool_size(0);
     record_chain_height(0);
 
@@ -89,7 +87,7 @@ pub fn record_chain_height(height: u64) {
 
 fn blocks_produced_total_counter() -> Counter {
     counter!(
-        description: "Number of blocks produced by this sequencer and applied to the head",
+        description: "Number of blocks produced by this sequencer and finalized on the channel",
         unit: Unit::Count,
         names::BLOCKS_PRODUCED_TOTAL
     )
@@ -97,6 +95,15 @@ fn blocks_produced_total_counter() -> Counter {
 
 pub fn increment_blocks_produced_total() {
     blocks_produced_total_counter().increment(1);
+}
+
+pub fn record_mempool_pending_slots(slots: usize) {
+    gauge!(
+        description: "Pending (account, nonce) slots the mempool holds",
+        unit: Unit::Count,
+        names::MEMPOOL_PENDING_SLOTS
+    )
+    .set(u64::try_from(slots).expect("Pending slot count should fit into u64") as f64);
 }
 
 pub fn record_mempool_size(size: usize) {
@@ -165,39 +172,4 @@ fn mempool_failed_transactions_total_counter() -> Counter {
 
 pub fn increment_mempool_failed_transactions_total() {
     mempool_failed_transactions_total_counter().increment(1);
-}
-
-fn cross_zone_dispatches_retired_total_counter() -> Counter {
-    counter!(
-        description: "Cross-zone deliveries this sequencer gave up on after repeated execution failures",
-        unit: Unit::Count,
-        names::CROSS_ZONE_DISPATCHES_RETIRED_TOTAL
-    )
-}
-
-pub fn increment_cross_zone_dispatches_retired_total() {
-    cross_zone_dispatches_retired_total_counter().increment(1);
-}
-
-/// Whether the watcher for `peer` (a hex zone id) is suspended on the
-/// committee floor. A gauge so it falls again on recovery.
-pub fn record_cross_zone_peer_committee_suspended(peer: String, suspended: bool) {
-    gauge!(
-        description: "1 while a cross-zone peer watcher is suspended because the peer committee is below the configured floor",
-        unit: Unit::Count,
-        names::CROSS_ZONE_PEER_COMMITTEE_SUSPENDED,
-        "peer" => peer
-    )
-    .set(if suspended { 1.0 } else { 0.0 });
-}
-
-/// Retained dead letters. A gauge, not a counter: eviction and reconciliation
-/// make this fall as well as rise.
-pub fn record_cross_zone_dead_letter_dispatches(count: usize) {
-    gauge!(
-        description: "Given-up-on cross-zone deliveries currently retained for inspection",
-        unit: Unit::Count,
-        names::CROSS_ZONE_DEAD_LETTER_DISPATCHES
-    )
-    .set(u64::try_from(count).expect("Dead letter count should fit into u64") as f64);
 }

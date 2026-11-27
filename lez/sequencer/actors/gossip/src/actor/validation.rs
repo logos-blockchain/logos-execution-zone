@@ -3,20 +3,32 @@
 //! The same stateless admission the RPC performs, minus mempool/seen-cache
 //! side effects (those live in the gossip actor). Testable without a swarm.
 
+use std::collections::HashSet;
+
 use common::transaction::LeeTransaction;
-use sequencer_channel_config_actor::Wire;
-use sequencer_core::{config::BLOCK_OVERHEAD, gossip::AccreditedKeys};
-use sequencer_slasher_actor::Approval;
+use sequencer_channel_signing_actor::protocol::Wire;
+use sequencer_core::config::BLOCK_OVERHEAD;
+use sequencer_slasher_actor::protocol::Approval;
+use system_upgrader_core::SignedApproval;
 
 #[derive(Debug)]
 // `Accept` is intentionally left unboxed: it is the common outcome and the enum
 // is short-lived per gossiped message, so boxing it would only add a heap
 // allocation on the hot validation path.
 pub enum TxEvaluation {
-    /// Structurally valid and authenticated; forward and admit.
-    Accept(LeeTransaction),
+    /// Structurally valid; forward and admit, where its signatures are verified.
+    Accept(Box<LeeTransaction>),
     /// Malformed / forbidden; do not forward. `GossipSub` peer scoring is not
     /// configured, so this does not currently penalize the propagating peer.
+    Reject(String),
+}
+
+#[derive(Debug)]
+pub enum SystemApprovalEvaluation {
+    /// Correctly signed by an accredited key; forward and hand to the approval pool.
+    Accept(SignedApproval),
+    /// Nothing this node can use, but not the sender's fault.
+    Ignore(String),
     Reject(String),
 }
 
@@ -31,7 +43,7 @@ pub enum ApprovalEvaluation {
 
 #[derive(Debug)]
 pub enum ConfigEvaluation {
-    /// From a channel key; forward and hand to the channel-config actor.
+    /// From a channel key; forward and hand to the channel-signing actor.
     Accept(Wire),
     /// Nothing this node can use, but not the sender's fault.
     Ignore(String),
@@ -39,8 +51,9 @@ pub enum ConfigEvaluation {
 }
 
 /// Decodes and stateless-checks a gossiped transaction the same way the RPC
-/// admits a submitted one: size check, signature/witness check, then the
-/// sequencer-only-program guard.
+/// admits a submitted one: size check, witness structure check, then the
+/// sequencer-only-program guard. Signatures need the head state: the
+/// executor verifies them when the transaction is submitted.
 #[must_use]
 pub fn evaluate_transaction(data: &[u8], max_block_size: u64) -> TxEvaluation {
     let tx_size = u64::try_from(data.len()).unwrap_or(u64::MAX);
@@ -54,18 +67,18 @@ pub fn evaluate_transaction(data: &[u8], max_block_size: u64) -> TxEvaluation {
         Err(err) => return TxEvaluation::Reject(format!("undecodable transaction: {err}")),
     };
 
-    let authenticated = match tx.transaction_stateless_check() {
+    let checked = match tx.transaction_stateless_check() {
         Ok(tx) => tx,
         Err(err) => return TxEvaluation::Reject(format!("stateless check failed: {err:?}")),
     };
 
-    if let LeeTransaction::Public(public_tx) = &authenticated
-        && sequencer_core::is_sequencer_only_program(public_tx.message().program_account_id)
+    if let Some((to, _)) = checked.public_call()
+        && sequencer_core::is_sequencer_only_program(to.program_account_id)
     {
         return TxEvaluation::Reject("sequencer-only program".to_owned());
     }
 
-    TxEvaluation::Accept(authenticated)
+    TxEvaluation::Accept(Box::new(checked))
 }
 
 /// Decodes a gossiped slash approval, drops it if the committee does not
@@ -79,7 +92,7 @@ pub fn evaluate_transaction(data: &[u8], max_block_size: u64) -> TxEvaluation {
 pub fn evaluate_approval(
     data: &[u8],
     channel_id: [u8; 32],
-    accredited_keys: Option<&AccreditedKeys>,
+    accredited_keys: Option<&HashSet<[u8; 32]>>,
 ) -> ApprovalEvaluation {
     let approval: Approval = match borsh::from_slice(data) {
         Ok(approval) => approval,
@@ -97,6 +110,33 @@ pub fn evaluate_approval(
     }
 }
 
+/// Decodes a gossiped `system_upgrader` approval, drops it if the committee does not accredit the
+/// key it names, then checks its signature. Accreditation comes first, as for slash approvals, so a
+/// minted key buys no signature check. Expiry is left to the pool, which knows the head.
+#[must_use]
+pub fn evaluate_system_approval(
+    data: &[u8],
+    channel_id: [u8; 32],
+    accredited_keys: Option<&HashSet<[u8; 32]>>,
+) -> SystemApprovalEvaluation {
+    let signed: SignedApproval = match borsh::from_slice(data) {
+        Ok(signed) => signed,
+        Err(err) => {
+            return SystemApprovalEvaluation::Reject(format!("undecodable approval: {err}"));
+        }
+    };
+
+    if accredited_keys.is_some_and(|keys| !keys.contains(&signed.approval.signer.to_bytes())) {
+        return SystemApprovalEvaluation::Ignore("signer is not an accredited key".to_owned());
+    }
+
+    if system_upgrader_core::verify_approval(&signed.approval, channel_id, &signed.proposal) {
+        SystemApprovalEvaluation::Accept(signed)
+    } else {
+        SystemApprovalEvaluation::Reject("approval signature does not verify".to_owned())
+    }
+}
+
 /// Decodes a gossiped channel-config message and drops it unless `origin`
 /// has stake on record.
 ///
@@ -109,7 +149,7 @@ pub fn evaluate_approval(
 pub fn evaluate_config_message(
     data: &[u8],
     origin: Option<[u8; 32]>,
-    staked_keys: Option<&AccreditedKeys>,
+    staked_keys: Option<&HashSet<[u8; 32]>>,
 ) -> ConfigEvaluation {
     let Some(message) = Wire::decode(data) else {
         return ConfigEvaluation::Reject("undecodable channel-config message".to_owned());
@@ -127,10 +167,13 @@ pub fn evaluate_config_message(
 
 #[cfg(test)]
 mod tests {
-    use logos_blockchain_core::proofs::channel_multi_sig_proof::IndexedSignature;
-    use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-    use sequencer_channel_config_actor::Signature;
-    use sequencer_slasher_actor::Offence;
+    use lee::test_utils::TestSigner;
+    use logos_blockchain_zone_sdk::{
+        core::proofs::channel_multi_sig_proof::IndexedSignature,
+        key_management_system_service::keys::Ed25519Key,
+    };
+    use sequencer_channel_signing_actor::protocol::Signature;
+    use sequencer_slasher_actor::protocol::Offence;
     use sequencer_stake_core::SequencerKey;
     use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_user_accounts};
 
@@ -162,7 +205,7 @@ mod tests {
     #[test]
     fn an_unaccredited_signer_is_ignored_without_verifying() {
         let (bytes, _) = signed_approval([5; 32]);
-        let accredited_keys = AccreditedKeys::from([[1; 32]]);
+        let accredited_keys = HashSet::from([[1; 32]]);
         // Correctly signed, so only the accreditation check can drop it.
         assert!(matches!(
             evaluate_approval(&bytes, CHANNEL, Some(&accredited_keys)),
@@ -170,10 +213,58 @@ mod tests {
         ));
     }
 
+    /// A `system_upgrader` approval by `secret`, encoded as gossiped, and the signer's key.
+    fn signed_system_approval(secret: [u8; 32], valid_until: u64) -> (Vec<u8>, [u8; 32]) {
+        use sequencer_stake_core::ed25519_dalek::{Signer as _, SigningKey};
+        use system_upgrader_core::{Approval, Proposal, SystemProgramName, approval_message};
+
+        let key = SigningKey::from_bytes(&secret);
+        let signer = key.verifying_key().to_bytes();
+        let proposal = Proposal::Install {
+            name: SystemProgramName::new(b"new"),
+            first_segment: lee::AccountId::new([9; 32]),
+            image_id: [7; 8],
+            immutable: false,
+        };
+        let signed = SignedApproval {
+            proposal,
+            approval: Approval {
+                signer: sequencer_stake_core::SequencerKey::new(signer).unwrap(),
+                valid_until,
+                signature: key
+                    .sign(&approval_message(CHANNEL, &proposal, valid_until))
+                    .to_bytes()
+                    .to_vec(),
+            },
+        };
+        (borsh::to_vec(&signed).unwrap(), signer)
+    }
+
+    #[test]
+    fn system_approvals_are_screened_by_accreditation_then_signature() {
+        let (bytes, signer) = signed_system_approval([5; 32], 40);
+        assert!(matches!(
+            evaluate_system_approval(&bytes, CHANNEL, Some(&HashSet::from([signer]))),
+            SystemApprovalEvaluation::Accept(_)
+        ));
+        assert!(matches!(
+            evaluate_system_approval(&bytes, CHANNEL, Some(&HashSet::from([[1; 32]]))),
+            SystemApprovalEvaluation::Ignore(_)
+        ));
+        assert!(matches!(
+            evaluate_system_approval(&bytes, [6; 32], Some(&HashSet::from([signer]))),
+            SystemApprovalEvaluation::Reject(_)
+        ));
+        assert!(matches!(
+            evaluate_system_approval(&[0xff], CHANNEL, None),
+            SystemApprovalEvaluation::Reject(_)
+        ));
+    }
+
     #[test]
     fn an_accredited_signer_is_accepted() {
         let (bytes, signer) = signed_approval([5; 32]);
-        let accredited_keys = AccreditedKeys::from([signer]);
+        let accredited_keys = HashSet::from([signer]);
         assert!(matches!(
             evaluate_approval(&bytes, CHANNEL, Some(&accredited_keys)),
             ApprovalEvaluation::Accept(_)
@@ -193,7 +284,7 @@ mod tests {
     fn a_committee_accrediting_nobody_filters_everything() {
         let (bytes, _) = signed_approval([5; 32]);
         assert!(matches!(
-            evaluate_approval(&bytes, CHANNEL, Some(&AccreditedKeys::new())),
+            evaluate_approval(&bytes, CHANNEL, Some(&HashSet::new())),
             ApprovalEvaluation::Ignore(_)
         ));
     }
@@ -201,8 +292,8 @@ mod tests {
     fn valid_transaction() -> LeeTransaction {
         let acc1 = initial_public_user_accounts()[0].account_id;
         let acc2 = initial_public_user_accounts()[1].account_id;
-        let sign_key1 = initial_pub_accounts_private_keys()[0].pub_sign_key.clone();
-        common::test_utils::create_transaction_native_token_transfer(acc1, 0, acc2, 10, &sign_key1)
+        let signer1 = TestSigner::from(&initial_pub_accounts_private_keys()[0].secret);
+        common::test_utils::create_transaction_native_token_transfer(acc1, 0, acc2, 10, &signer1)
     }
 
     #[test]
@@ -212,6 +303,30 @@ mod tests {
         assert!(matches!(
             evaluate_transaction(&bytes, 1 << 20),
             TxEvaluation::Accept(_)
+        ));
+    }
+
+    #[test]
+    fn a_system_upgrader_tx_from_a_peer_is_rejected() {
+        let registry = system_upgrader_core::registry_actor();
+        let message = lee::public_transaction::Message::try_new(
+            registry,
+            lee::test_utils::signed_by([registry], []),
+            std::collections::BTreeMap::new(),
+            system_upgrader_core::Message::Apply {
+                name: system_upgrader_core::SystemProgramName::new(b"clock"),
+                activation_height: 1,
+            },
+        )
+        .unwrap();
+        let tx = LeeTransaction::Public(lee::PublicTransaction::new(
+            message,
+            lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+        ));
+        let bytes = borsh::to_vec(&tx).unwrap();
+        assert!(matches!(
+            evaluate_transaction(&bytes, 1 << 20),
+            TxEvaluation::Reject(reason) if reason == "sequencer-only program"
         ));
     }
 
@@ -245,7 +360,7 @@ mod tests {
 
     #[test]
     fn a_config_message_from_a_staked_key_is_accepted() {
-        let staked_keys = AccreditedKeys::from([[1; 32], [2; 32]]);
+        let staked_keys = HashSet::from([[1; 32], [2; 32]]);
         assert!(matches!(
             evaluate_config_message(&config_bytes(), Some([2; 32]), Some(&staked_keys)),
             ConfigEvaluation::Accept(_)
@@ -254,7 +369,7 @@ mod tests {
 
     #[test]
     fn a_config_message_from_a_key_without_stake_is_ignored() {
-        let staked_keys = AccreditedKeys::from([[1; 32]]);
+        let staked_keys = HashSet::from([[1; 32]]);
         assert!(matches!(
             evaluate_config_message(&config_bytes(), Some([9; 32]), Some(&staked_keys)),
             ConfigEvaluation::Ignore(_)
@@ -263,7 +378,7 @@ mod tests {
 
     #[test]
     fn an_anonymous_config_message_is_ignored_once_stake_is_known() {
-        let staked_keys = AccreditedKeys::from([[1; 32]]);
+        let staked_keys = HashSet::from([[1; 32]]);
         assert!(matches!(
             evaluate_config_message(&config_bytes(), None, Some(&staked_keys)),
             ConfigEvaluation::Ignore(_)
@@ -280,7 +395,7 @@ mod tests {
 
     #[test]
     fn an_undecodable_config_message_is_rejected() {
-        let staked_keys = AccreditedKeys::from([[1; 32]]);
+        let staked_keys = HashSet::from([[1; 32]]);
         assert!(matches!(
             evaluate_config_message(&[99, 1, 2], Some([1; 32]), Some(&staked_keys)),
             ConfigEvaluation::Reject(_)

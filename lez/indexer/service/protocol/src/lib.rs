@@ -103,16 +103,17 @@ pub struct Account {
     pub data: AccountData,
 }
 
-/// An account's balance and program shards.
+/// An account's balance and program actor states.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct AccountData {
-    pub shards: BTreeMap<AccountId, ShardData>,
+    pub actor_states: BTreeMap<AccountId, ActorState>,
 }
 
 impl AccountData {
     #[must_use]
     pub fn balance(&self) -> Option<u128> {
-        let Some(ShardData(data)) = self.shards.get(&AccountId::native_token_program()) else {
+        let Some(ActorState(data)) = self.actor_states.get(&AccountId::native_token_program())
+        else {
             return Some(0);
         };
         if data.is_empty() {
@@ -132,34 +133,34 @@ impl AccountId {
     }
 }
 
-/// An account's balance and nonce with one entry per shard, carrying each shard's
+/// An account's balance and nonce with one entry per actor state, carrying each actor state's
 /// size instead of its bytes.
 ///
-/// Nothing bounds how many shards an account holds or how large each one is, so a
+/// Nothing bounds how many actor states an account holds or how large each one is, so a
 /// whole-account read is not a safe way to enumerate them: any third party can write
-/// its own shard onto any account, and enough of them push the response past the
+/// its own actor state onto any account, and enough of them push the response past the
 /// server's size cap for good. This answers "which programs hold state here, and how
-/// much" in a response whose size follows the shard count alone.
+/// much" in a response whose size follows the actor state count alone.
 ///
-/// `balance` is derived from the native-token shard, so it is `None` exactly when that
-/// shard is encoded non-canonically.
+/// `balance` is derived from the native-token actor state, so it is `None` exactly when that
+/// actor state is encoded non-canonically.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct AccountSummary {
     pub nonce: Nonce,
     pub balance: Option<u128>,
-    pub shards: Vec<ShardSummary>,
+    pub actor_states: Vec<ActorStateSummary>,
 }
 
-/// One program's shard on an account, by size rather than content.
+/// One program's actor state on an account, by size rather than content.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct ShardSummary {
+pub struct ActorStateSummary {
     pub program_account_id: AccountId,
     pub len: u64,
 }
 
-/// Selects one of an account's program shards.
+/// Selects one of an account's program actor states.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct ProgramShardSelector {
+pub struct Actor {
     pub account_id: AccountId,
     pub program_account_id: AccountId,
 }
@@ -206,9 +207,56 @@ impl FromStr for Signature {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct BlockBody {
     pub transactions: Vec<Transaction>,
+    /// One per user transaction, parallel to `transactions`; the trailing fee and clock
+    /// transactions have none.
+    pub receipts: Vec<TransactionReceipt>,
+}
+
+/// See `common::block::FeeReceipt`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct FeeReceipt {
+    pub gas_exec: u64,
+    pub gas_stor: u64,
+    pub fee_base: u128,
+    pub tip: u128,
+    pub refund: u128,
+}
+
+/// See `common::block::TransactionReceipt`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct TransactionReceipt {
+    /// `true`: applied; `false`: the action reverted, and its fee was still charged.
+    pub success: bool,
+    /// All zeros for a fee-exempt transaction.
+    pub fee: FeeReceipt,
+}
+
+impl TransactionReceipt {
+    #[must_use]
+    pub const fn is_exempt(&self) -> bool {
+        let FeeReceipt {
+            gas_exec,
+            gas_stor,
+            fee_base,
+            tip,
+            refund,
+        } = self.fee;
+        gas_exec == 0 && gas_stor == 0 && fee_base == 0 && tip == 0 && refund == 0
+    }
+
+    /// What the payer paid: the base fee and the tip.
+    #[must_use]
+    pub const fn fee_paid(&self) -> u128 {
+        self.fee.fee_base.saturating_add(self.fee.tip)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "both variants are whole transactions whose bulk is on the heap; the inline \
+              difference is a few hundred bytes, and boxing one would touch every match"
+)]
 pub enum Transaction {
     Public(PublicTransaction),
     PrivacyPreserving(PrivacyPreservingTransaction),
@@ -242,12 +290,12 @@ pub struct PrivacyPreservingTransaction {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PublicMessage {
-    pub program_account_id: AccountId,
-    pub shard_selectors: Vec<ProgramShardSelector>,
-    pub nonces: Vec<Nonce>,
-    pub instruction_data: InstructionData,
+    pub public_context: PublicExecutionContext,
+    pub root: RootCall,
     /// The fee declaration, or `None` for a fee-exempt (system) transaction.
     pub fee: Option<FeeDeclaration>,
+    pub nonces: Vec<(AccountId, Nonce)>,
+    pub admission_evidence: Vec<PublicAccountEvidence>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -258,22 +306,73 @@ pub struct FeeDeclaration {
     pub max_fee: u128,
 }
 
-pub type InstructionData = Vec<u8>;
-pub type EffectData = Vec<u8>;
+pub type MessageData = Vec<u8>;
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct PdaSeed(
+    #[serde(with = "base64::arr")]
+    #[schemars(with = "String", description = "base64-encoded PDA seed")]
+    pub [u8; 32],
+);
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct DeferredPublicEffect {
-    pub program_account_id: AccountId,
-    pub shard_program_account_id: AccountId,
-    pub data: EffectData,
+pub struct MessageEnvelope<S> {
+    pub from: S,
+    pub to: Actor,
+    pub message: MessageData,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct PublicActionWithID {
-    pub account_id: AccountId,
-    /// Ordered: settlement folds these onto the account's shards in this order, so any
-    /// representation of them has to keep it.
-    pub effects: Vec<DeferredPublicEffect>,
+pub struct RootCall {
+    pub to: Actor,
+    pub message: MessageData,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum PublicAccountEvidence {
+    /// The account's initial key.
+    Key(SigningKeyState),
+    Pda {
+        program: AccountId,
+        seed: PdaSeed,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct Delivery<S> {
+    pub envelope: MessageEnvelope<S>,
+    pub grants: Vec<Actor>,
+    pub pda_seeds: Vec<PdaSeed>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum BoundaryStep {
+    PrivateToPublic(Delivery<Actor>),
+    PublicToPrivate(Delivery<Actor>),
+    EndPrivateSubtree,
+    EndPublicSubtree,
+}
+
+pub type Boundary = Vec<BoundaryStep>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum Authority {
+    None,
+    Signer,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct DeclaredActor {
+    pub actor: Actor,
+    pub authority: Authority,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct PublicExecutionContext {
+    pub actors: Vec<DeclaredActor>,
+    pub authorized_accounts: Vec<AccountId>,
+    pub promotions: Vec<u64>,
+    pub private_signers: Vec<Actor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -284,22 +383,72 @@ pub struct PrivateAction {
     // to the nullifier in content. That is, the commitment's plaintext is
     // not necessarily the updated account state of the nullifier's plaintext.
     pub commitment: Commitment,
-    pub encrypted_post_state: EncryptedAccountData,
+    pub encrypted_post_state: EncryptedNote,
+}
+
+/// What a proof commits about its in-proof fee: the public refund target, the tip, and the
+/// payer's transition after the fee transfer alone, applied when the public part fails.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct ProvenFee {
+    pub refund_to: Option<AccountId>,
+    pub tip: u64,
+    pub fallback: Option<FeeFallback>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct FeeFallback {
+    /// The nullifier and root of the payer's private action.
+    pub nullifier: Nullifier,
+    pub root: CommitmentSetDigest,
+    pub commitment: Commitment,
+    /// The post-state's note, under the ephemeral key of the payer's private action.
+    pub ciphertext: Ciphertext,
+    pub boundary: Boundary,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PrivacyPreservingMessage {
-    pub public_actions: Vec<PublicActionWithID>,
-    pub nonces: Vec<Nonce>,
+    pub public_context: PublicExecutionContext,
+    pub boundary: Boundary,
+    pub async_messages: Vec<Publication>,
+    pub recovery_bindings: Vec<RecoveryBinding>,
+    pub public_root: Option<RootCall>,
+    pub nonces: Vec<(AccountId, Nonce)>,
     pub private_actions: Vec<PrivateAction>,
     pub block_validity_window: ValidityWindow,
     pub timestamp_validity_window: ValidityWindow,
+    pub admission_evidence: Vec<PublicAccountEvidence>,
+    /// The fee transfer's refund target and fallback, when the proof runs one.
+    pub proven_fee: Option<ProvenFee>,
+    /// The fee declaration, paid by a public signer instead of inside the proof.
+    pub fee: Option<FeeDeclaration>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct WitnessSet {
-    pub signatures_and_public_keys: Vec<(Signature, PublicKey)>,
+    pub entries: Vec<WitnessEntry>,
     pub proof: Option<Proof>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct WitnessEntry {
+    #[serde(with = "base64")]
+    #[schemars(with = "String", description = "base64-encoded authentication data")]
+    pub auth_data: Vec<u8>,
+    pub next: SigningKeyState,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct SigningKeyState {
+    pub key_type: KeyType,
+    #[serde(with = "base64::arr")]
+    #[schemars(with = "String", description = "base64-encoded key commitment")]
+    pub key_commitment: [u8; 32],
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum KeyType {
+    Schnorr,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -310,13 +459,28 @@ pub struct Proof(
 );
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct EncryptedAccountData {
-    pub ciphertext: Ciphertext,
-    pub epk: EphemeralPublicKey,
-    pub view_tag: ViewTag,
+pub struct RecoveryBinding {
+    pub address: AccountId,
+    pub note: EncryptedNote,
 }
 
-pub type ViewTag = u8;
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct SealedMessage {
+    pub commitment: Commitment,
+    pub note: EncryptedNote,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum Publication {
+    Clear(MessageEnvelope<Actor>),
+    Sealed(SealedMessage),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct EncryptedNote {
+    pub ciphertext: Ciphertext,
+    pub epk: EphemeralPublicKey,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct Ciphertext(
@@ -381,7 +545,7 @@ pub struct CommitmentSetDigest(
 );
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct ShardData(
+pub struct ActorState(
     #[serde(with = "base64")]
     #[schemars(with = "String", description = "base64-encoded account data")]
     pub Vec<u8>,
@@ -430,62 +594,11 @@ pub enum IndexerSyncState {
     /// Parked on a stall reason: the validated tip is frozen awaiting a valid
     /// continuation. See `last_error` and `stall_reason`.
     Stalled,
-    /// Ingestion ended on a cross-zone verdict. See `last_error` and
-    /// `cross_zone_halt`.
-    Halted,
     /// A state this client build does not know: a newer server added one.
     /// Treat it as "not known healthy" rather than failing to decode the
     /// snapshot.
     #[serde(other)]
     Unknown,
-}
-
-/// Durable record of a cross-zone verification halt: the local block whose
-/// dispatch failed re-derivation, the dispatch's source coordinates, and the
-/// verdict.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct CrossZoneHalt {
-    /// The local block whose dispatch failed.
-    pub block_id: BlockId,
-    pub block_hash: HashType,
-    /// Hex id of the dispatch's source zone.
-    pub src_zone: String,
-    pub src_block_id: u64,
-    pub src_tx_index: u32,
-    pub verdict: String,
-}
-
-/// Coarse health of one peer-zone reader.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub enum PeerHealth {
-    /// The last pass drained with no stall and the cursor at the channel tip.
-    Live,
-    /// No caught-up evidence yet.
-    Lagging,
-    /// Stuck on a slot it cannot read.
-    Holed,
-    /// The peer's live committee is below the configured floor; reading is
-    /// suspended until it recovers.
-    Suspended,
-    /// A verified-absence verdict was issued against this peer's chain.
-    Halted,
-    /// A health this client build does not know: a newer server added one.
-    /// Treat it as "not known healthy" rather than failing to decode the
-    /// snapshot.
-    #[serde(other)]
-    Unknown,
-}
-
-/// One peer reader's snapshot: how far the peer chain is verified, where the
-/// read cursor is, and a coarse health classification.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-pub struct PeerStatus {
-    /// Hex id of the peer zone.
-    pub zone: String,
-    pub verified_tip_block_id: Option<u64>,
-    pub cursor_slot: Option<u64>,
-    pub stuck_slot_attempts: u32,
-    pub health: PeerHealth,
 }
 
 /// Why the indexer could not apply an L2 block from the channel.
@@ -510,6 +623,12 @@ pub enum BlockIngestError {
     InvalidRewardTarget {
         reason: String,
     },
+    MisplacedSystemUpgraderTransaction {
+        tx_index: u64,
+    },
+    MissedSystemUpgrade {
+        name: String,
+    },
     InvalidFeeClass {
         tx_index: u64,
         reason: String,
@@ -526,11 +645,22 @@ pub enum BlockIngestError {
         reason: String,
     },
     NonPublicGenesisTransaction,
+    ReceiptMismatch {
+        tx_index: u64,
+        listed: Option<TransactionReceipt>,
+        settled: Option<TransactionReceipt>,
+    },
+    UnfinalizedRelease {
+        tx_index: u64,
+        /// The released sequencer key, hex.
+        key: String,
+    },
     StateTransition {
         /// Index of the failing transaction within the block body.
         tx_index: u64,
         reason: String,
     },
+    UndecodableSystemRegistry,
 }
 
 /// Diagnostic record of the first block that broke the L2 chain.
@@ -551,19 +681,13 @@ pub struct StallReason {
 }
 
 /// Status snapshot returned by `getStatus`: the ingestion state plus the
-/// indexed L2 tip and, when stalled or halted, the diagnostics.
+/// indexed L2 tip and, when stalled, the diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct IndexerStatus {
     pub state: IndexerSyncState,
     pub last_error: Option<String>,
     pub indexed_block_id: Option<BlockId>,
     pub stall_reason: Option<StallReason>,
-    /// Present while ingestion is halted on a cross-zone verdict.
-    #[serde(default)]
-    pub cross_zone_halt: Option<CrossZoneHalt>,
-    /// One snapshot per configured peer zone; empty with cross-zone disabled.
-    #[serde(default)]
-    pub cross_zone_peers: Vec<PeerStatus>,
 }
 
 #[derive(
@@ -695,53 +819,6 @@ pub fn resolve_event_block_range(
 mod tests {
     use super::*;
 
-    fn status() -> IndexerStatus {
-        IndexerStatus {
-            state: IndexerSyncState::Halted,
-            last_error: Some("cross-zone verification failed".to_owned()),
-            indexed_block_id: Some(8),
-            stall_reason: None,
-            cross_zone_halt: Some(CrossZoneHalt {
-                block_id: 9,
-                block_hash: HashType([0xAB; 32]),
-                src_zone: hex::encode([2_u8; 32]),
-                src_block_id: 5,
-                src_tx_index: 1,
-                verdict: "re-derivation mismatch".to_owned(),
-            }),
-            cross_zone_peers: vec![PeerStatus {
-                zone: hex::encode([2_u8; 32]),
-                verified_tip_block_id: Some(4),
-                cursor_slot: Some(70),
-                stuck_slot_attempts: 3,
-                health: PeerHealth::Holed,
-            }],
-        }
-    }
-
-    #[test]
-    fn indexer_status_round_trips_with_cross_zone_fields() {
-        let status = status();
-        let json = serde_json::to_string(&status).expect("serialize");
-        let back: IndexerStatus = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back, status);
-    }
-
-    #[test]
-    fn indexer_status_without_cross_zone_fields_still_deserializes() {
-        // A snapshot from before these fields existed.
-        let json = r#"{
-            "state": "CaughtUp",
-            "last_error": null,
-            "indexed_block_id": 7,
-            "stall_reason": null
-        }"#;
-        let status: IndexerStatus = serde_json::from_str(json).expect("deserialize");
-        assert_eq!(status.state, IndexerSyncState::CaughtUp);
-        assert_eq!(status.cross_zone_halt, None);
-        assert!(status.cross_zone_peers.is_empty());
-    }
-
     #[test]
     fn an_unknown_sync_state_deserializes_to_unknown() {
         let state: IndexerSyncState =
@@ -757,22 +834,6 @@ mod tests {
         }"#;
         let status: IndexerStatus = serde_json::from_str(json).expect("deserialize");
         assert_eq!(status.state, IndexerSyncState::Unknown);
-    }
-
-    #[test]
-    fn peer_health_variants_round_trip() {
-        for health in [
-            PeerHealth::Live,
-            PeerHealth::Lagging,
-            PeerHealth::Holed,
-            PeerHealth::Suspended,
-            PeerHealth::Halted,
-            PeerHealth::Unknown,
-        ] {
-            let json = serde_json::to_string(&health).expect("serialize");
-            let back: PeerHealth = serde_json::from_str(&json).expect("deserialize");
-            assert_eq!(back, health);
-        }
     }
 
     #[test]
@@ -894,23 +955,5 @@ mod tests {
             resolve_event_block_range(5, Some(3), 10),
             Err(EventRangeError::Inverted { from: 5, to: 3 })
         );
-    }
-
-    #[test]
-    fn an_unknown_peer_health_deserializes_to_unknown() {
-        let health: PeerHealth =
-            serde_json::from_str(r#""SomeFutureHealth""#).expect("deserialize");
-        assert_eq!(health, PeerHealth::Unknown);
-
-        // And a whole peer snapshot carrying it still decodes.
-        let json = r#"{
-            "zone": "0202",
-            "verified_tip_block_id": 4,
-            "cursor_slot": 70,
-            "stuck_slot_attempts": 0,
-            "health": "SomeFutureHealth"
-        }"#;
-        let status: PeerStatus = serde_json::from_str(json).expect("deserialize");
-        assert_eq!(status.health, PeerHealth::Unknown);
     }
 }

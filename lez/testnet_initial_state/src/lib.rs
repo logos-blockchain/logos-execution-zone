@@ -3,8 +3,12 @@ use std::collections::HashMap;
 use key_protocol::key_management::{
     KeyChain, key_tree::chain_index::ChainIndex, secret_holders::SecretSpendingKey,
 };
-use lee::{Account, AccountId, PrivateKey, PublicKey, V03State, program::Program};
-use lee_core::Identifier;
+use lee::{
+    Account, AccountId, Recipient, RecoveryBinding, V03State,
+    program::Program,
+    signature::{PublicAccountSecret, public_account_id},
+};
+use lee_core::PrivateAccountKind;
 use serde::{Deserialize, Serialize};
 
 const PRIVATE_KEY_PUB_ACC_A: [u8; 32] = [
@@ -32,9 +36,6 @@ const SSK_PRIV_ACC_B: [u8; 32] = [
 const PUB_ACC_A_INITIAL_BALANCE: u128 = 10_000_000_000_000;
 const PUB_ACC_B_INITIAL_BALANCE: u128 = 20_000_000_000_000;
 
-const PRIV_ACC_A_INITIAL_BALANCE: u128 = 10_000_000_000_000;
-const PRIV_ACC_B_INITIAL_BALANCE: u128 = 20_000_000_000_000;
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PublicAccountPublicInitialData {
     pub account_id: AccountId,
@@ -42,16 +43,9 @@ pub struct PublicAccountPublicInitialData {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PrivateAccountPublicInitialData {
-    pub npk: lee_core::NullifierPublicKey,
-    pub vpk: lee_core::encryption::ViewingPublicKey,
-    pub account: lee_core::account::Account,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PublicAccountPrivateInitialData {
     pub account_id: lee::AccountId,
-    pub pub_sign_key: lee::PrivateKey,
+    pub secret: PublicAccountSecret,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,34 +53,41 @@ pub struct PrivateAccountPrivateInitialData {
     pub account: lee_core::account::Account,
     pub key_chain: KeyChain,
     pub chain_index: Option<ChainIndex>,
-    pub identifier: lee_core::Identifier,
+    pub kind: PrivateAccountKind,
 }
 
 impl PrivateAccountPrivateInitialData {
     #[must_use]
     pub fn account_id(&self) -> lee::AccountId {
-        lee::AccountId::for_regular_private_account(
-            &self.key_chain.nullifier_public_key,
-            &self.key_chain.viewing_public_key,
-            self.identifier,
-        )
+        self.recipient().account_id()
+    }
+
+    /// The public material a sender binds to this account's canonical address.
+    #[must_use]
+    pub fn recipient(&self) -> Recipient {
+        Recipient {
+            npk: self.key_chain.nullifier_public_key,
+            vpk: self.key_chain.viewing_public_key.clone(),
+            kind: self.kind.clone(),
+            opening: None,
+        }
     }
 }
 
 #[must_use]
 pub fn initial_pub_accounts_private_keys() -> Vec<PublicAccountPrivateInitialData> {
-    let acc1_pub_sign_key = PrivateKey::try_new(PRIVATE_KEY_PUB_ACC_A).unwrap();
+    let acc1_secret = PublicAccountSecret::new(PRIVATE_KEY_PUB_ACC_A);
 
-    let acc2_pub_sign_key = PrivateKey::try_new(PRIVATE_KEY_PUB_ACC_B).unwrap();
+    let acc2_secret = PublicAccountSecret::new(PRIVATE_KEY_PUB_ACC_B);
 
     vec![
         PublicAccountPrivateInitialData {
-            account_id: AccountId::from(&PublicKey::new_from_private_key(&acc1_pub_sign_key)),
-            pub_sign_key: acc1_pub_sign_key,
+            account_id: public_account_id(&acc1_secret),
+            secret: acc1_secret,
         },
         PublicAccountPrivateInitialData {
-            account_id: AccountId::from(&PublicKey::new_from_private_key(&acc2_pub_sign_key)),
-            pub_sign_key: acc2_pub_sign_key,
+            account_id: public_account_id(&acc2_secret),
+            secret: acc2_secret,
         },
     ]
 }
@@ -105,54 +106,38 @@ fn key_chain_from_ssk(ssk: [u8; 32]) -> KeyChain {
     }
 }
 
-fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialData> {
+/// The testnet's private accounts. They start uninitialized: genesis funds them with pending
+/// credits that their owners receive.
+#[must_use]
+pub fn initial_priv_accounts_private_keys() -> Vec<PrivateAccountPrivateInitialData> {
     let key_chain_1 = key_chain_from_ssk(SSK_PRIV_ACC_A);
     let key_chain_2 = key_chain_from_ssk(SSK_PRIV_ACC_B);
 
     vec![
         PrivateAccountPrivateInitialData {
-            account: Account::funded(PRIV_ACC_A_INITIAL_BALANCE),
+            account: Account::default(),
             key_chain: key_chain_1,
             chain_index: None,
-            identifier: Identifier::ZERO,
+            kind: PrivateAccountKind::Regular,
         },
         PrivateAccountPrivateInitialData {
-            account: Account::funded(PRIV_ACC_B_INITIAL_BALANCE),
+            account: Account::default(),
             key_chain: key_chain_2,
             chain_index: None,
-            identifier: Identifier::ZERO,
+            kind: PrivateAccountKind::Regular,
         },
     ]
 }
 
-fn initial_commitments() -> Vec<PrivateAccountPublicInitialData> {
-    initial_priv_accounts_private_keys()
-        .into_iter()
-        .map(|data| PrivateAccountPublicInitialData {
-            npk: data.key_chain.nullifier_public_key,
-            vpk: data.key_chain.viewing_public_key.clone(),
-            account: data.account,
-        })
-        .collect()
-}
-
-fn initial_private_accounts() -> Vec<(lee_core::Commitment, lee_core::Nullifier)> {
-    initial_commitments()
-        .iter()
-        .map(|init_comm_data| {
-            let npk = &init_comm_data.npk;
-            let account_id = lee::AccountId::for_regular_private_account(
-                npk,
-                &init_comm_data.vpk,
-                Identifier::ZERO,
-            );
-
-            (
-                lee_core::Commitment::new(&account_id, &init_comm_data.account),
-                lee_core::Nullifier::for_account_initialization(&account_id),
-            )
-        })
-        .collect()
+/// The recovery bindings of the private accounts' canonical addresses.
+///
+/// Generated once under fresh encapsulation randomness by `regenerate_genesis_recovery_bindings`
+/// and pinned, so every node builds the same genesis and genesis credits to these addresses
+/// publish.
+#[must_use]
+pub fn initial_recovery_bindings() -> Vec<RecoveryBinding> {
+    borsh::from_slice(include_bytes!("genesis_recovery_bindings.bin"))
+        .expect("the pinned recovery bindings decode")
 }
 
 #[must_use]
@@ -182,11 +167,10 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
             system_accounts::bridge_account_id(),
             system_accounts::bridge_account(),
         )])
-        .chain(
-            system_accounts::clock_account_ids()
-                .into_iter()
-                .map(|clock_id| (clock_id, system_accounts::clock_account())),
-        )
+        .chain([(
+            system_accounts::clock_account_id(),
+            system_accounts::clock_account(),
+        )])
         .chain([(
             system_accounts::sequencer_stake_config_account_id(),
             system_accounts::sequencer_stake_config_account(None, None),
@@ -202,53 +186,52 @@ fn initial_public_accounts() -> HashMap<AccountId, Account> {
         .collect()
 }
 
-fn initial_programs(cross_zone: bool) -> Vec<(AccountId, Program)> {
-    let mut programs = vec![
-        (programs::clock_account_id(), programs::clock()),
-        (programs::fee_account_id(), programs::fee()),
-        (programs::bridge_account_id(), programs::bridge()),
-        (
-            programs::sequencer_stake_account_id(),
-            programs::sequencer_stake(),
-        ),
-    ];
-    if cross_zone {
-        // Builtins baked into every node (genesis-block ELFs would exceed the
-        // inscription size limit); registered only on cross_zone zones, fixed at
-        // genesis.
-        programs.extend([
-            (
-                programs::cross_zone_inbox_account_id(),
-                programs::cross_zone_inbox(),
-            ),
-            (
-                programs::cross_zone_outbox_account_id(),
-                programs::cross_zone_outbox(),
-            ),
-            (programs::ping_sender_account_id(), programs::ping_sender()),
-            (
-                programs::ping_receiver_account_id(),
-                programs::ping_receiver(),
-            ),
-            (programs::bridge_lock_account_id(), programs::bridge_lock()),
-            (
-                programs::wrapped_token_account_id(),
-                programs::wrapped_token(),
-            ),
-        ]);
-    }
-    programs
+/// System programs changed only by a protocol upgrade, seeded immutable: `system_upgrader`, the
+/// root of system program upgrades.
+fn protocol_upgradable_programs() -> Vec<(AccountId, Program)> {
+    vec![(
+        programs::system_upgrader_account_id(),
+        programs::system_upgrader(),
+    )]
 }
 
-/// The pre-genesis state. `cross_zone` selects whether the six cross-zone builtins are
-/// registered, each at a name-derived, `image_id`-independent address. Not defaulted: every
-/// caller states the choice.
+/// `system_upgrader`'s registry: the upgradable system programs, none with an upgrade pending.
+fn system_registry() -> (AccountId, Account) {
+    let registry = system_upgrader_core::Registry {
+        programs: programs::builtin_core_programs()
+            .into_iter()
+            .map(|(name, _)| (name, None))
+            .collect(),
+    };
+    (
+        system_upgrader_core::registry_account_id(),
+        Account::default().with_actor_state(
+            system_upgrader_core::SYSTEM_UPGRADER_ACCOUNT_ID,
+            registry.to_bytes().into(),
+        ),
+    )
+}
+
+/// The pre-genesis state.
 #[must_use]
-pub fn initial_state(cross_zone: bool) -> V03State {
-    lee::V03State::new()
+pub fn initial_state() -> V03State {
+    lee::GenesisBuilder::new()
         .with_public_accounts(initial_public_accounts())
-        .with_private_accounts(initial_private_accounts())
-        .with_named_programs(initial_programs(cross_zone))
+        .with_public_accounts([system_registry()])
+        .with_recovery_bindings(initial_recovery_bindings())
+        .with_programs_at(
+            protocol_upgradable_programs()
+                .into_iter()
+                .map(|(account_id, program)| (account_id, program, true))
+                .chain(
+                    programs::builtin_core_programs()
+                        .into_iter()
+                        .map(|(name, program)| {
+                            (AccountId::from_system_program_name(&name), program, false)
+                        }),
+                ),
+        )
+        .build()
 }
 
 #[cfg(test)]
@@ -256,6 +239,7 @@ mod tests {
     use std::str::FromStr as _;
 
     use key_protocol::key_management::secret_holders::ViewingSecretKey;
+    use program_loader_core::LoaderActorState as _;
 
     use super::*;
 
@@ -279,11 +263,11 @@ mod tests {
         66, 136, 209, 158, 243, 254, 168, 14, 19, 222, 8, 97,
     ];
 
-    const PUB_ACC_A_TEXT_ADDR: &str = "6iArKUXxhUJqS7kCaPNhwMWt3ro71PDyBj7jwAyE2VQV";
-    const PUB_ACC_B_TEXT_ADDR: &str = "7wHg9sbJwc6h3NP1S9bekfAzB8CHifEcxKswCKUt3YQo";
+    const PUB_ACC_A_TEXT_ADDR: &str = "7VDm7YRPvimbZgCzuFqCGf6RwPsTV3XY5W9DzT71oain";
+    const PUB_ACC_B_TEXT_ADDR: &str = "6AtC7ekAeMXh9QgiBoUnsb69SVEnCy9DMhCy4nmJDbkh";
 
-    const PRIV_ACC_A_TEXT_ADDR: &str = "GzKZCEamT6Mt7SnwrhoAJvaQpTG4q7yegcBSCYoRVyaE";
-    const PRIV_ACC_B_TEXT_ADDR: &str = "Baovohr2wgDpZXAEXwfvmMKBrsdotsxUsYpH3LUufDe";
+    const PRIV_ACC_A_TEXT_ADDR: &str = "44KVvzvh2ephQU9aR5snboGUXKgS1FnPYh1W4KZKwmhm";
+    const PRIV_ACC_B_TEXT_ADDR: &str = "478hD6LXFTYu5gRRkWkCyXPRsWgCwAfRredoCUfxr5b9";
 
     #[test]
     fn pub_state_consistency() {
@@ -320,10 +304,9 @@ mod tests {
     #[test]
     fn private_state_consistency() {
         let init_private_accs_keys = initial_priv_accounts_private_keys();
-        let init_comms = initial_commitments();
 
         // `nsk`/`npk` carry no constants of their own: the key chains derive from `SSK_*`, and the
-        // two address canaries below pin H(PREFIX || npk || vpk || identifier), so drift anywhere
+        // two address canaries below pin H(PREFIX || npk || vpk), so drift anywhere
         // in ask -> nsk -> npk or in vsk -> vpk moves one of them. Nothing is left unpinned.
         // `VSK_*` stays pinned separately because it is the last value on the vsk -> vpk leg that
         // a test can compare directly.
@@ -350,44 +333,40 @@ mod tests {
             init_private_accs_keys[1].account_id().to_string(),
             PRIV_ACC_B_TEXT_ADDR
         );
+    }
 
-        assert_eq!(
-            init_private_accs_keys[0].key_chain.nullifier_public_key,
-            init_comms[0].npk
-        );
-        assert_eq!(
-            init_private_accs_keys[1].key_chain.nullifier_public_key,
-            init_comms[1].npk
-        );
+    #[test]
+    fn the_pinned_recovery_bindings_name_the_private_accounts_none_of_them_funded() {
+        let state = initial_state();
+        let accounts = initial_priv_accounts_private_keys();
+        let bindings = initial_recovery_bindings();
+        assert_eq!(bindings.len(), accounts.len());
 
-        assert_eq!(
-            init_comms[0],
-            PrivateAccountPublicInitialData {
-                npk: init_private_accs_keys[0].key_chain.nullifier_public_key,
-                vpk: init_private_accs_keys[0]
-                    .key_chain
-                    .viewing_public_key
-                    .clone(),
-                account: Account::funded(PRIV_ACC_A_INITIAL_BALANCE),
-            }
-        );
-
-        assert_eq!(
-            init_comms[1],
-            PrivateAccountPublicInitialData {
-                npk: init_private_accs_keys[1].key_chain.nullifier_public_key,
-                vpk: init_private_accs_keys[1]
-                    .key_chain
-                    .viewing_public_key
-                    .clone(),
-                account: Account::funded(PRIV_ACC_B_INITIAL_BALANCE),
-            }
-        );
+        for (data, binding) in accounts.iter().zip(&bindings) {
+            let keys = &data.key_chain.private_key_holder;
+            assert_eq!(binding.address, data.account_id());
+            assert_eq!(
+                Recipient::recover(
+                    binding.address,
+                    &binding.note,
+                    &keys.viewing_secret_key.d,
+                    &keys.viewing_secret_key.z
+                ),
+                Some(data.recipient())
+            );
+            assert_eq!(state.recovery_binding(binding.address), Some(&binding.note));
+            assert!(
+                !state.is_spent(&lee_core::Nullifier::for_account_initialization(
+                    &binding.address,
+                    &keys.nullifier_secret_key()
+                ))
+            );
+        }
     }
 
     #[test]
     fn genesis_fee_accounts_are_registered_with_their_records() {
-        let state = initial_state(true);
+        let state = initial_state();
 
         let ids = system_accounts::fee_account_ids();
         // state, escrow, inbox — all distinct, all non-default.
@@ -406,14 +385,20 @@ mod tests {
             state
                 .get_account_by_id(system_accounts::fee_state_account_id())
                 .data
-                .shard(programs::fee_account_id()),
+                .actor_state(programs::fee_account_id()),
         );
         assert_eq!(fee_state, fee_core::state::FeeState::genesis());
         for empty_id in [
             system_accounts::fee_escrow_account_id(),
             system_accounts::fee_inbox_account_id(),
         ] {
-            assert!(state.get_account_by_id(empty_id).data.shards.is_empty());
+            assert!(
+                state
+                    .get_account_by_id(empty_id)
+                    .data
+                    .actor_states
+                    .is_empty()
+            );
         }
     }
 
@@ -427,7 +412,7 @@ mod tests {
         let bridge_id = system_accounts::bridge_account_id();
         assert_ne!(bridge_id, AccountId::default());
 
-        let state = initial_state(true);
+        let state = initial_state();
 
         let bridge = state.get_account_by_id(bridge_id);
         assert_eq!(
@@ -436,34 +421,47 @@ mod tests {
             "the bridge holds the whole supply"
         );
         assert_eq!(
-            bridge.data.shards.keys().copied().collect::<Vec<_>>(),
+            bridge.data.actor_states.keys().copied().collect::<Vec<_>>(),
             vec![lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID],
             "the bridge holds balance alone, no program's record"
         );
     }
 
-    /// Gating changes membership only: no other program moves.
     #[test]
-    fn cross_zone_builtins_register_only_when_declared() {
-        let cross_zone_ids = [
-            programs::cross_zone_inbox_account_id(),
-            programs::cross_zone_outbox_account_id(),
-            programs::ping_sender_account_id(),
-            programs::ping_receiver_account_id(),
-            programs::bridge_lock_account_id(),
-            programs::wrapped_token_account_id(),
-        ];
-        let with = initial_state(true);
-        let without = initial_state(false);
-        for id in cross_zone_ids {
-            assert!(
-                with.get_builtin_program(id).is_some(),
-                "registered when declared"
-            );
-            assert!(
-                without.get_builtin_program(id).is_none(),
-                "absent when not declared"
-            );
+    fn system_upgrader_is_seeded_immutable_with_its_mirror() {
+        let state = initial_state();
+        let program = programs::system_upgrader_account_id();
+        let header = lee_core::program::ProgramHeader::from_loader_actor_state(
+            state
+                .get_account_by_id(program)
+                .data
+                .actor_state(lee_core::program::PROGRAM_LOADER_ACCOUNT_ID),
+        )
+        .unwrap();
+        assert!(header.immutable);
+        let mirror = lee_core::program::immutable_mirror_commitment(program, &header);
+        assert!(state.get_proof_for_commitment(&mirror).is_some());
+    }
+
+    #[test]
+    fn every_registered_system_program_is_seeded_mutable() {
+        let state = initial_state();
+        let registry = system_upgrader_core::Registry::from_bytes(
+            state
+                .get_account_by_id(system_upgrader_core::registry_account_id())
+                .data
+                .actor_state(system_upgrader_core::SYSTEM_UPGRADER_ACCOUNT_ID),
+        )
+        .unwrap();
+        for name in registry.programs.keys() {
+            let header = lee_core::program::ProgramHeader::from_loader_actor_state(
+                state
+                    .get_account_by_id(AccountId::from_system_program_name(name))
+                    .data
+                    .actor_state(lee_core::program::PROGRAM_LOADER_ACCOUNT_ID),
+            )
+            .unwrap();
+            assert!(!header.immutable);
         }
     }
 }

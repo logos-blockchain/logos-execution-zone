@@ -10,6 +10,11 @@ use thiserror::Error;
 pub struct Label(String);
 
 impl Label {
+    /// Characters an account label can't contain: `@`, `:` and `/` are the separators of an
+    /// actor (`<account>[@program][:sign]`, `pda:<owner>/<seed>`, `ik:<hex>`, `Public/<id>`,
+    /// `m/<path>`), so a label holding one would be read as something else.
+    pub const RESERVED_CHARS: [char; 3] = ['@', ':', '/'];
+
     #[expect(
         clippy::needless_pass_by_value,
         reason = "Convenience for caller and negligible cost"
@@ -17,6 +22,17 @@ impl Label {
     #[must_use]
     pub fn new(label: impl ToString) -> Self {
         Self(label.to_string())
+    }
+
+    /// Checks that this can name an account: it holds none of [`Self::RESERVED_CHARS`].
+    pub fn validate_for_account(&self) -> anyhow::Result<()> {
+        if let Some(reserved) = self.0.chars().find(|c| Self::RESERVED_CHARS.contains(c)) {
+            anyhow::bail!(
+                "Label `{self}` can't contain `{reserved}`: `@`, `:` and `/` are reserved for \
+                 account syntax"
+            );
+        }
+        Ok(())
     }
 }
 
@@ -80,7 +96,7 @@ impl FromStr for AccountIdWithPrivacy {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HumanReadableAccount {
-    shards: BTreeMap<String, String>,
+    actor_states: BTreeMap<String, String>,
     nonce: u128,
 }
 
@@ -102,9 +118,9 @@ impl std::fmt::Display for HumanReadableAccount {
 impl From<lee::Account> for HumanReadableAccount {
     fn from(account: lee::Account) -> Self {
         Self {
-            shards: account
+            actor_states: account
                 .data
-                .shards
+                .actor_states
                 .into_iter()
                 .map(|(program, data)| (program.to_string(), hex::encode(data)))
                 .collect(),
@@ -115,24 +131,22 @@ impl From<lee::Account> for HumanReadableAccount {
 
 impl From<HumanReadableAccount> for lee::Account {
     fn from(account: HumanReadableAccount) -> Self {
-        let shards = account
-            .shards
+        let actor_states = account
+            .actor_states
             .into_iter()
             .map(|(program, data)| {
                 let program: AccountId = program
                     .parse()
-                    .expect("Invalid base58 in HumanReadableAccount.shards key");
-                let data = hex::decode(&data).expect("Invalid hex in HumanReadableAccount.shards");
-                let data = data
-                    .try_into()
-                    .expect("Invalid account data: exceeds maximum allowed size");
-                (program, data)
+                    .expect("Invalid base58 in HumanReadableAccount.actor_states key");
+                let data =
+                    hex::decode(&data).expect("Invalid hex in HumanReadableAccount.actor_states");
+                (program, data.into())
             })
             .collect();
 
         Self {
             nonce: lee_core::account::Nonce(account.nonce),
-            data: lee_core::account::AccountData { shards },
+            data: lee_core::account::AccountData { actor_states },
         }
     }
 }

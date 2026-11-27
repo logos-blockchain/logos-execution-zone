@@ -7,12 +7,14 @@ use std::{
 
 use anyhow::Context as _;
 use async_trait::async_trait;
-use lee::PrivateKey;
+use lee::signature::PublicAccountSecret;
+use logos_blockchain_zone_sdk::{
+    testing_framework_app::{AppDeployment, AppHostEnv, DeployContext},
+    testing_framework_core::scenario::DynError,
+};
 use sequencer_service::SequencerHandle;
 use sequencer_service_rpc::{SequencerClient, SequencerClientBuilder};
 use tempfile::TempDir;
-use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext};
-use testing_framework_core::scenario::DynError;
 
 use crate::{
     config::{self, InitialPrivateAccountForWallet, SequencerPartialConfig, UrlProtocol},
@@ -22,7 +24,7 @@ use crate::{
 struct SequencerInstance {
     client: SequencerClient,
     addr: SocketAddr,
-    public_accounts: Vec<(PrivateKey, u128)>,
+    public_accounts: Vec<(PublicAccountSecret, u128)>,
     private_accounts: Vec<InitialPrivateAccountForWallet>,
     service: Mutex<Option<SequencerHandle>>,
     _state_dir: Option<TempDir>,
@@ -39,7 +41,7 @@ impl LezSequencerClient {
     pub(crate) fn new(
         client: SequencerClient,
         addr: SocketAddr,
-        public_accounts: Vec<(PrivateKey, u128)>,
+        public_accounts: Vec<(PublicAccountSecret, u128)>,
         private_accounts: Vec<InitialPrivateAccountForWallet>,
         service: SequencerHandle,
         state_dir: Option<TempDir>,
@@ -83,7 +85,7 @@ impl LezSequencerClient {
         Ok(())
     }
 
-    pub(super) fn public_accounts(&self) -> &[(PrivateKey, u128)] {
+    pub(super) fn public_accounts(&self) -> &[(PublicAccountSecret, u128)] {
         &self.0.public_accounts
     }
 
@@ -131,7 +133,7 @@ impl SequencerApp {
             let private_accounts = config::default_private_accounts_for_wallet();
             let genesis = config::genesis_from_accounts(
                 &public_accounts,
-                config::private_total(&private_accounts),
+                config::private_funding_cost(&private_accounts),
             );
             // If the sequencer moves to a separate process, create a `LocalProcessApp`
             // with its `LaunchSpec` here so TF owns the process lifecycle.

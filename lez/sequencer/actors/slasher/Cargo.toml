@@ -13,14 +13,14 @@ lee.workspace = true
 programs.workspace = true
 system_accounts.workspace = true
 sequencer_stake_core.workspace = true
-sequencer_storage_actor = { workspace = true, features = ["actor"] }
+sequencer_storage_actor.workspace = true
 
-logos-blockchain-key-management-system-service.workspace = true
+logos-blockchain-zone-sdk.workspace = true
 kameo.workspace = true
 anyhow.workspace = true
 borsh.workspace = true
 hex.workspace = true
-log.workspace = true
+tracing.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 

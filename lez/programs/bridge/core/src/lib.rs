@@ -1,52 +1,52 @@
 use borsh::{BorshDeserialize, BorshSerialize};
+#[cfg(feature = "host")]
+pub use deposit::{DepositMetadata, DepositRecipient};
 use lee_core::account::AccountId;
 pub use lee_core::program::PdaSeed;
 
+#[cfg(feature = "host")]
+mod deposit;
 pub mod event;
 
 const BRIDGE_SEED_DOMAIN_SEPARATOR: [u8; 32] = *b"/LEZ/v0.3/BridgeSeed/0000000000/";
 const DEPOSIT_RECEIPT_SEED_DOMAIN: [u8; 32] = *b"/LEZ/v0.3/BridgeDepositReceipt/0";
 
-pub const BRIDGE_NAME: [u8; 6] = *b"bridge";
+pub const BRIDGE_NAME: lee_core::program::SystemProgramName =
+    lee_core::program::SystemProgramName::new(b"bridge");
+
+pub type BridgeAmount = u64;
 
 #[derive(BorshSerialize, BorshDeserialize)]
-pub enum Instruction {
+pub enum Message {
     /// Transfers native tokens from the bridge PDA account to a recipient,
     /// exactly once per `l1_deposit_op_id`.
     ///
-    /// Required accounts (3):
-    /// - Bridge PDA account
-    /// - Recipient account
-    /// - Deposit-receipt PDA account, derived from `l1_deposit_op_id`, with this program's shard. A
-    ///   nonempty shard marks the deposit as already processed; a repeat is refused.
+    /// Sent to the deposit-receipt PDA derived from `l1_deposit_op_id`, whose actor state of this
+    /// program marks the deposit as already processed once nonempty; a repeat is refused.
     Deposit {
-        /// Deposit OP ID from L1, stored here to pin each [`Deposit`](Instruction::Deposit) to a
+        /// Deposit OP ID from L1, stored here to pin each [`Deposit`](Message::Deposit) to a
         /// Deposit Event on L1.
         ///
         /// TODO: genesis allocations pass a synthetic id no L1 event backs; they should carry a
         /// real one once founding stakes are funded by real L1 deposits.
         l1_deposit_op_id: [u8; 32],
         recipient_id: AccountId,
-        amount: u64,
+        amount: BridgeAmount,
     },
 
     /// Transfers native tokens from a user account to the bridge PDA account.
     ///
-    /// Required accounts (2):
-    /// - Sender account
-    /// - Bridge PDA account
-    ///
     /// `bedrock_account_pk` is consumed by the Sequencer and is not used by the Bridge program
     /// logic.
     Withdraw {
-        amount: u64,
+        amount: BridgeAmount,
         bedrock_account_pk: [u8; 32],
     },
 }
 
 #[must_use]
 pub fn bridge_account_id() -> AccountId {
-    AccountId::from_builtin_program_name(&BRIDGE_NAME)
+    AccountId::from_system_program_name(&BRIDGE_NAME)
 }
 
 #[must_use]
@@ -62,7 +62,7 @@ pub fn compute_bridge_account_id(bridge_program_account_id: AccountId) -> Accoun
 /// Seed of the deposit-receipt PDA for `l1_deposit_op_id`. Domain-separated from
 /// [`compute_bridge_seed`].
 #[must_use]
-fn deposit_receipt_seed(l1_deposit_op_id: [u8; 32]) -> PdaSeed {
+pub fn deposit_receipt_seed(l1_deposit_op_id: [u8; 32]) -> PdaSeed {
     use risc0_zkvm::sha::{Impl, Sha256 as _};
 
     let mut bytes = [0_u8; 64];
@@ -76,7 +76,7 @@ fn deposit_receipt_seed(l1_deposit_op_id: [u8; 32]) -> PdaSeed {
     PdaSeed::new(seed)
 }
 
-/// The deposit-receipt PDA whose bridge shard marks `l1_deposit_op_id` as minted.
+/// The deposit-receipt PDA whose bridge actor state marks `l1_deposit_op_id` as minted.
 #[must_use]
 pub fn deposit_receipt_account_id(
     bridge_program_account_id: AccountId,

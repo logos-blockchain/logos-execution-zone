@@ -1,338 +1,230 @@
-use std::sync::Arc;
+use std::{
+    collections::{BTreeSet, HashMap, HashSet},
+    num::NonZero,
+    time::Duration,
+};
 
-use anyhow::Context as _;
+use anyhow::anyhow;
+use chain_state::timeout_node::TimeoutNode;
 use common::block::Block;
-use futures::StreamExt as _;
 use kameo::{
     Actor,
     actor::{ActorRef, WeakActorRef},
     mailbox::{MailboxReceiver, Signal},
     message::{Context, Message},
 };
-use kameo_actors::broker::Broker;
-use log::{info, warn};
-use logos_blockchain_binary_codec::bincode::DeserializeOp as _;
-use logos_blockchain_core::{
-    mantle::{
-        NoteId, Op, OpProof, SignedOps,
-        channel::{SlotTimeframe, SlotTimeout},
-        gas::GasCost,
-        ops::channel::{VerifiedChannelKeys, config::ChannelConfigOp, inscribe::InscriptionOp},
-        traits::Hashable as _,
-        transactions::{MantleTxBuilder, OpProofs},
-    },
-    proofs::channel_multi_sig_proof::{ChannelMultiSigProof, IndexedSignatures},
-};
 use logos_blockchain_zone_sdk::{
     CommonHttpClient,
     adapter::{Node as _, NodeHttpClient},
-    node_types::{Inscription, WalletFundRequestBody, WalletFundResponseBody},
-    sequencer::{
-        ChannelUpdate as SdkChannelUpdate, ChannelUpdateTx, Event, FinalizedOp, FundingConfig,
-        InscriptionInfo, PendingTx, SequencerChannelView, SequencerCheckpoint, SequencerConfig,
-        WithdrawInputs, ZoneSequencer,
+    common_http_client::BasicAuthCredentials,
+    core::mantle::NoteId,
+    sequencer::{InscriptionInfo, PendingTx},
+};
+use sequencer_storage_actor::{
+    StorageActorTrait,
+    protocol::{
+        GetFinalConfigsBytes, GetZoneCheckpoint, PutFinalConfigsBytes, UpdateZoneCheckpoint,
     },
 };
-use sequencer_actors_common::EraseMessage as _;
-use sequencer_storage_actor::{StorageActorTrait, protocol::GetZoneCheckpoint};
-use tokio::{select, sync::watch};
+use tokio::select;
+use tracing::{info_span, warn};
 
 #[cfg(feature = "test-utils")]
 use crate::protocol::PublishRawInscription;
 use crate::{
-    BedrockActorTrait, Result,
-    actor::config::Config,
+    BedrockActorTrait, Result, Url,
+    actor::finality::{BlockSummary, ConfigIndex, L1Reader},
     error::Error,
     protocol::{
-        AccreditedKeys, BoxStream, ChangeChannelConfig, ChannelEntry, ChannelEvent, ChannelId,
-        ChannelParams, ChannelSeq, ChannelUpdate, CheckChannelExists, CheckIsOurTurn,
-        CreateChannel, Ed25519PublicKey, GetAccreditedKeys, GetChannelId, GetChannelIdReply,
-        GetChannelTipMessageId, GetChannelTipSlot, LiveChannelConfig, MsgId, PrepareConfig,
-        PreparedChannelConfig, PublishBlock, PublishOutcome, ReadChannel, Slot, ViewChange,
-        ZoneMessage, verified_keys,
+        AccreditedKeys, ChangeChannelConfig, ChannelId, CheckChannelExists, CheckIsOurTurn,
+        CreateChannel, DeserializeOp as _, Ed25519PublicKey, FilterFinallyAbsent, FollowChannel,
+        FollowStart, GetAccreditedKeys, GetChannelNotes, GetChannelTipMessageId, GetChannelTipSlot,
+        HeaderId, InitializeChannelPublisher, LiveChannelConfig, MsgId, PendingBlock,
+        PrepareConfig, PreparePin, PreparedConfig, PreparedPin, PublishBlock, PublishOutcome,
+        PublishPin, SequencerCheckpoint, SequencerKey, SerializeOp as _, Slot,
+        UnverifiedEd25519PublicKey,
     },
 };
 
-pub mod config;
+mod channel;
+mod delivery;
+mod finality;
 #[cfg(test)]
 mod tests;
 
-/// Bedrock Actor responsible for interacting with the Bedrock node and managing channel events.
-///
-/// [`BedrockActor`] will post [`ChannelEvent`]s to the provided broker using the following topics:
-/// - `channel/<channel_id>/update`: for [`ChannelEvent::Update`]
-/// - `channel/<channel_id>/turn`: for [`ChannelEvent::Turn`]
-/// - `channel/<channel_id>/config`: for [`ChannelEvent::Config`]
-pub struct BedrockActor {
-    config: Config,
-    node: NodeHttpClient,
-    sequencer: ZoneSequencer<NodeHttpClient>,
-    channel_view_rx: watch::Receiver<SequencerChannelView>,
-    broker_ref: ActorRef<Broker<ChannelEvent>>,
-    /// Version of the channel view this actor holds, bumped by every broadcast
-    /// update and every publish.
-    seq: ChannelSeq,
-    /// zone-sdk's LIB slot when it became ready; its events cover everything
-    /// finalized after it, so [`ReadChannel`] reads no further.
-    ready_lib_slot: Option<Slot>,
+/// Time one [`FilterFinallyAbsent`] may hold the actor; the blocks and configs it read are kept.
+const FILTER_FINALLY_ABSENT_BUDGET: Duration = Duration::from_secs(10);
+
+pub struct Args<S: StorageActorTrait> {
+    pub node_url: Url,
+    pub basic_auth: Option<BasicAuthCredentials>,
+    pub channel_id: ChannelId,
+    /// Slots of finalized history each read covers.
+    pub backfill_batch_slots: NonZero<u64>,
+    pub storage_ref: ActorRef<S>,
 }
 
-impl BedrockActor {
-    pub async fn new<S: StorageActorTrait>(
-        config: Config,
-        storage_ref: ActorRef<S>,
-        broker_ref: ActorRef<Broker<ChannelEvent>>,
-    ) -> Result<Self> {
-        let stored_checkpoint = storage_ref.ask(GetZoneCheckpoint).await?;
-        let seq = stored_checkpoint
-            .as_ref()
-            .map_or(ChannelSeq::ZERO, |stored| ChannelSeq::resumed(stored.seq));
-        let initial_checkpoint = stored_checkpoint
-            .as_ref()
-            .map(|stored| SequencerCheckpoint::from_bytes(&stored.bytes))
-            .transpose()?;
+/// Bedrock Actor responsible for interacting with the Bedrock node and managing channel events.
+///
+/// This actor is expected to be used together with [`sharding_pool_actor`]. However it can be used
+/// on its own but make sure to provide the correct `channel_id` in every message. Passing
+/// unexpected `channel_id` will lead to a panic.
+///
+/// To be able to submit channel updates, you must first submit an [`InitializeChannelPublisher`]
+/// message, otherwise [`Error::ChannelPublisherIsNotInitialized`] will be returned.
+///
+/// Once the channel is followed with [`FollowChannel`], [`BedrockActor`] asks its recipient each
+/// [`ChannelEvent`](crate::protocol::ChannelEvent) in turn, reading the channel on only once the
+/// recipient replied. Messages are still handled while it waits, as the recipient may ask some of
+/// its own on the way.
+pub struct BedrockActor<S: StorageActorTrait> {
+    channel_id: ChannelId,
+    backfill_batch_slots: NonZero<u64>,
+    node: TimeoutNode<NodeHttpClient>,
+    /// [`Some`] after [`FollowChannel`] or [`InitializeChannelPublisher`] has been handled.
+    channel: Option<channel::Channel>,
+    /// The channel's events on their way to the [`FollowChannel::recipient`].
+    deliveries: delivery::Deliveries,
+    storage_ref: ActorRef<S>,
+    /// Summaries of the L1 blocks [`FilterFinallyAbsent`] walked, by id.
+    block_summary_cache: HashMap<HeaderId, BlockSummary>,
+    /// The channel's final configs, from zone-sdk's finalized events and [`FilterFinallyAbsent`]
+    /// reads.
+    config_index: ConfigIndex,
+}
 
-        let Config {
-            channel_id,
-            node_url,
-            basic_auth,
-            bedrock_signing_key,
-            funding_pk,
-            priority_fee_percent,
-            resubmit_interval,
-        } = &config;
-
-        let node = NodeHttpClient::new(CommonHttpClient::new(basic_auth.clone()), node_url.clone());
-
-        if let Some(checkpoint) = &initial_checkpoint
-            && has_channel_activity(checkpoint)
-            && node
-                .channel_state(*channel_id)
-                .await
-                .map_err(|err| Error::NodeRequestFailed(err.into()))?
-                .is_none()
-        {
-            return Err(Error::CheckpointChannelMissing);
-        }
-
-        let zone_sdk_config = SequencerConfig {
-            resubmit_interval: *resubmit_interval,
-            // Zero disables the pending-tx expiry, recovering the pre-expiry sdk behavior.
-            // TODO: set a sensible value.
-            stale_refund_slots: 0,
-            ..SequencerConfig::new(FundingConfig {
-                funding_pk: *funding_pk,
-                // Withdraw change goes back to the funding key.
-                change_pk: None,
-                max_tx_fee: GasCost::new(logos_blockchain_core::mantle::Value::MAX),
-                priority_fee_percent: *priority_fee_percent,
-            })
-        };
-
-        let sequencer = ZoneSequencer::init_with_config(
-            *channel_id,
-            bedrock_signing_key.clone(),
-            node.clone(),
-            zone_sdk_config,
-            initial_checkpoint,
-        );
-
-        let channel_view_rx = sequencer.subscribe_channel_view();
-
-        let mut bedrock = Self {
-            config,
-            node,
-            sequencer,
-            channel_view_rx,
-            broker_ref,
-            seq,
-            ready_lib_slot: None,
-        };
-
-        // Wait for cold-start backfill to complete before returning so callers
-        // can publish immediately without racing readiness.
-        while !bedrock.sequencer.is_ready() {
-            // Zone SDK sequencer will process ready event internally.
-            let event = bedrock.sequencer.next_event().await;
-            bedrock.on_event(event).await?;
-        }
-        bedrock.ready_lib_slot = bedrock
-            .sequencer
-            .checkpoint()
-            .map(|checkpoint| checkpoint.lib_slot);
-        if bedrock.ready_lib_slot.is_none() {
-            warn!(
-                "Zone SDK is ready without a checkpoint, so channel reads are not capped at its LIB"
-            );
-        }
-
-        Ok(bedrock)
+impl<S: StorageActorTrait> BedrockActor<S> {
+    fn assert_channel_id(&self, channel_id: ChannelId) {
+        assert_eq!(self.channel_id, channel_id, "Channel ID mismatch");
     }
 
-    async fn on_event(&mut self, event: Event) -> Result<()> {
-        match event {
-            Event::BlocksProcessed {
-                checkpoint,
-                channel_update,
-                finalized,
-                deposits: _,
-            } => {
-                // An L1 block that moved nothing on this channel: it only advances the checkpoint.
-                if matches!(&channel_update, SdkChannelUpdate::Extension { adopted } if adopted.is_empty())
-                    && finalized.is_empty()
-                {
-                    return Ok(());
-                }
-                let channel_id = self.config.channel_id;
-                let entries = |txs: &mut dyn Iterator<Item = &ChannelUpdateTx>| {
-                    txs.flat_map(|tx| channel_entries(tx, channel_id)).collect()
-                };
-                let view = match &channel_update {
-                    SdkChannelUpdate::Extension { adopted } => {
-                        ViewChange::Extension(entries(&mut adopted.iter()))
-                    }
-                    SdkChannelUpdate::Conflict { orphaned, .. } => ViewChange::Conflict {
-                        canonical: entries(
-                            &mut channel_update.canonical_chain().into_iter().flatten(),
-                        ),
-                        orphaned: entries(&mut orphaned.iter()),
-                    },
-                };
-
-                let mut finalized_entries = Vec::new();
-                let mut deposits = Vec::new();
-                let mut withdrawals = Vec::new();
-                let mut undecodable = Vec::new();
-                let mut finalized_signers = Vec::new();
-                for op in finalized.into_iter().flat_map(|item| item.ops) {
-                    match op {
-                        FinalizedOp::Inscription(inscription) => {
-                            let entry = channel_entry(&inscription);
-                            let signed = inscription
-                                .signer
-                                .and_then(|signer| Ed25519PublicKey::try_from(signer).ok())
-                                .map(|signer| (inscription.this_msg, signer));
-                            let empty = <Inscription as AsRef<[u8]>>::as_ref(&inscription.payload)
-                                .is_empty();
-                            match (&entry.block, empty) {
-                                (Some(_), _) => finalized_signers.extend(signed),
-                                // Empty payload: a missed turn for the liveness
-                                // fault. Signer-less entries are configs, via
-                                // `FinalizedOp::Config`.
-                                (None, true) => {}
-                                (None, false) => undecodable.extend(signed),
-                            }
-                            finalized_entries.push(entry);
-                        }
-                        FinalizedOp::Deposit(deposit) => deposits.push(deposit),
-                        FinalizedOp::Withdraw(withdraw) => {
-                            withdrawals.push(withdraw);
-                        }
-                        // Neither carries a block or an
-                        // author the LEZ chain models.
-                        FinalizedOp::Config(_) | FinalizedOp::ChannelTransfer(_) => {}
-                    }
-                }
-
-                let seq = self.next_seq();
-                self.broker_ref
-                    .tell(kameo_actors::broker::Publish {
-                        topic: format!("channel/{}/update", self.config.channel_id),
-                        message: ChannelEvent::Update(Arc::new(ChannelUpdate {
-                            checkpoint,
-                            seq,
-                            view,
-                            finalized: finalized_entries,
-                            deposits,
-                            withdrawals,
-                            undecodable,
-                            finalized_signers,
-                        })),
-                    })
-                    .await
-                    .map_err(|err| Error::BrokerPublishFailed(err.erase_message()))
+    const fn publishing_channel(&mut self) -> Result<&mut channel::PublishingChannel> {
+        match &mut self.channel {
+            Some(channel::Channel::Publishing(publishing)) => Ok(publishing),
+            Some(channel::Channel::Followed(_)) | None => {
+                Err(Error::ChannelPublisherIsNotInitialized)
             }
-            Event::TurnNotification { notification } => {
-                info!(
-                    "Turn update: our_turn={}, starting_slot={:?}, ends_at_slot={:?}",
-                    notification.our_turn_to_write,
-                    notification.starting_slot,
-                    notification.ends_at_slot
-                );
-
-                self.broker_ref
-                    .tell(kameo_actors::broker::Publish {
-                        topic: format!("channel/{}/turn", self.config.channel_id),
-                        message: ChannelEvent::Turn {
-                            our_turn_to_write: notification.our_turn_to_write,
-                        },
-                    })
-                    .await
-                    .map_err(|err| Error::BrokerPublishFailed(err.erase_message()))
-            }
-            Event::Ready => Ok(()),
         }
+    }
+
+    /// Starts following the channel from the stored checkpoint, returning it with the last config
+    /// entry that checkpoint holds final.
+    async fn follow(&mut self) -> Result<(channel::FollowedChannel, MsgId)> {
+        let checkpoint = self.resume_checkpoint().await?;
+        let finalized_config = checkpoint
+            .as_ref()
+            .map_or_else(MsgId::root, |checkpoint| checkpoint.finalized_config);
+        let followed = channel::FollowedChannel::follow(
+            self.channel_id,
+            self.node.clone(),
+            self.backfill_batch_slots,
+            checkpoint,
+        )
+        .await?;
+        self.store_config_index().await;
+        Ok((followed, finalized_config))
+    }
+
+    /// The stored checkpoint, with the config index read up to its LIB, as zone-sdk's events
+    /// resumed from it start after it.
+    async fn resume_checkpoint(&mut self) -> Result<Option<SequencerCheckpoint>> {
+        let Some(bytes) = self.storage_ref.ask(GetZoneCheckpoint).await? else {
+            return Ok(None);
+        };
+        let checkpoint = SequencerCheckpoint::from_bytes(&bytes)?;
+        let mut reader = NodeReader {
+            node: &self.node,
+            block_summary_cache: &mut self.block_summary_cache,
+            channel_id: self.channel_id,
+        };
+        self.config_index
+            .cover_through(&mut reader, checkpoint.lib_slot.into_inner())
+            .await?;
+        Ok(Some(checkpoint))
     }
 
     #[expect(
         clippy::needless_pass_by_ref_mut,
         reason = "Helps to make returned future Send"
     )]
-    async fn on_channel_view_change(&mut self, channel_view: SequencerChannelView) -> Result<()> {
-        let Some(channel) = channel_view.channel else {
-            return Ok(());
+    async fn store_checkpoint(&mut self, checkpoint: &SequencerCheckpoint) {
+        let bytes = match checkpoint.to_bytes() {
+            Ok(bytes) => bytes.into(),
+            Err(err) => {
+                warn!(error = %err, "Failed to encode the zone checkpoint");
+                return;
+            }
         };
-
-        let config = LiveChannelConfig::try_from(&channel)?;
-
-        self.broker_ref
-            .tell(kameo_actors::broker::Publish {
-                topic: format!("channel/{}/config", self.config.channel_id),
-                message: ChannelEvent::Config(config),
-            })
-            .await
-            .map_err(|err| Error::BrokerPublishFailed(err.erase_message()))
+        if let Err(err) = self.storage_ref.ask(UpdateZoneCheckpoint { bytes }).await {
+            warn!(error = %err, "Failed to store the zone checkpoint");
+        }
     }
 
-    fn submit_tx(
-        &mut self,
-        tx: SignedOps<
-            logos_blockchain_zone_sdk::node_types::Unverified,
-            logos_blockchain_core::mantle::ledger::verification_mode::StandardMode,
-        >,
-        msg_id: MsgId,
-        parent: MsgId,
-    ) -> Result<PublishOutcome> {
-        let (result, checkpoint) = self
-            .sequencer
-            .handle()
-            .submit_signed_tx(tx, msg_id)
-            .map_err(|err| Error::SubmitSignedTransactionFailed(err.into()))?;
-
-        Ok(PublishOutcome {
-            this_msg: result.tx.inscription().this_msg,
-            parent,
-            checkpoint,
-            seq: self.next_seq(),
-            released_notes: released_notes(&result.tx),
-        })
+    /// Stores the checkpoint of `published` and hands back its outcome.
+    async fn stored(&mut self, published: channel::Published) -> PublishOutcome {
+        self.store_checkpoint(&published.checkpoint).await;
+        published.outcome
     }
 
-    /// Bumps the channel sequence and hands back the new one.
-    const fn next_seq(&mut self) -> ChannelSeq {
-        self.seq = self.seq.next();
-        self.seq
+    /// Stores the config index when its bytes are due.
+    async fn store_config_index(&mut self) {
+        let Some(bytes) = self.config_index.bytes_to_store() else {
+            return;
+        };
+        if let Err(err) = self.storage_ref.ask(PutFinalConfigsBytes { bytes }).await {
+            warn!(error = %err, "Failed to store the channel's final configs");
+        }
     }
 }
 
-impl BedrockActorTrait for BedrockActor {}
+impl<S: StorageActorTrait> BedrockActorTrait for BedrockActor<S> {}
 
-impl Actor for BedrockActor {
-    type Args = Self;
+impl<S: StorageActorTrait> Actor for BedrockActor<S> {
+    type Args = Args<S>;
     type Error = Error;
 
     async fn on_start(args: Self::Args, _actor_ref: ActorRef<Self>) -> Result<Self> {
-        Ok(args)
+        let Args {
+            node_url,
+            basic_auth,
+            channel_id,
+            storage_ref,
+            backfill_batch_slots,
+        } = args;
+
+        let node = TimeoutNode::new(NodeHttpClient::new(
+            CommonHttpClient::new(basic_auth),
+            node_url,
+        ));
+
+        // Following starts zone-sdk from this stored checkpoint: a cold start backfills from
+        // slot 0, a restart's events start after its LIB.
+        let config_index = match storage_ref.ask(GetZoneCheckpoint).await? {
+            None => ConfigIndex::starting_at(0),
+            Some(checkpoint_bytes) => {
+                let restored = storage_ref
+                    .ask(GetFinalConfigsBytes)
+                    .await?
+                    .and_then(|bytes| ConfigIndex::from_bytes(&bytes));
+                if let Some(index) = restored {
+                    index
+                } else {
+                    let checkpoint = SequencerCheckpoint::from_bytes(&checkpoint_bytes)?;
+                    ConfigIndex::starting_at(checkpoint.lib_slot.into_inner().saturating_add(1))
+                }
+            }
+        };
+
+        Ok(Self {
+            channel_id,
+            node,
+            channel: None,
+            deliveries: delivery::Deliveries::new(channel_id, None),
+            storage_ref,
+            backfill_batch_slots,
+            block_summary_cache: HashMap::new(),
+            config_index,
+        })
     }
 
     async fn next(
@@ -345,283 +237,314 @@ impl Actor for BedrockActor {
             reason = "Generated by select! macro, can't be easily rewritten to avoid this lint"
         )]
         loop {
-            select! {
-                event = self.sequencer.next_event() => {
-                    self.on_event(event).await?;
+            if self.deliveries.start_next() {
+                select! {
+                    // A handled delivery goes first, so a publish its recipient sent after
+                    // replying is not refused for the update it already applied.
+                    biased;
+
+                    checkpoint = self.deliveries.delivered() => {
+                        if let Some(checkpoint) = checkpoint? {
+                            self.store_checkpoint(&checkpoint).await;
+                        }
+                    }
+                    signal = mailbox_rx.recv() => {
+                        return Ok(signal)
+                    }
                 }
-                Ok(()) = self.channel_view_rx.changed() => {
-                    let channel_view = self.channel_view_rx.borrow_and_update().clone();
-                    self.on_channel_view_change(channel_view).await?;
+            } else if let Some(channel) = self.channel.as_mut() {
+                let followed = channel.followed_mut();
+                select! {
+                    // Messages go before new zone-sdk events, so a run of events cannot hold
+                    // them up.
+                    biased;
+
+                    signal = mailbox_rx.recv() => {
+                        return Ok(signal)
+                    }
+                    event = followed.next_event() => {
+                        let span = info_span!("bedrock_event", otel.name = channel::span_name(&event));
+                        span.in_scope(|| {
+                            followed.on_event(event, &mut self.config_index, &mut self.deliveries)
+                        })?;
+                        self.store_config_index().await;
+                    }
                 }
-                signal = mailbox_rx.recv() => {
-                    return Ok(signal)
-                }
+            } else {
+                return Ok(mailbox_rx.recv().await);
             }
         }
     }
 }
 
-impl Message<CreateChannel> for BedrockActor {
+impl<S: StorageActorTrait> Message<FollowChannel> for BedrockActor<S> {
+    type Reply = Result<FollowStart>;
+
+    async fn handle(
+        &mut self,
+        FollowChannel {
+            channel_id,
+            recipient,
+        }: FollowChannel,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.assert_channel_id(channel_id);
+        if self.channel.is_some() {
+            return Err(Error::ChannelAlreadyFollowed);
+        }
+
+        let lib_slot = self
+            .node
+            .consensus_info()
+            .await
+            .inspect_err(|err| warn!(error = %err, "Failed to read the node's LIB"))
+            .ok()
+            .map(|info| info.cryptarchia_info.lib_slot);
+        let (followed, finalized_config) = self.follow().await?;
+        self.channel = Some(channel::Channel::Followed(followed));
+        self.deliveries = delivery::Deliveries::new(channel_id, Some(recipient));
+        Ok(FollowStart {
+            finalized_config,
+            lib_slot,
+        })
+    }
+}
+
+impl<S: StorageActorTrait> Message<InitializeChannelPublisher> for BedrockActor<S> {
+    type Reply = Result<Vec<PendingBlock>>;
+
+    async fn handle(
+        &mut self,
+        InitializeChannelPublisher {
+            channel_id,
+            channel_signing_key,
+            funding_pk,
+            priority_fee_percent,
+            resubmit_interval,
+            stale_refund_slots,
+        }: InitializeChannelPublisher,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.assert_channel_id(channel_id);
+
+        if let Some(channel::Channel::Publishing(publishing)) = &self.channel {
+            return Ok(publishing.pending_blocks());
+        }
+        let followed = match self.channel.take() {
+            None => self.follow().await?.0,
+            Some(channel::Channel::Followed(followed)) => followed,
+            Some(channel::Channel::Publishing(_)) => unreachable!("Returned above"),
+        };
+
+        let mut publishing = followed.into_publishing(channel::PublishConfig {
+            channel_signing_key,
+            funding_pk,
+            priority_fee_percent,
+            resubmit_interval,
+            stale_refund_slots,
+        });
+        let ready = publishing
+            .wait_until_ready(&mut self.config_index, &mut self.deliveries)
+            .await;
+        let pending_blocks = publishing.pending_blocks();
+        self.channel = Some(channel::Channel::Publishing(publishing));
+        self.store_config_index().await;
+        ready.map(|()| pending_blocks)
+    }
+}
+
+impl<S: StorageActorTrait> Message<CreateChannel> for BedrockActor<S> {
     type Reply = Result<PublishOutcome>;
 
     async fn handle(
         &mut self,
         CreateChannel {
+            channel_id,
             genesis,
             keys,
             channel_params,
             configuration_threshold,
+            transfer_threshold,
         }: CreateChannel,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let own_key = self.config.bedrock_signing_key.public_key();
-        if keys.first() != Some(&own_key) {
-            return Err(Error::ChannelCreationRequiresOurKey);
-        }
+        self.assert_channel_id(channel_id);
 
-        let key_count = keys.len();
-        let keys = VerifiedChannelKeys::try_from(keys)
-            .map_err(|err| Error::InvalidChannelKeyList(err.into()))?;
-
-        let config_op = genesis_config_op(
-            self.config.channel_id,
-            keys,
-            &channel_params,
-            configuration_threshold,
-        );
-
-        let data = borsh::to_vec(&genesis).map_err(Error::BlockEncodingFailed)?;
-        let inscription: Inscription = data.try_into().map_err(|_rr| Error::BlockTooLarge)?;
-        // A config moves the config tip only, so the first block chains on the root.
-        let inscribe_op = InscriptionOp {
-            channel_id: self.config.channel_id,
-            inscription,
-            parent: MsgId::root(),
-            signer: own_key.into_unverified(),
-        };
-        let msg_id = inscribe_op.id();
-
-        let funded = fund_ops(
-            &self.node,
-            &self.config,
-            [
-                Op::ChannelConfig(config_op),
-                Op::ChannelInscribe(inscribe_op),
-            ],
-        )
-        .await?;
-        let mantle_tx = funded.funded_tx;
-
-        let signature = self
-            .config
-            .bedrock_signing_key
-            .sign_payload(mantle_tx.hash().as_signing_bytes().as_ref());
-
-        let mut op_proofs = OpProofs::from([OpProof::ChannelMultiSigProof(genesis_config_proof())]);
-        op_proofs
-            .try_push(OpProof::Ed25519Sig(signature))
-            .map_err(|err| Error::TooManyOperationProofs(err.into()))?;
-        if let Some(transfer_proof) = funded.transfer_proof {
-            op_proofs
-                .try_push(transfer_proof)
-                .map_err(|err| Error::TooManyOperationProofs(err.into()))?;
-        }
-
-        info!("Creating the channel with {key_count} accredited key(s), genesis block bundled");
-
-        let tx = SignedOps::from_parts(mantle_tx, op_proofs)?;
-        self.submit_tx(tx, msg_id, MsgId::root())
+        let published = self
+            .publishing_channel()?
+            .create_channel(
+                genesis,
+                keys,
+                channel_params,
+                configuration_threshold,
+                transfer_threshold,
+            )
+            .await?;
+        Ok(self.stored(published).await)
     }
 }
 
-impl Message<PublishBlock> for BedrockActor {
+impl<S: StorageActorTrait> Message<PublishBlock> for BedrockActor<S> {
     type Reply = Result<PublishOutcome>;
 
     async fn handle(
         &mut self,
         PublishBlock {
+            channel_id,
             block,
             withdrawals,
             parent,
-            expected_seq,
         }: PublishBlock,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        if let Some(expected) = expected_seq
-            && expected != self.seq
-        {
-            return Err(Error::ChannelMoved {
-                provided: expected,
-                current: self.seq,
-            });
-        }
+        self.assert_channel_id(channel_id);
+        self.deliveries.check_not_moved()?;
 
-        let data = borsh::to_vec(&block).map_err(Error::BlockEncodingFailed)?;
-        let inscription: Inscription = data.try_into().map_err(|_err| Error::BlockTooLarge)?;
-
-        if let Some(parent) = parent {
-            if !withdrawals.is_empty() {
-                return Err(Error::CannotPublishBlockOnParentWithWithdrawals);
-            }
-
-            let inscribe_op = InscriptionOp {
-                channel_id: self.config.channel_id,
-                inscription,
-                parent,
-                signer: self
-                    .config
-                    .bedrock_signing_key
-                    .public_key()
-                    .into_unverified(),
-            };
-
-            let msg_id = inscribe_op.id();
-
-            let funded =
-                fund_ops(&self.node, &self.config, [Op::ChannelInscribe(inscribe_op)]).await?;
-            let mantle_tx = funded.funded_tx;
-
-            let signature = self
-                .config
-                .bedrock_signing_key
-                .sign_payload(mantle_tx.hash().as_signing_bytes().as_ref());
-            let mut op_proofs = OpProofs::from([OpProof::Ed25519Sig(signature)]);
-            if let Some(transfer_proof) = funded.transfer_proof {
-                op_proofs
-                    .try_push(transfer_proof)
-                    .map_err(|err| Error::TooManyOperationProofs(err.into()))?;
-            }
-
-            let tx = SignedOps::from_parts(mantle_tx, op_proofs)?;
-            self.submit_tx(tx, msg_id, parent)
-        } else {
-            let (result, checkpoint) = if withdrawals.is_empty() {
-                self.sequencer
-                    .handle()
-                    .publish(inscription)
-                    .await
-                    .map_err(|err| Error::SubmitSignedTransactionFailed(err.into()))?
-            } else {
-                self.sequencer
-                    .handle()
-                    .publish_atomic_withdraw(inscription, withdrawals, WithdrawInputs::Auto)
-                    .await
-                    .map_err(|err| Error::PublishAtomicWithdrawFailed(err.into()))?
-            };
-
-            Ok(PublishOutcome {
-                this_msg: result.tx.inscription().this_msg,
-                parent: result.tx.inscription().parent_msg,
-                checkpoint,
-                seq: self.next_seq(),
-                released_notes: released_notes(&result.tx),
-            })
-        }
+        let published = self
+            .publishing_channel()?
+            .publish_block(block, withdrawals, parent)
+            .await?;
+        Ok(self.stored(published).await)
     }
 }
 
-impl Message<PrepareConfig> for BedrockActor {
-    type Reply = Result<PreparedChannelConfig>;
+impl<S: StorageActorTrait> Message<PreparePin> for BedrockActor<S> {
+    type Reply = Result<PreparedPin>;
 
     async fn handle(
         &mut self,
-        PrepareConfig { target }: PrepareConfig,
+        PreparePin {
+            channel_id,
+            block,
+            parent,
+            notes,
+        }: PreparePin,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let keys = VerifiedChannelKeys::try_from(target.keys.clone())
-            .map_err(|err| Error::InvalidChannelKeyList(err.into()))?;
+        self.assert_channel_id(channel_id);
+        self.deliveries.check_not_moved()?;
 
-        self.sequencer
-            .handle()
-            .prepare_channel_config(
-                keys,
-                SlotTimeframe::from(target.posting_timeframe),
-                SlotTimeout::from(target.posting_timeout),
-                target.configuration_threshold,
-                target.transfer_threshold,
-            )
+        self.publishing_channel()?
+            .prepare_pin(block, parent, &notes)
             .await
-            .map_err(Into::into)
     }
 }
 
-impl Message<ChangeChannelConfig> for BedrockActor {
+impl<S: StorageActorTrait> Message<PublishPin> for BedrockActor<S> {
+    type Reply = Result<PublishOutcome>;
+
+    async fn handle(
+        &mut self,
+        PublishPin {
+            channel_id,
+            prepared,
+            signatures,
+        }: PublishPin,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.assert_channel_id(channel_id);
+        self.deliveries.check_not_moved()?;
+
+        let published = self
+            .publishing_channel()?
+            .publish_pin(prepared, signatures)?;
+        Ok(self.stored(published).await)
+    }
+}
+
+impl<S: StorageActorTrait> Message<PrepareConfig> for BedrockActor<S> {
+    type Reply = Result<PreparedConfig>;
+
+    async fn handle(
+        &mut self,
+        PrepareConfig {
+            channel_id,
+            keys,
+            posting_timeframe,
+            posting_timeout,
+            configuration_threshold,
+            transfer_threshold,
+        }: PrepareConfig,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.assert_channel_id(channel_id);
+
+        self.publishing_channel()?
+            .prepare_config(
+                keys,
+                posting_timeframe,
+                posting_timeout,
+                configuration_threshold,
+                transfer_threshold,
+            )
+            .await
+    }
+}
+
+impl<S: StorageActorTrait> Message<ChangeChannelConfig> for BedrockActor<S> {
     type Reply = Result<()>;
 
     async fn handle(
         &mut self,
         ChangeChannelConfig {
+            channel_id,
             prepared,
             signatures,
         }: ChangeChannelConfig,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let signatures = IndexedSignatures::try_from_iter(signatures.into_iter().map(Into::into))
-            .map_err(|err| Error::ChannelMultiSigProofAssemblyFailed(err.into()))?;
-        self.sequencer
-            .handle()
-            .submit_channel_config(prepared, signatures)?;
+        self.assert_channel_id(channel_id);
 
-        Ok(())
+        self.publishing_channel()?
+            .change_channel_config(prepared, signatures)
     }
 }
 
-impl Message<CheckChannelExists> for BedrockActor {
+impl<S: StorageActorTrait> Message<CheckChannelExists> for BedrockActor<S> {
     type Reply = Result<bool>;
 
     async fn handle(
         &mut self,
-        _msg: CheckChannelExists,
+        CheckChannelExists { channel_id }: CheckChannelExists,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        self.assert_channel_id(channel_id);
+
         Ok(self
             .node
-            .channel_state(self.config.channel_id)
+            .channel_state(channel_id)
             .await
             .map_err(|err| Error::NodeRequestFailed(err.into()))?
             .is_some())
     }
 }
 
-impl Message<GetChannelId> for BedrockActor {
-    type Reply = GetChannelIdReply;
+impl<S: StorageActorTrait> Message<CheckIsOurTurn> for BedrockActor<S> {
+    type Reply = Result<bool>;
 
     async fn handle(
         &mut self,
-        GetChannelId: GetChannelId,
+        CheckIsOurTurn { channel_id }: CheckIsOurTurn,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        GetChannelIdReply {
-            channel_id: self.config.channel_id,
-        }
+        self.assert_channel_id(channel_id);
+
+        Ok(self.publishing_channel()?.check_is_our_turn())
     }
 }
 
-impl Message<CheckIsOurTurn> for BedrockActor {
-    type Reply = bool;
-
-    async fn handle(
-        &mut self,
-        CheckIsOurTurn: CheckIsOurTurn,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.sequencer
-            .subscribe_turn_to_write()
-            .borrow()
-            .our_turn_to_write
-    }
-}
-
-impl Message<GetAccreditedKeys> for BedrockActor {
+impl<S: StorageActorTrait> Message<GetAccreditedKeys> for BedrockActor<S> {
     type Reply = Result<Option<AccreditedKeys>>;
 
     async fn handle(
         &mut self,
-        _msg: GetAccreditedKeys,
+        GetAccreditedKeys { channel_id }: GetAccreditedKeys,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        self.assert_channel_id(channel_id);
+
         self.node
-            .channel_state(self.config.channel_id)
+            .channel_state(self.channel_id)
             .await
             .map_err(|err| Error::NodeRequestFailed(err.into()))?
             .map(|state| -> Result<AccreditedKeys> {
@@ -629,132 +552,193 @@ impl Message<GetAccreditedKeys> for BedrockActor {
                     keys: verified_keys(&state.accredited_keys)?,
                     config_tip: state.config_tip_hash,
                     tip_sequencer: state.tip_sequencer,
+                    tip_slot: state.tip_slot,
                 })
             })
             .transpose()
     }
 }
 
-impl Message<GetChannelTipSlot> for BedrockActor {
+impl<S: StorageActorTrait> Message<GetChannelNotes> for BedrockActor<S> {
+    type Reply = Result<HashSet<NoteId>>;
+
+    async fn handle(
+        &mut self,
+        GetChannelNotes { channel_id }: GetChannelNotes,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.assert_channel_id(channel_id);
+
+        Ok(self.publishing_channel()?.channel_notes())
+    }
+}
+
+impl<S: StorageActorTrait> Message<GetChannelTipSlot> for BedrockActor<S> {
     type Reply = Result<Option<Slot>>;
 
     async fn handle(
         &mut self,
-        _msg: GetChannelTipSlot,
+        GetChannelTipSlot { channel_id }: GetChannelTipSlot,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        self.assert_channel_id(channel_id);
+
         Ok(self
             .node
-            .channel_state(self.config.channel_id)
+            .channel_state(self.channel_id)
             .await
             .map_err(|err| Error::NodeRequestFailed(err.into()))?
             .map(|state| state.tip_slot))
     }
 }
 
-impl Message<GetChannelTipMessageId> for BedrockActor {
+impl<S: StorageActorTrait> Message<GetChannelTipMessageId> for BedrockActor<S> {
     type Reply = Result<Option<MsgId>>;
 
     async fn handle(
         &mut self,
-        _msg: GetChannelTipMessageId,
+        GetChannelTipMessageId { channel_id }: GetChannelTipMessageId,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
+        self.assert_channel_id(channel_id);
+
         Ok(self
             .node
-            .channel_state(self.config.channel_id)
+            .channel_state(self.channel_id)
             .await
             .map_err(|err| Error::NodeRequestFailed(err.into()))?
             .map(|state| state.tip_message))
     }
 }
 
-impl Message<ReadChannel> for BedrockActor {
-    type Reply = Result<BoxStream<(ZoneMessage, Slot)>>;
+impl<S: StorageActorTrait> Message<FilterFinallyAbsent> for BedrockActor<S> {
+    type Reply = Result<BTreeSet<SequencerKey>>;
 
     async fn handle(
         &mut self,
-        ReadChannel { after }: ReadChannel,
+        FilterFinallyAbsent {
+            channel_id,
+            at,
+            keys,
+            depth,
+        }: FilterFinallyAbsent,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        const BATCH_SIZE: Slot = Slot::new(100);
+        self.assert_channel_id(channel_id);
 
-        let node_lib_slot = self
+        let mut reader = NodeReader {
+            node: &self.node,
+            block_summary_cache: &mut self.block_summary_cache,
+            channel_id,
+        };
+        let walk =
+            finality::filter_finally_absent(&mut reader, &mut self.config_index, at, &keys, depth);
+        let verdict = tokio::time::timeout(FILTER_FINALLY_ABSENT_BUDGET, walk)
+            .await
+            .unwrap_or(Err(Error::VerdictTimedOut));
+        self.store_config_index().await;
+        if verdict.is_ok() && self.block_summary_cache.len() >= NodeReader::CACHE_CAPACITY {
+            keep_newest_block_summaries(&mut self.block_summary_cache);
+        }
+        verdict
+    }
+}
+
+/// [`L1Reader`] over the node, caching the block summaries it reads by id.
+struct NodeReader<'actor> {
+    node: &'actor TimeoutNode<NodeHttpClient>,
+    block_summary_cache: &'actor mut HashMap<HeaderId, BlockSummary>,
+    channel_id: ChannelId,
+}
+
+impl NodeReader<'_> {
+    /// Block summaries cached before a walk that returns a verdict drops all but the newest
+    /// [`Self::CACHE_KEPT`].
+    const CACHE_CAPACITY: usize = 4096;
+    /// Block summaries a full cache keeps, the newest by slot, so a walk over fewer blocks stays
+    /// cached.
+    const CACHE_KEPT: usize = 2048;
+
+    fn summarize(&self, block: &logos_blockchain_zone_sdk::node_types::ApiBlock) -> BlockSummary {
+        BlockSummary::new(
+            block.header.id,
+            block.header.parent_block,
+            block.header.slot.into_inner(),
+            &block.transactions,
+            self.channel_id,
+        )
+    }
+}
+
+impl L1Reader for NodeReader<'_> {
+    async fn tip_block_summary(&mut self) -> Result<BlockSummary> {
+        let tip = self
             .node
             .consensus_info()
             .await
             .map_err(|err| Error::NodeRequestFailed(err.into()))?
             .cryptarchia_info
-            .lib_slot;
+            .tip;
+        self.block_summary(tip).await
+    }
+
+    async fn block_summary(&mut self, id: HeaderId) -> Result<BlockSummary> {
+        if let Some(block_summary) = self.block_summary_cache.get(&id) {
+            return Ok(block_summary.clone());
+        }
+        let block = self
+            .node
+            .block(id)
+            .await
+            .map_err(|err| Error::NodeRequestFailed(err.into()))?
+            .ok_or(Error::BlockMissing(id))?;
+        let block_summary = self.summarize(&block);
+        self.block_summary_cache
+            .insert(block_summary.id, block_summary.clone());
+        Ok(block_summary)
+    }
+
+    async fn final_block_summaries(&mut self, from: u64, to: u64) -> Result<Vec<BlockSummary>> {
         let lib_slot = self
-            .ready_lib_slot
-            .map_or(node_lib_slot, |ready| ready.min(node_lib_slot));
-        let start_slot = after.map_or_else(Slot::genesis, |s| s.strict_add(1.into()));
-
-        let node = self.node.clone();
-        let channel_id = self.config.channel_id;
-        let stream = futures::stream::unfold(start_slot, move |current_slot| {
-            let node = node.clone();
-            async move {
-                if current_slot > lib_slot {
-                    return None;
-                }
-
-                let end_slot = (Slot::from(
-                    current_slot
-                        .into_inner()
-                        .saturating_add(BATCH_SIZE.into_inner())
-                        .checked_sub(1)
-                        .expect("slot shouldn't overflow"),
-                ))
-                .min(lib_slot);
-
-                match node
-                    .zone_messages_in_blocks(current_slot, end_slot, channel_id)
-                    .await
-                {
-                    Ok(messages) => Some((messages, end_slot.strict_add(1.into()))),
-                    Err(e) => {
-                        log::warn!(
-                            "Failed to fetch zone messages from blocks {current_slot:?}..={end_slot:?}: {e}",
-                        );
-                        None
-                    }
-                }
-            }
-        })
-        .flatten();
-
-        Ok(Box::pin(stream))
+            .node
+            .consensus_info()
+            .await
+            .map_err(|err| Error::NodeRequestFailed(err.into()))?
+            .cryptarchia_info
+            .lib_slot
+            .into_inner();
+        // A slot past the node's LIB is refused, not read as empty.
+        if to > lib_slot {
+            return Err(Error::SlotNotFinal(to));
+        }
+        let blocks = self
+            .node
+            .immutable_blocks(Slot::from(from), Slot::from(to))
+            .await
+            .map_err(|err| Error::NodeRequestFailed(err.into()))?;
+        Ok(blocks
+            .into_iter()
+            .map(|block| self.summarize(&block))
+            .collect())
     }
 }
 
 #[cfg(feature = "test-utils")]
-impl Message<PublishRawInscription> for BedrockActor {
+impl<S: StorageActorTrait> Message<PublishRawInscription> for BedrockActor<S> {
     type Reply = Result<PublishOutcome>;
 
     async fn handle(
         &mut self,
-        PublishRawInscription { data }: PublishRawInscription,
+        PublishRawInscription { channel_id, data }: PublishRawInscription,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let inscription: Inscription =
-            data.try_into().map_err(|_err| Error::InscriptionTooLarge)?;
+        self.assert_channel_id(channel_id);
 
-        let (result, checkpoint) = self
-            .sequencer
-            .handle()
-            .publish(inscription)
-            .await
-            .map_err(|err| Error::SubmitSignedTransactionFailed(err.into()))?;
-
-        Ok(PublishOutcome {
-            this_msg: result.tx.inscription().this_msg,
-            parent: result.tx.inscription().parent_msg,
-            checkpoint,
-            seq: self.next_seq(),
-            released_notes: released_notes(&result.tx),
-        })
+        let published = self
+            .publishing_channel()?
+            .publish_raw_inscription(data)
+            .await?;
+        Ok(self.stored(published).await)
     }
 }
 
@@ -766,71 +750,24 @@ impl TryFrom<&logos_blockchain_zone_sdk::node_types::ChannelState> for LiveChann
             keys: verified_keys(&state.accredited_keys)?,
             config_tip: state.config_tip_hash,
             required_signatures: state.configuration_threshold,
+            transfer_threshold: state.transfer_threshold,
+            posting_timeframe: state.posting_timeframe.clone().into(),
+            posting_timeout: state.posting_timeout.clone().into(),
         })
     }
 }
 
-/// The config op that creates `channel_id` with `keys` as its founding committee.
-fn genesis_config_op(
-    channel_id: ChannelId,
-    keys: VerifiedChannelKeys,
-    channel_params: &ChannelParams,
-    configuration_threshold: u16,
-) -> ChannelConfigOp {
-    ChannelConfigOp {
-        channel: channel_id,
-        // The channel does not exist yet, so the config lineage starts here.
-        parent: MsgId::root(),
-        keys,
-        posting_timeframe: SlotTimeframe::from(channel_params.posting_timeframe),
-        posting_timeout: SlotTimeout::from(channel_params.posting_timeout),
-        configuration_threshold,
-        transfer_threshold: system_accounts::DEFAULT_SEQUENCER_WITHDRAW_THRESHOLD,
-    }
-}
-
-/// The proof a channel-creating config op carries. No key is accredited before
-/// creation, so Bedrock verifies against a threshold of zero and rejects the
-/// whole creation tx over a proof holding any signature.
-const fn genesis_config_proof() -> ChannelMultiSigProof {
-    ChannelMultiSigProof::empty()
-}
-
-/// Whether `checkpoint` records messages published to or observed on the channel.
-fn has_channel_activity(checkpoint: &SequencerCheckpoint) -> bool {
-    checkpoint.last_msg_id != MsgId::root() || !checkpoint.pending_txs.is_empty()
-}
-
-/// A message-lineage entry, with its block when the payload decodes to one.
-fn channel_entry(inscription: &InscriptionInfo) -> ChannelEntry {
-    let block = if <Inscription as AsRef<[u8]>>::as_ref(&inscription.payload).is_empty() {
-        None
-    } else {
-        block_from_inscription(inscription)
+/// Drops all but the newest [`NodeReader::CACHE_KEPT`] summaries of `cache` by slot.
+fn keep_newest_block_summaries(cache: &mut HashMap<HeaderId, BlockSummary>) {
+    let mut slots: Vec<u64> = cache
+        .values()
+        .map(|block_summary| block_summary.slot)
+        .collect();
+    let Some(oldest_kept) = slots.len().checked_sub(NodeReader::CACHE_KEPT) else {
+        return;
     };
-    ChannelEntry {
-        msg: inscription.this_msg,
-        parent: inscription.parent_msg,
-        block,
-    }
-}
-
-/// Every message-lineage entry a channel tx carries, in op order.
-///
-/// A config op is on the config lineage, not this one, so it is skipped.
-fn channel_entries(tx: &ChannelUpdateTx, channel_id: ChannelId) -> Vec<ChannelEntry> {
-    match tx {
-        ChannelUpdateTx::Inscription(info) => vec![channel_entry(info)],
-        ChannelUpdateTx::AtomicWithdraw(bundle) => vec![channel_entry(&bundle.inscription)],
-        ChannelUpdateTx::PinDeposit(bundle) => vec![channel_entry(&bundle.inscription)],
-        ChannelUpdateTx::Config(_) => Vec::new(),
-        ChannelUpdateTx::Custom(signed_tx) => {
-            logos_blockchain_zone_sdk::sequencer::channel_inscriptions(signed_tx, channel_id)
-                .iter()
-                .map(channel_entry)
-                .collect()
-        }
-    }
+    let (_, &mut cutoff, _) = slots.select_nth_unstable(oldest_kept);
+    cache.retain(|_, block_summary| block_summary.slot >= cutoff);
 }
 
 /// Deserialize an inscription payload into `(this_msg, Block)`. Bad payloads are
@@ -838,7 +775,7 @@ fn channel_entries(tx: &ChannelUpdateTx, channel_id: ChannelId) -> Vec<ChannelEn
 fn block_from_inscription(inscription: &InscriptionInfo) -> Option<Block> {
     borsh::from_slice::<Block>(&inscription.payload)
         .inspect_err(|err| {
-            warn!("Failed to deserialize block from inscription: {err:?}");
+            warn!(error = ?err, "Failed to deserialize block from inscription");
         })
         .ok()
 }
@@ -856,26 +793,11 @@ fn released_notes(tx: &PendingTx) -> Vec<NoteId> {
     }
 }
 
-/// Funds `ops` from the node's wallet, which appends a fee transfer (paid from
-/// `funding_key`, change back to it) and returns its proof.
-async fn fund_ops(
-    node: &NodeHttpClient,
-    config: &Config,
-    ops: impl IntoIterator<Item = Op>,
-) -> Result<WalletFundResponseBody> {
-    let tx_builder = MantleTxBuilder::new()
-        .extend_ops(ops)
-        .map_err(|err| Error::TooManyOperationProofs(err.into()))?;
-
-    node.fund_tx(WalletFundRequestBody {
-        tip: None,
-        tx_builder,
-        change_public_key: config.funding_pk,
-        funding_public_keys: vec![config.funding_pk],
-        max_tx_fee: GasCost::new(logos_blockchain_core::mantle::Value::MAX),
-        priority_fee_percent: config.priority_fee_percent,
-    })
-    .await
-    .context("Failed to fund channel transaction")
-    .map_err(Error::NodeRequestFailed)
+fn verified_keys(keys: &[UnverifiedEd25519PublicKey]) -> Result<Vec<Ed25519PublicKey>> {
+    keys.iter()
+        .map(|key| {
+            Ed25519PublicKey::try_from(*key)
+                .map_err(|err| Error::InvalidChannelKeyList(anyhow!("{err:?}")))
+        })
+        .collect()
 }

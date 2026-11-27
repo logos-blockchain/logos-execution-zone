@@ -54,6 +54,65 @@ class DiscoverIntegrationTestTargetsTests(unittest.TestCase):
 
         self.assertEqual(discover_targets(summary), ["auth_transfer"])
 
+    def test_splits_configured_binaries_into_one_entry_per_test(self) -> None:
+        summary = {
+            "rust-suites": {
+                "integration_tests::scoped_reads": suite(
+                    "scoped_reads",
+                    ("first_offence", False, "matches"),
+                    ("second_offence", False, "matches"),
+                    ("blocked_on_finality", True, "mismatch"),
+                ),
+                "integration_tests::gossip": suite(
+                    "gossip",
+                    ("peers_converge", False, "matches"),
+                    ("peers_recover", False, "matches"),
+                ),
+            }
+        }
+
+        self.assertEqual(
+            discover_targets(summary),
+            [
+                "gossip",
+                "scoped_reads::first_offence",
+                "scoped_reads::second_offence",
+            ],
+        )
+
+    def test_keeps_the_module_path_of_a_split_test(self) -> None:
+        summary = {
+            "rust-suites": {
+                "integration_tests::program_deployment": suite(
+                    "program_deployment",
+                    ("deploy_and_execute_program", False, "matches"),
+                    ("system_upgrade::a_cancelled_upgrade", False, "matches"),
+                ),
+            }
+        }
+
+        # The shard filter splits on the first `::` only, so the module path has
+        # to survive into the target or the test it names cannot be found.
+        self.assertEqual(
+            discover_targets(summary),
+            [
+                "program_deployment::deploy_and_execute_program",
+                "program_deployment::system_upgrade::a_cancelled_upgrade",
+            ],
+        )
+
+    def test_drops_a_split_binary_with_no_runnable_tests(self) -> None:
+        summary = {
+            "rust-suites": {
+                "integration_tests::slashing": suite(
+                    "slashing",
+                    ("blocked_on_finality", True, "mismatch"),
+                ),
+            }
+        }
+
+        self.assertEqual(discover_targets(summary), [])
+
     def test_rejects_binary_only_listing(self) -> None:
         with self.assertRaises(DiscoveryError):
             discover_targets(

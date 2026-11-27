@@ -2,25 +2,23 @@ use std::{path::Path, sync::Arc};
 
 use anyhow::Result;
 use arc_swap::ArcSwap;
-pub use chain_state::{AcceptOutcome, BlockIngestError, StallReason};
+pub use chain_state::{AcceptOutcome, BlockIngestError, StallReason, timeout_node::TimeoutNode};
 use chain_state::{Anchor, ChainConsistency, zone_indexer::ZoneIndexer};
 use common::block::Block;
 // TODO: Remove after testnet
 use futures::StreamExt as _;
-use log::{error, warn};
 use logos_blockchain_zone_sdk::{CommonHttpClient, Slot, ZoneMessage, adapter::NodeHttpClient};
 use retry::ApplyRetryGate;
+use tracing::{error, info, warn};
 
 use crate::{
     block_store::IndexerStore,
     config::IndexerConfig,
-    cross_zone_verifier::{CrossZoneVerifier, CrossZoneVerifyError, ForgedDispatch, SeenKey},
-    status::{CrossZoneHalt, IndexerStatus, IndexerSyncStatus},
+    status::{IndexerStatus, IndexerSyncStatus},
 };
 
 pub mod block_store;
 pub mod config;
-pub mod cross_zone_verifier;
 pub mod event_filter;
 mod retry;
 pub mod status;
@@ -40,15 +38,13 @@ struct SlotProgress(Option<Slot>);
 
 #[derive(Clone)]
 pub struct IndexerCore {
-    pub zone_indexer: Arc<ZoneIndexer<NodeHttpClient>>,
+    pub zone_indexer: Arc<ZoneIndexer<TimeoutNode<NodeHttpClient>>>,
     /// Direct node handle for queries outside `ZoneIndexer`'s streaming API.
-    pub node: NodeHttpClient,
+    pub node: TimeoutNode<NodeHttpClient>,
     pub config: IndexerConfig,
     pub store: IndexerStore,
     /// Live ingestion status; updated by the ingest stream, read by `status`.
     pub status: Arc<ArcSwap<IndexerSyncStatus>>,
-    /// Option B cross-zone verifier; `None` when cross-zone messaging is disabled.
-    pub verifier: Option<CrossZoneVerifier>,
 }
 
 impl SlotProgress {
@@ -86,9 +82,9 @@ impl IndexerCore {
             ChainConsistency::Consistent | ChainConsistency::Inconclusive => Ok(core),
             ChainConsistency::Inconsistent(mismatch) if config.allow_chain_reset => {
                 warn!(
-                    "Chain reset detected ({mismatch}). Wiping indexer store at {} and \
-                     re-indexing.",
-                    home.display()
+                    %mismatch,
+                    home = %home.display(),
+                    "Chain reset detected. Wiping indexer store and re-indexing."
                 );
                 drop(core); // sole owner before the ingest task is spawned → closes the DB
                 storage::indexer::RocksDBIO::destroy(&home)?;
@@ -110,41 +106,21 @@ impl IndexerCore {
         let home = storage_dir.join(format!("rocksdb-{}", config.channel_id));
 
         let basic_auth = config.bedrock_config.auth.clone().map(Into::into);
-        let node = NodeHttpClient::new(
+        let node = TimeoutNode::new(NodeHttpClient::new(
             CommonHttpClient::new(basic_auth),
             config.bedrock_config.addr.clone(),
-        );
-        let zone_indexer = ZoneIndexer::new(config.channel_id, node.clone());
+        ));
+        let zone_indexer =
+            ZoneIndexer::new(config.channel_id, node.clone(), config.backfill_batch_slots);
 
-        // Option B verifier: re-derives each cross-zone dispatch from the peer's
-        // finalized blocks. `None` when cross-zone messaging is disabled.
-        let verifier = CrossZoneVerifier::start(&config);
-
-        let store = IndexerStore::open_db(
-            &home,
-            config.cross_zone.is_some(),
-            Vec::new(),
-            config.event_filter.to_filter()?,
-        )?;
-        // A persisted halt outlives the process: report it from boot with its
-        // stored reason. The ingest loop may still start and re-halt
-        // identically, which refreshes the record.
-        let initial_status = match store.get_cross_zone_halt() {
-            Ok(Some(halt)) => IndexerSyncStatus::halted(halt.to_string()),
-            Ok(None) => IndexerSyncStatus::starting(),
-            Err(err) => {
-                warn!("Failed to read cross-zone halt record at startup: {err:#}");
-                IndexerSyncStatus::starting()
-            }
-        };
+        let store = IndexerStore::open_db(&home, Vec::new(), config.event_filter.to_filter()?)?;
 
         Ok(Self {
             zone_indexer: Arc::new(zone_indexer),
             store,
             node,
             config,
-            status: Arc::new(ArcSwap::from_pointee(initial_status)),
-            verifier,
+            status: Arc::new(ArcSwap::from_pointee(IndexerSyncStatus::starting())),
         })
     }
 
@@ -161,7 +137,13 @@ impl IndexerCore {
             return Ok(ChainConsistency::Inconclusive);
         };
 
-        chain_state::verify_chain_consistency(&self.node, self.config.channel_id, &anchor).await
+        chain_state::verify_chain_consistency(
+            &self.node,
+            self.config.channel_id,
+            &anchor,
+            self.config.backfill_batch_slots,
+        )
+        .await
     }
 
     /// Builds the anchor for the startup check.
@@ -207,21 +189,20 @@ impl IndexerCore {
         let indexed_block_id = match self.store.get_last_block_id() {
             Ok(id) => id,
             Err(err) => {
-                warn!("Failed to read last indexed block id for status: {err:#}");
+                warn!(
+                    error = format_args!("{err:#}"),
+                    "Failed to read last indexed block id for status"
+                );
                 None
             }
         };
         let stall_reason = match self.store.get_stall_reason() {
             Ok(reason) => reason,
             Err(err) => {
-                warn!("Failed to read stall reason for status: {err:#}");
-                None
-            }
-        };
-        let cross_zone_halt = match self.store.get_cross_zone_halt() {
-            Ok(halt) => halt,
-            Err(err) => {
-                warn!("Failed to read cross-zone halt record for status: {err:#}");
+                warn!(
+                    error = format_args!("{err:#}"),
+                    "Failed to read stall reason for status"
+                );
                 None
             }
         };
@@ -229,12 +210,6 @@ impl IndexerCore {
             sync,
             indexed_block_id,
             stall_reason,
-            cross_zone_halt,
-            cross_zone_peers: self
-                .verifier
-                .as_ref()
-                .map(CrossZoneVerifier::peer_statuses)
-                .unwrap_or_default(),
         }
     }
 
@@ -249,82 +224,11 @@ impl IndexerCore {
     fn advance_cursor(&self, cursor: &mut Option<Slot>, slot: Slot) {
         *cursor = Some(slot);
         if let Err(err) = self.store.set_zone_cursor(&slot) {
-            warn!("Failed to persist indexer cursor: {err:#}");
-        }
-    }
-
-    /// Clears the persisted halt record once the block it names applies, or
-    /// once a block at the recorded id applies under a different hash, which
-    /// proves the record stale. Called only after [`AcceptOutcome::Applied`],
-    /// never before apply. `pending_halt` mirrors the record so the hot path
-    /// compares in memory instead of reading the store per block.
-    fn clear_halt_for_block(&self, block: &Block, pending_halt: &mut Option<CrossZoneHalt>) {
-        let Some(halt) = pending_halt.as_ref() else {
-            return;
-        };
-        if halt.block_hash != block.header.hash && halt.block_id != block.header.block_id {
-            return;
-        }
-        if halt.block_hash != block.header.hash {
             warn!(
-                "Cross-zone halt record is stale: block {} applied with hash {}, not the recorded {}. Clearing it.",
-                block.header.block_id, block.header.hash, halt.block_hash
+                error = format_args!("{err:#}"),
+                "Failed to persist indexer cursor"
             );
         }
-        if let Err(err) = self.store.set_cross_zone_halt(&None) {
-            warn!("Failed to clear cross-zone halt record: {err:#}");
-            return;
-        }
-        *pending_halt = None;
-    }
-
-    /// The keys to record for an operator-listed block. Checked before
-    /// verification: a listed block skips it entirely, so listing a hash also
-    /// clears a dead-peer retry loop, not only a forged verdict. `None` when
-    /// the hash is not listed.
-    fn accept_listed(&self, block: &Block) -> Option<Vec<SeenKey>> {
-        if !self
-            .config
-            .cross_zone_accept_unverified
-            .contains(&block.header.hash)
-        {
-            return None;
-        }
-        error!(
-            "Accepting block {} without cross-zone verification: hash {} is listed in cross_zone_accept_unverified.",
-            block.header.block_id, block.header.hash
-        );
-        Some(self.verifier.as_ref().map_or_else(
-            || CrossZoneVerifier::unverified_dispatch_keys(block),
-            |verifier| verifier.accept_unverified(block),
-        ))
-    }
-
-    /// Persists the halt record for a forged verdict and flips the status; the
-    /// caller ends ingestion.
-    fn handle_forged(
-        &self,
-        block: &Block,
-        forged: &ForgedDispatch,
-        pending_halt: &mut Option<CrossZoneHalt>,
-    ) {
-        error!(
-            "Cross-zone verification failed for block {}: {forged}. Halting indexer ingestion.",
-            block.header.block_id
-        );
-        let halt = CrossZoneHalt {
-            block_id: block.header.block_id,
-            block_hash: block.header.hash,
-            src_zone: hex::encode(forged.src_zone),
-            src_block_id: forged.src_block_id,
-            src_tx_index: forged.src_tx_index,
-            verdict: forged.verdict.clone(),
-        };
-        if let Err(err) = self.store.set_cross_zone_halt(&Some(halt.clone())) {
-            error!("Failed to persist cross-zone halt record: {err:#}");
-        }
-        self.set_status(IndexerSyncStatus::halted(halt.to_string()));
-        *pending_halt = Some(halt);
     }
 
     /// Parks on an inscription that could not be parsed as an L2 block:
@@ -337,12 +241,15 @@ impl IndexerCore {
 
         // use `:#` to get the entire error chain
         let reason = format!("{error:#}");
-        error!("Failed to deserialize L2 block from zone-sdk: {reason}");
+        error!(%reason, "Failed to deserialize L2 block from zone-sdk");
         if let Err(err) =
             self.store
                 .record_stall(None, slot, BlockIngestError::Deserialize(reason.clone()))
         {
-            error!("Failed to record stall reason: {err:#}");
+            error!(
+                error = format_args!("{err:#}"),
+                "Failed to record stall reason"
+            );
             self.set_status(IndexerSyncStatus::error(format!("store error: {err:#}")));
             return false;
         }
@@ -362,27 +269,18 @@ impl IndexerCore {
         async_stream::stream! {
             let mut cursor = initial_cursor;
             let mut retry_gate = ApplyRetryGate::new();
-            // In-memory mirror of the persisted halt record, so clearing it
-            // when the recorded block later applies needs no per-block read.
-            let mut pending_halt = match self.store.get_cross_zone_halt() {
-                Ok(halt) => halt,
-                Err(err) => {
-                    warn!("Failed to read cross-zone halt record: {err:#}");
-                    None
-                }
-            };
 
             if let Some(slot) = &cursor {
-                log::info!("Resuming indexer from cursor {slot:?}");
+                info!(slot = slot.into_inner(), "Resuming indexer from cursor");
             } else {
-                log::info!("Starting indexer from beginning of channel");
+                info!("Starting indexer from beginning of channel");
             }
 
             loop {
                 let stream = match self.zone_indexer.next_messages(cursor).await {
                     Ok(s) => s,
                     Err(err) => {
-                        error!("Failed to start zone-sdk next_messages stream: {err}");
+                        error!(error = %err, "Failed to start zone-sdk next_messages stream");
                         self.set_status(IndexerSyncStatus::error(format!(
                             "cannot reach L1 / read channel: {err}"
                         )));
@@ -392,7 +290,6 @@ impl IndexerCore {
                 };
                 let mut stream = std::pin::pin!(stream);
 
-                let mut announced_syncing = false;
                 let mut had_cycle_error = false;
                 // The slot being consumed: every message of it seen so far is
                 // handled, but another may follow, so the cursor may not move
@@ -402,15 +299,22 @@ impl IndexerCore {
                 // for ever if this pass ends early.
                 let mut in_progress = SlotProgress::default();
 
-                while let Some((msg, slot)) = stream.next().await {
+                while let Some(item) = stream.next().await {
+                    let (msg, slot) = match item {
+                        Ok(message) => message,
+                        Err(err) => {
+                            error!(error = %err, "Channel read failed, holding the cursor");
+                            self.set_status(IndexerSyncStatus::error(format!(
+                                "cannot read channel: {err}"
+                            )));
+                            had_cycle_error = true;
+                            break;
+                        }
+                    };
+
                     // A message from a later slot means the previous one is complete.
                     if let Some(done) = in_progress.enter(slot) {
                         self.advance_cursor(&mut cursor, done);
-                    }
-
-                    if !announced_syncing {
-                        self.set_status(IndexerSyncStatus::syncing());
-                        announced_syncing = true;
                     }
 
                     let zone_block = match msg {
@@ -432,67 +336,29 @@ impl IndexerCore {
                         }
                     };
 
-                    // Re-derive and verify every cross-zone dispatch the block
-                    // carries before applying it, so the destination never trusts
-                    // a dispatch just because a sequencer signed the block: a
-                    // forged one halts ingestion rather than persisting invalid
-                    // state, while a replay is left to the inbox, which refuses it
-                    // on chain. An operator-listed block hash skips verification
-                    // entirely, ahead of it, so listing clears a dead-peer retry
-                    // loop as well as a forged verdict. The keys are marked seen
-                    // only once the block applies (below), so a block that does
-                    // not apply cannot poison the seen-set.
-                    let verified_keys = match self.accept_listed(&block) {
-                        Some(keys) => keys,
-                        None => match &self.verifier {
-                            Some(verifier) => match verifier.verify_block(&block, slot).await {
-                                Ok(keys) => keys,
-                                Err(CrossZoneVerifyError::Forged(forged)) => {
-                                    self.handle_forged(&block, &forged, &mut pending_halt);
-                                    return;
-                                }
-                                // Not judged either way yet, so retry rather than halt.
-                                Err(err @ CrossZoneVerifyError::PeerUnavailable { .. }) => {
-                                    error!(
-                                        "Cross-zone verification of block {} stalled: {err}. Holding the cursor and retrying.",
-                                        block.header.block_id
-                                    );
-                                    self.set_status(IndexerSyncStatus::error(format!(
-                                        "cross-zone peer unavailable: {err}"
-                                    )));
-                                    had_cycle_error = true;
-                                    break;
-                                }
-                            },
-                            None => Vec::new(),
-                        },
-                    };
-
                     match self.store.accept_block(&block, slot).await {
                         // Indexer writes logs directly into DB, they are redundant here.
                         Ok(AcceptOutcome::Applied(_)) => {
-                            if let Some(verifier) = &self.verifier {
-                                verifier.record_seen(verified_keys).await;
-                            }
-                            // Only an applied block may clear the halt record;
-                            // clearing earlier would drop it for a block that
-                            // never reaches the chain state.
-                            self.clear_halt_for_block(&block, &mut pending_halt);
                             retry_gate.reset();
-                            log::info!("Indexed L2 block {} at channel {}", block.header.block_id, self.config.channel_id);
+                            info!(
+                                block_id = block.header.block_id,
+                                channel_id = %self.config.channel_id,
+                                "Indexed L2 block"
+                            );
                             self.set_status(IndexerSyncStatus::syncing());
                             yield Ok(block);
                         }
                         Ok(AcceptOutcome::AlreadyApplied) => {
-                            log::info!(
-                                "Skipping already-applied block {}",
-                                block.header.block_id
+                            info!(
+                                block_id = block.header.block_id,
+                                "Skipping already-applied block"
                             );
                         }
                         Ok(AcceptOutcome::Parked(ingest_err)) => {
                             error!(
-                                "Parked at block {}: {ingest_err}",
-                                block.header.block_id
+                                block_id = block.header.block_id,
+                                error = %ingest_err,
+                                "Parked at block"
                             );
                             self.set_status(IndexerSyncStatus::stalled(ingest_err.to_string()));
                             // L1 proceeds regardless
@@ -501,8 +367,10 @@ impl IndexerCore {
                             let attempts = retry_gate.register_failure(block.header.block_id);
                             if attempts >= APPLY_RETRY_LIMIT {
                                 error!(
-                                    "Parked at block {} after {attempts} failed apply attempts: {ingest_err}",
-                                    block.header.block_id
+                                    block_id = block.header.block_id,
+                                    attempts,
+                                    error = %ingest_err,
+                                    "Parked at block after failed apply attempts"
                                 );
                                 // The stall must be durable before the cursor moves.
                                 if let Err(err) = self.store.record_stall(
@@ -511,8 +379,9 @@ impl IndexerCore {
                                     ingest_err.clone(),
                                 ) {
                                     error!(
-                                        "Failed to record stall reason for block {}: {err:#}",
-                                        block.header.block_id
+                                        block_id = block.header.block_id,
+                                        error = format_args!("{err:#}"),
+                                        "Failed to record stall reason"
                                     );
                                     self.set_status(IndexerSyncStatus::error(format!(
                                         "store error: {err:#}"
@@ -524,8 +393,11 @@ impl IndexerCore {
                                 retry_gate.reset();
                             } else {
                                 error!(
-                                    "Failed to apply block {} (attempt {attempts}/{APPLY_RETRY_LIMIT}), will retry: {ingest_err}",
-                                    block.header.block_id
+                                    block_id = block.header.block_id,
+                                    attempt = attempts,
+                                    max_attempts = APPLY_RETRY_LIMIT,
+                                    error = %ingest_err,
+                                    "Failed to apply block, will retry"
                                 );
                                 self.set_status(IndexerSyncStatus::error(format!(
                                     "apply failed, retrying: {ingest_err}"
@@ -538,8 +410,9 @@ impl IndexerCore {
                             // Infrastructure error (DB read/write), not a bad block.
                             // will re-poll from the same cursor next cycle.
                             error!(
-                                "Store error applying block {}: {err:#}",
-                                block.header.block_id
+                                block_id = block.header.block_id,
+                                error = format_args!("{err:#}"),
+                                "Store error applying block"
                             );
                             self.set_status(IndexerSyncStatus::error(format!(
                                 "store error: {err:#}"
@@ -569,7 +442,10 @@ impl IndexerCore {
                     Ok(None) => self.set_status(IndexerSyncStatus::caught_up()),
                     Ok(Some(_)) => {}
                     Err(err) => {
-                        warn!("Failed to read stall reason after draining stream; not marking caught up: {err:#}");
+                        warn!(
+                error = format_args!("{err:#}"),
+                "Failed to read stall reason after draining stream, not marking caught up"
+            );
                     }
                 }
                 tokio::time::sleep(poll_interval).await;
@@ -580,7 +456,7 @@ impl IndexerCore {
 
 #[cfg(test)]
 mod tests {
-    use std::{num::NonZeroU32, time::Duration};
+    use std::time::Duration;
 
     use common::{HashType, block::HashableBlockData};
     use logos_blockchain_zone_sdk::Slot;
@@ -634,13 +510,6 @@ mod tests {
     }
 
     fn unreachable_core(dir: &std::path::Path) -> IndexerCore {
-        unreachable_core_accepting(dir, Vec::new())
-    }
-
-    fn unreachable_core_accepting(
-        dir: &std::path::Path,
-        cross_zone_accept_unverified: Vec<HashType>,
-    ) -> IndexerCore {
         let config = IndexerConfig {
             consensus_info_polling_interval: Duration::from_secs(1),
             bedrock_config: ClientConfig {
@@ -649,9 +518,7 @@ mod tests {
             },
             channel_id: ChannelId::from([1; 32]),
             allow_chain_reset: false,
-            cross_zone: None,
-            cross_zone_accept_unverified,
-            peer_block_cache_window: NonZeroU32::new(1024).expect("1024 is nonzero"),
+            backfill_batch_slots: crate::config::default_backfill_batch_slots(),
             event_filter: EventFilterConfig::default(),
         };
         IndexerCore::open(config, dir).expect("open core")
@@ -663,6 +530,7 @@ mod tests {
             prev_block_hash: HashType([0; 32]),
             timestamp,
             transactions: vec![],
+            receipts: Vec::new(),
         }
         .into_pending_block()
     }
@@ -753,174 +621,5 @@ mod tests {
         let anchor = core.get_startup_anchor().expect("anchor").expect("present");
         let expected = Anchor::new(Slot::from(1_010), Some((3, block3.header.hash)));
         assert_eq!(anchor, expected);
-    }
-
-    /// An inbox dispatch transaction with fixed source coordinates, so blocks
-    /// in these tests carry a decodable dispatch key.
-    fn dispatch_tx() -> common::transaction::LeeTransaction {
-        let receiver_id = programs::ping_receiver_account_id();
-        common::transaction::LeeTransaction::Public(cross_zone::build_dispatch_from_emission(
-            &cross_zone::EmissionSource {
-                src_zone: [2; 32],
-                src_block_id: 5,
-                src_block_hash: [3; 32],
-                src_tx_index: 0,
-                src_account_id: programs::ping_sender_account_id(),
-            },
-            receiver_id,
-            &[
-                lee::ProgramShardSelector::new(
-                    ping_core::receiver_config_account_id(receiver_id),
-                    receiver_id,
-                ),
-                lee::ProgramShardSelector::new(
-                    ping_core::ping_record_pda(receiver_id),
-                    receiver_id,
-                ),
-            ],
-            b"hi".to_vec(),
-        ))
-    }
-
-    fn forged_verdict() -> ForgedDispatch {
-        ForgedDispatch {
-            src_zone: [2; 32],
-            src_block_id: 5,
-            src_tx_index: 0,
-            verdict: "re-derivation mismatch".to_owned(),
-        }
-    }
-
-    #[tokio::test]
-    async fn a_forged_verdict_persists_a_halt_record_and_halts() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let core = unreachable_core(dir.path());
-        let block = common::test_utils::produce_dummy_block(9, None, vec![dispatch_tx()]);
-
-        let mut pending = None;
-        core.handle_forged(&block, &forged_verdict(), &mut pending);
-
-        let halt = core
-            .store
-            .get_cross_zone_halt()
-            .expect("get")
-            .expect("the halt record is persisted");
-        assert_eq!(halt.block_id, 9);
-        assert_eq!(halt.block_hash, block.header.hash);
-        assert_eq!(halt.src_zone, hex::encode([2_u8; 32]));
-        assert_eq!(halt.src_block_id, 5);
-        assert_eq!(halt.src_tx_index, 0);
-        assert_eq!(pending, Some(halt.clone()));
-
-        let status = core.status();
-        assert_eq!(status.sync.state, crate::status::IndexerSyncState::Halted);
-        assert_eq!(status.cross_zone_halt, Some(halt));
-    }
-
-    #[tokio::test]
-    async fn startup_with_a_halt_record_reports_halted() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let core = unreachable_core(dir.path());
-        let block = common::test_utils::produce_dummy_block(9, None, vec![dispatch_tx()]);
-        let mut pending = None;
-        core.handle_forged(&block, &forged_verdict(), &mut pending);
-        drop(core);
-
-        let reopened = unreachable_core(dir.path());
-        let status = reopened.status();
-        assert_eq!(status.sync.state, crate::status::IndexerSyncState::Halted);
-        let reason = status
-            .sync
-            .last_error
-            .expect("the stored reason is reported");
-        assert!(reason.contains("re-derivation mismatch"), "{reason}");
-        assert!(status.cross_zone_halt.is_some());
-    }
-
-    #[tokio::test]
-    async fn an_accept_listed_block_is_taken_before_verification() {
-        // The gate runs ahead of `verify_block`, so a listed block never
-        // touches the verifier: it clears a dead-peer PeerUnavailable loop
-        // just as it clears a forged verdict.
-        let dir = tempfile::tempdir().expect("tempdir");
-        let block = common::test_utils::produce_dummy_block(9, None, vec![dispatch_tx()]);
-        let core = unreachable_core_accepting(dir.path(), vec![block.header.hash]);
-
-        let keys = core
-            .accept_listed(&block)
-            .expect("a listed hash is accepted");
-        assert_eq!(
-            keys,
-            CrossZoneVerifier::unverified_dispatch_keys(&block),
-            "the block's dispatch keys are what gets marked seen"
-        );
-        assert_eq!(keys.len(), 1);
-
-        // The override names one hash only; any other block is not accepted.
-        let other = common::test_utils::produce_dummy_block(
-            10,
-            Some(block.header.hash),
-            vec![dispatch_tx()],
-        );
-        assert!(core.accept_listed(&other).is_none());
-    }
-
-    #[tokio::test]
-    async fn the_halt_record_clears_only_after_the_block_applies() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let block = common::test_utils::produce_dummy_block(9, None, vec![dispatch_tx()]);
-        let core = unreachable_core_accepting(dir.path(), vec![block.header.hash]);
-
-        // A previous run halted on this block; the operator then listed it.
-        let mut pending = None;
-        core.handle_forged(&block, &forged_verdict(), &mut pending);
-
-        // Acceptance alone must not clear the record: the block has not
-        // applied yet, and a crash before apply must re-halt identically.
-        core.accept_listed(&block).expect("listed");
-        assert!(core.store.get_cross_zone_halt().expect("get").is_some());
-        assert!(pending.is_some());
-
-        // What the ingest loop does on AcceptOutcome::Applied.
-        core.clear_halt_for_block(&block, &mut pending);
-        assert!(core.store.get_cross_zone_halt().expect("get").is_none());
-        assert!(pending.is_none());
-    }
-
-    #[tokio::test]
-    async fn a_halting_block_that_applies_clears_the_record() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let core = unreachable_core(dir.path());
-        let block = common::test_utils::produce_dummy_block(9, None, vec![dispatch_tx()]);
-        let mut pending = None;
-        core.handle_forged(&block, &forged_verdict(), &mut pending);
-
-        // A different block applying leaves the record alone.
-        let other = common::test_utils::produce_dummy_block(8, None, vec![]);
-        core.clear_halt_for_block(&other, &mut pending);
-        assert!(core.store.get_cross_zone_halt().expect("get").is_some());
-
-        // The halting block itself applying clears it.
-        core.clear_halt_for_block(&block, &mut pending);
-        assert!(core.store.get_cross_zone_halt().expect("get").is_none());
-        assert!(pending.is_none());
-    }
-
-    #[tokio::test]
-    async fn a_different_hash_applying_at_the_halted_id_clears_the_stale_record() {
-        // The channel can come to serve a different block at the recorded id
-        // (e.g. after a chain reset); once one applies, the record provably
-        // describes a block the chain no longer carries.
-        let dir = tempfile::tempdir().expect("tempdir");
-        let core = unreachable_core(dir.path());
-        let block = common::test_utils::produce_dummy_block(9, None, vec![dispatch_tx()]);
-        let mut pending = None;
-        core.handle_forged(&block, &forged_verdict(), &mut pending);
-
-        let different = common::test_utils::produce_dummy_block(9, None, vec![]);
-        assert_ne!(different.header.hash, block.header.hash);
-        core.clear_halt_for_block(&different, &mut pending);
-        assert!(core.store.get_cross_zone_halt().expect("get").is_none());
-        assert!(pending.is_none());
     }
 }

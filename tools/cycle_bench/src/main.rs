@@ -4,9 +4,9 @@
 //! drawn from the existing per-program unit tests, then prints a table and writes a
 //! JSON dump for regression comparison.
 //!
-//! A program instruction is two kinds of guest invocation, not one: a planner run that sees
-//! only account handles and emits shard effects, and one apply run per effect that sees a
-//! single shard's data. Both are measured, one row each, because a caller pays for all of them.
+//! An operation is not one guest invocation: its root delivery and every send it triggers are
+//! transitions, each a guest run that sees only its receiver's actor state. Every transition is
+//! measured, one row each, because a caller pays for all of them.
 //!
 //! Run with `cargo run --release -p cycle_bench`. `RISC0_DEV_MODE` has no effect on
 //! executor cycle counts.
@@ -25,29 +25,31 @@
 )]
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     path::PathBuf,
     time::Instant,
 };
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow};
 use clap::Parser;
-use clock_core::{
-    CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
-    ClockAccountData,
-};
-use cycle_bench::{ppe, stats::Stats};
+use clock_core::{CLOCK_PROGRAM_ACCOUNT_ID, ClockAccountData};
+use cycle_bench::{ppe, stats::Stats, system_upgrader};
 use fee_core::{BlockFeeSummary, state::FeeState};
 use lee::program::Program;
 use lee_core::{
-    BlockId, Timestamp,
-    account::{AccountId, ProgramShardSelector, ShardData},
+    BlockId, RootCall, Timestamp,
+    account::{AccountId, Actor, ActorState},
+    execution_state::{
+        ExecutionEnvironment, PublicExecutionContext, TransactionEntry, TransitionView,
+        WholeExecution,
+    },
     from_frame,
-    native_token::encode_balance,
-    program::{AccountMeta, ApplyInput, GuestOutput, InstructionData, PlanInput, PlanOutput},
+    native_token::{self, NATIVE_TOKEN_PROGRAM_ID, encode_balance},
+    program::{MessageData, PROGRAM_LOADER_ACCOUNT_ID, ReceiveInput, Transition},
 };
 use risc0_zkvm::{ExecutorEnv, default_executor, default_prover};
 use serde::Serialize;
+use test_guest_core::Script;
 
 /// Two points fit a line exactly, making R² 1.0 by construction and the slope pure noise.
 const MIN_CALIBRATION_POINTS: usize = 3;
@@ -62,10 +64,16 @@ struct Cli {
     prove: bool,
 
     /// Also run privacy-preserving execution circuit (PPE) composition cases:
-    /// (a) single native Transfer through `execute_and_prove`, (b) `chain_caller`
-    /// with depth N=1,3,5,9. Requires --features ppe at build time. Very slow.
+    /// (a) native Transfer through `execute_and_prove` at several dummy-input counts, (b) a
+    /// scripted actor sending N=1,3,5,9 native transfers. Requires --features ppe at build time.
+    /// Very slow.
     #[arg(long)]
     ppe: bool,
+
+    /// With --ppe, run only this fee case (0 = no fee, 1 = recovery under its own key, 2 =
+    /// recovery under the note key, 3 = public refund target) and nothing else.
+    #[arg(long, requires = "ppe")]
+    ppe_fee_case: Option<usize>,
 
     /// Iterations for executor wall-time sampling per case. First iter is
     /// discarded as warmup, remaining N feed the stats.
@@ -74,17 +82,15 @@ struct Cli {
 }
 
 #[derive(Debug, Serialize, Clone, Copy, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 enum Phase {
-    Plan,
-    Apply,
+    HandleMessage,
 }
 
 impl Phase {
     const fn label(self) -> &'static str {
         match self {
-            Self::Plan => "plan",
-            Self::Apply => "apply",
+            Self::HandleMessage => "handle_message",
         }
     }
 }
@@ -205,120 +211,173 @@ impl Calibration {
 }
 
 struct Fixture {
-    account: AccountMeta,
-    data: ShardData,
+    actor: Actor,
+    is_authorized: bool,
+    data: ActorState,
 }
 
 impl Fixture {
-    fn new(
+    const fn new(
         account_id: AccountId,
         is_authorized: bool,
         program_account_id: AccountId,
-        data: ShardData,
+        data: ActorState,
     ) -> Self {
         Self {
-            account: AccountMeta::new(account_id, is_authorized, program_account_id),
+            actor: Actor::new(account_id, program_account_id),
+            is_authorized,
             data,
         }
     }
 
-    fn balance(account_id: AccountId, is_authorized: bool, balance: u128) -> Self {
+    fn balance(account_id: AccountId, balance: u128) -> Self {
         Self {
-            account: AccountMeta::native_balance(account_id, is_authorized),
+            actor: Actor::native_balance(account_id),
+            is_authorized: false,
             data: encode_balance(balance),
         }
     }
 }
 
+// A root delivery to `root` over the declared `fixtures`; a fixture flagged authorized is a
+// signer.
 struct Case {
-    program_name: &'static str,
-    instruction_label: &'static str,
-    program: Program,
-    /// Where the program is registered on chain. Effects name this as their shard owner, so
-    /// deriving it from the image id instead would make every plan panic.
-    program_account_id: AccountId,
+    label: &'static str,
+    root: Actor,
     fixtures: Vec<Fixture>,
-    instruction_data: InstructionData,
+    message: MessageData,
 }
 
 impl Case {
-    fn new<I: borsh::BorshSerialize>(
-        program_name: &'static str,
-        instruction_label: &'static str,
-        program: Program,
-        program_account_id: AccountId,
+    fn new<M: borsh::BorshSerialize>(
+        label: &'static str,
+        root: Actor,
         fixtures: Vec<Fixture>,
-        instruction: &I,
+        message: &M,
     ) -> Result<Self> {
         Ok(Self {
-            program_name,
-            instruction_label,
-            program,
-            program_account_id,
+            label,
+            root,
             fixtures,
-            instruction_data: borsh::to_vec(instruction)?,
+            message: borsh::to_vec(message)?,
         })
     }
 
     fn run(self, prove: bool, exec_iters: usize) -> Result<Vec<BenchResult>> {
         let Self {
-            program_name,
-            instruction_label,
-            program,
-            program_account_id: self_account_id,
+            label,
+            root,
             fixtures,
-            instruction_data,
+            message,
         } = self;
-
-        let mut shards: HashMap<ProgramShardSelector, ShardData> = fixtures
+        let signers: BTreeSet<AccountId> = fixtures
             .iter()
-            .map(|f| (ProgramShardSelector::from(&f.account), f.data.clone()))
+            .filter(|f| f.is_authorized)
+            .map(|f| f.actor.account_id)
             .collect();
-        let input = PlanInput {
-            self_account_id,
-            caller_account_id: None,
-            accounts: fixtures.into_iter().map(|f| f.account).collect(),
-            instruction_data,
-        };
-
-        let mut rows = Vec::new();
-        let (journal, row) = sample(
-            program_name,
-            instruction_label,
-            Phase::Plan,
-            &program,
+        let public_context = PublicExecutionContext::new(
+            fixtures.iter().map(|f| {
+                let authority = if signers.contains(&f.actor.account_id) {
+                    lee::Authority::Signer
+                } else {
+                    lee::Authority::None
+                };
+                (f.actor, authority)
+            }),
+            signers.clone(),
+        );
+        let mut meter = Meter {
+            label,
+            actor_states: fixtures.into_iter().map(|f| (f.actor, f.data)).collect(),
             prove,
             exec_iters,
-            |env| Ok(Program::write_plan_inputs(&input, env)?),
-        )?;
-        rows.push(row);
-
-        let plan = plan_journal(&journal)?;
-        for effect in plan.effects {
-            let apply_input = ApplyInput {
-                self_account_id,
-                selector: effect.selector,
-                pre_data: shards.get(&effect.selector).cloned().unwrap_or_default(),
-                effect_data: effect.data,
-            };
-            let (output, apply_row) = sample(
-                program_name,
-                instruction_label,
-                Phase::Apply,
-                &program,
-                prove,
-                exec_iters,
-                |env| Ok(Program::write_apply_inputs(&apply_input, env)?),
-            )?;
-            rows.push(apply_row);
-
-            if let Some(post_data) = apply_journal(&output)?.post_data {
-                shards.insert(effect.selector, post_data);
-            }
-        }
-
-        Ok(rows)
+            rows: Vec::new(),
+        };
+        WholeExecution::new(
+            public_context,
+            TransactionEntry::Sync(RootCall { to: root, message }),
+            Vec::new(),
+            None,
+            &[],
+        )?
+        .execute(&mut meter)?;
+        Ok(meter.rows)
     }
+}
+
+struct Meter {
+    label: &'static str,
+    actor_states: HashMap<Actor, ActorState>,
+    prove: bool,
+    exec_iters: usize,
+    rows: Vec<BenchResult>,
+}
+
+impl ExecutionEnvironment for Meter {
+    type Error = anyhow::Error;
+
+    fn handle_message(
+        &mut self,
+        input: &ReceiveInput,
+        _: &TransitionView<'_>,
+    ) -> Result<Transition> {
+        let program_account_id = input.receiver.program_account_id;
+        if program_account_id == NATIVE_TOKEN_PROGRAM_ID {
+            return Ok(native_token::handle_message(input)?);
+        }
+        // Native, like the token program: no guest cycles to record.
+        if program_account_id == PROGRAM_LOADER_ACCOUNT_ID {
+            const ABSENT: &ActorState = &ActorState::empty();
+            let (transition, _) = program_loader_core::handle_message(input, |account_id| {
+                self.actor_states
+                    .get(&Actor::new(account_id, PROGRAM_LOADER_ACCOUNT_ID))
+                    .unwrap_or(ABSENT)
+            });
+            return Ok(transition);
+        }
+        let (program_name, program) = guest(program_account_id)
+            .ok_or_else(|| anyhow!("no guest is registered at {program_account_id}"))?;
+        let (journal, row) = sample(
+            program_name,
+            self.label,
+            &program,
+            self.prove,
+            self.exec_iters,
+            |env| Ok(Program::write_receive_input(input, env)?),
+        )?;
+        self.rows.push(row);
+        let payload = from_frame(&journal).ok_or_else(|| anyhow!("malformed journal frame"))?;
+        Ok(borsh::from_slice(payload)?)
+    }
+
+    fn public_actor_state(&mut self, actor: Actor) -> Result<ActorState> {
+        Ok(self.actor_states.get(&actor).cloned().unwrap_or_default())
+    }
+
+    fn admits(&mut self, _account_id: AccountId) -> Result<bool> {
+        Ok(true)
+    }
+}
+
+fn guest(program_account_id: AccountId) -> Option<(&'static str, Program)> {
+    [
+        ("clock", programs::clock_account_id(), programs::clock()),
+        ("fee", programs::fee_account_id(), programs::fee()),
+        ("scripted", scripted_account_id(), test_programs::scripted()),
+        (
+            "system_upgrader",
+            programs::system_upgrader_account_id(),
+            programs::system_upgrader(),
+        ),
+        (
+            "sequencer_stake",
+            programs::sequencer_stake_account_id(),
+            programs::sequencer_stake(),
+        ),
+    ]
+    .into_iter()
+    .find(|(_, account_id, _)| *account_id == program_account_id)
+    .map(|(name, _, program)| (name, program))
 }
 
 /// One warmup pass discarded. The executor has
@@ -327,7 +386,6 @@ impl Case {
 fn sample(
     program_name: &'static str,
     instruction_label: &'static str,
-    phase: Phase,
     program: &Program,
     prove: bool,
     exec_iters: usize,
@@ -375,7 +433,7 @@ fn sample(
         prove_segments = Some(prove_info.stats.segments);
         eprintln!(
             "  prove({program_name}/{instruction_label}/{}): {prove_ms:.1} ms ({:.1}s), total_cycles={}, segments={}",
-            phase.label(),
+            Phase::HandleMessage.label(),
             prove_ms / 1_000.0,
             prove_info.stats.total_cycles,
             prove_info.stats.segments,
@@ -385,7 +443,7 @@ fn sample(
     let result = BenchResult {
         program_name,
         instruction: instruction_label.to_owned(),
-        phase,
+        phase: Phase::HandleMessage,
         user_cycles: info.cycles(),
         segments: info.segments.len(),
         exec_stats,
@@ -400,28 +458,23 @@ fn sample(
     Ok((info.journal.bytes, result))
 }
 
-fn guest_output(journal: &[u8]) -> Result<GuestOutput> {
-    let payload = from_frame(journal).ok_or_else(|| anyhow::anyhow!("malformed journal frame"))?;
-    Ok(borsh::from_slice(payload)?)
+fn scripted_account_id() -> AccountId {
+    AccountId::from_builtin_program(test_programs::scripted().id())
 }
 
-fn plan_journal(journal: &[u8]) -> Result<PlanOutput> {
-    match guest_output(journal)? {
-        GuestOutput::Plan(plan) => Ok(plan),
-        GuestOutput::Apply(_) => bail!("a scheduled plan returned an apply journal"),
-    }
+fn fee_state_actor() -> Actor {
+    let fee_id = programs::fee_account_id();
+    Actor::new(fee_core::compute_fee_state_account_id(fee_id), fee_id)
 }
 
-fn apply_journal(journal: &[u8]) -> Result<lee_core::program::ApplyOutput> {
-    match guest_output(journal)? {
-        GuestOutput::Apply(output) => Ok(output),
-        GuestOutput::Plan(_) => bail!("a scheduled apply returned a plan journal"),
-    }
-}
-
-/// Fee's plan derives its PDAs from its own address, so fixtures must use the same value.
-fn fee_self_account_id() -> AccountId {
-    programs::fee_account_id()
+fn fee_state_account() -> Fixture {
+    let actor = fee_state_actor();
+    Fixture::new(
+        actor.account_id,
+        false,
+        actor.program_account_id,
+        FeeState::genesis().to_bytes().into(),
+    )
 }
 
 fn fee_distribute_summary() -> BlockFeeSummary {
@@ -438,65 +491,49 @@ fn fee_distribute_payout() -> u128 {
 }
 
 fn fee_distribute_accounts() -> Vec<Fixture> {
-    let fee_id = fee_self_account_id();
+    let fee_id = programs::fee_account_id();
     let summary = fee_distribute_summary();
-    // The inspect effect refuses an inbox holding anything but the block's revenue.
+    // The payout refuses an inbox holding anything but the block's revenue.
     let collected = summary.revenue_base.saturating_add(summary.revenue_tip);
     vec![
-        Fixture::new(
-            fee_core::compute_fee_state_account_id(fee_id),
-            true,
-            fee_id,
-            FeeState::genesis()
-                .to_bytes()
-                .try_into()
-                .expect("FeeState should fit in account data"),
-        ),
-        Fixture::balance(fee_core::compute_fee_escrow_account_id(fee_id), true, 0),
-        Fixture::balance(
-            fee_core::compute_fee_inbox_account_id(fee_id),
-            true,
-            collected,
-        ),
-        Fixture::balance(AccountId::new([71; 32]), true, 0),
+        fee_state_account(),
+        Fixture::balance(fee_core::compute_fee_escrow_account_id(fee_id), 0),
+        Fixture::balance(fee_core::compute_fee_inbox_account_id(fee_id), collected),
+        Fixture::balance(AccountId::new([71; 32]), 0),
     ]
 }
 
 fn fee_refund_accounts() -> Vec<Fixture> {
     vec![
+        fee_state_account(),
         Fixture::balance(
-            fee_core::compute_fee_inbox_account_id(fee_self_account_id()),
-            true,
+            fee_core::compute_fee_inbox_account_id(programs::fee_account_id()),
             FEE_REFUND_AMOUNT,
         ),
-        Fixture::balance(AccountId::new([72; 32]), true, 0),
+        Fixture::balance(AccountId::new([72; 32]), 0),
     ]
 }
 
-/// A shard-write of `bytes` bytes. The payload is the cycle dial: the built-in programs left in
+/// A state write of `bytes` bytes. The payload is the cycle dial: the built-in programs left in
 /// the repo all sit under 30k cycles, too narrow a range to condition the calibration fit.
-fn data_writer_case(label: &'static str, bytes: usize) -> Result<Case> {
-    let program = test_programs::data_writer();
-    let program_account_id = AccountId::from_builtin_program(program.id());
-    let fixtures = vec![Fixture::new(
-        AccountId::new([83; 32]),
-        true,
-        program_account_id,
-        ShardData::default(),
-    )];
+fn state_write_case(label: &'static str, bytes: usize) -> Result<Case> {
+    let writer = Actor::new(AccountId::new([83; 32]), scripted_account_id());
     Case::new(
-        "data_writer",
         label,
-        program,
-        program_account_id,
-        fixtures,
-        &vec![7_u8; bytes],
+        writer,
+        vec![Fixture::new(
+            writer.account_id,
+            false,
+            writer.program_account_id,
+            ActorState::empty(),
+        )],
+        &Script::write(vec![7; bytes]),
     )
 }
 
-fn clock_account(account_id: AccountId, block_id: BlockId) -> Fixture {
+fn clock_account(block_id: BlockId) -> Fixture {
     Fixture::new(
-        account_id,
+        CLOCK_PROGRAM_ACCOUNT_ID,
         false,
         programs::clock_account_id(),
         ClockAccountData {
@@ -504,88 +541,90 @@ fn clock_account(account_id: AccountId, block_id: BlockId) -> Fixture {
             timestamp: Timestamp::from(0_u64),
         }
         .to_bytes()
-        .try_into()
-        .expect("ClockAccountData should fit in account data"),
+        .into(),
     )
 }
 
-fn clock_accounts_tick_at(block_id: BlockId) -> Vec<Fixture> {
-    vec![
-        clock_account(CLOCK_01_PROGRAM_ACCOUNT_ID, block_id),
-        clock_account(CLOCK_10_PROGRAM_ACCOUNT_ID, block_id),
-        clock_account(CLOCK_50_PROGRAM_ACCOUNT_ID, block_id),
-    ]
+// A tick requires the clock's pre-state one block below the message's.
+fn tick_case(label: &'static str, block_id: BlockId) -> Result<Case> {
+    Case::new(
+        label,
+        clock_core::clock_actor(),
+        vec![clock_account(block_id - 1)],
+        &clock_core::Message::Tick {
+            timestamp: Timestamp::from(1_700_000_000_u64),
+            block_id,
+        },
+    )
+}
+
+/// `Schedule`'s guest work: `system_upgrader`'s and `sequencer_stake`'s approval checks.
+/// `Apply`'s chain walk runs natively in `program_loader`; the `system_upgrader` criterion bench
+/// times it.
+fn schedule_case(label: &'static str, committee_size: usize) -> Result<Case> {
+    let (actor_states, message) =
+        system_upgrader::schedule_guest_input(committee_size, &programs::bridge());
+    Case::new(
+        label,
+        system_upgrader_core::registry_actor(),
+        actor_states
+            .into_iter()
+            .map(|(actor, data)| {
+                Fixture::new(actor.account_id, false, actor.program_account_id, data)
+            })
+            .collect(),
+        &message,
+    )
+}
+
+fn cases() -> Result<[Case; 10]> {
+    Ok([
+        tick_case("Tick", 1)?,
+        Case::new(
+            "Distribute",
+            fee_state_actor(),
+            fee_distribute_accounts(),
+            &fee_core::Message::Distribute {
+                summary: fee_distribute_summary(),
+                payout: fee_distribute_payout(),
+                producer: AccountId::new([71; 32]),
+            },
+        )?,
+        Case::new(
+            "Refund",
+            fee_state_actor(),
+            fee_refund_accounts(),
+            &fee_core::Message::Refund {
+                amount: FEE_REFUND_AMOUNT,
+                payer: AccountId::new([72; 32]),
+            },
+        )?,
+        state_write_case("Write 4 KiB", 4 * 1024)?,
+        state_write_case("Write 64 KiB", 64 * 1024)?,
+        schedule_case("Schedule (committee 2)", 2)?,
+        schedule_case("Schedule (committee 4)", 4)?,
+        schedule_case("Schedule (committee 7)", 7)?,
+        schedule_case("Schedule (committee 10)", 10)?,
+        schedule_case("Schedule (committee 20)", 20)?,
+    ])
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     let prove = cli.prove;
     let exec_iters = cli.exec_iters.max(1);
+    #[cfg(feature = "ppe")]
+    if let Some(case) = cli.ppe_fee_case {
+        let results = ppe::run_all(Some(case));
+        anyhow::ensure!(!results.is_empty(), "no fee case {case}");
+        ppe::print_table(&results);
+        return Ok(());
+    }
     if prove {
         eprintln!("cycle_bench: prove mode ON, this will be slow (~minutes per program)");
     }
 
-    // `Advance` requires each clock account's pre-state one block below the instruction's.
-    let cases = [
-        Case::new(
-            "clock",
-            "Tick (block_id+1, no multiples)",
-            programs::clock(),
-            programs::clock_account_id(),
-            clock_accounts_tick_at(0),
-            &clock_core::Instruction {
-                timestamp: Timestamp::from(1_700_000_000_u64),
-                block_id: 1,
-            },
-        )?,
-        Case::new(
-            "clock",
-            "Tick (10-block rollup)",
-            programs::clock(),
-            programs::clock_account_id(),
-            clock_accounts_tick_at(9),
-            &clock_core::Instruction {
-                timestamp: Timestamp::from(1_700_000_000_u64),
-                block_id: 10,
-            },
-        )?,
-        Case::new(
-            "clock",
-            "Tick (10 and 50-block rollups)",
-            programs::clock(),
-            programs::clock_account_id(),
-            clock_accounts_tick_at(49),
-            &clock_core::Instruction {
-                timestamp: Timestamp::from(1_700_000_000_u64),
-                block_id: 50,
-            },
-        )?,
-        Case::new(
-            "fee",
-            "Distribute",
-            programs::fee(),
-            programs::fee_account_id(),
-            fee_distribute_accounts(),
-            &fee_core::Instruction::Distribute {
-                summary: fee_distribute_summary(),
-                payout: fee_distribute_payout(),
-            },
-        )?,
-        Case::new(
-            "fee",
-            "Refund",
-            programs::fee(),
-            programs::fee_account_id(),
-            fee_refund_accounts(),
-            &fee_core::Instruction::Refund {
-                amount: FEE_REFUND_AMOUNT,
-            },
-        )?,
-        data_writer_case("Write 4 KiB", 4 * 1024)?,
-        data_writer_case("Write 64 KiB", 64 * 1024)?,
-    ];
-
-    let mut results: Vec<BenchResult> = cases
+    let mut results: Vec<BenchResult> = cases()?
         .into_iter()
         .map(|c| c.run(prove, exec_iters))
         .collect::<Result<Vec<_>>>()?
@@ -613,7 +652,11 @@ fn main() -> Result<()> {
     }
 
     #[cfg(feature = "ppe")]
-    let ppe_results = if cli.ppe { ppe::run_all() } else { Vec::new() };
+    let ppe_results = if cli.ppe {
+        ppe::run_all(None)
+    } else {
+        Vec::new()
+    };
     #[cfg(not(feature = "ppe"))]
     let ppe_results: Vec<ppe::PpeBenchResult> = {
         if cli.ppe {
@@ -771,7 +814,7 @@ mod tests {
         BenchResult {
             program_name,
             instruction: "test".to_owned(),
-            phase: Phase::Plan,
+            phase: Phase::HandleMessage,
             user_cycles,
             segments: 1,
             exec_stats: Stats::from_samples(&[best_ms]),

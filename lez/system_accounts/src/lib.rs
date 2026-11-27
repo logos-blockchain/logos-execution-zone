@@ -3,7 +3,7 @@
 use std::collections::BTreeMap;
 
 use clock_core::ClockAccountData;
-use lee_core::account::{Account, AccountId};
+use lee_core::account::{Account, AccountId, Actor};
 
 // TODO: Replace with a real minimum value for testnet
 /// Minimum summed stake for a Bedrock sequencer key to be a committee candidate.
@@ -17,11 +17,13 @@ pub const DEFAULT_MINIMUM_SEQUENCER_STAKE: u128 = 149;
 /// blocks.
 pub const DEFAULT_SEQUENCER_POSTING_TIMEFRAME: Slots = 300;
 pub const DEFAULT_SEQUENCER_POSTING_TIMEOUT: Slots = 25;
-pub const DEFAULT_SEQUENCER_WITHDRAW_THRESHOLD: u16 = 1;
+
+/// Largest block a sequencer builds, in bytes.
+pub const DEFAULT_MAX_BLOCK_SIZE: u64 = 1024 * 1024;
 
 // TODO: Size against mainnet finality before launch.
-/// Blocks an unstake waits before release.
-pub const DEFAULT_SEQUENCER_EXIT_DELAY: u64 = 100;
+/// L1 blocks on top of a key's removal config before its whole stake is released.
+pub const DEFAULT_FINALITY_DEPTH: u64 = 180;
 
 pub type Slots = u32;
 
@@ -70,18 +72,20 @@ pub fn fee_account_ids() -> [AccountId; 3] {
 /// The fee-state account initialized with the genesis market state.
 #[must_use]
 pub fn fee_state_account() -> Account {
-    Account::default().with_shard(
+    Account::default().with_actor_state(
         programs::fee_account_id(),
-        fee_core::state::FeeState::genesis()
-            .to_bytes()
-            .try_into()
-            .expect("FeeState data should fit"),
+        fee_core::state::FeeState::genesis().to_bytes().into(),
     )
 }
 
 #[must_use]
-pub const fn clock_account_ids() -> [AccountId; 3] {
-    clock_core::CLOCK_PROGRAM_ACCOUNT_IDS
+pub const fn clock_account_id() -> AccountId {
+    clock_core::CLOCK_PROGRAM_ACCOUNT_ID
+}
+
+#[must_use]
+pub fn clock_actor() -> Actor {
+    clock_core::clock_actor()
 }
 
 #[must_use]
@@ -109,29 +113,28 @@ pub fn sequencer_stake_config_account(
     channel_params: Option<sequencer_stake_core::ChannelParams>,
     channel_id: Option<[u8; 32]>,
 ) -> Account {
-    Account::default().with_shard(
+    Account::default().with_actor_state(
         programs::sequencer_stake_account_id(),
         sequencer_stake_core::SequencerStakeConfig {
             channel_params,
             channel_id,
             entries: BTreeMap::new(),
+            params_votes: BTreeMap::new(),
         }
         .to_bytes()
-        .try_into()
-        .expect("sequencer stake config data should fit"),
+        .into(),
     )
 }
 
 #[must_use]
 pub fn clock_account() -> Account {
-    Account::default().with_shard(
+    Account::default().with_actor_state(
         programs::clock_account_id(),
         ClockAccountData {
             block_id: 0,
             timestamp: 0,
         }
         .to_bytes()
-        .try_into()
-        .expect("Clock account data should fit"),
+        .into(),
     )
 }

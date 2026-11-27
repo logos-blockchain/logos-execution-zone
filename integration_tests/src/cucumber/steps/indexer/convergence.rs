@@ -76,7 +76,7 @@ async fn assert_transferred_public_account_states_match(
             IndexerRpcClient::get_account(&**context.indexer_client(), account.into())
                 .await
                 .map_err(StepError::query_failed)?;
-        if indexer_state != sequencer_state.into() {
+        if indexer_state != sequencer_state.map(Into::into) {
             return Err(StepError::AssertionFailed {
                 message: format!(
                     "indexer and sequencer states differ for public account {account:?}"

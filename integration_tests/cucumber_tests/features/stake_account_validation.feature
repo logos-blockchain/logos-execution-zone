@@ -1,9 +1,11 @@
 Feature: Stake account validation
 
-  # Node-level (L3) coverage of the pre-state account list a Stake names:
-  # [funding, ownership, funds, config]. The program checks who signed, that
-  # the config slot holds the real config account, and that the list has
-  # exactly four entries. Every scenario runs
+  # Node-level (L3) coverage of the accounts a Stake declares: the ownership
+  # account's stake actor it is delivered to, the stake funds PDA, the funding
+  # account and the config account. The program checks that the ownership
+  # account signed, and addresses the config account and the funds PDA
+  # itself, so a transaction can only leave them undeclared, never substitute
+  # them. Every scenario runs
   # against a deployed LEZ stack through the scenario wallet and the
   # sequencer's RPC API. The @P-NN tags are stable case ids.
   #
@@ -27,10 +29,9 @@ Feature: Stake account validation
     And the config, funding and ownership accounts are unchanged
 
   @stake_accounts_ci @P-14 @P0 @L3
-  # In-program reason: "not the sequencer_stake config account". Mirrors
-  # lez/sequencer/core/src/tests.rs::an_ownership_account_cannot_stand_in_for_the_config_account
-  # for the Stake path: the stand-in is owned by sequencer_stake too, so only
-  # the id check can reject it.
+  # The Stake sends its record to the config account it derives, so a
+  # stand-in, though owned by sequencer_stake too, leaves the real config
+  # account undeclared and the transaction fails on it.
   Scenario: An ownership account cannot stand in for the config account
     Given a second sequencer key staked through its own ownership account
     When a Stake of "twice the minimum stake" is submitted with the second ownership account standing in for the config account
@@ -39,16 +40,16 @@ Feature: Stake account validation
     And the config, funding, ownership and second ownership accounts are unchanged
 
   @stake_accounts_ci @P-20 @P2 @L3
-  # In-program reason: "Stake requires a funding account, an ownership
-  # account, the stake funds account, and the config account". The canonical
-  # count is 4, so the examples sit one short of and one past it; a
-  # 4-account list with a wrong funds slot is P-27, not this case.
-  Scenario Outline: Wrong pre-state account count is rejected
-    When a Stake of "the minimum stake" is submitted with <count> pre-state accounts
+  # A Stake reaches all four declared accounts, so declaring only a prefix of
+  # them leaves one it reaches undeclared. The examples sit one and two short
+  # of the four; a longer list is not malformed, since an account the Stake
+  # never reaches is merely unused.
+  Scenario Outline: A Stake declaring too few accounts is rejected
+    When a Stake of "the minimum stake" is submitted declaring only its first <count> accounts
     Then the stake transaction is not included within the next 2 blocks
     And the config, funding and ownership accounts are unchanged
 
     Examples:
       | count |
       | 2     |
-      | 5     |
+      | 3     |

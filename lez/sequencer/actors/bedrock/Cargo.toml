@@ -8,17 +8,8 @@ license.workspace = true
 workspace = true
 
 [features]
-# Adds actor implementation using kameo_actors.
-actor = [
-  "dep:system_accounts",
-
-  "dep:logos-blockchain-common-http-client",
-  "dep:kameo_actors",
-  "dep:tokio",
-  "dep:borsh",
-  "dep:url",
-  "dep:log",
-]
+# Adds actor implementation.
+actor = ["dep:tokio", "dep:borsh", "dep:url", "dep:tracing", "dep:rand"]
 # Adds mock actor implementation.
 mock = ["sequencer_actors_common/mock", "dep:mockall"]
 test-utils = []
@@ -29,24 +20,21 @@ common.workspace = true
 sequencer_stake_core.workspace = true
 sequencer_actors_common.workspace = true
 sequencer_storage_actor.workspace = true
-sequencer_channel_config_actor.workspace = true
-system_accounts = { workspace = true, optional = true }
+sharding_pool_actor.workspace = true
 
 logos-blockchain-zone-sdk.workspace = true
-logos-blockchain-core.workspace = true
-logos-blockchain-binary-codec.workspace = true
 kameo.workspace = true
 thiserror.workspace = true
 anyhow.workspace = true
 futures.workspace = true
-logos-blockchain-key-management-system-service.workspace = true
-logos-blockchain-common-http-client = { workspace = true, optional = true }
-kameo_actors = { workspace = true, optional = true }
-tokio = { workspace = true, optional = true }
+tokio = { workspace = true, features = ["time"], optional = true }
 borsh = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
-log = { workspace = true, optional = true }
+tracing = { workspace = true, optional = true }
+rand = { workspace = true, optional = true }
 mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
 rand.workspace = true
+tokio = { workspace = true, features = ["macros", "test-util"] }
+sequencer_storage_actor = { workspace = true, features = ["mock"] }

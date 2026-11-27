@@ -9,7 +9,7 @@ use super::{
     super::log_step,
     helpers::{
         assert_private_balance_delta, assert_public_balance_delta, assert_sender_paid_fee,
-        expected_balance_after, expected_public_signing_key, get_transfer_transaction,
+        expected_balance_after, expected_public_initial_key, get_transfer_transaction,
         rejected_transfer_details, transfer_artifact, transfer_details,
         wait_for_transfer_inclusion,
     },
@@ -211,7 +211,7 @@ async fn assert_new_account_balance(
     Ok(())
 }
 
-#[then(expr = "the sender private balance for transfer {string} decreases by {int}")]
+#[then(expr = "the sender private balance for transfer {string} decreases by {int} plus the fee")]
 async fn assert_sender_private_balance_decreased(
     world: &mut CucumberWorld,
     step: &Step,
@@ -222,13 +222,26 @@ async fn assert_sender_private_balance_decreased(
     let artifact = transfer_artifact(world, &transfer_name)?;
     let account = artifact.sender;
     let initial_balance = artifact.sender_balance_before;
-    let amount = artifact.amount;
+    // The private sender also pays the in-proof fee, priced off the transfer's charged bytes.
+    let (transaction, _) =
+        get_transfer_transaction(world.lez()?.sequencer_client(), artifact.hash).await?;
+    let fee = crate::config::private_fee(transaction.charged_bytes().map_err(|err| {
+        StepError::QueryFailed {
+            message: format!("the transfer does not serialize: {err}"),
+        }
+    })?);
+    let amount = artifact
+        .amount
+        .checked_add(fee)
+        .expect("private debit overflow");
     let observed_balance = assert_private_balance_delta(
         world,
         account,
         initial_balance,
         amount,
-        expected_amount,
+        expected_amount
+            .checked_add(fee)
+            .expect("expected private debit overflow"),
         false,
         "private sender",
     )
@@ -428,70 +441,15 @@ async fn assert_only_sender_signs(
         });
     };
     let expected_sender =
-        expected_public_signing_key(sender).ok_or_else(|| StepError::QueryFailed {
+        expected_public_initial_key(sender).ok_or_else(|| StepError::QueryFailed {
             message: format!("sender {sender:?} is not in the configured public accounts"),
         })?;
-    let signers: Vec<_> = transaction
-        .witness_set()
-        .signatures_and_public_keys()
-        .iter()
-        .map(|(_, public_key)| public_key)
-        .collect();
-    if signers != vec![&expected_sender] {
+    let signers: Vec<_> = transaction.message().nonces.keys().copied().collect();
+    if signers != [lee::AccountId::for_initial_key(&expected_sender).expect("an initial key")]
+        || transaction.witness_set().entries().len() != signers.len()
+    {
         return Err(StepError::AssertionFailed {
             message: format!("expected only sender {expected_sender:?} to sign, got {signers:?}"),
-        });
-    }
-    Ok(())
-}
-
-#[then(expr = "the sender and new account sign transfer {string}")]
-#[expect(
-    clippy::needless_pass_by_ref_mut,
-    reason = "Cucumber step functions require `&mut World` as the first parameter"
-)]
-async fn assert_sender_and_new_account_sign(
-    world: &mut CucumberWorld,
-    step: &Step,
-    transfer_name: String,
-) -> StepResult {
-    log_step(step);
-    let artifact = transfer_artifact(world, &transfer_name)?;
-    let sender = artifact.sender;
-    let receiver = world
-        .environment
-        .accounts
-        .new_public_account
-        .ok_or(StepError::MissingSelectedAccount)?;
-    let context = world.lez()?;
-    let (transaction, _) =
-        get_transfer_transaction(context.sequencer_client(), artifact.hash).await?;
-    let LeeTransaction::Public(transaction) = transaction else {
-        return Err(StepError::AssertionFailed {
-            message: "expected the transfer to be public".to_owned(),
-        });
-    };
-    let expected_sender =
-        expected_public_signing_key(sender).ok_or_else(|| StepError::QueryFailed {
-            message: format!("sender {sender:?} is not in the configured public accounts"),
-        })?;
-    let expected_receiver = context
-        .public_account_signing_key(receiver)
-        .await?
-        .ok_or_else(|| StepError::QueryFailed {
-            message: format!("new account {receiver:?} has no wallet signing key"),
-        })?;
-    let signers: Vec<_> = transaction
-        .witness_set()
-        .signatures_and_public_keys()
-        .iter()
-        .map(|(_, public_key)| public_key)
-        .collect();
-    if signers != vec![&expected_sender, &expected_receiver] {
-        return Err(StepError::AssertionFailed {
-            message: format!(
-                "expected sender {expected_sender:?} and new account {expected_receiver:?} to sign, got {signers:?}"
-            ),
         });
     }
     Ok(())

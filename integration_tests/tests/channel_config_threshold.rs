@@ -14,15 +14,14 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result, ensure};
 use integration_tests::{account_balance, get_account, init_logger, new_account};
-use lee::{AccountId, PrivateKey, PublicKey, program::Program};
-use log::info;
-use logos_blockchain_core::mantle::channel::ChannelState;
-use logos_blockchain_key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey};
+use lee::{signature::PublicAccountSecret, test_utils::TestSigner};
 use logos_blockchain_zone_sdk::{
     CommonHttpClient,
     adapter::{Node as _, NodeHttpClient},
+    core::mantle::channel::ChannelState,
+    key_management_system_service::keys::{Ed25519Key, Ed25519PublicKey},
 };
-use sequencer_core::config::GenesisAction;
+use sequencer_core::config::{DepositRecipient, GenesisAction};
 use test_fixtures::{
     MultiZoneTestContextBuilder, TestContext, ZoneTestContextBuilder,
     config::{
@@ -31,12 +30,13 @@ use test_fixtures::{
     },
 };
 use tokio::test;
-use wallet::AccountIdentity;
+use tracing::info;
+use wallet::{AccountIdentity, program_facades::sequencer_stake::SequencerStake};
 
 /// Comfortably above `system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE`.
 const FUNDING_BALANCE: u128 = 2 * system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
 
-/// Bedrock signing key of the sequencer that stakes its way in.
+/// Channel signing key of the sequencer that stakes its way in.
 const JOINER_SIGNING_KEY: [u8; 32] = [0x42; 32];
 
 /// The committee update is its own transaction and needs peer signatures, so
@@ -47,6 +47,8 @@ const COMMITTEE_POLL: Duration = Duration::from_secs(3);
 fn fast_blocks() -> SequencerPartialConfig {
     SequencerPartialConfig {
         block_create_timeout: Duration::from_secs(2),
+        // Covers the storage price doubling at the devnet's first epoch rotations.
+        priority_fee_percent: 150,
         ..SequencerPartialConfig::default()
     }
 }
@@ -85,10 +87,11 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
 
     let joiner_key = Ed25519Key::from_bytes(&JOINER_SIGNING_KEY).public_key();
     let joiner_stake_key = sequencer_stake_core::SequencerKey::new(joiner_key.to_bytes())
-        .expect("a Bedrock key is a valid Ed25519 public key");
+        .expect("a channel signing public key is a valid Ed25519 public key");
 
-    let funding_private_key = PrivateKey::new_os_random();
-    let funding_id = AccountId::from(&PublicKey::new_from_private_key(&funding_private_key));
+    let funding_private_key = PublicAccountSecret::new_os_random();
+    let funding_signer = TestSigner::from(&funding_private_key);
+    let funding_id = funding_signer.account_id();
 
     let mut ctx = MultiZoneTestContextBuilder::default()
         .with_zone(
@@ -99,7 +102,7 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
             .with_sequencer_partial_config(fast_blocks())
             .with_gossip()
             .with_genesis(vec![GenesisAction::SupplyAccount {
-                account_id: funding_id,
+                recipient: DepositRecipient::Identified(funding_signer.evidence()),
                 balance: u64::try_from(FUNDING_BALANCE).expect("funding balance fits u64"),
             }]),
         )
@@ -121,9 +124,9 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
         genesis_state.configuration_threshold
     );
     info!(
-        "Channel created accrediting {} keys at a configuration threshold of {}",
-        genesis_state.accredited_keys.len(),
-        genesis_state.configuration_threshold
+        accredited_keys = genesis_state.accredited_keys.len(),
+        configuration_threshold = genesis_state.configuration_threshold,
+        "Channel created"
     );
 
     ctx.wallet_mut()
@@ -142,37 +145,17 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
     let funds_id = system_accounts::stake_funds_account_id(&ownership_id);
 
     let stake_id = programs::sequencer_stake_account_id();
-    // An untrusted claim about the ownership account this stake targets, read from live state
-    // the same way `submit_stake` builds it: it is checked against the account it describes.
-    let has_record = !get_account(&ctx, ownership_id)
-        .await
-        .context("Failed to read the stake ownership account")?
-        .data
-        .shard(stake_id)
-        .is_empty();
-    let stake_instruction_data =
-        Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
-            sequencer_key: joiner_stake_key,
-            amount: FUNDING_BALANCE,
-            has_record,
-        })
-        .context("Failed to serialize Stake instruction")?;
 
     info!(
-        "Staking sequencer key {}",
-        hex::encode(joiner_key.to_bytes())
+        sequencer_key = %hex::encode(joiner_key.to_bytes()),
+        "Staking sequencer key"
     );
-    ctx.wallet()
-        .send_pub_tx(
-            vec![
-                AccountIdentity::Public(funding_id).balance(),
-                AccountIdentity::Public(ownership_id).select_program_shard(stake_id),
-                AccountIdentity::PublicNoSign(funds_id).balance(),
-                AccountIdentity::PublicNoSign(system_accounts::sequencer_stake_config_account_id())
-                    .select_program_shard(stake_id),
-            ],
-            stake_instruction_data,
-            stake_id,
+    SequencerStake(ctx.wallet())
+        .send_stake(
+            AccountIdentity::Public(ownership_id),
+            AccountIdentity::Public(funding_id),
+            joiner_stake_key,
+            FUNDING_BALANCE,
         )
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit Stake transaction: {err:?}"))?;
@@ -181,7 +164,7 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
         Ok(!get_account(&ctx, ownership_id)
             .await?
             .data
-            .shard(stake_id)
+            .actor_state(stake_id)
             .is_empty())
     })
     .await?;
@@ -210,9 +193,9 @@ async fn a_committee_update_needs_a_peer_signature() -> Result<()> {
         updated.configuration_threshold
     );
     info!(
-        "Committee update landed: {} keys at a configuration threshold of {}",
-        updated.accredited_keys.len(),
-        updated.configuration_threshold
+        accredited_keys = updated.accredited_keys.len(),
+        configuration_threshold = updated.configuration_threshold,
+        "Committee update landed"
     );
 
     Ok(())

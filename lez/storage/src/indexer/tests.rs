@@ -1,5 +1,5 @@
 use common::{test_utils::produce_dummy_block, transaction::TxEvents};
-use lee::{Account, AccountId, PublicKey};
+use lee::{Account, AccountId, test_utils::TestSigner};
 use tempfile::tempdir;
 
 use super::*;
@@ -29,20 +29,23 @@ fn settled_block(
     mut transactions: Vec<common::transaction::LeeTransaction>,
     state: &lee::V03State,
 ) -> Block {
-    use common::transaction::{LeeTransaction, clock_invocation, fee_invocation};
+    use common::transaction::{FeePayee, LeeTransaction, clock_invocation, fee_invocation};
     let timestamp = id.saturating_mul(100);
-    let (summary, payout) = if id == lee::GENESIS_BLOCK_ID {
+    let (summary, payout, receipts) = if id == lee::GENESIS_BLOCK_ID {
         // Genesis transactions are fee-exempt
         let summary = fee_core::BlockFeeSummary::default();
         let payout = chain_state::apply::opening_fee_state(state).apply_block(&summary);
-        (summary, payout)
+        let receipts = vec![common::block::TransactionReceipt::EXEMPT; transactions.len()];
+        (summary, payout, receipts)
     } else {
         chain_state::apply::derive_block_summary(state, &transactions, id, timestamp)
             .expect("test transactions settle")
     };
     let producer = common::test_utils::producer_account_for_testing();
     transactions.push(LeeTransaction::Public(fee_invocation(
-        summary, payout, producer,
+        summary,
+        payout,
+        FeePayee::Present(producer),
     )));
     transactions.push(LeeTransaction::Public(clock_invocation(id, timestamp)));
     common::block::HashableBlockData {
@@ -50,24 +53,25 @@ fn settled_block(
         prev_block_hash: prev_hash,
         timestamp,
         transactions,
+        receipts,
     }
     .into_pending_block()
 }
 
-fn acc1_sign_key() -> lee::PrivateKey {
-    lee::PrivateKey::try_new([1; 32]).unwrap()
+fn acc1_signer() -> TestSigner {
+    TestSigner::new(1)
 }
 
-fn acc2_sign_key() -> lee::PrivateKey {
-    lee::PrivateKey::try_new([2; 32]).unwrap()
+fn acc2_signer() -> TestSigner {
+    TestSigner::new(2)
 }
 
 fn acc1() -> AccountId {
-    AccountId::from(&PublicKey::new_from_private_key(&acc1_sign_key()))
+    acc1_signer().account_id()
 }
 
 fn acc2() -> AccountId {
-    AccountId::from(&PublicKey::new_from_private_key(&acc2_sign_key()))
+    acc2_signer().account_id()
 }
 
 fn initial_state() -> lee::V03State {
@@ -79,10 +83,11 @@ fn initial_state() -> lee::V03State {
     .map(|(id, balance)| (id, Account::funded(balance)))
     .collect::<Vec<_>>();
 
-    // push clock system accounts
-    for clock_id in system_accounts::clock_account_ids() {
-        public_accounts.push((clock_id, system_accounts::clock_account()));
-    }
+    // push clock system account
+    public_accounts.push((
+        system_accounts::clock_account_id(),
+        system_accounts::clock_account(),
+    ));
 
     // push fee system accounts
     public_accounts.push((
@@ -102,9 +107,9 @@ fn initial_state() -> lee::V03State {
 
     lee::V03State::new()
         .with_public_accounts(public_accounts)
-        .with_named_programs([
-            (programs::clock_account_id(), programs::clock()),
-            (programs::fee_account_id(), programs::fee()),
+        .with_programs_at([
+            (programs::clock_account_id(), programs::clock(), true),
+            (programs::fee_account_id(), programs::fee(), true),
         ])
 }
 
@@ -157,10 +162,10 @@ fn one_block_insertion() {
     let prev_hash = genesis_block.header.hash;
     let from = acc1();
     let to = acc2();
-    let sign_key = acc1_sign_key();
+    let signer = acc1_signer();
 
     let transfer_tx =
-        common::test_utils::create_transaction_native_token_transfer(from, 0, to, 1, &sign_key);
+        common::test_utils::create_transaction_native_token_transfer(from, 0, to, 1, &signer);
     let block = settled_block(2, prev_hash, vec![transfer_tx], &build_state);
     chain_state::apply::apply_block_to_state(&block, &mut build_state).expect("block applies");
 
@@ -285,7 +290,7 @@ fn state_replay_falls_back_over_missing_breakpoints() {
 
     let from = acc1();
     let to = acc2();
-    let sign_key = acc1_sign_key();
+    let signer = acc1_signer();
 
     let mut build_state = initial_state.clone();
     for i in 1..=u64::from(BREAKPOINT_INTERVAL) + 1 {
@@ -298,7 +303,7 @@ fn state_replay_falls_back_over_missing_breakpoints() {
             (i - 1).into(),
             to,
             1,
-            &sign_key,
+            &signer,
         );
         let block = settled_block_opt(i, prev_hash, vec![transfer_tx], &build_state);
         let events =
@@ -344,10 +349,10 @@ fn simple_maps() {
 
     let from = acc1();
     let to = acc2();
-    let sign_key = acc1_sign_key();
+    let signer = acc1_signer();
 
     let transfer_tx =
-        common::test_utils::create_transaction_native_token_transfer(from, 0, to, 1, &sign_key);
+        common::test_utils::create_transaction_native_token_transfer(from, 0, to, 1, &signer);
     let block = produce_dummy_block(1, None, vec![transfer_tx]);
     let mut build_state = initial_state.clone();
     chain_state::apply::apply_block_to_state(&block, &mut build_state).expect("genesis applies");
@@ -362,7 +367,7 @@ fn simple_maps() {
 
     let prev_hash = last_block.header.hash;
     let transfer_tx =
-        common::test_utils::create_transaction_native_token_transfer(from, 1, to, 1, &sign_key);
+        common::test_utils::create_transaction_native_token_transfer(from, 1, to, 1, &signer);
     let block = settled_block(2, prev_hash, vec![transfer_tx], &build_state);
     chain_state::apply::apply_block_to_state(&block, &mut build_state).expect("block applies");
 
@@ -376,7 +381,7 @@ fn simple_maps() {
 
     let prev_hash = last_block.header.hash;
     let transfer_tx =
-        common::test_utils::create_transaction_native_token_transfer(from, 2, to, 1, &sign_key);
+        common::test_utils::create_transaction_native_token_transfer(from, 2, to, 1, &signer);
 
     let control_tx_hash1 = transfer_tx.hash();
 
@@ -391,7 +396,7 @@ fn simple_maps() {
 
     let prev_hash = last_block.header.hash;
     let transfer_tx =
-        common::test_utils::create_transaction_native_token_transfer(from, 3, to, 1, &sign_key);
+        common::test_utils::create_transaction_native_token_transfer(from, 3, to, 1, &signer);
 
     let control_tx_hash2 = transfer_tx.hash();
 
@@ -430,10 +435,10 @@ fn block_batch() {
 
     let from = acc1();
     let to = acc2();
-    let sign_key = acc1_sign_key();
+    let signer = acc1_signer();
 
     let transfer_tx =
-        common::test_utils::create_transaction_native_token_transfer(from, 0, to, 1, &sign_key);
+        common::test_utils::create_transaction_native_token_transfer(from, 0, to, 1, &signer);
     let block = produce_dummy_block(1, None, vec![transfer_tx]);
     let mut build_state = initial_state.clone();
     chain_state::apply::apply_block_to_state(&block, &mut build_state).expect("genesis applies");
@@ -447,7 +452,7 @@ fn block_batch() {
 
     let prev_hash = last_block.header.hash;
     let transfer_tx =
-        common::test_utils::create_transaction_native_token_transfer(from, 1, to, 1, &sign_key);
+        common::test_utils::create_transaction_native_token_transfer(from, 1, to, 1, &signer);
     let block = settled_block(2, prev_hash, vec![transfer_tx], &build_state);
     chain_state::apply::apply_block_to_state(&block, &mut build_state).expect("block applies");
 
@@ -460,7 +465,7 @@ fn block_batch() {
 
     let prev_hash = last_block.header.hash;
     let transfer_tx =
-        common::test_utils::create_transaction_native_token_transfer(from, 2, to, 1, &sign_key);
+        common::test_utils::create_transaction_native_token_transfer(from, 2, to, 1, &signer);
 
     let block = settled_block(3, prev_hash, vec![transfer_tx], &build_state);
     chain_state::apply::apply_block_to_state(&block, &mut build_state).expect("block applies");
@@ -473,7 +478,7 @@ fn block_batch() {
 
     let prev_hash = last_block.header.hash;
     let transfer_tx =
-        common::test_utils::create_transaction_native_token_transfer(from, 3, to, 1, &sign_key);
+        common::test_utils::create_transaction_native_token_transfer(from, 3, to, 1, &signer);
 
     let block = settled_block(4, prev_hash, vec![transfer_tx], &build_state);
     chain_state::apply::apply_block_to_state(&block, &mut build_state).expect("block applies");
@@ -526,14 +531,14 @@ fn account_map() {
 
     let from = acc1();
     let to = acc2();
-    let sign_key = acc1_sign_key();
+    let signer = acc1_signer();
 
     let mut tx_hash_res = vec![];
 
     let transfer_tx1 =
-        common::test_utils::create_transaction_native_token_transfer(from, 0, to, 1, &sign_key);
+        common::test_utils::create_transaction_native_token_transfer(from, 0, to, 1, &signer);
     let transfer_tx2 =
-        common::test_utils::create_transaction_native_token_transfer(from, 1, to, 1, &sign_key);
+        common::test_utils::create_transaction_native_token_transfer(from, 1, to, 1, &signer);
     tx_hash_res.push(transfer_tx1.hash().0);
     tx_hash_res.push(transfer_tx2.hash().0);
 
@@ -549,9 +554,9 @@ fn account_map() {
 
     let prev_hash = last_block.header.hash;
     let transfer_tx1 =
-        common::test_utils::create_transaction_native_token_transfer(from, 2, to, 1, &sign_key);
+        common::test_utils::create_transaction_native_token_transfer(from, 2, to, 1, &signer);
     let transfer_tx2 =
-        common::test_utils::create_transaction_native_token_transfer(from, 3, to, 1, &sign_key);
+        common::test_utils::create_transaction_native_token_transfer(from, 3, to, 1, &signer);
     tx_hash_res.push(transfer_tx1.hash().0);
     tx_hash_res.push(transfer_tx2.hash().0);
 
@@ -566,9 +571,9 @@ fn account_map() {
 
     let prev_hash = last_block.header.hash;
     let transfer_tx1 =
-        common::test_utils::create_transaction_native_token_transfer(from, 4, to, 1, &sign_key);
+        common::test_utils::create_transaction_native_token_transfer(from, 4, to, 1, &signer);
     let transfer_tx2 =
-        common::test_utils::create_transaction_native_token_transfer(from, 5, to, 1, &sign_key);
+        common::test_utils::create_transaction_native_token_transfer(from, 5, to, 1, &signer);
     tx_hash_res.push(transfer_tx1.hash().0);
     tx_hash_res.push(transfer_tx2.hash().0);
 
@@ -583,7 +588,7 @@ fn account_map() {
 
     let prev_hash = last_block.header.hash;
     let transfer_tx =
-        common::test_utils::create_transaction_native_token_transfer(from, 6, to, 1, &sign_key);
+        common::test_utils::create_transaction_native_token_transfer(from, 6, to, 1, &signer);
     tx_hash_res.push(transfer_tx.hash().0);
 
     let block = settled_block(4, prev_hash, vec![transfer_tx], &build_state);

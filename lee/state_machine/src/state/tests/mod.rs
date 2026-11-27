@@ -4,37 +4,40 @@
     reason = "We don't care about it in tests"
 )]
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
+use borsh::BorshSerialize;
 use lee_core::{
-    AuthorizationSecretKey, BlockId, Commitment, DUMMY_COMMITMENT_HASH, Identifier,
-    MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey, NullifierWitness,
-    PrivateWitness, Timestamp, WitnessKind,
-    account::{Account, AccountId, Balance, Nonce, ProgramShardSelector, data::ShardData},
-    encryption::ViewingPublicKey,
-    execution_state::{DeferredPublicEffect, ExecutionError},
+    AuthorizationSecretKey, BlockId, Commitment, DUMMY_COMMITMENT_HASH, DummyOutput,
+    MembershipProof, MessageWitness, Nullifier, NullifierWitness, PrivacyPreservingCircuitOutput,
+    PrivateWitness, RecipientEncryption, RegularKey, RootCall, Timestamp, WitnessKind,
+    account::{Account, AccountId, Actor, ActorState, Balance, Nonce},
+    execution_state::{Delivery, ExecutionError, TransactionEntry},
     native_token::{
-        Effect as NativeEffect, Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID,
-        TransferError, encode_balance,
+        Message as NativeMessage, NATIVE_TOKEN_PROGRAM_ID, TransferError, encode_balance,
     },
     program::{
-        AccountMeta, BlockValidityWindow, ExecutionValidationError, InstructionData,
-        MAX_NUMBER_CHAINED_CALLS, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent, ProgramId,
-        ProgramSegment, TimestampValidityWindow, TransactionEvent,
+        BlockValidityWindow, MessageEnvelope, PROGRAM_LOADER_ACCOUNT_ID, PdaSeed, ProgramEvent,
+        ProgramId, SyncMessage, TimestampValidityWindow, TransactionEvent,
     },
 };
+use program_loader_core::{LoaderActorState as _, ProgramSegment};
+use test_guest_core::{ForgeField, Script};
 
+pub use crate::test_utils::{TestPrivateKeys, init_witness, no_seal, signed_by, update_witness};
 use crate::{
-    ProvingInput, PublicKey, PublicTransaction, V03State,
+    ProvingInput, PublicAccountEvidence, PublicExecutionContext, PublicTransaction,
+    SenderPresentation, Simulation, V03State,
     error::{InvalidProgramBehaviorError, LeeError},
-    execute_and_prove,
+    execute_and_prove, execute_and_prove_with_cross_messages,
     privacy_preserving_transaction::{
-        PrivacyPreservingTransaction, circuit::ProgramWithDependencies, message::Message,
-        witness_set::WitnessSet,
+        PrivacyPreservingTransaction,
+        circuit::{ProgramCatalog, Proof},
+        message::Message,
     },
     program::Program,
     public_transaction,
-    signature::PrivateKey,
+    test_utils::{TestSigner, privacy_witness_for, signer_nonces, witness_for},
 };
 
 mod chained_calls;
@@ -43,125 +46,175 @@ mod deploy;
 mod events;
 mod flash_swap;
 mod genesis;
+mod key_rotation;
 mod native_transfer;
+mod pending_messages;
 mod privacy_preserving;
 mod public_program_rules;
-mod run_program;
+mod publications;
+mod recovery_bindings;
+mod sealed_messages;
 mod validity_window;
+
+// A second deployment of `scripted`: a distinct program for dispatch and PDA derivation.
+pub const TWIN: AccountId = AccountId::new([0x5c; 32]);
 
 impl V03State {
     #[must_use]
-    pub fn with_test_programs(mut self) -> Self {
-        self.insert_program(&crate::test_methods::dropped_account(), true);
-        self.insert_program(&crate::test_methods::data_changer(), true);
-        self.insert_program(&crate::test_methods::native_spender(), true);
-        self.insert_program(&crate::test_methods::forges_apply_echo(), true);
-        self.insert_program(&crate::test_methods::auth_asserting_noop(), true);
-        self.insert_program(&crate::test_methods::private_pda_delegator(), true);
-        self.insert_program(&crate::test_methods::noop(), true);
-        self.insert_program(&crate::test_methods::shard_forwarder(), true);
-        self.insert_program(&crate::test_methods::chain_caller(), true);
-        self.insert_program(&crate::test_methods::non_delegating_forwarder(), true);
-        self.insert_program(&crate::test_methods::event_emitter(), true);
-        self.insert_program(&crate::test_methods::validity_window(), true);
-        self.insert_program(&crate::test_methods::flash_swap_initiator(), true);
-        self.insert_program(&crate::test_methods::flash_swap_callback(), true);
-        self.insert_program(&crate::test_methods::malicious_self_program_id(), true);
-        self.insert_program(&crate::test_methods::malicious_caller_program_id(), true);
-        self.insert_program(&crate::test_methods::pda_spend_proxy(), true);
-        self.insert_program(&crate::test_methods::validity_window_chain_caller(), true);
-        self.insert_program(&crate::test_methods::references_undeclared_account(), true);
-        self.insert_program(&crate::test_methods::injects_undeclared_pre_state(), true);
-        self.insert_program(&crate::test_methods::reordering_writer(), true);
-        self
+    pub fn with_test_programs(self) -> Self {
+        self.with_programs([
+            crate::test_methods::scripted(),
+            crate::test_methods::forges_echo(),
+            crate::test_methods::flash_swap_initiator(),
+            crate::test_methods::flash_swap_callback(),
+        ])
+        .with_programs_at([(TWIN, crate::test_methods::scripted(), true)])
     }
 
     #[must_use]
     pub fn with_private_account(mut self, keys: &TestPrivateKeys, account: &Account) -> Self {
-        let account_id =
-            AccountId::for_regular_private_account(&keys.npk(), &keys.vpk(), Identifier::ZERO);
+        let account_id = AccountId::for_regular_private_account(&keys.npk(), &keys.vpk());
         let commitment = Commitment::new(&account_id, account);
         self.private_state.0.extend(&[commitment]);
         self
     }
 }
 
-pub struct TestPublicKeys {
-    pub signing_key: PrivateKey,
-}
-
-impl TestPublicKeys {
-    pub fn account_id(&self) -> AccountId {
-        AccountId::from(&PublicKey::new_from_private_key(&self.signing_key))
-    }
-}
-
-pub struct TestPrivateKeys {
-    pub ask: AuthorizationSecretKey,
-    pub d: [u8; 32],
-    pub z: [u8; 32],
-}
-
-impl TestPrivateKeys {
-    pub fn nsk(&self) -> NullifierSecretKey {
-        (&self.ask).into()
-    }
-
-    pub fn npk(&self) -> NullifierPublicKey {
-        NullifierPublicKey::from(&self.nsk())
-    }
-
-    pub fn vpk(&self) -> ViewingPublicKey {
-        ViewingPublicKey::from_seed(&self.d, &self.z)
-    }
-}
-
 // ── Flash Swap types (mirrors of guest types for host-side serialisation) ──
 
-#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
-struct CallbackInstruction {
+#[derive(borsh::BorshSerialize)]
+struct CallbackMessage {
     return_funds: bool,
     amount: u128,
+    vault: AccountId,
+    receiver: AccountId,
 }
 
-#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
-enum FlashSwapInstruction {
+#[derive(borsh::BorshSerialize)]
+enum FlashSwapMessage {
     Initiate {
-        callback_program_id: AccountId,
+        vault: AccountId,
+        receiver: AccountId,
+        callback: Actor,
         amount_out: u128,
         vault_balance: u128,
-        callback_instruction_data: Vec<u8>,
-    },
-    InvariantCheck {
-        min_vault_balance: u128,
+        callback_message: Vec<u8>,
     },
 }
 
-#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
-struct EmitterInstruction {
-    events: Vec<ProgramEvent>,
-    chain: Vec<(AccountId, InstructionData)>,
+pub fn scripted_id() -> AccountId {
+    AccountId::from_builtin_program(crate::test_methods::scripted().id())
 }
 
-pub fn synthetic_program(program: Program) -> ProgramWithDependencies {
-    let self_account_id = AccountId::from_builtin_program(program.id());
-    ProgramWithDependencies::new(program, self_account_id, HashMap::new())
+pub fn synthetic_program(program: Program) -> ProgramCatalog {
+    ProgramCatalog::from([(AccountId::from_builtin_program(program.id()), program)])
 }
 
-pub fn native_debit(amount: Balance) -> DeferredPublicEffect {
-    native_effect(&NativeEffect::Debit(amount))
+pub fn scripted_programs() -> ProgramCatalog {
+    ProgramCatalog::from([
+        (scripted_id(), crate::test_methods::scripted()),
+        (TWIN, crate::test_methods::scripted()),
+    ])
 }
 
-pub fn native_credit(amount: Balance) -> DeferredPublicEffect {
-    native_effect(&NativeEffect::Credit(amount))
+pub const fn transfer(to: AccountId, amount: Balance) -> NativeMessage {
+    NativeMessage::Transfer { to, amount }
 }
 
-fn native_effect(effect: &NativeEffect) -> DeferredPublicEffect {
-    DeferredPublicEffect {
-        program_account_id: NATIVE_TOKEN_PROGRAM_ID,
-        shard_program_account_id: NATIVE_TOKEN_PROGRAM_ID,
-        data: borsh::to_vec(effect).expect("the effect serializes"),
+pub fn credit(from: Actor, to: Actor, amount: Balance) -> Delivery<Actor> {
+    Delivery {
+        envelope: MessageEnvelope {
+            from,
+            to,
+            message: borsh::to_vec(&NativeMessage::Credit(amount)).unwrap(),
+        },
+        grants: BTreeSet::new(),
+        pda_seeds: BTreeSet::new(),
     }
+}
+
+pub fn self_sends(actor: Actor, depth: usize) -> Script {
+    (0..depth).fold(Script::default(), |script, _| {
+        Script::default().send_sync(actor, &script)
+    })
+}
+
+pub fn root(to: Actor, message: &impl BorshSerialize) -> TransactionEntry<MessageWitness> {
+    TransactionEntry::Sync(RootCall {
+        to,
+        message: borsh::to_vec(message).unwrap(),
+    })
+}
+
+pub fn proving_input(root: TransactionEntry<MessageWitness>) -> ProvingInput {
+    ProvingInput {
+        claims: Vec::new(),
+        root,
+        public_context: PublicExecutionContext::default(),
+        private_witnesses: Vec::new(),
+        dummy_inputs: Vec::new(),
+        ciphertext_padding: None,
+        recoveries: Vec::new(),
+        private_promotions: BTreeSet::new(),
+        fee: None,
+    }
+}
+
+// A proof binding `recoveries` whose public root runs `script`, touching no private account.
+pub fn binding(
+    script: &Script,
+    recoveries: Vec<RecipientEncryption>,
+) -> PrivacyPreservingTransaction {
+    let keys = test_public_account_keys_1();
+    let public = Actor::new(keys.account_id(), scripted_id());
+    let (output, proof) = execute_and_prove(
+        ProvingInput {
+            public_context: PublicExecutionContext::new(signed_by(vec![public], []), []),
+            recoveries,
+            ..proving_input(root(public, script))
+        },
+        &Simulation::default(),
+        &scripted_programs(),
+        |_| SenderPresentation::Canonical,
+        |_, _| false,
+        no_seal,
+    )
+    .unwrap();
+    let message = Message {
+        admission_evidence: vec![keys.evidence()],
+        ..Message::from_circuit_output(BTreeMap::new(), output)
+    };
+    let witness_set = privacy_witness_for(&message, proof, &[]);
+    PrivacyPreservingTransaction::new(message, witness_set)
+}
+
+pub fn public_tx(
+    to: Actor,
+    public_actors: Vec<Actor>,
+    nonces: Vec<Nonce>,
+    message: impl BorshSerialize,
+    signers: &[&TestSigner],
+) -> PublicTransaction {
+    let nonces = signer_nonces(signers, nonces);
+    let message = public_transaction::Message::try_new(
+        to,
+        signed_by(public_actors, nonces.keys().copied()),
+        nonces,
+        message,
+    )
+    .unwrap();
+    let witness_set = witness_for(&message, signers);
+    PublicTransaction::new(message, witness_set)
+}
+
+pub fn private_tx(
+    (output, proof): (PrivacyPreservingCircuitOutput, Proof),
+    nonces: Vec<Nonce>,
+    signers: &[&TestSigner],
+) -> PrivacyPreservingTransaction {
+    let message = Message::from_circuit_output(signer_nonces(signers, nonces), output);
+    let witness_set = privacy_witness_for(&message, proof, signers);
+    PrivacyPreservingTransaction::new(message, witness_set)
 }
 
 pub fn execution_error<T: std::fmt::Debug>(result: Result<T, LeeError>) -> ExecutionError {
@@ -175,59 +228,55 @@ pub fn execution_error<T: std::fmt::Debug>(result: Result<T, LeeError>) -> Execu
 
 fn transfer_transaction(
     from: AccountId,
-    from_key: &PrivateKey,
+    from_key: &TestSigner,
     from_nonce: u128,
     to: AccountId,
-    to_key: &PrivateKey,
+    to_key: &TestSigner,
     to_nonce: u128,
     balance: u128,
 ) -> PublicTransaction {
-    let shard_selectors = vec![
-        ProgramShardSelector::native_balance(from),
-        ProgramShardSelector::native_balance(to),
-    ];
-    let nonces = vec![Nonce(from_nonce), Nonce(to_nonce)];
-    let message = public_transaction::Message::try_new(
-        NATIVE_TOKEN_PROGRAM_ID,
-        shard_selectors,
-        nonces,
-        NativeInstruction::Transfer { amount: balance },
+    let sender = Actor::native_balance(from);
+    let recipient = Actor::native_balance(to);
+    public_tx(
+        sender,
+        vec![sender, recipient],
+        vec![Nonce(from_nonce), Nonce(to_nonce)],
+        transfer(recipient.account_id, balance),
+        &[from_key, to_key],
     )
-    .unwrap();
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[from_key, to_key]);
-    PublicTransaction::new(message, witness_set)
 }
 
-fn build_flash_swap_tx(
-    initiator: &Program,
+fn flash_swap_tx(
     vault_id: AccountId,
     receiver_id: AccountId,
-    instruction: FlashSwapInstruction,
+    callback: Actor,
+    message: &FlashSwapMessage,
 ) -> PublicTransaction {
-    let message = public_transaction::Message::try_new(
-        AccountId::from_builtin_program(initiator.id()),
+    let initiator = Actor::new(
+        vault_id,
+        AccountId::from_builtin_program(crate::test_methods::flash_swap_initiator().id()),
+    );
+    // No signers: the vault is PDA-authorised.
+    public_tx(
+        initiator,
         vec![
-            ProgramShardSelector::native_balance(vault_id),
-            ProgramShardSelector::native_balance(receiver_id),
+            initiator,
+            Actor::native_balance(vault_id),
+            Actor::native_balance(receiver_id),
+            callback,
         ],
-        vec![], // no signers — vault is PDA-authorised
-        instruction,
+        vec![],
+        message,
+        &[],
     )
-    .unwrap();
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
-    PublicTransaction::new(message, witness_set)
 }
 
-fn test_public_account_keys_1() -> TestPublicKeys {
-    TestPublicKeys {
-        signing_key: PrivateKey::try_new([37; 32]).unwrap(),
-    }
+fn test_public_account_keys_1() -> TestSigner {
+    TestSigner::new(37)
 }
 
-fn test_public_account_keys_2() -> TestPublicKeys {
-    TestPublicKeys {
-        signing_key: PrivateKey::try_new([38; 32]).unwrap(),
-    }
+fn test_public_account_keys_2() -> TestSigner {
+    TestSigner::new(38)
 }
 
 pub fn test_private_account_keys_1() -> TestPrivateKeys {
@@ -266,16 +315,15 @@ fn force_insert_segment_chain(state: &mut V03State, elf: &[u8], key_seed: u8) ->
     for i in (0..chunks.len()).rev() {
         state.force_insert_account(
             segment_ids[i],
-            Account::default().with_shard(
+            Account::default().with_actor_state(
                 PROGRAM_LOADER_ACCOUNT_ID,
-                ShardData::try_from(
+                ActorState::from(
                     ProgramSegment {
                         bytecode: chunks[i].to_vec(),
                         next_segment: segment_ids.get(i + 1).copied(),
                     }
-                    .to_bytes(),
-                )
-                .expect("segment must fit under DATA_MAX_LENGTH"),
+                    .to_loader_actor_state(),
+                ),
             ),
         );
     }
@@ -283,26 +331,24 @@ fn force_insert_segment_chain(state: &mut V03State, elf: &[u8], key_seed: u8) ->
 }
 
 /// Init-lifecycle private-PDA witness for `keys`, the shape every PDA circuit test starts from.
-pub fn init_pda_witness(
-    keys: &TestPrivateKeys,
-    identifier: Identifier,
-    binding: (AccountId, PdaSeed),
-) -> PrivateWitness {
+pub fn init_pda_witness(keys: &TestPrivateKeys, binding: (AccountId, PdaSeed)) -> PrivateWitness {
     PrivateWitness {
         vpk: keys.vpk(),
         random_seed: [0; 32],
-        identifier,
-        kind: WitnessKind::Pda { binding },
+        kind: WitnessKind::Pda {
+            nsk: keys.nsk(),
+            binding,
+        },
         nullifier: NullifierWitness::Init {
-            npk: keys.npk(),
             commitment_root: DUMMY_COMMITMENT_HASH,
         },
+        address_openings: BTreeSet::new(),
+        signer_programs: BTreeSet::new(),
     }
 }
 
 pub fn update_pda_witness(
     keys: &TestPrivateKeys,
-    identifier: Identifier,
     binding: (AccountId, PdaSeed),
     account: Account,
     membership_proof: MembershipProof,
@@ -310,91 +356,55 @@ pub fn update_pda_witness(
     PrivateWitness {
         vpk: keys.vpk(),
         random_seed: [0; 32],
-        identifier,
-        kind: WitnessKind::Pda { binding },
-        nullifier: NullifierWitness::Update {
-            account,
-            view_tag: 0,
+        kind: WitnessKind::Pda {
             nsk: keys.nsk(),
-            membership_proof,
-        },
-    }
-}
-
-pub fn init_witness(keys: &TestPrivateKeys, identifier: Identifier) -> PrivateWitness {
-    PrivateWitness {
-        vpk: keys.vpk(),
-        random_seed: [0; 32],
-        identifier,
-        kind: WitnessKind::Regular {
-            ask: Some(keys.ask),
-        },
-        nullifier: NullifierWitness::Init {
-            npk: keys.npk(),
-            commitment_root: DUMMY_COMMITMENT_HASH,
-        },
-    }
-}
-
-pub fn update_witness(
-    keys: &TestPrivateKeys,
-    identifier: Identifier,
-    account: Account,
-    membership_proof: MembershipProof,
-) -> PrivateWitness {
-    PrivateWitness {
-        vpk: keys.vpk(),
-        random_seed: [0; 32],
-        identifier,
-        kind: WitnessKind::Regular {
-            ask: Some(keys.ask),
+            binding,
         },
         nullifier: NullifierWitness::Update {
             account,
-            view_tag: 0,
-            nsk: keys.nsk(),
             membership_proof,
         },
+        address_openings: BTreeSet::new(),
+        signer_programs: BTreeSet::new(),
     }
 }
 
 fn shielded_balance_transfer_for_tests(
-    sender_keys: &TestPublicKeys,
+    sender_keys: &TestSigner,
     recipient_keys: &TestPrivateKeys,
     balance_to_move: u128,
     state: &V03State,
 ) -> PrivacyPreservingTransaction {
     let sender_id = sender_keys.account_id();
-    let sender_account = state.get_account_by_id(sender_id);
-    let sender_nonce = sender_account.nonce;
-    let recipient_id = AccountId::for_regular_private_account(
-        &recipient_keys.npk(),
-        &recipient_keys.vpk(),
-        Identifier::ZERO,
-    );
+    let sender = Actor::native_balance(sender_id);
+    let recipient_id =
+        AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk());
 
-    let (output, proof) = execute_and_prove(
+    let proven = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![
-                ProgramShardSelector::native_balance(sender_id),
-                ProgramShardSelector::native_balance(recipient_id),
-            ],
-            signers: [sender_id].into(),
-            private_witnesses: vec![init_witness(recipient_keys, Identifier::ZERO)],
-            instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
-                amount: balance_to_move,
-            })
-            .unwrap(),
-            ..Default::default()
+            public_context: PublicExecutionContext::new(
+                signed_by(vec![sender], [sender_id]),
+                [sender_id],
+            ),
+            private_witnesses: vec![init_witness(recipient_keys)],
+            ..proving_input(root(sender, &transfer(recipient_id, balance_to_move)))
         },
-        &ProgramWithDependencies::native(),
+        &Simulation {
+            public_actor_states: [(sender, encode_balance(balance_to_move))].into(),
+            admitted_accounts: None,
+        },
+        &ProgramCatalog::default(),
+        |_| SenderPresentation::Canonical,
+        |_, _| true,
+        no_seal,
     )
     .unwrap();
 
-    let message = Message::from_circuit_output(vec![sender_nonce], output);
-
-    let witness_set = WitnessSet::for_message(&message, proof, &[&sender_keys.signing_key]);
-    PrivacyPreservingTransaction::new(message, witness_set)
+    private_tx(
+        proven,
+        vec![state.get_account_by_id(sender_id).nonce],
+        &[sender_keys],
+    )
 }
 
 fn private_balance_transfer_for_tests(
@@ -404,50 +414,37 @@ fn private_balance_transfer_for_tests(
     balance_to_move: u128,
     state: &V03State,
 ) -> PrivacyPreservingTransaction {
-    let sender_id = AccountId::for_regular_private_account(
-        &sender_keys.npk(),
-        &sender_keys.vpk(),
-        Identifier::ZERO,
-    );
+    let sender_id = AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk());
     let sender_commitment = Commitment::new(&sender_id, sender_private_account);
-    let recipient_id = AccountId::for_regular_private_account(
-        &recipient_keys.npk(),
-        &recipient_keys.vpk(),
-        Identifier::ZERO,
-    );
+    let recipient_id =
+        AccountId::for_regular_private_account(&recipient_keys.npk(), &recipient_keys.vpk());
 
-    let (output, proof) = execute_and_prove(
+    let proven = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![
-                ProgramShardSelector::native_balance(sender_id),
-                ProgramShardSelector::native_balance(recipient_id),
-            ],
             private_witnesses: vec![
                 update_witness(
                     sender_keys,
-                    Identifier::ZERO,
                     sender_private_account.clone(),
                     state
                         .get_proof_for_commitment(&sender_commitment)
                         .expect("sender's commitment must be in state"),
                 ),
-                init_witness(recipient_keys, Identifier::ZERO),
+                init_witness(recipient_keys),
             ],
-            instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
-                amount: balance_to_move,
-            })
-            .unwrap(),
-            ..Default::default()
+            ..proving_input(root(
+                Actor::native_balance(sender_id),
+                &transfer(recipient_id, balance_to_move),
+            ))
         },
-        &ProgramWithDependencies::native(),
+        &Simulation::default(),
+        &ProgramCatalog::default(),
+        |_| SenderPresentation::Canonical,
+        |_, _| true,
+        no_seal,
     )
     .unwrap();
 
-    let message = Message::from_circuit_output(vec![], output);
-
-    let witness_set = WitnessSet::for_message(&message, proof, &[]);
-
-    PrivacyPreservingTransaction::new(message, witness_set)
+    private_tx(proven, vec![], &[])
 }
 
 fn deshielded_balance_transfer_for_tests(
@@ -457,42 +454,34 @@ fn deshielded_balance_transfer_for_tests(
     balance_to_move: u128,
     state: &V03State,
 ) -> PrivacyPreservingTransaction {
-    let sender_id = AccountId::for_regular_private_account(
-        &sender_keys.npk(),
-        &sender_keys.vpk(),
-        Identifier::ZERO,
-    );
+    let sender_id = AccountId::for_regular_private_account(&sender_keys.npk(), &sender_keys.vpk());
     let sender_commitment = Commitment::new(&sender_id, sender_private_account);
+    let recipient = Actor::native_balance(*recipient_account_id);
 
-    let (output, proof) = execute_and_prove(
+    let proven = execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![
-                ProgramShardSelector::native_balance(sender_id),
-                ProgramShardSelector::native_balance(*recipient_account_id),
-            ],
+            public_context: PublicExecutionContext::new(signed_by(vec![recipient], []), []),
             private_witnesses: vec![update_witness(
                 sender_keys,
-                Identifier::ZERO,
                 sender_private_account.clone(),
                 state
                     .get_proof_for_commitment(&sender_commitment)
                     .expect("sender's commitment must be in state"),
             )],
-            instruction_data: Program::serialize_instruction(NativeInstruction::Transfer {
-                amount: balance_to_move,
-            })
-            .unwrap(),
-            ..Default::default()
+            ..proving_input(root(
+                Actor::native_balance(sender_id),
+                &transfer(recipient.account_id, balance_to_move),
+            ))
         },
-        &ProgramWithDependencies::native(),
+        &Simulation::default(),
+        &ProgramCatalog::default(),
+        |_| SenderPresentation::Canonical,
+        |_, _| false,
+        no_seal,
     )
     .unwrap();
 
-    let message = Message::from_circuit_output(vec![], output);
-
-    let witness_set = WitnessSet::for_message(&message, proof, &[]);
-
-    PrivacyPreservingTransaction::new(message, witness_set)
+    private_tx(proven, vec![], &[])
 }
 
 fn valid_private_transfer_tx_and_state() -> (V03State, PrivacyPreservingTransaction) {

@@ -20,17 +20,20 @@ pub const ML_KEM_768_CIPHERTEXT_LEN: usize = 1088;
 /// a floor.
 pub const MAX_CIPHERTEXT_PADDING: u32 = 8 * 1024;
 
+const ACCOUNT_KEY_DOMAIN: &[u8; 20] = b"LEE/v0.3/KDF-SHA256/";
+const FEE_FALLBACK_KEY_DOMAIN: &[u8; 29] = b"LEE/v0.3/KDF-SHA256/Fallback/";
+const MAX_KEY_DOMAIN_LEN: usize = 29;
+
 pub type Scalar = [u8; 32];
 
-#[derive(Serialize, Deserialize, Clone, Copy)]
+#[derive(Serialize, Deserialize, Clone, Copy, BorshSerialize, BorshDeserialize)]
 pub struct EphemeralSecretKey(pub [u8; 32]);
 
 impl EphemeralSecretKey {
     /// Derives an ephemeral secret key from OS randomness and account-specific values.
     ///
-    /// For updates, `nonce` carries `nsk`-derived entropy, making `esk` strong even
-    /// with a compromised RNG. For inits, `nonce` is deterministic, so `random_seed`
-    /// is the sole entropy source.
+    /// `nonce` carries `nsk`-derived entropy for every transition, an initialization's included,
+    /// making `esk` strong even with a compromised RNG.
     #[must_use]
     pub fn new(
         account_id: &crate::account::AccountId,
@@ -76,48 +79,14 @@ impl std::fmt::Debug for Ciphertext {
     }
 }
 
-pub type ViewTag = u8;
-
-/// Encrypted private-account note for one output.
 #[derive(Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
 #[cfg_attr(
     any(feature = "host", test),
     derive(Debug, Clone, Default, PartialEq, Eq)
 )]
-pub struct EncryptedAccountData {
+pub struct EncryptedNote {
     pub ciphertext: Ciphertext,
     pub epk: EphemeralPublicKey,
-    pub view_tag: ViewTag,
-}
-
-impl EncryptedAccountData {
-    #[must_use]
-    pub fn compute_view_tag(npk: &crate::NullifierPublicKey, vpk: &ViewingPublicKey) -> ViewTag {
-        const PREFIX: &[u8; 18] = b"/LEE/v0.3/ViewTag/";
-        let mut bytes = [0_u8; 18 + 32 + ViewingPublicKey::LEN];
-        bytes[0..18].copy_from_slice(PREFIX);
-        bytes[18..50].copy_from_slice(&npk.to_byte_array());
-        bytes[50..].copy_from_slice(vpk.to_bytes());
-        Impl::hash_bytes(&bytes).as_bytes()[0]
-    }
-}
-
-#[cfg(feature = "host")]
-impl EncryptedAccountData {
-    #[must_use]
-    pub fn new(
-        ciphertext: Ciphertext,
-        npk: &crate::NullifierPublicKey,
-        vpk: &ViewingPublicKey,
-        epk: EphemeralPublicKey,
-    ) -> Self {
-        let view_tag = Self::compute_view_tag(npk, vpk);
-        Self {
-            ciphertext,
-            epk,
-            view_tag,
-        }
-    }
 }
 
 impl EncryptionScheme {
@@ -140,58 +109,99 @@ impl EncryptionScheme {
         nullifier: &Nullifier,
         pad_to_len: Option<u32>,
     ) -> Ciphertext {
+        Self::encrypt_under(
+            ACCOUNT_KEY_DOMAIN,
+            account,
+            kind,
+            shared_secret,
+            nullifier,
+            pad_to_len,
+        )
+    }
+
+    /// [`Self::encrypt`] for a fee fallback's note. Its key is apart from the main note's, so
+    /// the two may share a shared secret and a nullifier.
+    #[must_use]
+    pub fn encrypt_fee_fallback(
+        account: &Account,
+        kind: &PrivateAccountKind,
+        shared_secret: &SharedSecretKey,
+        nullifier: &Nullifier,
+        pad_to_len: Option<u32>,
+    ) -> Ciphertext {
+        Self::encrypt_under(
+            FEE_FALLBACK_KEY_DOMAIN,
+            account,
+            kind,
+            shared_secret,
+            nullifier,
+            pad_to_len,
+        )
+    }
+
+    fn encrypt_under(
+        domain: &[u8],
+        account: &Account,
+        kind: &PrivateAccountKind,
+        shared_secret: &SharedSecretKey,
+        nullifier: &Nullifier,
+        pad_to_len: Option<u32>,
+    ) -> Ciphertext {
         // Plaintext: PrivateAccountKind::HEADER_LEN bytes header || account bytes.
         // Both variants produce the same header length — see PrivateAccountKind::to_header_bytes.
         let mut buffer = kind.to_header_bytes().to_vec();
         buffer.extend_from_slice(&account.to_bytes());
-        if let Some(pad_to_len) = pad_to_len {
-            assert!(
-                pad_to_len <= MAX_CIPHERTEXT_PADDING,
-                "ciphertext padding exceeds the maximum"
-            );
-            let pad_to_len = usize::try_from(pad_to_len).expect("pad length fits in usize");
-            if pad_to_len > buffer.len() {
-                buffer.resize(pad_to_len, 0);
-            }
-        }
-        Self::symmetric_transform(&mut buffer, shared_secret, nullifier);
+        pad_to_floor(&mut buffer, pad_to_len);
+        apply_keystream(
+            &mut buffer,
+            domain,
+            shared_secret,
+            &nullifier.to_byte_array(),
+        );
         Ciphertext(buffer)
     }
 
-    fn symmetric_transform(
-        buffer: &mut [u8],
-        shared_secret: &SharedSecretKey,
-        nullifier: &Nullifier,
-    ) {
-        let key = Self::kdf(shared_secret, nullifier);
-        let mut cipher = ChaCha20::new(&key.into(), &[0; 12].into());
-        cipher.apply_keystream(buffer);
-    }
-
-    fn kdf(shared_secret: &SharedSecretKey, nullifier: &Nullifier) -> [u8; 32] {
-        const PREFIX: &[u8; 20] = b"LEE/v0.3/KDF-SHA256/";
-        let mut bytes = [0_u8; 20 + 32 + 32];
-        bytes[0..20].copy_from_slice(PREFIX);
-        bytes[20..52].copy_from_slice(&shared_secret.0);
-        bytes[52..84].copy_from_slice(&nullifier.to_byte_array());
-
-        Impl::hash_bytes(&bytes).as_bytes().try_into().unwrap()
-    }
-
     #[cfg(feature = "host")]
-    #[expect(
-        clippy::print_stdout,
-        reason = "This is the current way to debug things. TODO: fix later"
-    )]
     #[must_use]
     pub fn decrypt(
         ciphertext: &Ciphertext,
         shared_secret: &SharedSecretKey,
         nullifier: &Nullifier,
     ) -> Option<(PrivateAccountKind, Account)> {
+        Self::decrypt_under(ACCOUNT_KEY_DOMAIN, ciphertext, shared_secret, nullifier)
+    }
+
+    /// [`Self::decrypt`] for a fee fallback's note.
+    #[cfg(feature = "host")]
+    #[must_use]
+    pub fn decrypt_fee_fallback(
+        ciphertext: &Ciphertext,
+        shared_secret: &SharedSecretKey,
+        nullifier: &Nullifier,
+    ) -> Option<(PrivateAccountKind, Account)> {
+        Self::decrypt_under(
+            FEE_FALLBACK_KEY_DOMAIN,
+            ciphertext,
+            shared_secret,
+            nullifier,
+        )
+    }
+
+    #[cfg(feature = "host")]
+    fn decrypt_under(
+        domain: &[u8],
+        ciphertext: &Ciphertext,
+        shared_secret: &SharedSecretKey,
+        nullifier: &Nullifier,
+    ) -> Option<(PrivateAccountKind, Account)> {
         use std::io::Cursor;
         let mut buffer = ciphertext.0.clone();
-        Self::symmetric_transform(&mut buffer, shared_secret, nullifier);
+        apply_keystream(
+            &mut buffer,
+            domain,
+            shared_secret,
+            &nullifier.to_byte_array(),
+        );
 
         if buffer.len() < PrivateAccountKind::HEADER_LEN {
             return None;
@@ -202,17 +212,55 @@ impl EncryptionScheme {
 
         let mut cursor = Cursor::new(&buffer[PrivateAccountKind::HEADER_LEN..]);
         Account::from_cursor(&mut cursor)
-            .inspect_err(|err| {
-                println!(
-                    "Failed to decode {ciphertext:?} \n
-                      with secret {:?} ,\n
-                      nullifier {nullifier:?} ,\n
-                      with error {err:?}",
-                    shared_secret.0
-                );
-            })
             .ok()
             .map(|account| (kind, account))
+    }
+}
+
+pub(crate) fn note_key(
+    domain: &[u8],
+    shared_secret: &SharedSecretKey,
+    binding: &[u8; 32],
+) -> [u8; 32] {
+    let mut preimage = [0_u8; MAX_KEY_DOMAIN_LEN + 32 + 32];
+    let (head, tail) = preimage.split_at_mut(domain.len());
+    head.copy_from_slice(domain);
+    let (secret, tail) = tail.split_at_mut(32);
+    secret.copy_from_slice(&shared_secret.0);
+    tail[..32].copy_from_slice(binding);
+    let len = domain
+        .len()
+        .checked_add(64)
+        .expect("a key domain fits the preimage");
+    Impl::hash_bytes(&preimage[..len])
+        .as_bytes()
+        .try_into()
+        .expect("SHA-256 output is 32 bytes")
+}
+
+pub(crate) fn apply_keystream(
+    buffer: &mut [u8],
+    domain: &[u8],
+    shared_secret: &SharedSecretKey,
+    binding: &[u8; 32],
+) {
+    ChaCha20::new(
+        &note_key(domain, shared_secret, binding).into(),
+        &[0; 12].into(),
+    )
+    .apply_keystream(buffer);
+}
+
+pub(crate) fn pad_to_floor(buffer: &mut Vec<u8>, pad_to_len: Option<u32>) {
+    if let Some(pad_to_len) = pad_to_len {
+        assert!(
+            pad_to_len <= MAX_CIPHERTEXT_PADDING,
+            "ciphertext padding exceeds the maximum"
+        );
+        let pad_to_len = usize::try_from(pad_to_len).expect("pad length fits in usize");
+        if pad_to_len > buffer.len() {
+            buffer.resize(pad_to_len, 0);
+        }
     }
 }
 
@@ -220,7 +268,6 @@ impl EncryptionScheme {
 mod tests {
     use super::*;
     use crate::{
-        Identifier,
         account::{Account, AccountId},
         program::PdaSeed,
     };
@@ -229,11 +276,11 @@ mod tests {
     fn encrypt_same_length_for_account_and_pda() {
         let account = Account::default();
         let secret = SharedSecretKey([0_u8; 32]);
-        let nullifier = Nullifier::for_account_initialization(&AccountId::new([0_u8; 32]));
+        let nullifier = Nullifier::for_dummy(&[0; 32]);
 
         let account_ct = EncryptionScheme::encrypt(
             &account,
-            &PrivateAccountKind::Regular(Identifier::new([42; 32])),
+            &PrivateAccountKind::Regular,
             &secret,
             &nullifier,
             None,
@@ -243,7 +290,6 @@ mod tests {
             &PrivateAccountKind::Pda {
                 account_id: AccountId::new([1_u8; 32]),
                 seed: PdaSeed::new([2_u8; 32]),
-                identifier: Identifier::new([42; 32]),
             },
             &secret,
             &nullifier,
@@ -254,10 +300,7 @@ mod tests {
     }
 
     fn account_with_data(data_len: usize) -> Account {
-        Account::default().with_shard(
-            AccountId::new([8_u8; 32]),
-            vec![7_u8; data_len].try_into().expect("data fits"),
-        )
+        Account::default().with_actor_state(AccountId::new([8_u8; 32]), vec![7_u8; data_len].into())
     }
 
     fn plaintext_len(account: &Account) -> u32 {
@@ -270,8 +313,8 @@ mod tests {
     #[test]
     fn encrypt_pads_short_plaintext_to_requested_length() {
         let secret = SharedSecretKey([0_u8; 32]);
-        let nullifier = Nullifier::for_account_initialization(&AccountId::new([0_u8; 32]));
-        let kind = PrivateAccountKind::Regular(Identifier::ZERO);
+        let nullifier = Nullifier::for_dummy(&[0; 32]);
+        let kind = PrivateAccountKind::Regular;
 
         for data_len in [0, 10, 100, 300] {
             let account = account_with_data(data_len);
@@ -292,8 +335,8 @@ mod tests {
     #[test]
     fn encrypt_leaves_plaintext_longer_than_the_pad_alone() {
         let secret = SharedSecretKey([0_u8; 32]);
-        let nullifier = Nullifier::for_account_initialization(&AccountId::new([0_u8; 32]));
-        let kind = PrivateAccountKind::Regular(Identifier::ZERO);
+        let nullifier = Nullifier::for_dummy(&[0; 32]);
+        let kind = PrivateAccountKind::Regular;
         let account = account_with_data(1000);
         let base = plaintext_len(&account);
 
@@ -317,16 +360,15 @@ mod tests {
         let (sender_ss, epk) = SharedSecretKey::encapsulate(&vpk);
         let receiver_ss = SharedSecretKey::decapsulate(&epk, &d, &z).unwrap();
 
-        let account = account_with_data(37).with_shard(
+        let account = account_with_data(37).with_actor_state(
             crate::native_token::NATIVE_TOKEN_PROGRAM_ID,
             crate::native_token::encode_balance(42),
         );
         let kind = PrivateAccountKind::Pda {
             account_id: AccountId::new([1_u8; 32]),
             seed: PdaSeed::new([2_u8; 32]),
-            identifier: Identifier::new([9; 32]),
         };
-        let nullifier = Nullifier::for_account_initialization(&AccountId::new([7_u8; 32]));
+        let nullifier = Nullifier::for_dummy(&[7; 32]);
 
         let ct = EncryptionScheme::encrypt(&account, &kind, &sender_ss, &nullifier, Some(PAD));
         assert_eq!(
@@ -352,9 +394,9 @@ mod tests {
     fn encrypt_rejects_padding_above_the_maximum() {
         let _ct = EncryptionScheme::encrypt(
             &Account::default(),
-            &PrivateAccountKind::Regular(Identifier::ZERO),
+            &PrivateAccountKind::Regular,
             &SharedSecretKey([0_u8; 32]),
-            &Nullifier::for_account_initialization(&AccountId::new([0_u8; 32])),
+            &Nullifier::for_dummy(&[0; 32]),
             Some(MAX_CIPHERTEXT_PADDING.saturating_add(1)),
         );
     }
@@ -371,12 +413,12 @@ mod tests {
         let (sender_ss, epk) = SharedSecretKey::encapsulate(&vpk);
         let receiver_ss = SharedSecretKey::decapsulate(&epk, &d, &z).unwrap();
 
-        let account = Account::funded(999).with_shard(
+        let account = Account::funded(999).with_actor_state(
             AccountId::new([12; 32]),
-            b"shard record".to_vec().try_into().unwrap(),
+            b"actor state record".to_vec().into(),
         );
-        let kind = PrivateAccountKind::Regular(Identifier::ZERO);
-        let nullifier = Nullifier::for_account_initialization(&AccountId::new([7_u8; 32]));
+        let kind = PrivateAccountKind::Regular;
+        let nullifier = Nullifier::for_dummy(&[7; 32]);
 
         let ct = EncryptionScheme::encrypt(&account, &kind, &sender_ss, &nullifier, None);
         let (decoded_kind, decoded_account) =
@@ -395,11 +437,22 @@ mod tests {
         );
 
         // Wrong nullifier must not decrypt correctly.
-        let wrong_nullifier = Nullifier::for_account_initialization(&AccountId::new([9; 32]));
+        let wrong_nullifier = Nullifier::for_dummy(&[9; 32]);
         let bad_via_nlf = EncryptionScheme::decrypt(&ct, &receiver_ss, &wrong_nullifier);
         assert!(
             bad_via_nlf.is_none_or(|(_, a)| a.data.native_balance() != Ok(999)),
             "wrong nullifier must not produce the correct plaintext"
+        );
+    }
+
+    #[test]
+    fn the_account_note_key_matches_its_pinned_derivation() {
+        assert_eq!(
+            note_key(ACCOUNT_KEY_DOMAIN, &SharedSecretKey([1; 32]), &[2; 32]),
+            [
+                14, 24, 5, 161, 233, 87, 180, 194, 168, 42, 43, 224, 144, 8, 219, 118, 162, 196,
+                68, 106, 51, 60, 178, 163, 139, 164, 53, 9, 82, 205, 47, 61,
+            ]
         );
     }
 

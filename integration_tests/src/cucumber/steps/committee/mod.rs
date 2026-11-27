@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use cucumber::gherkin::Step;
-use logos_blockchain_key_management_system_service::keys::ED25519_SECRET_KEY_SIZE;
+use logos_blockchain_zone_sdk::key_management_system_service::keys::ED25519_SECRET_KEY_SIZE;
 
 use crate::{
     cucumber::error::StepError,

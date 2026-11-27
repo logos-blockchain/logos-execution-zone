@@ -1,48 +1,40 @@
 use indexer_service_protocol::{
-    PrivacyPreservingMessage, PrivacyPreservingTransaction, ProgramShardSelector, PublicMessage,
-    PublicTransaction, WitnessSet,
+    AccountId, BoundaryStep, FeeDeclaration, FeeReceipt, PrivacyPreservingMessage,
+    PrivacyPreservingTransaction, ProvenFee, PublicExecutionContext, PublicMessage,
+    PublicTransaction, RootCall, TransactionReceipt, WitnessEntry, WitnessSet,
 };
 use leptos::prelude::*;
 
-use super::ShardSelectorList;
+use super::{ActorList, DeclaredActorList};
 
 /// Public transaction details component
 #[component]
-pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
+pub fn PublicTxDetails(
+    tx: PublicTransaction,
+    receipt: Option<TransactionReceipt>,
+) -> impl IntoView {
     let PublicTransaction {
         hash: _,
         message,
         witness_set,
     } = tx;
     let PublicMessage {
-        program_account_id,
-        shard_selectors,
-        nonces,
-        instruction_data,
+        public_context,
+        root: RootCall { to, message: data },
         fee,
+        nonces,
+        admission_evidence: _,
     } = message;
-    let WitnessSet {
-        signatures_and_public_keys,
-        proof,
-    } = witness_set;
+    let public_actors = public_context.actors;
+    let WitnessSet { entries, proof } = witness_set;
 
-    let program_id_str = program_account_id.to_string();
+    let program_id_str = to.program_account_id.to_string();
+    let message_str = format!("{} bytes", data.len());
+    let root_actors = vec![to];
     let proof_len = proof.map_or(0, |p| p.0.len());
-    let signatures_count = signatures_and_public_keys.len();
-    let signer_nonces_str = nonces
-        .iter()
-        .map(ToString::to_string)
-        .collect::<Vec<_>>()
-        .join(", ");
-    let (fee_payer_str, fee_amounts_str) = fee.map_or_else(
-        || ("None (exempt)".to_owned(), "None (exempt)".to_owned()),
-        |fee| {
-            (
-                fee.payer.to_string(),
-                format!("{} / {} / {}", fee.gas_limit, fee.tip, fee.max_fee),
-            )
-        },
-    );
+    let witness_entries_str = witness_entries(&entries);
+    let signer_nonces_str = signer_nonces(&nonces);
+    let (fee_payer_str, fee_amounts_str) = fee_strs(fee, "None (exempt)");
 
     view! {
         <div class="transaction-details">
@@ -53,18 +45,16 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
                     <span class="info-value hash">{program_id_str}</span>
                 </div>
                 <div class="info-row">
-                    <span class="info-label">"Instruction Data:"</span>
-                    <span class="info-value">
-                        {format!("{} u32 values", instruction_data.len())}
-                    </span>
+                    <span class="info-label">"Message:"</span>
+                    <span class="info-value">{message_str}</span>
                 </div>
                 <div class="info-row">
                     <span class="info-label">"Proof Size:"</span>
                     <span class="info-value">{format!("{proof_len} bytes")}</span>
                 </div>
                 <div class="info-row">
-                    <span class="info-label">"Signatures:"</span>
-                    <span class="info-value">{signatures_count.to_string()}</span>
+                    <span class="info-label">"Witness Entries:"</span>
+                    <span class="info-value hash">{witness_entries_str}</span>
                 </div>
                 <div class="info-row">
                     <span class="info-label">"Fee Payer:"</span>
@@ -80,51 +70,102 @@ pub fn PublicTxDetails(tx: PublicTransaction) -> impl IntoView {
                 </div>
             </div>
 
-            <h3>"Accounts"</h3>
-            <ShardSelectorList shard_selectors=shard_selectors />
+            <ReceiptRows receipt=receipt />
+
+            <h3>"Root Actor"</h3>
+            <ActorList actors=root_actors />
+
+            <h3>"Public Actors"</h3>
+            <DeclaredActorList actors=public_actors />
         </div>
     }
 }
 
 /// Privacy-preserving transaction details component
 #[component]
-pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl IntoView {
+pub fn PrivacyPreservingTxDetails(
+    tx: PrivacyPreservingTransaction,
+    receipt: Option<TransactionReceipt>,
+) -> impl IntoView {
     let PrivacyPreservingTransaction {
         hash: _,
         message,
         witness_set,
     } = tx;
     let PrivacyPreservingMessage {
-        public_actions,
+        public_context,
+        boundary,
+        async_messages: _,
+        recovery_bindings: _,
+        public_root: _,
         nonces,
         private_actions,
         block_validity_window,
         timestamp_validity_window,
+        admission_evidence: _,
+        proven_fee,
+        fee,
     } = message;
+    // Without a declaration, a charged receipt means the proof paid; the payer stays private.
+    let none_label = if receipt.is_some_and(|receipt| !receipt.is_exempt()) {
+        "Private (paid in proof)"
+    } else {
+        "None (exempt)"
+    };
+    let (fee_payer_str, fee_amounts_str) = fee_strs(fee, none_label);
+    let (refund_target_str, tip_str, fallback_str) = proven_fee.map_or_else(
+        || ("-".to_owned(), "-".to_owned(), "-"),
+        |ProvenFee {
+             refund_to,
+             tip,
+             fallback,
+         }| {
+            (
+                refund_to.map_or_else(|| "Payer's alias".to_owned(), |id| id.to_string()),
+                tip.to_string(),
+                if fallback.is_some() {
+                    "Committed"
+                } else {
+                    "None"
+                },
+            )
+        },
+    );
+    let PublicExecutionContext {
+        actors: public_actors,
+        authorized_accounts,
+        promotions: _,
+        private_signers: _,
+    } = public_context;
     let private_action_count = private_actions.len();
-    let public_account_count = public_actions.len();
-    // One row per effect, in the order settlement folds them: the same shard can appear twice.
-    let public_shard_selectors: Vec<_> = public_actions
-        .into_iter()
-        .flat_map(|action| {
-            action
-                .effects
-                .into_iter()
-                .map(move |effect| ProgramShardSelector {
-                    account_id: action.account_id,
-                    program_account_id: effect.shard_program_account_id,
-                })
-        })
-        .collect();
-    let signer_nonces_str = nonces
+    let public_actor_count = public_actors.len();
+    let authorized_count = authorized_accounts.len();
+    let steps_str = boundary
         .iter()
-        .map(ToString::to_string)
+        .map(|step| match step {
+            BoundaryStep::PrivateToPublic(_) => "PrivateToPublic",
+            BoundaryStep::PublicToPrivate(_) => "PublicToPrivate",
+            BoundaryStep::EndPrivateSubtree => "EndPrivateSubtree",
+            BoundaryStep::EndPublicSubtree => "EndPublicSubtree",
+        })
         .collect::<Vec<_>>()
         .join(", ");
-    let WitnessSet {
-        signatures_and_public_keys: _,
-        proof,
-    } = witness_set;
+    // The public actors the private execution called, and those that called into it.
+    let mut delivery_receivers = Vec::new();
+    let mut cross_message_senders = Vec::new();
+    for step in boundary {
+        match step {
+            BoundaryStep::PrivateToPublic(delivery) => {
+                delivery_receivers.push(delivery.envelope.to);
+            }
+            BoundaryStep::PublicToPrivate(cross_message) => {
+                cross_message_senders.push(cross_message.envelope.from);
+            }
+            BoundaryStep::EndPrivateSubtree | BoundaryStep::EndPublicSubtree => {}
+        }
+    }
+    let signer_nonces_str = signer_nonces(&nonces);
+    let WitnessSet { entries: _, proof } = witness_set;
     let proof_len = proof.map_or(0, |p| p.0.len());
 
     view! {
@@ -132,10 +173,12 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
             <h2>"Privacy-Preserving Transaction Details"</h2>
             <div class="info-grid">
                 <div class="info-row">
-                    <span class="info-label">"Public Accounts:"</span>
-                    <span class="info-value">
-                        {public_account_count.to_string()}
-                    </span>
+                    <span class="info-label">"Public Actors:"</span>
+                    <span class="info-value">{public_actor_count.to_string()}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">"Authorized Accounts:"</span>
+                    <span class="info-value">{authorized_count.to_string()}</span>
                 </div>
                 <div class="info-row">
                     <span class="info-label">"Private Actions:"</span>
@@ -144,6 +187,26 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
                 <div class="info-row">
                     <span class="info-label">"Proof Size:"</span>
                     <span class="info-value">{format!("{proof_len} bytes")}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">"Fee Payer:"</span>
+                    <span class="info-value hash">{fee_payer_str}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">"Gas Limit / Tip / Max Fee:"</span>
+                    <span class="info-value">{fee_amounts_str}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">"Proven Fee Refund Target:"</span>
+                    <span class="info-value hash">{refund_target_str}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">"Proven Fee Tip:"</span>
+                    <span class="info-value">{tip_str}</span>
+                </div>
+                <div class="info-row">
+                    <span class="info-label">"Proven Fee Fallback:"</span>
+                    <span class="info-value">{fallback_str}</span>
                 </div>
                 <div class="info-row">
                     <span class="info-label">"Block Validity Window:"</span>
@@ -157,10 +220,105 @@ pub fn PrivacyPreservingTxDetails(tx: PrivacyPreservingTransaction) -> impl Into
                     <span class="info-label">"Signer Nonces:"</span>
                     <span class="info-value">{signer_nonces_str}</span>
                 </div>
+                <div class="info-row">
+                    <span class="info-label">"Boundary Steps:"</span>
+                    <span class="info-value">{steps_str}</span>
+                </div>
             </div>
 
-            <h3>"Public Effects"</h3>
-            <ShardSelectorList shard_selectors=public_shard_selectors />
+            <ReceiptRows receipt=receipt />
+
+            <h3>"Declared Public Actors"</h3>
+            <DeclaredActorList actors=public_actors />
+
+            <h3>"Boundary Public Deliveries"</h3>
+            <ActorList actors=delivery_receivers />
+
+            <h3>"Boundary Private Deliveries"</h3>
+            <ActorList actors=cross_message_senders />
         </div>
     }
+}
+
+/// The transaction's receipt; a block's fee and clock transactions have none.
+#[component]
+fn ReceiptRows(receipt: Option<TransactionReceipt>) -> impl IntoView {
+    let Some(receipt) = receipt else {
+        return view! {
+            <h3>"Receipt"</h3>
+            <div class="info-grid">"None (system transaction)"</div>
+        }
+        .into_any();
+    };
+    let status_str = match (receipt.success, receipt.is_exempt()) {
+        (true, true) => "Applied (fee-exempt)",
+        (true, false) => "Applied",
+        (false, _) => "Reverted (fee charged)",
+    };
+    let fee_paid_str = receipt.fee_paid().to_string();
+    let FeeReceipt {
+        gas_exec,
+        gas_stor,
+        fee_base,
+        tip,
+        refund,
+    } = receipt.fee;
+
+    view! {
+        <h3>"Receipt"</h3>
+        <div class="info-grid">
+            <div class="info-row">
+                <span class="info-label">"Status:"</span>
+                <span class="info-value">{status_str}</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">"Gas Used (Exec / Storage):"</span>
+                <span class="info-value">{format!("{gas_exec} / {gas_stor}")}</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">"Fee Paid (Base + Tip):"</span>
+                <span class="info-value">{format!("{fee_paid_str} ({fee_base} + {tip})")}</span>
+            </div>
+            <div class="info-row">
+                <span class="info-label">"Refund:"</span>
+                <span class="info-value">{refund.to_string()}</span>
+            </div>
+        </div>
+    }
+    .into_any()
+}
+
+fn fee_strs(fee: Option<FeeDeclaration>, none_label: &str) -> (String, String) {
+    fee.map_or_else(
+        || (none_label.to_owned(), none_label.to_owned()),
+        |fee| {
+            (
+                fee.payer.to_string(),
+                format!("{} / {} / {}", fee.gas_limit, fee.tip, fee.max_fee),
+            )
+        },
+    )
+}
+
+fn witness_entries(entries: &[WitnessEntry]) -> String {
+    entries
+        .iter()
+        .map(|entry| {
+            format!(
+                "{} (next: {:?} {})",
+                hex::encode(&entry.auth_data),
+                entry.next.key_type,
+                hex::encode(entry.next.key_commitment)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn signer_nonces(nonces: &[(AccountId, u128)]) -> String {
+    nonces
+        .iter()
+        .map(|(account_id, nonce)| format!("{account_id}: {nonce}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }

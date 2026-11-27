@@ -20,26 +20,23 @@ pub enum FeeTxView {
         tip: Fee,
         max_fee: Balance,
     },
+    /// The fee is paid inside the proof: `reserve` is the amount the proof
+    /// credited to the fee inbox from `payer`, the address a refund of the
+    /// surplus goes back to; `tip` is the part of `reserve` paid to the producer.
     Private {
         payer: AccountId,
+        reserve: Balance,
+        data_bytes: Gas,
+        tip: Fee,
     },
 }
 
 impl FeeTxView {
-    #[must_use]
-    pub const fn payer(&self) -> AccountId {
-        match self {
-            Self::Public { payer, .. } | Self::Private { payer } => *payer,
-        }
-    }
-
-    /// Storage gas: serialized bytes for public, the canonical constant size
-    /// for private.
+    /// Storage gas: the transaction's serialized bytes.
     #[must_use]
     pub const fn gas_stor(&self) -> Gas {
         match self {
-            Self::Public { data_bytes, .. } => *data_bytes,
-            Self::Private { .. } => market::PRIVATE_GAS_STOR,
+            Self::Public { data_bytes, .. } | Self::Private { data_bytes, .. } => *data_bytes,
         }
     }
 
@@ -57,8 +54,7 @@ impl FeeTxView {
     #[must_use]
     pub const fn tip(&self) -> Fee {
         match self {
-            Self::Public { tip, .. } => *tip,
-            Self::Private { .. } => 0,
+            Self::Public { tip, .. } | Self::Private { tip, .. } => *tip,
         }
     }
 }
@@ -73,9 +69,28 @@ impl FeeTxView {
 /// corrupt state it could wrap silently in release.
 #[must_use]
 pub fn fee_reserve(view: &FeeTxView, fee_state: &FeeState) -> Balance {
-    u128::from(view.gas_limit()) * u128::from(fee_state.base_fee_exec)
-        + u128::from(view.gas_stor()) * u128::from(fee_state.base_fee_stor)
-        + u128::from(view.tip())
+    fee_for(
+        view.gas_limit(),
+        view.gas_stor(),
+        view.tip(),
+        fee_state.base_fee_exec,
+        fee_state.base_fee_stor,
+    )
+}
+
+/// The fee of `gas_exec` execution and `gas_stor` storage gas at the given base fees, plus `tip`:
+/// `gas_exec·base_fee_exec + gas_stor·base_fee_stor + tip`, under [`fee_reserve`]'s bounds.
+#[must_use]
+pub fn fee_for(
+    gas_exec: Gas,
+    gas_stor: Gas,
+    tip: Fee,
+    base_fee_exec: Fee,
+    base_fee_stor: Fee,
+) -> Balance {
+    u128::from(gas_exec) * u128::from(base_fee_exec)
+        + u128::from(gas_stor) * u128::from(base_fee_stor)
+        + u128::from(tip)
 }
 
 /// The base fee actually owed after execution.
@@ -92,8 +107,43 @@ pub fn fee_actual_base(charged_cycles: Cycles, view: &FeeTxView, fee_state: &Fee
         FeeTxView::Public { gas_limit, .. } => charged_cycles.min(*gas_limit),
         FeeTxView::Private { .. } => market::PRIVATE_VERIFY_GAS,
     };
-    u128::from(gas_exec) * u128::from(fee_state.base_fee_exec)
-        + u128::from(view.gas_stor()) * u128::from(fee_state.base_fee_stor)
+    fee_for(
+        gas_exec,
+        view.gas_stor(),
+        0,
+        fee_state.base_fee_exec,
+        fee_state.base_fee_stor,
+    )
+}
+
+/// The base fee a private transaction of `data_bytes` serialized bytes owes at the given base
+/// fees: `(PRIVATE_VERIFY_GAS + effect_cycles)·base_fee_exec + data_bytes·base_fee_stor`.
+#[must_use]
+pub fn private_fee_required(
+    effect_cycles: Cycles,
+    data_bytes: Gas,
+    base_fee_exec: Fee,
+    base_fee_stor: Fee,
+) -> Balance {
+    (u128::from(market::PRIVATE_VERIFY_GAS) + u128::from(effect_cycles)) * u128::from(base_fee_exec)
+        + u128::from(data_bytes) * u128::from(base_fee_stor)
+}
+
+/// The public cycles a privacy-preserving transaction's `reserve` pays for at these base fees,
+/// after its verification and storage cost: zero when the reserve does not cover that.
+#[must_use]
+pub fn private_cycles_affordable(
+    reserve: Balance,
+    data_bytes: Gas,
+    base_fee_exec: Fee,
+    base_fee_stor: Fee,
+) -> Cycles {
+    let flat = private_fee_required(0, data_bytes, base_fee_exec, base_fee_stor);
+    let cycles = reserve
+        .saturating_sub(flat)
+        .checked_div(u128::from(base_fee_exec))
+        .unwrap_or(u128::MAX);
+    Cycles::try_from(cycles).unwrap_or(Cycles::MAX)
 }
 
 #[cfg(test)]
@@ -126,17 +176,13 @@ mod tests {
 
     #[test]
     fn spec_worked_example_private() {
-        // Any private transaction pays 409,764·8 + 224,063·8 = 5,070,616,
-        // identical for all of them in that block, and its reserve equals its
-        // actual fee.
-        let view = FeeTxView::Private { payer: payer() };
-        assert_eq!(fee_reserve(&view, &genesis()), 5_070_616);
-        assert_eq!(fee_actual_base(0, &view, &genesis()), 5_070_616);
-        assert_eq!(
-            fee_reserve(&view, &genesis()),
-            fee_actual_base(u64::MAX, &view, &genesis()),
-            "private reserve equals private actual regardless of reported cycles",
-        );
+        // A private transaction with no metered effects pays
+        // 409,764·8 + 237,039·8 = 5,174,424; each effect cycle adds one
+        // base_fee_exec and each byte one base_fee_stor.
+        const BYTES: u64 = 237_039;
+        assert_eq!(private_fee_required(0, BYTES, 8, 8), 5_174_424);
+        assert_eq!(private_fee_required(1_000, BYTES, 8, 8), 5_174_424 + 8_000);
+        assert_eq!(private_fee_required(0, BYTES + 1, 8, 8), 5_174_424 + 8);
     }
 
     #[test]
@@ -174,5 +220,26 @@ mod tests {
         let reserve = fee_reserve(&view, &state);
         assert!(reserve > 0);
         assert!(fee_actual_base(market::MAX_GAS_EXEC, &view, &state) < reserve);
+    }
+
+    #[test]
+    fn a_private_reserve_pays_for_the_cycles_above_its_flat_cost() {
+        let bytes = 1_000;
+        let flat = private_fee_required(0, bytes, 8, 8);
+        assert_eq!(private_cycles_affordable(flat - 1, bytes, 8, 8), 0);
+        assert_eq!(private_cycles_affordable(flat, bytes, 8, 8), 0);
+        assert_eq!(
+            private_cycles_affordable(flat + 8 * 1_000 + 7, bytes, 8, 8),
+            1_000
+        );
+        assert_eq!(
+            private_fee_required(
+                private_cycles_affordable(flat + 8_003, bytes, 8, 8),
+                bytes,
+                8,
+                8
+            ),
+            flat + 8_000
+        );
     }
 }

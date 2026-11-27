@@ -14,6 +14,7 @@ program_loader_core.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 risc0-zkvm = { workspace = true, features = ["client"] }
+serde.workspace = true
 serde_with.workspace = true
 sha2.workspace = true
 rand.workspace = true
@@ -24,7 +25,8 @@ k256.workspace = true
 risc0-binfmt.workspace = true
 risc0-zkos-v1compat.workspace = true
 semver = { version = "1", optional = true }
-log.workspace = true
+tracing.workspace = true
+zeroize = { workspace = true, features = ["derive"] }
 
 [build-dependencies]
 build_utils.workspace = true
@@ -40,4 +42,5 @@ test-case = "3.3.1"
 [features]
 default = []
 prove = ["risc0-zkvm/prove", "dep:semver"]
-test-utils = ["lee_core/test_utils"]
+test-signer = []
+test-utils = ["lee_core/test_utils", "test-signer"]

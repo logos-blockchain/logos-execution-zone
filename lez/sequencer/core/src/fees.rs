@@ -4,7 +4,7 @@ use chain_state::{
 };
 use common::transaction::LeeTransaction;
 use fee_core::{
-    assess::fee_reserve,
+    assess::{FeeTxView, fee_reserve},
     market,
     validity::{FeeError, validate_static_tx},
 };
@@ -22,8 +22,14 @@ pub enum Error {
         fee_reserve: u128,
     },
 
-    #[error("payer {payer:?} holds a native balance shard that is not canonically encoded")]
+    #[error("payer {payer:?} holds a native balance actor state that is not canonically encoded")]
     PayerBalanceMalformed { payer: AccountId },
+
+    #[error(
+        "private transaction has a public part that can fail but no fee fallback: fund the payer \
+         beforehand or declare a public payer"
+    )]
+    MissingFeeFallback,
 
     #[error("transaction fee classification failed")]
     Classification(#[from] ClassifyError),
@@ -54,15 +60,38 @@ pub fn screen(tx: &LeeTransaction, state: &lee::V03State) -> Result<()> {
     let FeeClass::Charged(view) = class else {
         return Ok(());
     };
-    let LeeTransaction::Public(public_tx) = tx else {
-        unreachable!("only public transactions classify as charged");
-    };
     let fee_state = opening_fee_state(state);
 
     validate_static_tx(&view, &fee_state)?;
 
-    let payer = view.payer();
-    if !lee::is_fee_authorized(public_tx.message(), public_tx.witness_set()) {
+    let payer = match view {
+        // A fee paid inside the proof leaves nothing to check against the payer, but only its
+        // fallback pays when the public part fails.
+        FeeTxView::Private { .. } => {
+            // the public part can't fail if the only public thing is paying the fee
+            if !tx.public_part_can_fail() {
+                return Ok(());
+            }
+
+            // otherwise, it needs to have a fallback in case public part fails
+            let has_fallback = matches!(
+                tx,
+                LeeTransaction::PrivacyPreserving(tx) if tx
+                    .message()
+                    .execution
+                    .proven_fee
+                    .as_ref()
+                    .is_some_and(|fee| fee.fallback.is_some())
+            );
+            return if has_fallback {
+                Ok(())
+            } else {
+                Err(Error::MissingFeeFallback)
+            };
+        }
+        FeeTxView::Public { payer, .. } => payer,
+    };
+    if !tx.is_fee_authorized() {
         return Err(Error::UnauthorizedPayer { payer });
     }
 
@@ -129,7 +158,7 @@ mod tests {
         create_transaction_native_token_transfer_without_fee,
     };
     use fee_core::BlockFeeSummary;
-    use lee::{AccountId, FeeDeclaration, PrivateKey, PublicKey};
+    use lee::{AccountId, FeeDeclaration, test_utils::TestSigner};
     use testnet_initial_state::{initial_pub_accounts_private_keys, initial_state};
 
     use super::*;
@@ -137,18 +166,13 @@ mod tests {
     /// The gas limit test transactions declare (`test_fee_declaration`).
     const TEST_GAS_LIMIT: u64 = 2_000_000;
 
-    fn key(seed: u8) -> PrivateKey {
-        PrivateKey::try_new([seed; 32]).expect("valid key")
-    }
-
-    fn account_of(private_key: &PrivateKey) -> AccountId {
-        AccountId::from(&PublicKey::new_from_private_key(private_key))
-    }
-
     /// A funded account of the initial state, and the key that signs for it.
-    fn funded() -> (AccountId, PrivateKey) {
+    fn funded() -> (AccountId, TestSigner) {
         let accounts = initial_pub_accounts_private_keys();
-        (accounts[0].account_id, accounts[0].pub_sign_key.clone())
+        (
+            accounts[0].account_id,
+            TestSigner::from(&accounts[0].secret),
+        )
     }
 
     fn recipient() -> AccountId {
@@ -173,9 +197,9 @@ mod tests {
 
     #[test]
     fn a_funded_transfer_is_admitted() {
-        let state = initial_state(true);
-        let (from, sign_key) = funded();
-        let tx = create_transaction_native_token_transfer(from, 0, recipient(), 10, &sign_key);
+        let state = initial_state();
+        let (from, signer) = funded();
+        let tx = create_transaction_native_token_transfer(from, 0, recipient(), 10, &signer);
 
         screen(&tx, &state).expect("a well-formed, funded transfer is admitted");
         settle_verdict(&tx, &state).expect("and the block transition agrees");
@@ -183,17 +207,12 @@ mod tests {
 
     #[test]
     fn a_transfer_without_a_fee_is_rejected() {
-        let state = initial_state(true);
-        let (from, sign_key) = funded();
+        let state = initial_state();
+        let (from, signer) = funded();
         // Omitting the fee would be executed for free if admitted; the door
         // turns it away, and the block transition agrees.
-        let tx = create_transaction_native_token_transfer_without_fee(
-            from,
-            0,
-            recipient(),
-            10,
-            &sign_key,
-        );
+        let tx =
+            create_transaction_native_token_transfer_without_fee(from, 0, recipient(), 10, &signer);
 
         assert!(matches!(
             screen(&tx, &state).expect_err("a fee-less transfer is turned away at the door"),
@@ -204,14 +223,14 @@ mod tests {
 
     #[test]
     fn a_gas_limit_beyond_the_block_cap_is_rejected() {
-        let state = initial_state(true);
-        let (from, sign_key) = funded();
+        let state = initial_state();
+        let (from, signer) = funded();
         let tx = create_transaction_native_token_transfer_with_fees(
             from,
             0,
             recipient(),
             10,
-            &sign_key,
+            &signer,
             FeeDeclaration::new(from, market::MAX_GAS_EXEC + 1, 0, u128::MAX >> 1),
         );
 
@@ -226,14 +245,14 @@ mod tests {
 
     #[test]
     fn a_max_fee_below_the_reserve_is_rejected() {
-        let state = initial_state(true);
-        let (from, sign_key) = funded();
+        let state = initial_state();
+        let (from, signer) = funded();
         let tx = create_transaction_native_token_transfer_with_fees(
             from,
             0,
             recipient(),
             10,
-            &sign_key,
+            &signer,
             FeeDeclaration::new(from, TEST_GAS_LIMIT, 7, 1),
         );
 
@@ -259,15 +278,15 @@ mod tests {
     /// reservation the next block would take cannot succeed.
     #[test]
     fn a_payer_that_cannot_fund_the_reserve_is_rejected() {
-        let state = initial_state(true);
-        let broke_key = key(9);
-        let broke = account_of(&broke_key);
+        let state = initial_state();
+        let broke_signer = TestSigner::new(9);
+        let broke = broke_signer.account_id();
         let tx = create_transaction_native_token_transfer_with_fees(
             broke,
             0,
             recipient(),
             10,
-            &broke_key,
+            &broke_signer,
             FeeDeclaration::new(broke, TEST_GAS_LIMIT, 0, u128::MAX >> 1),
         );
 
@@ -290,15 +309,15 @@ mod tests {
 
     #[test]
     fn a_payer_nothing_authorizes_is_rejected() {
-        let state = initial_state(true);
-        let (from, sign_key) = funded();
-        let stranger = account_of(&key(9));
+        let state = initial_state();
+        let (from, signer) = funded();
+        let stranger = TestSigner::new(9).account_id();
         let tx = create_transaction_native_token_transfer_with_fees(
             from,
             0,
             recipient(),
             10,
-            &sign_key,
+            &signer,
             FeeDeclaration::new(stranger, TEST_GAS_LIMIT, 0, u128::MAX >> 1),
         );
 
@@ -310,22 +329,152 @@ mod tests {
         assert!(settle_verdict(&tx, &state).is_err());
     }
 
-    /// Private transactions are fee-exempt under the interim policy, so
-    /// admission has nothing to check against one.
+    /// A private transaction is screened on its in-proof reserve alone: the
+    /// flat part of the fee at the head. The proof covers the debit.
     #[test]
-    fn a_private_transaction_is_admitted_unscreened() {
+    fn a_private_transaction_is_screened_on_its_in_proof_reserve() {
+        use std::collections::BTreeSet;
+
         use lee::privacy_preserving_transaction::{
             Message as PrivateMessage, PrivacyPreservingTransaction,
             WitnessSet as PrivateWitnessSet, circuit::Proof,
         };
+        use lee_core::{
+            account::Actor,
+            execution_state::{BoundaryStep, Delivery},
+            native_token,
+            program::MessageEnvelope,
+        };
 
-        let state = initial_state(true);
-        let tx = LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
-            PrivateMessage::default(),
-            PrivateWitnessSet::from_raw_parts(vec![], Proof::from_inner(vec![])),
+        let state = initial_state();
+        let private_message = |reserve: Option<u128>| {
+            let mut message = PrivateMessage::default();
+            message.execution.boundary = reserve
+                .map(|reserve| {
+                    BoundaryStep::PrivateToPublic(Delivery {
+                        envelope: MessageEnvelope {
+                            from: Actor::native_balance(recipient()),
+                            to: Actor::native_balance(system_accounts::fee_inbox_account_id()),
+                            message: borsh::to_vec(&native_token::Message::Credit(reserve))
+                                .expect("serializes"),
+                        },
+                        grants: BTreeSet::new(),
+                        pda_seeds: BTreeSet::new(),
+                    })
+                })
+                .into_iter()
+                .chain([BoundaryStep::EndPublicSubtree])
+                .collect();
+            message.execution.proven_fee = Some(lee_core::ProvenFee {
+                refund_to: None,
+                tip: 0,
+                fallback: Some(lee_core::FeeFallback {
+                    boundary: message.execution.boundary.clone(),
+                    ..lee_core::FeeFallback::default()
+                }),
+            });
+            message
+        };
+        let wrap = |message| {
+            LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
+                message,
+                PrivateWitnessSet::from_raw_parts(vec![], Proof::from_inner(vec![])),
+            ))
+        };
+        let private_tx = |reserve| wrap(private_message(reserve));
+
+        // The reserve's value leaves the size alone.
+        let size = private_tx(Some(0)).charged_bytes().unwrap();
+        let flat = fee_core::assess::private_fee_required(0, size, 8, 8);
+        screen(&private_tx(Some(flat)), &state).expect("a well-priced reserve is admitted");
+        assert!(matches!(
+            screen(&private_tx(None), &state),
+            Err(Error::Classification(ClassifyError::MissingPrivateFee))
+        ));
+        assert!(matches!(
+            screen(&private_tx(Some(flat - 1)), &state),
+            Err(Error::FeeCore(FeeError::PrivateFeeBelowRequired { .. }))
         ));
 
-        screen(&tx, &state).expect("private transactions are uncharged and unscreened");
+        // Without the fee fallback nothing pays when the public part fails, which takes one
+        // doing more than delivering the fee.
+        let shaped = |fallback: bool, public_part: bool| {
+            let mut message = private_message(Some(2 * flat));
+            if !fallback {
+                message.execution.proven_fee.as_mut().unwrap().fallback = None;
+            }
+            if public_part {
+                message
+                    .execution
+                    .boundary
+                    .push(BoundaryStep::EndPublicSubtree);
+            }
+            wrap(message)
+        };
+        assert!(matches!(
+            screen(&shaped(false, true), &state),
+            Err(Error::MissingFeeFallback)
+        ));
+        screen(&shaped(false, false), &state).expect("a lone fee delivery cannot fail");
+        screen(&shaped(true, false), &state).expect("nor does its fee fallback hurt");
+        screen(&shaped(true, true), &state).expect("a fee fallback pays for a failed part");
+
+        // A public promotion the lone fee delivery never reaches fails settlement.
+        let mut promoting = private_message(Some(2 * flat));
+        promoting.execution.proven_fee.as_mut().unwrap().fallback = None;
+        promoting.public_context.promotions.insert(7);
+        assert!(matches!(
+            screen(&wrap(promoting), &state),
+            Err(Error::MissingFeeFallback)
+        ));
+    }
+
+    /// A private transaction whose fee a public signer declares is screened as a public one: the
+    /// payer must sign and hold the reserve.
+    #[test]
+    fn a_private_transaction_declaring_its_fee_is_screened_on_its_signer() {
+        use lee::privacy_preserving_transaction::{
+            Message as PrivateMessage, PrivacyPreservingTransaction, circuit::Proof,
+        };
+
+        let state = initial_state();
+        let funded = TestSigner::from(&initial_pub_accounts_private_keys()[0].secret);
+        let unfunded = TestSigner::new(7);
+        let account_id = TestSigner::account_id;
+        let declared = |payer, signer: &TestSigner| {
+            let message = PrivateMessage {
+                fee: Some(FeeDeclaration::new(
+                    payer,
+                    market::PRIVATE_VERIFY_GAS,
+                    0,
+                    u128::MAX >> 1,
+                )),
+                nonces: std::collections::BTreeMap::from([(
+                    signer.account_id(),
+                    lee_core::account::Nonce(0),
+                )]),
+                ..PrivateMessage::default()
+            };
+            LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(
+                message.clone(),
+                lee::test_utils::privacy_witness_for(
+                    &message,
+                    Proof::from_inner(vec![]),
+                    &[signer],
+                ),
+            ))
+        };
+
+        screen(&declared(account_id(&funded), &funded), &state)
+            .expect("a funded signer pays its declared fee");
+        assert!(matches!(
+            screen(&declared(account_id(&unfunded), &funded), &state),
+            Err(Error::UnauthorizedPayer { .. })
+        ));
+        assert!(matches!(
+            screen(&declared(account_id(&unfunded), &unfunded), &state),
+            Err(Error::PayerCannotFund { .. })
+        ));
     }
 
     /// SPECS §Overview worked example: at the genesis base fees of 8/8 the
@@ -333,7 +482,7 @@ mod tests {
     /// guaranteed +1 step.
     #[test]
     fn the_quote_prices_the_head_fee_state() {
-        let state = initial_state(true);
+        let state = initial_state();
         let quote = fee_quote(&state);
 
         assert_eq!(quote.height, 0);
@@ -352,8 +501,8 @@ mod tests {
     /// headroom below it is exactly what admission rejects.
     #[test]
     fn a_reserve_computed_from_the_quote_matches_the_one_admission_uses() {
-        let state = initial_state(true);
-        let (from, sign_key) = funded();
+        let state = initial_state();
+        let (from, signer) = funded();
         let quote = fee_quote(&state);
         let build = |max_fee: u128| {
             create_transaction_native_token_transfer_with_fees(
@@ -361,7 +510,7 @@ mod tests {
                 0,
                 recipient(),
                 10,
-                &sign_key,
+                &signer,
                 FeeDeclaration::new(from, TEST_GAS_LIMIT, 3, max_fee),
             )
         };

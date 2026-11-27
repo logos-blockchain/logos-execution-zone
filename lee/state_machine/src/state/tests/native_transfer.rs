@@ -2,10 +2,10 @@ use super::*;
 
 #[test]
 fn transition_from_native_transfer_invocation_credits_empty_and_funded_recipients() {
-    let from_key = PrivateKey::try_new([1; 32]).unwrap();
-    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
-    let to_key = PrivateKey::try_new([2; 32]).unwrap();
-    let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
+    let from_key = TestSigner::new(1);
+    let from = from_key.account_id();
+    let to_key = TestSigner::new(2);
+    let to = to_key.account_id();
 
     for (recipient_balance, amount) in [(0, 5), (100, 8)] {
         let mut state = V03State::new().with_public_accounts([
@@ -35,14 +35,14 @@ fn transition_from_native_transfer_invocation_credits_empty_and_funded_recipient
 
 #[test]
 fn transition_from_sequence_of_native_transfer_invocations() {
-    let key1 = PrivateKey::try_new([8; 32]).unwrap();
-    let account_id1 = AccountId::from(&PublicKey::new_from_private_key(&key1));
-    let key2 = PrivateKey::try_new([2; 32]).unwrap();
-    let account_id2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
+    let key1 = TestSigner::new(8);
+    let account_id1 = key1.account_id();
+    let key2 = TestSigner::new(2);
+    let account_id2 = key2.account_id();
     let initial_data = [(account_id1, Account::funded(100))];
     let mut state = V03State::new().with_public_accounts(initial_data);
-    let key3 = PrivateKey::try_new([3; 32]).unwrap();
-    let account_id3 = AccountId::from(&PublicKey::new_from_private_key(&key3));
+    let key3 = TestSigner::new(3);
+    let account_id3 = key3.account_id();
     let balance_to_move = 5;
 
     let tx = transfer_transaction(
@@ -85,14 +85,13 @@ fn transition_from_sequence_of_native_transfer_invocations() {
 }
 
 #[test]
-fn a_guest_writes_its_own_shard_and_chains_a_transfer_of_the_same_account() {
-    let program = crate::test_methods::native_spender();
-    let program_id = AccountId::from_builtin_program(program.id());
+fn a_guest_writes_its_own_actor_state_and_sends_a_transfer_of_the_same_account() {
+    let program_id = scripted_id();
     let stranger = AccountId::new([9; 32]);
-    let stranger_record: ShardData = b"untouched".to_vec().try_into().unwrap();
+    let stranger_record: ActorState = b"untouched".to_vec().into();
 
-    let sender_key = PrivateKey::try_new([11; 32]).unwrap();
-    let sender = AccountId::from(&PublicKey::new_from_private_key(&sender_key));
+    let sender_key = TestSigner::new(11);
+    let sender = sender_key.account_id();
     let recipient = AccountId::new([12; 32]);
     let written: Vec<u8> = vec![7; 4];
     let amount: u128 = 30;
@@ -100,31 +99,34 @@ fn a_guest_writes_its_own_shard_and_chains_a_transfer_of_the_same_account() {
     let mut state = V03State::new()
         .with_public_accounts([(
             sender,
-            Account::funded(100).with_shard(stranger, stranger_record.clone()),
+            Account::funded(100).with_actor_state(stranger, stranger_record.clone()),
         )])
-        .with_programs([crate::test_methods::native_spender()]);
+        .with_empty_public_accounts([recipient])
+        .with_programs([crate::test_methods::scripted()]);
 
-    let message = public_transaction::Message::try_new(
-        program_id,
+    let writer = Actor::new(sender, program_id);
+    let script = Script::write(written.clone()).send(
+        SyncMessage::new(Actor::native_balance(sender), &transfer(recipient, amount))
+            .with_grants([Actor::native_balance(sender)]),
+    );
+    let tx = public_tx(
+        writer,
         vec![
-            ProgramShardSelector::new(sender, program_id),
-            ProgramShardSelector::native_balance(sender),
-            ProgramShardSelector::native_balance(recipient),
+            writer,
+            Actor::native_balance(sender),
+            Actor::native_balance(recipient),
         ],
         vec![Nonce(0)],
-        (written.clone(), amount),
-    )
-    .unwrap();
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[&sender_key]);
+        script,
+        &[&sender_key],
+    );
 
-    state
-        .transition_from_public_transaction(&PublicTransaction::new(message, witness_set), 1, 0)
-        .unwrap();
+    state.transition_from_public_transaction(&tx, 1, 0).unwrap();
 
     let sender_post = state.get_account_by_id(sender);
-    assert_eq!(sender_post.data.shard(program_id).as_ref(), written);
+    assert_eq!(sender_post.data.actor_state(program_id).as_ref(), written);
     assert_eq!(sender_post.data.native_balance(), Ok(70));
-    assert_eq!(sender_post.data.shard(stranger), &stranger_record);
+    assert_eq!(sender_post.data.actor_state(stranger), &stranger_record);
     assert_eq!(sender_post.nonce, Nonce(1));
     assert_eq!(
         state.get_account_by_id(recipient).data.native_balance(),
@@ -133,40 +135,11 @@ fn a_guest_writes_its_own_shard_and_chains_a_transfer_of_the_same_account() {
 }
 
 #[test]
-fn a_repeated_shard_selector_is_rejected() {
-    let account_id = AccountId::new([4; 32]);
-    let mut state = V03State::new();
-
-    let message = public_transaction::Message::try_new(
-        NATIVE_TOKEN_PROGRAM_ID,
-        vec![
-            ProgramShardSelector::native_balance(account_id),
-            ProgramShardSelector::native_balance(account_id),
-        ],
-        vec![],
-        NativeInstruction::Transfer { amount: 0 },
-    )
-    .unwrap();
-    let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
-
-    let result = state.transition_from_public_transaction(
-        &PublicTransaction::new(message, witness_set),
-        1,
-        0,
-    );
-
-    let Err(LeeError::InvalidInput(message)) = result else {
-        panic!("a duplicate pair was accepted: {result:?}");
-    };
-    assert!(message.contains("Duplicate shard selectors"), "{message}");
-}
-
-#[test]
 fn a_transfer_that_overflows_the_recipient_is_rejected() {
-    let from_key = PrivateKey::try_new([1; 32]).unwrap();
-    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
-    let to_key = PrivateKey::try_new([2; 32]).unwrap();
-    let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
+    let from_key = TestSigner::new(1);
+    let from = from_key.account_id();
+    let to_key = TestSigner::new(2);
+    let to = to_key.account_id();
     let mut state = V03State::new().with_public_accounts([
         (from, Account::funded(1)),
         (to, Account::funded(Balance::MAX)),
@@ -190,14 +163,14 @@ fn a_transfer_that_overflows_the_recipient_is_rejected() {
 
 #[test]
 fn a_transfer_from_a_non_canonical_balance_is_rejected() {
-    let from_key = PrivateKey::try_new([1; 32]).unwrap();
-    let from = AccountId::from(&PublicKey::new_from_private_key(&from_key));
-    let to_key = PrivateKey::try_new([2; 32]).unwrap();
-    let to = AccountId::from(&PublicKey::new_from_private_key(&to_key));
-    let zero_padded = ShardData::try_from(vec![0; 16]).unwrap();
+    let from_key = TestSigner::new(1);
+    let from = from_key.account_id();
+    let to_key = TestSigner::new(2);
+    let to = to_key.account_id();
+    let zero_padded = ActorState::from(vec![0; 16]);
     let mut state = V03State::new().with_public_accounts([(
         from,
-        Account::default().with_shard(NATIVE_TOKEN_PROGRAM_ID, zero_padded),
+        Account::default().with_actor_state(NATIVE_TOKEN_PROGRAM_ID, zero_padded),
     )]);
 
     let tx = transfer_transaction(from, &from_key, 0, to, &to_key, 0, 1);
@@ -209,4 +182,25 @@ fn a_transfer_from_a_non_canonical_balance_is_rejected() {
     else {
         panic!("a non-canonical balance was spent: {result:?}");
     };
+}
+
+#[test]
+fn a_native_transfer_to_the_sender_itself_preserves_its_balance() {
+    let key = TestSigner::new(1);
+    let account_id = key.account_id();
+    let sender = Actor::native_balance(account_id);
+    let mut state = V03State::new().with_public_accounts([(account_id, Account::funded(200))]);
+
+    let tx = public_tx(
+        sender,
+        vec![sender],
+        vec![Nonce(0)],
+        transfer(account_id, 30),
+        &[&key],
+    );
+    state.transition_from_public_transaction(&tx, 1, 0).unwrap();
+
+    let account = state.get_account_by_id(account_id);
+    assert_eq!(account.data.native_balance(), Ok(200));
+    assert_eq!(account.nonce, Nonce(1));
 }

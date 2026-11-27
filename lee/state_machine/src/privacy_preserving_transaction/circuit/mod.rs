@@ -1,27 +1,32 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::{
-    DummyInput, MembershipProof, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput,
-    PrivateWitness, ProgramImageWitness, ProvenCall, ShadowProgramWitness,
-    account::{AccountId, ProgramShardSelector},
-    execution_state::{Backend, DeferPublicEffects, ExecutionState, RootCall},
+    MembershipProof, PrivacyPreservingCircuitInput, PrivacyPreservingCircuitOutput,
+    ProgramImageWitness, ProvenExecution, ProvingInput, PublicationMode, SenderPresentation,
+    ShadowProgramWitness,
+    account::{AccountId, Actor, ActorState, Cycles},
+    execution_state::{
+        ExecutionEnvironment, ExecutionError, Placement, PredictedCrossMessages, PrivatePart,
+        PublicExecutionContext, TransactionEntry, TransitionView, WholeExecution,
+    },
     from_frame,
     native_token::{self, NATIVE_TOKEN_PROGRAM_ID},
     program::{
-        ApplyInput, ApplyOutput, InstructionData, PlanInput, PlanOutput, ProgramEvent,
-        ProgramHeader,
+        MessageBody, PROGRAM_LOADER_ACCOUNT_ID, ProgramHeader, ReceiveInput, Response, Transition,
     },
     to_frame,
 };
 use risc0_zkvm::{
-    ExecutorEnv, ExecutorEnvBuilder, InnerReceipt, ProverOpts, Receipt, default_prover,
+    AssumptionReceipt, ExecutorEnv, ExecutorEnvBuilder, InnerReceipt, MaybePruned, ProverOpts,
+    Receipt, SessionStats, default_executor, default_prover, sha::Digestible as _,
 };
 
 use crate::{
-    PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID,
+    PRIVACY_PRESERVING_CIRCUIT_ELF, PRIVACY_PRESERVING_CIRCUIT_ID, PublicTransaction,
     error::{InvalidProgramBehaviorError, LeeError},
-    program::{Program, apply_journal, check_exit_code, plan_journal},
+    program::{DEFAULT_PUBLIC_CYCLE_BUDGET, Program, check_exit_code, transition_journal},
+    validated_state_diff::{charged_cycles, run_program_loader},
 };
 
 /// Proof of the privacy preserving execution circuit.
@@ -40,16 +45,39 @@ impl Proof {
         self.0
     }
 
+    /// The proof's length in bytes.
+    #[must_use]
+    pub const fn size(&self) -> usize {
+        self.0.len()
+    }
+
     #[must_use]
     pub const fn from_inner(inner: Vec<u8>) -> Self {
         Self(inner)
     }
 
-    pub(crate) fn is_valid_for(&self, circuit_output: &PrivacyPreservingCircuitOutput) -> bool {
+    pub(crate) fn is_valid_for(
+        &self,
+        public_context: &PublicExecutionContext,
+        execution: &ProvenExecution,
+    ) -> bool {
         let Ok(inner) = borsh::from_slice::<InnerReceipt>(&self.0) else {
             return false;
         };
-        let receipt = Receipt::new(inner, circuit_output.to_bytes());
+        // One encoding per proof: a succinct receipt, or a fake one that only a dev-mode verifier
+        // accepts, with its claim pruned to the digest verification compares.
+        let canonical = match &inner {
+            InnerReceipt::Succinct(receipt) => matches!(receipt.claim, MaybePruned::Pruned(_)),
+            InnerReceipt::Fake(receipt) => matches!(receipt.claim, MaybePruned::Pruned(_)),
+            InnerReceipt::Composite(_) | InnerReceipt::Groth16(_) | _ => false,
+        };
+        if !canonical {
+            return false;
+        }
+        let receipt = Receipt::new(
+            inner,
+            lee_core::to_borsh_frame(&(public_context, execution)),
+        );
         receipt.verify(PRIVACY_PRESERVING_CIRCUIT_ID).is_ok()
     }
 }
@@ -73,76 +101,48 @@ pub struct Dependency {
     pub kind: ProgramKind,
 }
 
-#[derive(Clone)]
-pub struct ProgramWithDependencies {
-    /// Where the top-level call is dispatched — never assumed to be the root bytecode's
-    /// bijection address, since the same bytecode may be deployed more than once at different
-    /// addresses.
-    pub self_account_id: AccountId,
+#[derive(Clone, Default)]
+pub struct ProgramCatalog {
     // TODO: avoid having a copy of the bytecode of each program.
-    /// Every program this execution may dispatch, root included, keyed by the account address
-    /// it's deployed at — never its bytecode identity, for the same reason. The caller building
-    /// this off-chain (e.g. the wallet) already knows which program lives where; there's no live
-    /// state to look it up against inside a pure proving function.
+    /// Every program this execution may dispatch, keyed by the account address it's deployed at
+    /// — never its bytecode identity, since the same bytecode may be deployed more than once at
+    /// different addresses. The caller building this off-chain (e.g. the wallet) already knows
+    /// which program lives where; there's no live state to look it up against inside a pure
+    /// proving function.
     pub programs: HashMap<AccountId, Dependency>,
 }
 
-impl ProgramWithDependencies {
-    #[must_use]
-    pub fn new(
-        program: Program,
-        self_account_id: AccountId,
-        dependencies: HashMap<AccountId, Program>,
-    ) -> Self {
-        let programs = dependencies
-            .into_iter()
-            .chain([(self_account_id, program)])
-            .map(|(account_id, dep_program)| {
-                (
-                    account_id,
-                    Dependency {
-                        program: dep_program,
-                        kind: ProgramKind::Disclosed,
-                    },
-                )
-            })
-            .collect();
+impl FromIterator<(AccountId, Program)> for ProgramCatalog {
+    fn from_iter<I: IntoIterator<Item = (AccountId, Program)>>(iter: I) -> Self {
         Self {
-            self_account_id,
-            programs,
+            programs: iter
+                .into_iter()
+                .map(|(account_id, program)| {
+                    (
+                        account_id,
+                        Dependency {
+                            program,
+                            kind: ProgramKind::Disclosed,
+                        },
+                    )
+                })
+                .collect(),
         }
     }
 }
 
-impl ProgramWithDependencies {
-    #[must_use]
-    pub fn native() -> Self {
-        Self {
-            self_account_id: NATIVE_TOKEN_PROGRAM_ID,
-            programs: HashMap::new(),
-        }
+impl<const N: usize> From<[(AccountId, Program); N]> for ProgramCatalog {
+    fn from(entries: [(AccountId, Program); N]) -> Self {
+        entries.into_iter().collect()
     }
+}
 
-    /// Marks the root program as a shadow program: dispatched at
-    /// `AccountId::for_shadow_program(program.id())`, resolved via a fresh
-    /// [`ShadowProgramWitness`] instead of a public claim.
+impl ProgramCatalog {
+    /// Resolves the program at `account_id`, which must be
+    /// `AccountId::for_shadow_program(&program.id())`, via a fresh [`ShadowProgramWitness`]
+    /// instead of a public claim.
     #[must_use]
-    pub fn as_shadow_program(mut self) -> Self {
-        if let Some(root) = self.programs.remove(&self.self_account_id) {
-            self.self_account_id = AccountId::for_shadow_program(&root.program.id());
-            self.programs.insert(
-                self.self_account_id,
-                Dependency {
-                    kind: ProgramKind::Shadow,
-                    ..root
-                },
-            );
-        }
-        self
-    }
-
-    #[must_use]
-    pub fn with_shadow_dependency(mut self, account_id: AccountId) -> Self {
+    pub fn with_shadow(mut self, account_id: AccountId) -> Self {
         if let Some(dependency) = self.programs.get_mut(&account_id) {
             dependency.kind = ProgramKind::Shadow;
         }
@@ -151,17 +151,7 @@ impl ProgramWithDependencies {
 
     /// `ProgramImageClaim::Undisclosed` instead of `Disclosed`.
     #[must_use]
-    pub fn as_undisclosed_program(
-        self,
-        program_header: ProgramHeader,
-        membership_proof: MembershipProof,
-    ) -> Self {
-        let root = self.self_account_id;
-        self.with_undisclosed_dependency(root, program_header, membership_proof)
-    }
-
-    #[must_use]
-    pub fn with_undisclosed_dependency(
+    pub fn with_undisclosed(
         mut self,
         account_id: AccountId,
         program_header: ProgramHeader,
@@ -177,127 +167,630 @@ impl ProgramWithDependencies {
     }
 }
 
-/// Inputs for proving an LEE program's execution.
-#[derive(Default)]
-pub struct ProvingInput {
-    pub shard_selectors: Vec<ProgramShardSelector>,
-    pub signers: HashSet<AccountId>,
-    pub private_witnesses: Vec<PrivateWitness>,
-    pub instruction_data: InstructionData,
-    pub dummy_inputs: Vec<DummyInput>,
-    /// Minimum length each emitted note is padded to, so notes do not leak their
-    /// account's size. `None` leaves them at their natural length.
-    pub ciphertext_padding: Option<u32>,
+/// Public states assumed for simulation purposes of a private part of a transaction.
+#[derive(Clone, Default)]
+pub struct Simulation {
+    pub public_actor_states: HashMap<Actor, ActorState>,
+    /// The public accounts settlement admits, or `None` to admit every one.
+    pub admitted_accounts: Option<BTreeSet<AccountId>>,
 }
 
+/// What a private actor is presented as.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Presenting {
+    Sender,
+    Grant,
+}
+
+/// Chooses how a private actor is presented; a closure presents a grant as it would a sender.
+pub trait Presenter {
+    fn present(&mut self, presenting: Presenting, actor: Actor) -> SenderPresentation;
+}
+
+impl<F: FnMut(Actor) -> SenderPresentation> Presenter for F {
+    fn present(&mut self, _presenting: Presenting, actor: Actor) -> SenderPresentation {
+        self(actor)
+    }
+}
+
+/// A recorder deriving the presentations of private senders and grants.
+struct SenderPresentationRecorder<'present> {
+    choose: &'present mut dyn FnMut(Presenting, Actor) -> Option<SenderPresentation>,
+    recorded: Vec<SenderPresentation>,
+}
+
+impl SenderPresentationRecorder<'_> {
+    fn present(
+        &mut self,
+        presenting: Presenting,
+        actor: Actor,
+    ) -> Result<SenderPresentation, LeeError> {
+        let presentation = (self.choose)(presenting, actor)
+            .ok_or(ExecutionError::MissingSenderPresentation { sender: actor })?;
+        self.recorded.push(presentation);
+        Ok(presentation)
+    }
+}
+
+/// A selector of which asynchronous messages will be delivered atomically.
+struct PromotionSelector<'select> {
+    select: &'select mut dyn FnMut(Placement, &MessageBody) -> bool,
+    from_public: PromotionSelection,
+    from_private: PromotionSelection,
+}
+
+/// The selection of async messages to be delivered atomically and which are left.
+struct PromotionSelection {
+    remaining_requested: BTreeSet<u64>,
+    selected: BTreeSet<u64>,
+}
+
+impl PromotionSelection {
+    const fn new(requested: BTreeSet<u64>) -> Self {
+        Self {
+            remaining_requested: requested,
+            selected: BTreeSet::new(),
+        }
+    }
+
+    fn finish(self) -> Result<BTreeSet<u64>, LeeError> {
+        match self.remaining_requested.first() {
+            Some(&index) => Err(ExecutionError::UnreachedPromotion { index }.into()),
+            None => Ok(self.selected),
+        }
+    }
+}
+
+/// A simulator recording the data for private execution by running thins in plaintext.
+struct Simulator<'input> {
+    programs: &'input HashMap<AccountId, Dependency>,
+    public_actor_states: &'input HashMap<Actor, ActorState>,
+    admitted_accounts: Option<&'input BTreeSet<AccountId>>,
+    recorder: SenderPresentationRecorder<'input>,
+    selector: PromotionSelector<'input>,
+    cycle_budget: Cycles,
+    cycles_used: Cycles,
+}
+
+impl ExecutionEnvironment for Simulator<'_> {
+    type Error = LeeError;
+
+    fn handle_message(
+        &mut self,
+        input: &ReceiveInput,
+        view: &TransitionView<'_>,
+    ) -> Result<Transition, LeeError> {
+        // The loader runs as Rust and is charged as in settlement, and only in a transaction
+        // without private accounts; it reads the declared accounts' loader states.
+        if input.receiver.program_account_id == PROGRAM_LOADER_ACCOUNT_ID {
+            const ABSENT: &ActorState = &ActorState::empty();
+            let states = self.public_actor_states;
+            let (transition, _) = run_program_loader(
+                input,
+                |account_id| {
+                    let actor = Actor::new(account_id, PROGRAM_LOADER_ACCOUNT_ID);
+                    view.staged_state(actor)
+                        .or_else(|| states.get(&actor))
+                        .unwrap_or(ABSENT)
+                },
+                self.cycle_budget,
+                &mut self.cycles_used,
+            )?;
+            return Ok(transition);
+        }
+        // A private transition is bounded only by what its prover can prove, as when it is proven.
+        let runs_privately = view.runs_privately(input.receiver.account_id);
+        handle_message_with(self.programs, input, |program| {
+            if runs_privately {
+                Ok(program.handle_message(input, Cycles::MAX)?.0)
+            } else {
+                program.handle_message_metered(input, self.cycle_budget, &mut self.cycles_used)
+            }
+        })
+    }
+
+    fn public_actor_state(&mut self, actor: Actor) -> Result<ActorState, LeeError> {
+        Ok(self
+            .public_actor_states
+            .get(&actor)
+            .map_or_else(ActorState::empty, Clone::clone))
+    }
+
+    fn present(&mut self, sender: Actor) -> Result<SenderPresentation, LeeError> {
+        self.recorder.present(Presenting::Sender, sender)
+    }
+
+    fn present_grant(&mut self, grant: Actor) -> Result<SenderPresentation, LeeError> {
+        self.recorder.present(Presenting::Grant, grant)
+    }
+
+    fn admits(&mut self, account_id: AccountId) -> Result<bool, LeeError> {
+        Ok(self
+            .admitted_accounts
+            .is_none_or(|admitted| admitted.contains(&account_id)))
+    }
+
+    fn promote(
+        &mut self,
+        placement: Placement,
+        index: u64,
+        body: &MessageBody,
+    ) -> Result<bool, LeeError> {
+        let PromotionSelector {
+            select,
+            from_public,
+            from_private,
+        } = &mut self.selector;
+        let selection = match placement {
+            Placement::Public => from_public,
+            Placement::Private => from_private,
+        };
+        let selected = selection.remaining_requested.remove(&index) || select(placement, body);
+        if selected {
+            selection.selected.insert(index);
+        }
+        Ok(selected)
+    }
+}
+
+/// What a whole simulation derives for the prover.
+struct Simulated {
+    predicted_cross_messages: PredictedCrossMessages,
+    public_promotions: BTreeSet<u64>,
+    private_promotions: BTreeSet<u64>,
+    presented: Vec<SenderPresentation>,
+    cycles_used: Cycles,
+}
+
+/// The prover handling the generation of the proof of a private part of a transaction.
 struct Prover<'programs> {
     programs: &'programs HashMap<AccountId, Dependency>,
     env_builder: ExecutorEnvBuilder<'static>,
-    calls: Vec<ProvenCall>,
+    responses: Vec<Response>,
+    invoked: BTreeSet<AccountId>,
+    recorder: SenderPresentationRecorder<'programs>,
+    select: &'programs mut dyn FnMut(u64, &MessageBody) -> bool,
+    promotions: BTreeSet<u64>,
+    proving: bool,
 }
 
-impl<'programs> Backend for Prover<'programs> {
-    type Call = Option<(&'programs Program, ProvenCall)>;
+impl ExecutionEnvironment for Prover<'_> {
     type Error = LeeError;
-    type PublicEffects = DeferPublicEffects;
 
-    fn plan(
+    fn handle_message(
         &mut self,
-        input: &PlanInput,
-        _execution: &ExecutionState<'_>,
-    ) -> Result<(PlanOutput, Self::Call), LeeError> {
-        let self_account_id = input.self_account_id;
-        // The native token program is recomputed by the circuit from the protocol's own
-        // implementation, so it has neither an ELF to prove nor a transcript to carry.
-        if self_account_id == NATIVE_TOKEN_PROGRAM_ID {
-            let plan = native_token::plan(
-                input.caller_account_id,
-                &input.accounts,
-                &input.instruction_data,
-            )
-            .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?;
-            return Ok((plan, None));
+        input: &ReceiveInput,
+        _view: &TransitionView<'_>,
+    ) -> Result<Transition, LeeError> {
+        handle_message_with(self.programs, input, |program| {
+            let (journal, assumption) = run_session(self.proving, program, |env| {
+                Program::write_receive_input(input, env)
+            })?;
+            let transition = transition_journal(&journal)?;
+            self.env_builder.add_assumption(assumption);
+            self.responses.push(transition.response.clone());
+            self.invoked.insert(input.receiver.program_account_id);
+            Ok(transition)
+        })
+    }
+
+    fn present(&mut self, sender: Actor) -> Result<SenderPresentation, LeeError> {
+        self.recorder.present(Presenting::Sender, sender)
+    }
+
+    fn present_grant(&mut self, grant: Actor) -> Result<SenderPresentation, LeeError> {
+        self.recorder.present(Presenting::Grant, grant)
+    }
+
+    fn promote(
+        &mut self,
+        placement: Placement,
+        index: u64,
+        body: &MessageBody,
+    ) -> Result<bool, LeeError> {
+        let selected = placement == Placement::Private && (self.select)(index, body);
+        if selected {
+            self.promotions.insert(index);
         }
-        let program = &self
-            .programs
-            .get(&self_account_id)
-            .ok_or(InvalidProgramBehaviorError::UndeclaredProgramDependency {
-                program_account_id: self_account_id,
-            })?
-            .program;
-        let receipt = prove_session(program, |env| Program::write_plan_inputs(input, env))?;
-        let plan = plan_journal(&receipt.journal.bytes)?;
-        self.env_builder.add_assumption(receipt);
-        let proven = ProvenCall {
-            plan: plan.clone(),
-            private_apply_outputs: Vec::new(),
-        };
-        Ok((plan, Some((program, proven))))
+        Ok(selected)
     }
+}
 
-    fn apply(
-        &mut self,
-        call: &mut Self::Call,
-        input: &ApplyInput,
-    ) -> Result<ApplyOutput, LeeError> {
-        let Some((program, proven)) = call else {
-            return Ok(native_token::apply_output(input)
-                .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?);
-        };
-        let receipt = prove_session(program, |env| Program::write_apply_inputs(input, env))?;
-        let output = apply_journal(&receipt.journal.bytes)?;
-        self.env_builder.add_assumption(receipt);
-        proven.private_apply_outputs.push(output.clone());
-        Ok(output)
-    }
+type PublicationChooser<'choose> =
+    dyn FnMut(&[MessageBody]) -> Result<Vec<PublicationMode>, LeeError> + 'choose;
 
-    fn complete(
-        &mut self,
-        call: Self::Call,
-        _events: Vec<ProgramEvent>,
-        _execution: &ExecutionState<'_>,
-    ) -> Result<(), LeeError> {
-        self.calls.extend(call.map(|(_, proven)| proven));
-        Ok(())
+fn handle_message_with(
+    programs: &HashMap<AccountId, Dependency>,
+    input: &ReceiveInput,
+    run: impl FnOnce(&Program) -> Result<Transition, LeeError>,
+) -> Result<Transition, LeeError> {
+    let program_account_id = input.receiver.program_account_id;
+    // The native token program is recomputed by the circuit from the protocol's own
+    // implementation, so it has neither an ELF to prove nor a transition to carry.
+    if program_account_id == NATIVE_TOKEN_PROGRAM_ID {
+        return Ok(native_token::handle_message(input)
+            .map_err(InvalidProgramBehaviorError::NativeTransferFailed)?);
     }
+    run(&programs
+        .get(&program_account_id)
+        .ok_or(InvalidProgramBehaviorError::UndeclaredProgramDependency { program_account_id })?
+        .program)
 }
 
 /// Generates a proof of the execution of a LEE program inside the privacy preserving execution
 /// circuit.
+///
+/// It assumes of public execution what running it against `simulation.public_actor_states`
+/// delivers, and executes at once each async message to an undeclared destination that `input`
+/// selects or `select_promotion` accepts.
 pub fn execute_and_prove(
     input: ProvingInput,
-    program_with_dependencies: &ProgramWithDependencies,
+    simulation: &Simulation,
+    programs: &ProgramCatalog,
+    present_sender: impl Presenter,
+    select_promotion: impl FnMut(Placement, &MessageBody) -> bool,
+    choose_publications: impl FnMut(&[MessageBody]) -> Result<Vec<PublicationMode>, LeeError>,
 ) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
-    let ProvingInput {
-        shard_selectors,
-        signers,
-        private_witnesses,
-        instruction_data,
-        dummy_inputs,
-        ciphertext_padding,
-    } = input;
-    let ProgramWithDependencies {
-        self_account_id: initial_account_id,
+    execute_and_prove_with_stats(
+        input,
+        simulation,
         programs,
-    } = program_with_dependencies;
+        present_sender,
+        select_promotion,
+        choose_publications,
+    )
+    .map(|(output, proof, _)| (output, proof))
+}
 
-    let root = RootCall {
-        program_account_id: *initial_account_id,
-        shard_selectors,
-        instruction_data,
-        authorized_accounts: signers.into_iter().collect(),
+/// Like [`execute_and_prove`], and also returns the cycle statistics of the circuit's run.
+pub fn execute_and_prove_with_stats(
+    input: ProvingInput,
+    simulation: &Simulation,
+    programs: &ProgramCatalog,
+    mut present_sender: impl Presenter,
+    mut select_promotion: impl FnMut(Placement, &MessageBody) -> bool,
+    mut choose_publications: impl FnMut(&[MessageBody]) -> Result<Vec<PublicationMode>, LeeError>,
+) -> Result<(PrivacyPreservingCircuitOutput, Proof, SessionStats), LeeError> {
+    simulate_and_run(
+        input,
+        simulation,
+        programs,
+        &mut present_sender,
+        &mut select_promotion,
+        &mut choose_publications,
+        true,
+    )
+    .map(|(output, proven)| {
+        let (proof, stats) = proven.expect("a proving run returns its proof");
+        (output, proof, stats)
+    })
+}
+
+/// Runs [`execute_and_prove`] without proving: the circuit's output, for measuring the
+/// transaction before proving it.
+pub fn execute_unproven(
+    input: ProvingInput,
+    simulation: &Simulation,
+    programs: &ProgramCatalog,
+    mut present_sender: impl Presenter,
+    mut select_promotion: impl FnMut(Placement, &MessageBody) -> bool,
+    mut choose_publications: impl FnMut(&[MessageBody]) -> Result<Vec<PublicationMode>, LeeError>,
+) -> Result<PrivacyPreservingCircuitOutput, LeeError> {
+    simulate_and_run(
+        input,
+        simulation,
+        programs,
+        &mut present_sender,
+        &mut select_promotion,
+        &mut choose_publications,
+        false,
+    )
+    .map(|(output, _)| output)
+}
+
+fn simulate_and_run(
+    mut input: ProvingInput,
+    simulation: &Simulation,
+    programs: &ProgramCatalog,
+    present_sender: &mut dyn Presenter,
+    select_promotion: &mut dyn FnMut(Placement, &MessageBody) -> bool,
+    choose_publications: &mut PublicationChooser<'_>,
+    proving: bool,
+) -> Result<
+    (
+        PrivacyPreservingCircuitOutput,
+        Option<(Proof, SessionStats)>,
+    ),
+    LeeError,
+> {
+    let Simulated {
+        predicted_cross_messages,
+        public_promotions,
+        private_promotions,
+        presented,
+        cycles_used: _,
+    } = simulate_whole(
+        &input,
+        simulation,
+        programs,
+        &mut |presenting, actor| Some(present_sender.present(presenting, actor)),
+        select_promotion,
+    )?;
+    input.public_context.promotions = public_promotions;
+    input.private_promotions = private_promotions;
+    let recorded = input.private_promotions.clone();
+    let mut presented = presented.into_iter();
+    // Given the simulated outputs, use them to prove the private part of the transaction.
+    prove(
+        input,
+        predicted_cross_messages,
+        programs,
+        &mut |_, _| presented.next(),
+        &mut |index, _| recorded.contains(&index),
+        choose_publications,
+        proving,
+    )
+}
+
+fn claim_bodies(input: &ProvingInput) -> Vec<MessageBody> {
+    input
+        .claims
+        .iter()
+        .map(|witness| witness.body.clone())
+        .collect()
+}
+
+/// Simulates the whole transaction as [`execute_and_prove`] does and returns the cycles its
+/// public transitions metered, for pricing the fee before proving.
+pub fn simulate_privacy_preserving_transaction(
+    input: &ProvingInput,
+    simulation: &Simulation,
+    programs: &ProgramCatalog,
+    mut present_sender: impl Presenter,
+    mut select_promotion: impl FnMut(Placement, &MessageBody) -> bool,
+) -> Result<Cycles, LeeError> {
+    simulate_whole(
+        input,
+        simulation,
+        programs,
+        &mut |presenting, actor| Some(present_sender.present(presenting, actor)),
+        &mut select_promotion,
+    )
+    .map(|simulated| simulated.cycles_used)
+}
+
+/// Runs a public transaction's action against `simulation`, as settlement charges it.
+///
+/// Returns the cycles it would be charged within `cycle_budget` and, if it fails, why. Its
+/// signatures, nonces and validity windows are not checked.
+pub fn simulate_public_transaction(
+    tx: &PublicTransaction,
+    simulation: &Simulation,
+    programs: &ProgramCatalog,
+    cycle_budget: Cycles,
+) -> (Cycles, Result<(), LeeError>) {
+    let message = tx.message();
+    let mut choose = |_, _| None;
+    let mut select = |_, _: &MessageBody| false;
+    let mut simulator = Simulator {
+        programs: &programs.programs,
+        public_actor_states: &simulation.public_actor_states,
+        admitted_accounts: simulation.admitted_accounts.as_ref(),
+        recorder: SenderPresentationRecorder {
+            choose: &mut choose,
+            recorded: Vec::new(),
+        },
+        selector: PromotionSelector {
+            select: &mut select,
+            from_public: PromotionSelection::new(message.public_context.promotions.clone()),
+            from_private: PromotionSelection::new(BTreeSet::new()),
+        },
+        cycle_budget,
+        cycles_used: 0,
     };
+    let root = message.execution.root.clone();
+    let result = if message.public_context.runs_publicly(root.to) {
+        WholeExecution::new(
+            message.public_context.clone(),
+            TransactionEntry::Sync(root),
+            Vec::new(),
+            None,
+            &[],
+        )
+        .map_err(|error| LeeError::InvalidInput(error.to_string()))
+        .and_then(|request| request.execute(&mut simulator).map(drop))
+    } else {
+        Err(LeeError::InvalidInput("Root actor is not declared".into()))
+    };
+    let cycles = charged_cycles(&result, simulator.cycles_used, cycle_budget);
+    (cycles, result)
+}
+
+fn simulate_whole(
+    input: &ProvingInput,
+    simulation: &Simulation,
+    programs: &ProgramCatalog,
+    choose: &mut dyn FnMut(Presenting, Actor) -> Option<SenderPresentation>,
+    select: &mut dyn FnMut(Placement, &MessageBody) -> bool,
+) -> Result<Simulated, LeeError> {
+    // Build a simulator to generate the parameters to generate the proof with.
+    let mut simulator = Simulator {
+        programs: &programs.programs,
+        public_actor_states: &simulation.public_actor_states,
+        admitted_accounts: simulation.admitted_accounts.as_ref(),
+        recorder: SenderPresentationRecorder {
+            choose,
+            recorded: Vec::new(),
+        },
+        selector: PromotionSelector {
+            select,
+            from_public: PromotionSelection::new(input.public_context.promotions.clone()),
+            from_private: PromotionSelection::new(input.private_promotions.clone()),
+        },
+        cycle_budget: DEFAULT_PUBLIC_CYCLE_BUDGET,
+        cycles_used: 0,
+    };
+
+    // Given the initial context and top level call, simulate a whole transaction and record
+    // predicted public-private messages.
+    let predicted_cross_messages = WholeExecution::new(
+        input.public_context.clone(),
+        input.root.clone().map(|witness| witness.body),
+        claim_bodies(input),
+        input.fee,
+        &input.private_witnesses,
+    )?
+    .execute(&mut simulator)?
+    .predicted_cross_messages;
+    let Simulator {
+        recorder,
+        selector,
+        cycles_used,
+        ..
+    } = simulator;
+    Ok(Simulated {
+        predicted_cross_messages,
+        public_promotions: selector.from_public.finish()?,
+        private_promotions: selector.from_private.finish()?,
+        presented: recorder.recorded,
+        cycles_used,
+    })
+}
+
+/// Like [`execute_and_prove`], but under the given predicted cross messages and the promotions
+/// `input` selects, with any further private async messages `select_promotion` chooses.
+///
+/// Settlement matches them against live public execution; a prover that did not derive them may
+/// produce a proof settlement refuses.
+pub fn execute_and_prove_with_cross_messages(
+    input: ProvingInput,
+    predicted_cross_messages: PredictedCrossMessages,
+    programs: &ProgramCatalog,
+    mut present_sender: impl Presenter,
+    mut select_promotion: impl FnMut(Placement, &MessageBody) -> bool,
+    mut choose_publications: impl FnMut(&[MessageBody]) -> Result<Vec<PublicationMode>, LeeError>,
+) -> Result<(PrivacyPreservingCircuitOutput, Proof), LeeError> {
+    run_with_cross_messages(
+        input,
+        predicted_cross_messages,
+        programs,
+        &mut present_sender,
+        &mut select_promotion,
+        &mut choose_publications,
+        true,
+    )
+    .map(|(output, proven)| (output, proven.expect("a proving run returns its proof").0))
+}
+
+/// Runs [`execute_and_prove_with_cross_messages`] without proving: the circuit's output, for
+/// measuring the transaction before proving it.
+pub fn execute_unproven_with_cross_messages(
+    input: ProvingInput,
+    predicted_cross_messages: PredictedCrossMessages,
+    programs: &ProgramCatalog,
+    mut present_sender: impl Presenter,
+    mut select_promotion: impl FnMut(Placement, &MessageBody) -> bool,
+    mut choose_publications: impl FnMut(&[MessageBody]) -> Result<Vec<PublicationMode>, LeeError>,
+) -> Result<PrivacyPreservingCircuitOutput, LeeError> {
+    run_with_cross_messages(
+        input,
+        predicted_cross_messages,
+        programs,
+        &mut present_sender,
+        &mut select_promotion,
+        &mut choose_publications,
+        false,
+    )
+    .map(|(output, _)| output)
+}
+
+fn run_with_cross_messages(
+    input: ProvingInput,
+    mut predicted_cross_messages: PredictedCrossMessages,
+    programs: &ProgramCatalog,
+    present_sender: &mut dyn Presenter,
+    select_promotion: &mut dyn FnMut(Placement, &MessageBody) -> bool,
+    choose_publications: &mut PublicationChooser<'_>,
+    proving: bool,
+) -> Result<
+    (
+        PrivacyPreservingCircuitOutput,
+        Option<(Proof, SessionStats)>,
+    ),
+    LeeError,
+> {
+    // The fee's credit reaches a native actor, which calls nothing back.
+    if input.fee.is_some() {
+        predicted_cross_messages.push(Vec::new());
+    }
+    let requested = input.private_promotions.clone();
+    prove(
+        input,
+        predicted_cross_messages,
+        programs,
+        &mut |presenting, actor| Some(present_sender.present(presenting, actor)),
+        &mut |index, body| requested.contains(&index) || select_promotion(Placement::Private, body),
+        choose_publications,
+        proving,
+    )
+}
+
+fn prove(
+    mut input: ProvingInput,
+    predicted_cross_messages: PredictedCrossMessages,
+    programs: &ProgramCatalog,
+    choose: &mut dyn FnMut(Presenting, Actor) -> Option<SenderPresentation>,
+    select: &mut dyn FnMut(u64, &MessageBody) -> bool,
+    choose_publications: &mut PublicationChooser<'_>,
+    proving: bool,
+) -> Result<
+    (
+        PrivacyPreservingCircuitOutput,
+        Option<(Proof, SessionStats)>,
+    ),
+    LeeError,
+> {
+    let ProgramCatalog { programs } = programs;
+
     let mut backend = Prover {
         programs,
         env_builder: ExecutorEnv::builder(),
-        calls: Vec::new(),
+        responses: Vec::new(),
+        invoked: BTreeSet::new(),
+        recorder: SenderPresentationRecorder {
+            choose,
+            recorded: Vec::new(),
+        },
+        select,
+        promotions: BTreeSet::new(),
+        proving,
     };
-    ExecutionState::initialize(root.clone(), &private_witnesses)?.run(&mut backend)?;
+    let outcome = PrivatePart::new(
+        input.public_context.clone(),
+        input.root.clone().map(|witness| witness.body),
+        claim_bodies(&input),
+        input.fee,
+        &input.private_witnesses,
+        predicted_cross_messages.clone(),
+    )?
+    .execute(&mut backend)?;
+    if let Some(&index) = input
+        .private_promotions
+        .difference(&backend.promotions)
+        .next()
+    {
+        return Err(ExecutionError::UnreachedPromotion { index }.into());
+    }
+    let publication_modes = choose_publications(&outcome.async_messages)?;
     let Prover {
         mut env_builder,
-        calls,
+        responses,
+        invoked,
+        recorder,
+        promotions,
         ..
     } = backend;
+    input.private_promotions = promotions;
 
     // Every program actually invoked, claimed against its real bytecode identity — the guest
     // circuit uses these for `env::verify`, unchecked; the sequencer verifies each `Disclosed` one
@@ -305,11 +798,8 @@ pub fn execute_and_prove(
     // in-circuit — unless it's resolved as shadow instead.
     let mut program_image_witnesses = Vec::new();
     let mut shadow_program_witnesses = Vec::new();
-    #[expect(
-        clippy::iter_over_hash_type,
-        reason = "Witness order is not significant; the journal echoes whatever order is supplied"
-    )]
-    for (account_id, Dependency { program, kind }) in programs {
+    for account_id in &invoked {
+        let Dependency { program, kind } = &programs[account_id];
         match kind {
             ProgramKind::Disclosed => {
                 program_image_witnesses.push(ProgramImageWitness::Disclosed {
@@ -332,36 +822,87 @@ pub fn execute_and_prove(
     }
 
     let circuit_input = PrivacyPreservingCircuitInput {
-        root,
-        private_witnesses,
-        dummy_inputs,
-        ciphertext_padding,
+        input,
         program_image_witnesses,
         shadow_program_witnesses,
-        calls,
+        responses,
+        sender_presentations: recorder.recorded,
+        publication_modes,
+        predicted_cross_messages,
     };
 
     let circuit_input_payload = borsh::to_vec(&circuit_input)?;
     env_builder.write_slice(&to_frame(&circuit_input_payload));
     let env = env_builder.build().unwrap();
-    let prover = default_prover();
-    let opts = ProverOpts::succinct();
-    let prove_info = prover
-        .prove_with_opts(env, PRIVACY_PRESERVING_CIRCUIT_ELF, &opts)
-        .map_err(|e| LeeError::CircuitProvingError(e.to_string()))?;
+    let (journal, proof) = if proving {
+        let prove_info = default_prover()
+            .prove_with_opts(env, PRIVACY_PRESERVING_CIRCUIT_ELF, &ProverOpts::succinct())
+            .map_err(|e| LeeError::CircuitProvingError(e.to_string()))?;
+        let proof = Proof(borsh::to_vec(&pruned(prove_info.receipt.inner))?);
+        (
+            prove_info.receipt.journal.bytes,
+            Some((proof, prove_info.stats)),
+        )
+    } else {
+        let session = default_executor()
+            .execute(env, PRIVACY_PRESERVING_CIRCUIT_ELF)
+            .map_err(|e| LeeError::CircuitProvingError(e.to_string()))?;
+        (session.journal.bytes, None)
+    };
 
-    let proof = Proof(borsh::to_vec(&prove_info.receipt.inner)?);
-
-    let circuit_output: PrivacyPreservingCircuitOutput = borsh::from_slice(
-        from_frame(&prove_info.receipt.journal.bytes).ok_or_else(|| {
+    let circuit_output: PrivacyPreservingCircuitOutput =
+        borsh::from_slice(from_frame(&journal).ok_or_else(|| {
             LeeError::CircuitOutputDeserializationError(
                 "malformed circuit journal frame".to_owned(),
             )
-        })?,
-    )
-    .map_err(|e| LeeError::CircuitOutputDeserializationError(e.to_string()))?;
+        })?)
+        .map_err(|e| LeeError::CircuitOutputDeserializationError(e.to_string()))?;
 
     Ok((circuit_output, proof))
+}
+
+/// `inner` with its claim pruned to its digest, which is all verification compares, so the proof
+/// does not carry a second copy of the journal the message holds.
+fn pruned(inner: InnerReceipt) -> InnerReceipt {
+    match inner {
+        InnerReceipt::Succinct(mut receipt) => {
+            receipt.claim = MaybePruned::Pruned(receipt.claim.digest());
+            InnerReceipt::Succinct(receipt)
+        }
+        InnerReceipt::Fake(mut receipt) => {
+            receipt.claim = MaybePruned::Pruned(receipt.claim.digest());
+            InnerReceipt::Fake(receipt)
+        }
+        other @ (InnerReceipt::Composite(_) | InnerReceipt::Groth16(_) | _) => other,
+    }
+}
+
+/// Proves `program`'s session, or only executes it when not `proving`: its journal and the
+/// assumption the circuit verifies it by.
+fn run_session(
+    proving: bool,
+    program: &Program,
+    write: impl FnOnce(&mut ExecutorEnvBuilder) -> Result<(), LeeError>,
+) -> Result<(Vec<u8>, AssumptionReceipt), LeeError> {
+    if proving {
+        let receipt = prove_session(program, write)?;
+        return Ok((receipt.journal.bytes.clone(), receipt.into()));
+    }
+    let mut env_builder = ExecutorEnv::builder();
+    write(&mut env_builder)?;
+    let env = env_builder.build().unwrap();
+    let session = default_executor()
+        .execute(env, program.elf())
+        .map_err(|e| LeeError::ProgramProveFailed(e.to_string()))?;
+    check_exit_code(
+        session.exit_code,
+        session.cycles(),
+        LeeError::ProgramProveFailed,
+    )?;
+    let claim = session.receipt_claim.ok_or_else(|| {
+        LeeError::ProgramProveFailed("the executor returned no receipt claim".to_owned())
+    })?;
+    Ok((session.journal.bytes, claim.into()))
 }
 
 fn prove_session(

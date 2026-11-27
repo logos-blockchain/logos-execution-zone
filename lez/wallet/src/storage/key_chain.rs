@@ -1,20 +1,31 @@
 use core::panic;
-use std::collections::{BTreeMap, HashMap, HashSet, btree_map::Entry};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet, btree_map::Entry},
+};
 
-use anyhow::{Context as _, Result, anyhow};
+use anyhow::{Context as _, Result, anyhow, ensure};
+use common::{block::Block, transaction::LeeTransaction};
+use futures::{Stream, TryStreamExt as _};
 use key_protocol::key_management::{
     KeyChain,
     group_key_holder::GroupKeyHolder,
     key_tree::{KeyTreePrivate, KeyTreePublic, chain_index::ChainIndex, traits::KeyTreeNode as _},
     secret_holders::{PrivateKeyHolder, SeedHolder, ViewingSecretKey},
 };
-use lee::{Account, AccountId, privacy_preserving_transaction::message::Message};
-use lee_core::{
-    Commitment, Identifier, Nullifier, NullifierSecretKey, PrivateAccountKind, SharedSecretKey,
+use lee::{
+    Account, AccountId, EncryptedNote, Recipient,
+    privacy_preserving_transaction::message::Message,
+    signature::{PublicAccountSecret, initial_key, public_account_id},
 };
-use log::{debug, warn};
+use lee_core::{
+    BlockId, Commitment, Nullifier, NullifierPublicKey, NullifierSecretKey, PrivateAccountKind,
+    PrivateAction, SealedMessage, SharedSecretKey, encryption::ViewingPublicKey,
+    program::MessageBody, signing_key::SigningKeyState,
+};
 use serde::{Deserialize, Serialize};
 use testnet_initial_state::{PrivateAccountPrivateInitialData, PublicAccountPrivateInitialData};
+use tracing::warn;
 
 use crate::{
     account::{AccountIdWithPrivacy, Label},
@@ -47,22 +58,39 @@ pub struct FoundPrivateAccount<'acc> {
     pub chain_index: Option<ChainIndex>,
 }
 
+pub struct ManagedPrivateAccount<'acc> {
+    pub account: &'acc Account,
+    pub kind: &'acc PrivateAccountKind,
+    pub keys: Cow<'acc, PrivateKeyHolder>,
+    pub vpk: ViewingPublicKey,
+}
+
 /// Metadata for a shared account (GMS-derived), stored alongside the cached plaintext state.
-/// The group label and identifier (or PDA seed) are needed to re-derive keys during sync.
+/// The group label and derivation are needed to re-derive keys during sync.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct SharedAccountEntry {
     pub group_label: Label,
-    pub identifier: Identifier,
-    /// For PDA accounts, the seed and program ID used to derive keys via `derive_keys_for_pda`.
-    /// `None` for regular shared accounts (keys derived from identifier via derivation seed).
-    pub pda_seed: Option<lee_core::program::PdaSeed>,
-    pub authority_program_id: Option<lee_core::program::ProgramId>,
+    pub derivation: SharedAccountDerivation,
+    pub kind: PrivateAccountKind,
     pub account: Account,
 }
 
-/// Maps each owned or shared private account to the nullifier its next update will publish,
-/// so sync can spot updates by nullifier rather than view tag.
+/// How a shared account's keys derive from its group's GMS.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
+pub enum SharedAccountDerivation {
+    /// A regular account, selected by a wallet-local id its co-owners agree on.
+    Regular { derivation_id: [u8; 32] },
+    /// A private PDA, keyed by its program and seed via `derive_keys_for_pda`.
+    Pda {
+        seed: lee_core::program::PdaSeed,
+        program_id: lee_core::program::ProgramId,
+    },
+}
+
+/// Maps each owned or shared private account to the nullifier its next transition spends; an
+/// account not yet initialized waits on its empty predecessor's.
 #[derive(Default)]
 pub struct NullifierIndex(HashMap<Nullifier, AccountId>);
 
@@ -89,14 +117,6 @@ impl NullifierIndex {
         );
     }
 
-    /// Indexes `account_id` by the nullifier its initialization publishes.
-    pub fn track_initialization(&mut self, account_id: AccountId) {
-        self.0.insert(
-            Nullifier::for_account_initialization(&account_id),
-            account_id,
-        );
-    }
-
     /// Replaces a spent nullifier with the account's `next` one.
     pub fn update(&mut self, spent: &Nullifier, next: Nullifier, account_id: AccountId) {
         self.0.remove(spent);
@@ -108,7 +128,7 @@ impl NullifierIndex {
 #[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct UserKeyChain {
     /// Imported public accounts.
-    imported_public_accounts: BTreeMap<AccountId, lee::PrivateKey>,
+    imported_public_accounts: BTreeMap<AccountId, PublicAccountSecret>,
     /// Imported private accounts.
     imported_private_accounts: BTreeMap<ImportedPrivateAccountKey, ImportedPrivateAccountData>,
     /// Tree of public account keys.
@@ -116,11 +136,14 @@ pub struct UserKeyChain {
     /// Tree of private account keys.
     private_key_tree: KeyTreePrivate,
     /// Cached plaintext state of shared private accounts (PDAs and regular shared accounts),
-    /// keyed by `AccountId`. Each entry stores the group label and identifier needed
+    /// keyed by `AccountId`. Each entry stores the group label and derivation needed
     /// to re-derive keys during sync.
     shared_private_accounts: BTreeMap<lee::AccountId, SharedAccountEntry>,
     /// Group key holders for shared account management, keyed by a human-readable label.
     group_key_holders: BTreeMap<Label, GroupKeyHolder>,
+    /// The labels of the groups this wallet made itself, whose accounts cannot predate it. A
+    /// joined group is absent, since nothing says how long its GMS has been in use.
+    locally_created_groups: BTreeSet<Label>,
     /// Dedicated sealing secret key for GMS distribution. Generated once via
     /// `wallet group new-sealing-key`. The corresponding public key is shared with
     /// group members so they can seal GMS for this wallet.
@@ -139,6 +162,7 @@ impl UserKeyChain {
             public_key_tree,
             private_key_tree,
             group_key_holders: BTreeMap::new(),
+            locally_created_groups: BTreeSet::new(),
             shared_private_accounts: BTreeMap::new(),
             sealing_secret_key: None,
         }
@@ -162,12 +186,13 @@ impl UserKeyChain {
         &mut self,
         depth: u32,
         get_account: impl Fn(AccountId) -> F,
+        awaited: &HashSet<AccountId>,
     ) -> Result<()> {
         self.public_key_tree
             .cleanup_tree_remove_uninit_layered(depth, get_account)
             .await?;
         self.private_key_tree
-            .cleanup_tree_remove_uninit_layered(depth);
+            .cleanup_tree_remove_uninit_layered(depth, awaited);
         Ok(())
     }
 
@@ -190,12 +215,20 @@ impl UserKeyChain {
         }
     }
 
-    /// Returns the signing key for public transaction signatures.
+    /// Returns the secret a public account's signing keys are derived from.
     #[must_use]
-    pub fn pub_account_signing_key(&self, account_id: AccountId) -> Option<&lee::PrivateKey> {
-        self.imported_public_accounts
-            .get(&account_id)
-            .or_else(|| self.public_key_tree.get_node(account_id).map(Into::into))
+    pub fn pub_account_secret(&self, account_id: AccountId) -> Option<&PublicAccountSecret> {
+        self.imported_public_accounts.get(&account_id).or_else(|| {
+            self.public_key_tree
+                .get_node(account_id)
+                .map(|node| &node.secret)
+        })
+    }
+
+    /// Returns a public account's initial key: what others name it by to pay it.
+    #[must_use]
+    pub fn pub_account_initial_key(&self, account_id: AccountId) -> Option<SigningKeyState> {
+        self.pub_account_secret(account_id).map(initial_key)
     }
 
     /// Generated new private key for privacy preserving transactions.
@@ -236,18 +269,6 @@ impl UserKeyChain {
                 .create_private_accounts_key_node_layered()
                 .expect("Search for new node slot failed"),
         }
-    }
-
-    /// Registers an additional identifier on an existing private key node, deriving and recording
-    /// the corresponding [`AccountId`]. Returns [`None`] if the node does not exist or the
-    /// identifier is already registered.
-    pub fn register_identifier_on_private_key_chain(
-        &mut self,
-        cci: &ChainIndex,
-        identifier: Identifier,
-    ) -> Option<lee::AccountId> {
-        self.private_key_tree
-            .register_identifier_on_node(cci, identifier)
     }
 
     /// Returns private account for given `account_id`. Doesn't search in pda accounts cache.
@@ -336,23 +357,113 @@ impl UserKeyChain {
             )
     }
 
+    // The recipient a recovery note for `address` names, with the nullifier key that receives
+    // for it, if one of this wallet's key pairs owns it, whether or not an account is recorded
+    // under it yet.
+    #[must_use]
+    pub fn recover(
+        &self,
+        address: AccountId,
+        note: &EncryptedNote,
+    ) -> Option<(Recipient, NullifierSecretKey)> {
+        self.key_pairs().find_map(|(npk, vsk, nsk)| {
+            Recipient::recover(address, note, &vsk.d, &vsk.z)
+                .filter(|recipient| recipient.npk == npk)
+                .map(|recipient| (recipient, nsk))
+        })
+    }
+
+    // A sealed message's body, recipient and commitment randomness, with the nullifier key that
+    // receives it, if one of this wallet's key pairs opens it.
+    #[must_use]
+    pub fn open(
+        &self,
+        sealed: &SealedMessage,
+    ) -> Option<(MessageBody, Recipient, [u8; 32], NullifierSecretKey)> {
+        self.key_pairs().find_map(|(npk, vsk, nsk)| {
+            sealed
+                .open(npk, &vsk.d, &vsk.z)
+                .map(|(body, recipient, rho)| (body, recipient, rho, nsk))
+        })
+    }
+
+    fn owned_key_chains(&self) -> impl Iterator<Item = &KeyChain> {
+        self.imported_private_accounts
+            .keys()
+            .map(|key| &key.key_chain)
+            .chain(
+                self.private_key_tree
+                    .key_map
+                    .values()
+                    .map(|node| &node.value.0),
+            )
+    }
+
+    fn key_pairs(
+        &self,
+    ) -> impl Iterator<Item = (NullifierPublicKey, ViewingSecretKey, NullifierSecretKey)> + '_ {
+        self.owned_key_chains()
+            .map(|key_chain| {
+                (
+                    key_chain.nullifier_public_key,
+                    key_chain.private_key_holder.viewing_secret_key.clone(),
+                    key_chain.private_key_holder.nullifier_secret_key(),
+                )
+            })
+            .chain(self.shared_private_accounts.values().filter_map(|entry| {
+                let keys = self.derive_shared_account_keys(entry)?;
+                let nsk = keys.nullifier_secret_key();
+                Some((
+                    NullifierPublicKey::from(&nsk),
+                    keys.viewing_secret_key.clone(),
+                    nsk,
+                ))
+            }))
+    }
+
     /// Re-derives the [`PrivateKeyHolder`] for a shared account `entry`, dispatching on PDA vs
-    /// regular. `None` if the group key holder is absent or a PDA entry lacks its program id.
+    /// regular. `None` if the group key holder is absent.
     #[must_use]
     pub fn derive_shared_account_keys(
         &self,
         entry: &SharedAccountEntry,
     ) -> Option<PrivateKeyHolder> {
         let holder = self.group_key_holder(&entry.group_label)?;
-        Some(match (&entry.pda_seed, &entry.authority_program_id) {
-            (Some(pda_seed), Some(program_id)) => holder.derive_keys_for_pda(program_id, pda_seed),
-            (Some(_), None) => return None,
-            _ => holder.derive_regular_shared_account_keys_from_identifier(entry.identifier),
+        Some(match &entry.derivation {
+            SharedAccountDerivation::Regular { derivation_id } => {
+                holder.derive_regular_shared_account_keys(derivation_id)
+            }
+            SharedAccountDerivation::Pda { seed, program_id } => {
+                holder.derive_keys_for_pda(program_id, seed)
+            }
+        })
+    }
+
+    #[must_use]
+    pub fn managed_private_account(
+        &self,
+        account_id: AccountId,
+    ) -> Option<ManagedPrivateAccount<'_>> {
+        if let Some(found) = self.private_account(account_id) {
+            return Some(ManagedPrivateAccount {
+                account: found.account,
+                kind: found.kind,
+                keys: Cow::Borrowed(&found.key_chain.private_key_holder),
+                vpk: found.key_chain.viewing_public_key.clone(),
+            });
+        }
+        let entry = self.shared_private_account(account_id)?;
+        let keys = self.derive_shared_account_keys(entry)?;
+        Some(ManagedPrivateAccount {
+            account: &entry.account,
+            kind: &entry.kind,
+            vpk: keys.generate_viewing_public_key(),
+            keys: Cow::Owned(keys),
         })
     }
 
     /// Maps each owned and shared account's current-state update nullifier to its `account_id`,
-    /// so co-owner updates are found during sync by nullifier rather than view tag.
+    /// so sync finds every account's next transition, its initialization included, by nullifier.
     #[must_use]
     pub fn build_latest_nullifier_index(&self) -> NullifierIndex {
         let mut index = NullifierIndex::default();
@@ -381,123 +492,263 @@ impl UserKeyChain {
         index
     }
 
-    /// Applies every watched nullifier the `message` publishes: decrypts the position-aligned
-    /// note, stores the new state, and rolls the index to the account's next nullifier. Returns
-    /// the output slots handled, so the view-tag pass can skip them.
+    /// Follows what settlement applied of `message`: its fee fallback's action when it
+    /// `reverted`, else every private action and, when `discover`, the unfollowed notes.
+    pub fn follow_transaction(
+        &mut self,
+        message: &Message,
+        reverted: bool,
+        discover: bool,
+        index: &mut NullifierIndex,
+    ) {
+        if reverted {
+            self.sync_reverted_via_nullifier(message, index);
+            return;
+        }
+        let followed = self.sync_updates_via_nullifiers(message, index);
+        if discover {
+            self.discover_unfollowed(message, &followed, index);
+        }
+    }
+
+    /// Applies the fee fallback's action of a reverted `message`, if the index watches its
+    /// nullifier: the payer's state after the fee alone.
+    pub fn sync_reverted_via_nullifier(&mut self, message: &Message, index: &mut NullifierIndex) {
+        let Some(action) = message
+            .execution
+            .proven_fee
+            .as_ref()
+            .and_then(|fee| fee.fallback.as_ref())
+            .and_then(|fallback| fallback.action(&message.execution.private_actions))
+        else {
+            return;
+        };
+        let action = &action;
+        let Some(account_id) = index.account_for(&action.nullifier) else {
+            return;
+        };
+        let committed = HashSet::from([action.commitment]);
+        if let Some(next) = self.apply_nullifier_update(
+            account_id,
+            action,
+            &committed,
+            crate::decrypt_fee_fallback_note,
+        ) {
+            index.update(&action.nullifier, next, account_id);
+        }
+    }
+
+    /// Applies every watched nullifier the `message` publishes: decrypts the note in that
+    /// nullifier's action, stores the new state, and rolls the index to the account's next
+    /// nullifier. Returns the action slots it followed.
     pub fn sync_updates_via_nullifiers(
         &mut self,
         message: &Message,
         index: &mut NullifierIndex,
     ) -> HashSet<usize> {
-        let mut handled = HashSet::new();
-        for (i, action) in message.private_actions.iter().enumerate() {
+        let mut followed = HashSet::new();
+        let committed: HashSet<Commitment> = message.execution.commitments().into_iter().collect();
+        for (i, action) in message.execution.private_actions.iter().enumerate() {
             // Get the nullifier information if awaiting the nullifier.
             let Some(account_id) = index.account_for(&action.nullifier) else {
                 continue;
             };
             // Try decrypting the commitment connected to the nullifier and get the next
             // nullifier to await.
-            if let Some(new_nullifier) = self.apply_nullifier_update(account_id, message, i) {
+            if let Some(new_nullifier) =
+                self.apply_nullifier_update(account_id, action, &committed, crate::decrypt_note)
+            {
                 // Update the index to await for the new state of the account, i.e.
                 // the new nullifier.
                 index.update(&action.nullifier, new_nullifier, account_id);
-                // Record that this nullifier's position can be skipped for scanning.
-                handled.insert(i);
+                followed.insert(i);
             }
         }
-        handled
+        followed
     }
 
-    /// Decrypts the note at slot `i` for `account_id`, stores the new state, and returns the
-    /// account's next update nullifier. `None` if keys or decryption fail.
+    /// Trial-decrypts each note of `message` outside the `followed` slots with every owned key
+    /// pair. An unrecorded account whose decrypted state the message commits is recorded and
+    /// followed by its next nullifier, as restoration needs for the private PDAs under its keys.
+    pub fn discover_unfollowed(
+        &mut self,
+        message: &Message,
+        followed: &HashSet<usize>,
+        index: &mut NullifierIndex,
+    ) {
+        let commitments: HashSet<Commitment> =
+            message.execution.commitments().into_iter().collect();
+        let found: Vec<_> = (0..message.execution.private_actions.len())
+            .filter(|slot| !followed.contains(slot))
+            .flat_map(|slot| {
+                let action = &message.execution.private_actions[slot];
+                self.owned_key_chains().filter_map(move |key_chain| {
+                    let secret = key_chain
+                        .calculate_shared_secret_receiver(&action.encrypted_post_state.epk)?;
+                    let (kind, account) = crate::decrypt_note(action, &secret)?;
+                    let account_id = AccountId::for_private_account(
+                        &key_chain.nullifier_public_key,
+                        &key_chain.viewing_public_key,
+                        &kind,
+                    );
+                    let nsk = key_chain.private_key_holder.nullifier_secret_key();
+                    Some((account_id, kind, account, nsk))
+                })
+            })
+            .filter(|(account_id, _, account, _)| {
+                self.private_account(*account_id).is_none()
+                    && self.shared_private_account(*account_id).is_none()
+                    && commitments.contains(&Commitment::new(account_id, account))
+            })
+            .collect();
+        for (account_id, kind, account, nsk) in found {
+            index.track(account_id, &account, &nsk);
+            self.insert_private_account(account_id, kind, account)
+                .expect("an owned key pair derives the account");
+        }
+    }
+
+    /// Records the account a received message names, at its empty state, under the key pair that
+    /// holds its nullifier key: an owned one, or a shared one whose derivation the new entry keeps.
+    pub fn record_received(&mut self, recipient: &Recipient) -> Result<()> {
+        let account_id = recipient.account_id();
+        let Some(shared) = self
+            .shared_private_accounts
+            .values()
+            .find(|entry| {
+                self.derive_shared_account_keys(entry)
+                    .is_some_and(|keys| keys.generate_nullifier_public_key() == recipient.npk)
+            })
+            .cloned()
+        else {
+            return self.insert_private_account(
+                account_id,
+                recipient.kind.clone(),
+                Account::default(),
+            );
+        };
+        self.insert_shared_private_account(
+            account_id,
+            SharedAccountEntry {
+                kind: recipient.kind.clone(),
+                account: Account::default(),
+                ..shared
+            },
+        );
+        Ok(())
+    }
+
+    /// Records an account through `record`, at the state the history from genesis through `tip`
+    /// brings it to from its empty predecessor, or not at all: a failed, short or gapped history
+    /// leaves the key chain as it was.
+    pub async fn record_caught_up(
+        &mut self,
+        record: impl FnOnce(&mut Self) -> Result<()>,
+        account_id: AccountId,
+        nsk: &NullifierSecretKey,
+        tip: BlockId,
+        blocks: impl Stream<Item = Result<Block>>,
+    ) -> Result<()> {
+        let mut recorded = self.clone();
+        record(&mut recorded)?;
+        let mut index = NullifierIndex::default();
+        index.track(account_id, &Account::default(), nsk);
+        recorded.replay(index, false, tip, blocks).await?;
+        *self = recorded;
+        Ok(())
+    }
+
+    /// Follows every recorded account from its current state, and records each unrecorded one an
+    /// owned key pair opens, through the history from genesis through `tip`. A failed, short or
+    /// gapped history returns an error instead of the key chain.
+    pub async fn rescan(
+        mut self,
+        tip: BlockId,
+        blocks: impl Stream<Item = Result<Block>>,
+    ) -> Result<Self> {
+        let index = self.build_latest_nullifier_index();
+        self.replay(index, true, tip, blocks).await?;
+        Ok(self)
+    }
+
+    // Follows `index`, discovering the notes it does not follow when `discover`, through a history
+    // that must run from genesis through `tip` in order.
+    async fn replay(
+        &mut self,
+        mut index: NullifierIndex,
+        discover: bool,
+        tip: BlockId,
+        blocks: impl Stream<Item = Result<Block>>,
+    ) -> Result<()> {
+        let mut expected = 1..=tip;
+        let mut blocks = std::pin::pin!(blocks);
+        while let Some(block) = blocks.try_next().await? {
+            ensure!(
+                expected.next() == Some(block.header.block_id),
+                "History reaches block {} out of sequence",
+                block.header.block_id
+            );
+            for (position, tx) in block.body.transactions.iter().enumerate() {
+                if let LeeTransaction::PrivacyPreserving(pp_tx) = tx {
+                    let reverted = block.body.is_reverted(position);
+                    self.follow_transaction(&pp_tx.message, reverted, discover, &mut index);
+                }
+            }
+        }
+        ensure!(expected.next().is_none(), "History ends before block {tip}");
+        Ok(())
+    }
+
+    /// Decrypts `action`'s note for `account_id` with `decrypt`, stores the new state if
+    /// `committed` holds its commitment, and returns the account's next update nullifier. `None`
+    /// if keys or decryption fail.
     fn apply_nullifier_update(
         &mut self,
         account_id: AccountId,
-        message: &Message,
-        i: usize,
+        action: &PrivateAction,
+        committed: &HashSet<Commitment>,
+        decrypt: fn(&PrivateAction, &SharedSecretKey) -> Option<(PrivateAccountKind, Account)>,
     ) -> Option<Nullifier> {
-        let encrypted = &message.private_actions[i].encrypted_post_state;
+        let keys = self.managed_private_account(account_id)?.keys;
+        let secret = SharedSecretKey::decapsulate(
+            &action.encrypted_post_state.epk,
+            &keys.viewing_secret_key.d,
+            &keys.viewing_secret_key.z,
+        )?;
+        let nsk = keys.nullifier_secret_key();
 
-        let (nsk, secret, is_shared) = if let Some(entry) = self.shared_private_account(account_id)
-        {
-            let keys = self.derive_shared_account_keys(entry)?;
-            let secret = SharedSecretKey::decapsulate(
-                &encrypted.epk,
-                &keys.viewing_secret_key.d,
-                &keys.viewing_secret_key.z,
-            )?;
-            (keys.nullifier_secret_key(), secret, true)
-        } else {
-            let found = self.private_account(account_id)?;
-            let secret = found
-                .key_chain
-                .calculate_shared_secret_receiver(&encrypted.epk)?;
-            (
-                found.key_chain.private_key_holder.nullifier_secret_key(),
-                secret,
-                false,
-            )
-        };
-
-        let (kind, new_account) = crate::decrypt_note_at(message, i, &secret)?;
-        let new_nullifier = NullifierIndex::next_update_nullifier(account_id, &new_account, &nsk);
-
-        if is_shared {
-            self.update_shared_private_account_state(&account_id, new_account);
-        } else {
-            self.insert_private_account(account_id, kind, new_account)
-                .ok()?;
+        let (kind, new_account) = decrypt(action, &secret)?;
+        // The note is the sender's claim: follow it only to a state the message commits.
+        if !committed.contains(&Commitment::new(&account_id, &new_account)) {
+            return None;
         }
+        let new_nullifier = NullifierIndex::next_update_nullifier(account_id, &new_account, &nsk);
+        self.insert_private_account(account_id, kind, new_account)
+            .ok()?;
         Some(new_nullifier)
     }
 
-    /// Constructs the next nullifier based on current account state
-    /// of the ID.
-    fn next_update_nullifier(&self, account_id: AccountId) -> Option<Nullifier> {
-        if let Some(entry) = self.shared_private_account(account_id) {
-            let keys = self.derive_shared_account_keys(entry)?;
-            return Some(NullifierIndex::next_update_nullifier(
-                account_id,
-                &entry.account,
-                &keys.nullifier_secret_key(),
-            ));
-        }
-        let acc = self.private_account(account_id)?;
-        Some(NullifierIndex::next_update_nullifier(
-            account_id,
-            acc.account,
-            &acc.key_chain.private_key_holder.nullifier_secret_key(),
-        ))
+    pub fn add_imported_public_account(&mut self, secret: PublicAccountSecret) {
+        let account_id = public_account_id(&secret);
+
+        self.imported_public_accounts.insert(account_id, secret);
     }
 
-    #[must_use]
-    pub fn locate_spend(&self, account_id: AccountId, message: &Message) -> Option<usize> {
-        let init = Nullifier::for_account_initialization(&account_id);
-        let update = self.next_update_nullifier(account_id);
-        message.private_actions.iter().position(|action| {
-            action.nullifier == init || Some(&action.nullifier) == update.as_ref()
-        })
-    }
-
-    pub fn add_imported_public_account(&mut self, private_key: lee::PrivateKey) {
-        let account_id = AccountId::from(&lee::PublicKey::new_from_private_key(&private_key));
-
-        self.imported_public_accounts
-            .insert(account_id, private_key);
+    pub fn remove_imported_public_account(&mut self, account_id: &AccountId) {
+        self.imported_public_accounts.remove(account_id);
     }
 
     pub fn add_imported_private_account(
         &mut self,
         key_chain: KeyChain,
         chain_index: Option<ChainIndex>,
-        identifier: Identifier,
         account: Account,
     ) {
         let key = ImportedPrivateAccountKey {
             key_chain,
             chain_index,
         };
-        let kind = PrivateAccountKind::Regular(identifier);
+        let kind = PrivateAccountKind::Regular;
         let entry = self.imported_private_accounts.entry(key.clone());
         match entry {
             Entry::Occupied(mut occupied) => {
@@ -507,8 +758,10 @@ impl UserKeyChain {
                     let existing_account = per_id_occupied.get();
                     if existing_account != &account {
                         warn!(
-                            "Overwriting existing imported private account for key {key:?}. \
-                            Existing account: {existing_account:?}, new account: {account:?}",
+                            ?key,
+                            ?existing_account,
+                            new_account = ?account,
+                            "Overwriting existing imported private account"
                         );
                     }
                 }
@@ -530,24 +783,22 @@ impl UserKeyChain {
     ) -> Result<()> {
         // Try to find in shared accounts
         if let Some(entry) = self.shared_private_accounts.get_mut(&account_id) {
-            debug!("Updating shared private account {account_id}");
+            tracing::debug!(%account_id, "Updating shared private account");
             entry.account = account;
             return Ok(());
         }
 
-        // Then try to update imported account
+        // Then try an imported key pair, which may receive at a kind it has not recorded yet
         for (key, data) in &mut self.imported_private_accounts {
-            for (kind, imported_account) in &mut data.accounts {
-                let expected_id = AccountId::for_private_account(
-                    &key.key_chain.nullifier_public_key,
-                    &key.key_chain.viewing_public_key,
-                    kind,
-                );
-                if expected_id == account_id {
-                    debug!("Updating imported private account {account_id}");
-                    *imported_account = account;
-                    return Ok(());
-                }
+            let expected_id = AccountId::for_private_account(
+                &key.key_chain.nullifier_public_key,
+                &key.key_chain.viewing_public_key,
+                &kind,
+            );
+            if expected_id == account_id {
+                tracing::debug!(%account_id, "Updating imported private account");
+                data.accounts.insert(kind, account);
+                return Ok(());
             }
         }
 
@@ -565,11 +816,11 @@ impl UserKeyChain {
 
             match node.value.1.entry(kind) {
                 Entry::Occupied(mut occupied) => {
-                    debug!("Updating generated private account {account_id}");
+                    tracing::debug!(%account_id, "Updating generated private account");
                     occupied.insert(account);
                 }
                 Entry::Vacant(vacant) => {
-                    debug!("Inserting new private account identity {account_id}");
+                    tracing::debug!(%account_id, "Inserting new private account identity");
                     vacant.insert(account);
                 }
             }
@@ -587,11 +838,11 @@ impl UserKeyChain {
             if expected_id == account_id {
                 match node.value.1.entry(kind) {
                     Entry::Occupied(mut occupied) => {
-                        debug!("Updating generated private account {account_id}");
+                        tracing::debug!(%account_id, "Updating generated private account");
                         occupied.insert(account);
                     }
                     Entry::Vacant(vacant) => {
-                        debug!("Inserting new private account identity {account_id}");
+                        tracing::debug!(%account_id, "Inserting new private account identity");
                         vacant.insert(account);
                     }
                 }
@@ -672,27 +923,27 @@ impl UserKeyChain {
         self.shared_private_accounts.insert(account_id, entry);
     }
 
-    /// Updates the cached account state for a shared private account.
-    pub fn update_shared_private_account_state(
-        &mut self,
-        account_id: &lee::AccountId,
-        account: lee_core::account::Account,
-    ) {
-        if let Some(entry) = self.shared_private_accounts.get_mut(account_id) {
-            entry.account = account;
-        }
-    }
-
     /// Inserts or replaces a `GroupKeyHolder` under the given label.
     ///
     /// If a holder already exists under this label, it is silently replaced and the old
     /// GMS is lost. Callers must ensure label uniqueness across groups.
-    pub fn insert_group_key_holder(&mut self, label: Label, holder: GroupKeyHolder) {
+    pub fn insert_group_key_holder(&mut self, label: Label, holder: GroupKeyHolder, created: bool) {
+        if created {
+            self.locally_created_groups.insert(label.clone());
+        } else {
+            self.locally_created_groups.remove(&label);
+        }
         self.group_key_holders.insert(label, holder);
+    }
+
+    #[must_use]
+    pub fn is_locally_created_group(&self, label: &Label) -> bool {
+        self.locally_created_groups.contains(label)
     }
 
     /// Removes the `GroupKeyHolder` under the given label, if it exists.
     pub fn remove_group_key_holder(&mut self, label: &Label) -> Option<GroupKeyHolder> {
+        self.locally_created_groups.remove(label);
         self.group_key_holders.remove(label)
     }
 
@@ -721,7 +972,7 @@ impl UserKeyChain {
     }
 
     /// Sets the sealing secret key for GMS distribution.
-    pub const fn set_sealing_secret_key(&mut self, key: ViewingSecretKey) {
+    pub fn set_sealing_secret_key(&mut self, key: ViewingSecretKey) {
         self.sealing_secret_key = Some(key);
     }
 
@@ -733,6 +984,7 @@ impl UserKeyChain {
             private_key_tree,
             shared_private_accounts,
             group_key_holders,
+            locally_created_groups,
             sealing_secret_key,
         } = self;
 
@@ -760,11 +1012,11 @@ impl UserKeyChain {
             }
         }
 
-        for (account_id, key) in imported_public_accounts {
+        for (account_id, secret) in imported_public_accounts {
             accounts.push(PersistentAccountData::ImportedPublic(
                 PublicAccountPrivateInitialData {
                     account_id: *account_id,
-                    pub_sign_key: key.clone(),
+                    secret: secret.clone(),
                 },
             ));
         }
@@ -783,7 +1035,7 @@ impl UserKeyChain {
                         account: account.clone(),
                         key_chain: key_chain.clone(),
                         chain_index: chain_index.clone(),
-                        identifier: kind.identifier(),
+                        kind: kind.clone(),
                     },
                 )));
             }
@@ -793,6 +1045,7 @@ impl UserKeyChain {
             accounts,
             sealing_secret_key: sealing_secret_key.clone(),
             group_key_holders: group_key_holders.clone(),
+            locally_created_groups: locally_created_groups.clone(),
             shared_private_accounts: shared_private_accounts.clone(),
         }
     }
@@ -806,6 +1059,7 @@ impl UserKeyChain {
             accounts: persistent_accounts,
             sealing_secret_key,
             group_key_holders,
+            locally_created_groups,
             shared_private_accounts,
         } = key_chain_data;
 
@@ -848,7 +1102,7 @@ impl UserKeyChain {
                     private_key_tree.insert(data.account_id, data.chain_index, data.data.into());
                 }
                 PersistentAccountData::ImportedPublic(data) => {
-                    imported_public_accounts.insert(data.account_id, data.pub_sign_key);
+                    imported_public_accounts.insert(data.account_id, data.secret);
                 }
                 PersistentAccountData::ImportedPrivate(data) => {
                     imported_private_accounts
@@ -860,7 +1114,7 @@ impl UserKeyChain {
                             accounts: BTreeMap::new(),
                         })
                         .accounts
-                        .insert(PrivateAccountKind::Regular(data.identifier), data.account);
+                        .insert(data.kind, data.account);
                 }
             }
         }
@@ -872,6 +1126,7 @@ impl UserKeyChain {
             private_key_tree,
             shared_private_accounts,
             group_key_holders,
+            locally_created_groups,
             sealing_secret_key,
         })
     }
@@ -888,63 +1143,165 @@ impl Default for UserKeyChain {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
 
-    use lee_core::{EncryptionScheme, PrivateAction, encryption::EncryptedAccountData};
+    use futures::executor::block_on;
+    use lee::{
+        RecipientEncryption, RecoveryBinding, SignedTransaction as _,
+        privacy_preserving_transaction::{PrivacyPreservingTransaction, circuit::Proof},
+        test_utils::{TestSigner, privacy_witness_for, witness_for},
+    };
+    use lee_core::{
+        EncryptionScheme, EphemeralSecretKey, PrivateAction, ProvenExecution,
+        account::Actor,
+        encryption::{EncryptedNote, ViewingPublicKey},
+        program::PdaSeed,
+    };
 
     use super::*;
+
+    // A block whose one transaction carries `message`.
+    pub fn block_of(id: u64, message: Message) -> Block {
+        let witness_set = privacy_witness_for(&message, Proof::from_inner(Vec::new()), &[]);
+        common::test_utils::produce_dummy_block(
+            id,
+            None,
+            vec![LeeTransaction::PrivacyPreserving(
+                PrivacyPreservingTransaction::new(message, witness_set),
+            )],
+        )
+    }
+
+    // A message whose one action spends `spent` and carries `next` as `account_id`'s state,
+    // encrypted to `vpk`.
+    pub fn transition_message(
+        account_id: AccountId,
+        kind: &PrivateAccountKind,
+        vpk: &ViewingPublicKey,
+        spent: Nullifier,
+        next: &Account,
+    ) -> Message {
+        let (secret, epk) = SharedSecretKey::encapsulate(vpk);
+        Message {
+            execution: ProvenExecution {
+                private_actions: vec![PrivateAction {
+                    nullifier: spent,
+                    commitment: Commitment::new(&account_id, next),
+                    encrypted_post_state: EncryptedNote {
+                        ciphertext: EncryptionScheme::encrypt(next, kind, &secret, &spent, None),
+                        epk,
+                    },
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_key_node_opens_only_recovery_notes_naming_its_nullifier_key() {
+        let mut kc = UserKeyChain::default();
+        let chain_index = kc.create_private_accounts_key(None);
+        let key_chain = kc.private_key_tree.key_map[&chain_index].value.0.clone();
+        let recipient = Recipient {
+            npk: key_chain.nullifier_public_key,
+            vpk: key_chain.viewing_public_key,
+            kind: PrivateAccountKind::Regular,
+            opening: Some([4; 32]),
+        };
+        let bind = |recipient| {
+            RecipientEncryption {
+                recipient,
+                esk: EphemeralSecretKey([5; 32]),
+            }
+            .bind_recovery()
+        };
+
+        let RecoveryBinding { address, note } = bind(recipient.clone());
+        assert_eq!(
+            kc.recover(address, &note),
+            Some((
+                recipient.clone(),
+                key_chain.private_key_holder.nullifier_secret_key()
+            ))
+        );
+
+        let RecoveryBinding { address, note } = bind(Recipient {
+            npk: NullifierPublicKey([6; 32]),
+            ..recipient
+        });
+        assert_eq!(kc.recover(address, &note), None);
+    }
+
+    #[test]
+    fn a_key_node_opens_only_messages_sealed_to_its_keys() {
+        let mut kc = UserKeyChain::default();
+        let chain_index = kc.create_private_accounts_key(None);
+        let key_chain = kc.private_key_tree.key_map[&chain_index].value.0.clone();
+        let recipient = Recipient {
+            npk: key_chain.nullifier_public_key,
+            vpk: key_chain.viewing_public_key,
+            kind: PrivateAccountKind::Regular,
+            opening: Some([4; 32]),
+        };
+        let seal = |recipient: Recipient| {
+            let body = MessageBody {
+                from: Actor::new(AccountId::new([5; 32]), AccountId::new([6; 32])),
+                to: Actor::new(recipient.address(), AccountId::new([7; 32])),
+                message: vec![8; 2],
+            };
+            RecipientEncryption {
+                recipient,
+                esk: EphemeralSecretKey([9; 32]),
+            }
+            .seal_message(&body, None)
+            .unwrap()
+        };
+
+        let (_, opened, _, nsk) = kc.open(&seal(recipient.clone())).unwrap();
+        assert_eq!(
+            (opened, nsk),
+            (
+                recipient.clone(),
+                key_chain.private_key_holder.nullifier_secret_key()
+            )
+        );
+        assert!(
+            kc.open(&seal(Recipient {
+                npk: NullifierPublicKey([10; 32]),
+                ..recipient
+            }))
+            .is_none()
+        );
+    }
 
     #[test]
     fn nullifier_sync_updates_sole_owned_account() {
         let mut kc = UserKeyChain::default();
-
         let key_chain = KeyChain::new_os_random();
         let nsk = key_chain.private_key_holder.nullifier_secret_key();
-        let identifier = Identifier::ZERO;
         let account_id = AccountId::for_private_account(
             &key_chain.nullifier_public_key,
             &key_chain.viewing_public_key,
-            &PrivateAccountKind::Regular(identifier),
+            &PrivateAccountKind::Regular,
         );
-
-        let old_account = Account::default();
-        kc.add_imported_private_account(key_chain.clone(), None, identifier, old_account.clone());
-
-        let old_nullifier =
-            Nullifier::for_account_update(&Commitment::new(&account_id, &old_account), &nsk);
+        kc.add_imported_private_account(key_chain.clone(), None, Account::default());
         let mut index = kc.build_latest_nullifier_index();
-        assert_eq!(index.account_for(&old_nullifier), Some(account_id));
-
+        let spent = Nullifier::for_account_initialization(&account_id, &nsk);
         let new_account = Account::funded(150);
-        let new_commitment = Commitment::new(&account_id, &new_account);
-        let (sender_ss, epk) = SharedSecretKey::encapsulate(&key_chain.viewing_public_key);
-        let ciphertext = EncryptionScheme::encrypt(
-            &new_account,
-            &PrivateAccountKind::Regular(identifier),
-            &sender_ss,
-            &old_nullifier,
-            None,
-        );
-        let note = EncryptedAccountData::new(
-            ciphertext,
-            &key_chain.nullifier_public_key,
-            &key_chain.viewing_public_key,
-            epk,
+
+        kc.sync_updates_via_nullifiers(
+            &transition_message(
+                account_id,
+                &PrivateAccountKind::Regular,
+                &key_chain.viewing_public_key,
+                spent,
+                &new_account,
+            ),
+            &mut index,
         );
 
-        let message = Message {
-            private_actions: vec![PrivateAction {
-                nullifier: old_nullifier,
-                commitment: new_commitment,
-                encrypted_post_state: note,
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-
-        let handled = kc.sync_updates_via_nullifiers(&message, &mut index);
-
-        assert_eq!(handled, HashSet::from([0]));
         assert_eq!(
             kc.private_account(account_id).unwrap().account,
             &new_account
@@ -952,155 +1309,411 @@ mod tests {
         let new_nullifier =
             Nullifier::for_account_update(&Commitment::new(&account_id, &new_account), &nsk);
         assert_eq!(index.account_for(&new_nullifier), Some(account_id));
-        assert!(index.account_for(&old_nullifier).is_none());
+        assert!(index.account_for(&spent).is_none());
     }
 
     #[test]
-    fn nullifier_sync_updates_shared_account() {
+    fn a_shared_account_is_followed_from_its_first_nullifier_through_each_update() {
         let mut kc = UserKeyChain::default();
-
         let label = Label::new("group");
         let holder = GroupKeyHolder::new();
-        let identifier = Identifier::ZERO;
-        let keys = holder.derive_regular_shared_account_keys_from_identifier(identifier);
-        let npk = keys.generate_nullifier_public_key();
+        let derivation_id = [0; 32];
+        let keys = holder.derive_regular_shared_account_keys(&derivation_id);
         let vpk = keys.generate_viewing_public_key();
         let nsk = keys.nullifier_secret_key();
-        let account_id = AccountId::from((&npk, &vpk, identifier));
-
-        kc.insert_group_key_holder(label.clone(), holder);
-        let old_account = Account::default();
+        let account_id = AccountId::from((&keys.generate_nullifier_public_key(), &vpk));
+        kc.insert_group_key_holder(label.clone(), holder, false);
         kc.insert_shared_private_account(
             account_id,
             SharedAccountEntry {
                 group_label: label,
-                identifier,
-                pda_seed: None,
-                authority_program_id: None,
-                account: old_account.clone(),
-            },
-        );
-
-        let old_nullifier =
-            Nullifier::for_account_update(&Commitment::new(&account_id, &old_account), &nsk);
-        let mut index = kc.build_latest_nullifier_index();
-        assert_eq!(index.account_for(&old_nullifier), Some(account_id));
-
-        let new_account = Account::funded(250);
-        let new_commitment = Commitment::new(&account_id, &new_account);
-        let (sender_ss, epk) = SharedSecretKey::encapsulate(&vpk);
-        let ciphertext = EncryptionScheme::encrypt(
-            &new_account,
-            &PrivateAccountKind::Regular(identifier),
-            &sender_ss,
-            &old_nullifier,
-            None,
-        );
-        let note = EncryptedAccountData::new(ciphertext, &npk, &vpk, epk);
-        let message = Message {
-            private_actions: vec![PrivateAction {
-                nullifier: old_nullifier,
-                commitment: new_commitment,
-                encrypted_post_state: note,
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-
-        let handled = kc.sync_updates_via_nullifiers(&message, &mut index);
-
-        assert_eq!(handled, HashSet::from([0]));
-        assert_eq!(
-            kc.shared_private_account(account_id).unwrap().account,
-            new_account
-        );
-        let new_nullifier =
-            Nullifier::for_account_update(&Commitment::new(&account_id, &new_account), &nsk);
-        assert_eq!(index.account_for(&new_nullifier), Some(account_id));
-        assert!(index.account_for(&old_nullifier).is_none());
-    }
-
-    // The genesis catch-up seeds only the init nullifier and lets the nullifier pass decode the
-    // init note and every subsequent (randomly-tagged) update. Verify a shared account rolls from
-    // default through its init to a later update purely by nullifier — the path the catch-up runs.
-    #[test]
-    fn nullifier_sync_catches_up_shared_account_from_init() {
-        let mut kc = UserKeyChain::default();
-
-        let label = Label::new("group");
-        let holder = GroupKeyHolder::new();
-        let identifier = Identifier::ZERO;
-        let keys = holder.derive_regular_shared_account_keys_from_identifier(identifier);
-        let npk = keys.generate_nullifier_public_key();
-        let vpk = keys.generate_viewing_public_key();
-        let nsk = keys.nullifier_secret_key();
-        let account_id = AccountId::from((&npk, &vpk, identifier));
-
-        kc.insert_group_key_holder(label.clone(), holder);
-        kc.insert_shared_private_account(
-            account_id,
-            SharedAccountEntry {
-                group_label: label,
-                identifier,
-                pda_seed: None,
-                authority_program_id: None,
+                derivation: SharedAccountDerivation::Regular { derivation_id },
+                kind: PrivateAccountKind::Regular,
                 account: Account::default(),
             },
         );
+        let mut index = kc.build_latest_nullifier_index();
 
-        let mut index = NullifierIndex::default();
-        index.track_initialization(account_id);
-
-        // A note publishing `spent` and carrying the state `next`.
-        let make_message = |spent: Nullifier, next: &Account| {
-            let commitment = Commitment::new(&account_id, next);
-            let (sender_ss, epk) = SharedSecretKey::encapsulate(&vpk);
-            let ciphertext = EncryptionScheme::encrypt(
-                next,
-                &PrivateAccountKind::Regular(identifier),
-                &sender_ss,
-                &spent,
-                None,
+        let initialized = Account::funded(250);
+        let updated = Account::funded(500);
+        for (spent, next) in [
+            (
+                Nullifier::for_account_initialization(&account_id, &nsk),
+                &initialized,
+            ),
+            (
+                Nullifier::for_account_update(&Commitment::new(&account_id, &initialized), &nsk),
+                &updated,
+            ),
+        ] {
+            kc.sync_updates_via_nullifiers(
+                &transition_message(account_id, &PrivateAccountKind::Regular, &vpk, spent, next),
+                &mut index,
             );
-            let note = EncryptedAccountData::new(ciphertext, &npk, &vpk, epk);
-            Message {
-                private_actions: vec![PrivateAction {
-                    nullifier: spent,
-                    commitment,
-                    encrypted_post_state: note,
-                    ..Default::default()
-                }],
+            assert_eq!(
+                &kc.shared_private_account(account_id).unwrap().account,
+                next
+            );
+        }
+    }
+
+    #[test]
+    fn an_allocated_key_node_is_followed_from_its_first_nullifier_through_each_update() {
+        let mut kc = UserKeyChain::default();
+        let (account_id, chain_index) =
+            kc.generate_new_privacy_preserving_transaction_key_chain(None);
+        let key_chain = kc
+            .private_account_key_chain_by_index(&chain_index)
+            .unwrap()
+            .clone();
+        let nsk = key_chain.private_key_holder.nullifier_secret_key();
+        let mut index = kc.build_latest_nullifier_index();
+
+        let initialized = Account::funded(250);
+        let updated = Account::funded(500);
+        for (spent, next) in [
+            (
+                Nullifier::for_account_initialization(&account_id, &nsk),
+                &initialized,
+            ),
+            (
+                Nullifier::for_account_update(&Commitment::new(&account_id, &initialized), &nsk),
+                &updated,
+            ),
+        ] {
+            kc.sync_updates_via_nullifiers(
+                &transition_message(
+                    account_id,
+                    &PrivateAccountKind::Regular,
+                    &key_chain.viewing_public_key,
+                    spent,
+                    next,
+                ),
+                &mut index,
+            );
+            assert_eq!(kc.private_account(account_id).unwrap().account, next);
+        }
+    }
+
+    #[test]
+    fn sync_takes_each_note_from_its_nullifiers_action_whatever_the_commitment_order() {
+        let mut kc = UserKeyChain::default();
+        let accounts: Vec<_> = std::iter::repeat_with(|| {
+            let (account_id, chain_index) =
+                kc.generate_new_privacy_preserving_transaction_key_chain(None);
+            let key_chain = kc
+                .private_account_key_chain_by_index(&chain_index)
+                .unwrap()
+                .clone();
+            (account_id, key_chain)
+        })
+        .take(2)
+        .collect();
+        let states = [Account::funded(1), Account::funded(2)];
+        let mut actions: Vec<_> = accounts
+            .iter()
+            .zip(&states)
+            .flat_map(|((account_id, key_chain), next)| {
+                transition_message(
+                    *account_id,
+                    &PrivateAccountKind::Regular,
+                    &key_chain.viewing_public_key,
+                    Nullifier::for_account_initialization(
+                        account_id,
+                        &key_chain.private_key_holder.nullifier_secret_key(),
+                    ),
+                    next,
+                )
+                .execution
+                .private_actions
+            })
+            .collect();
+        // Output obfuscation permutes commitments independently of nullifiers and their notes.
+        let (first, second) = actions.split_at_mut(1);
+        std::mem::swap(&mut first[0].commitment, &mut second[0].commitment);
+        let message = Message {
+            execution: ProvenExecution {
+                private_actions: actions,
                 ..Default::default()
-            }
+            },
+            ..Default::default()
         };
 
-        // Init: default -> initialized, discovered via the seeded init nullifier.
-        let initialized = Account::funded(250);
-        let init_msg = make_message(
-            Nullifier::for_account_initialization(&account_id),
-            &initialized,
-        );
-        assert_eq!(
-            kc.sync_updates_via_nullifiers(&init_msg, &mut index),
-            HashSet::from([0])
-        );
-        assert_eq!(
-            kc.shared_private_account(account_id).unwrap().account,
-            initialized
+        kc.sync_updates_via_nullifiers(&message, &mut kc.build_latest_nullifier_index());
+
+        for ((account_id, _), next) in accounts.iter().zip(&states) {
+            assert_eq!(kc.private_account(*account_id).unwrap().account, next);
+        }
+    }
+
+    #[test]
+    fn a_private_pda_the_wallet_did_not_create_is_recognized_from_its_funding_publication() {
+        let mut kc = UserKeyChain::default();
+        let (_, chain_index) = kc.generate_new_privacy_preserving_transaction_key_chain(None);
+        let key_chain = kc
+            .private_account_key_chain_by_index(&chain_index)
+            .unwrap()
+            .clone();
+        let recipient = Recipient {
+            npk: key_chain.nullifier_public_key,
+            vpk: key_chain.viewing_public_key,
+            kind: PrivateAccountKind::Pda {
+                account_id: AccountId::new([4; 32]),
+                seed: PdaSeed::new([5; 32]),
+            },
+            opening: None,
+        };
+        let RecoveryBinding { address, note } = RecipientEncryption {
+            recipient: recipient.clone(),
+            esk: EphemeralSecretKey([6; 32]),
+        }
+        .bind_recovery();
+        let (recognized, nsk) = kc
+            .recover(address, &note)
+            .expect("the publication names a destination under the node's keys");
+        assert_eq!(recognized, recipient);
+        let pda_id = recognized.account_id();
+        let funded = Account::funded(70);
+        let receipt = transition_message(
+            pda_id,
+            &recognized.kind,
+            &recognized.vpk,
+            Nullifier::for_account_initialization(&pda_id, &nsk),
+            &funded,
         );
 
-        // Update: initialized -> updated, discovered via the now-tracked update nullifier.
-        let updated = Account::funded(500);
-        let update_spent =
-            Nullifier::for_account_update(&Commitment::new(&account_id, &initialized), &nsk);
-        let update_msg = make_message(update_spent, &updated);
-        assert_eq!(
-            kc.sync_updates_via_nullifiers(&update_msg, &mut index),
-            HashSet::from([0])
+        kc.sync_updates_via_nullifiers(&receipt, &mut kc.build_latest_nullifier_index());
+        assert!(kc.private_account(pda_id).is_none());
+
+        kc.insert_private_account(pda_id, recognized.kind, Account::default())
+            .unwrap();
+        kc.sync_updates_via_nullifiers(&receipt, &mut kc.build_latest_nullifier_index());
+        assert_eq!(kc.private_account(pda_id).unwrap().account, &funded);
+    }
+
+    #[test]
+    fn sync_follows_a_nullifier_only_to_a_state_its_message_commits() {
+        let mut kc = UserKeyChain::default();
+        let (account_id, chain_index) =
+            kc.generate_new_privacy_preserving_transaction_key_chain(None);
+        let key_chain = kc
+            .private_account_key_chain_by_index(&chain_index)
+            .unwrap()
+            .clone();
+        let mut index = kc.build_latest_nullifier_index();
+        let initialized = Account::funded(250);
+        let committed = transition_message(
+            account_id,
+            &PrivateAccountKind::Regular,
+            &key_chain.viewing_public_key,
+            Nullifier::for_account_initialization(
+                &account_id,
+                &key_chain.private_key_holder.nullifier_secret_key(),
+            ),
+            &initialized,
+        );
+        let mut uncommitted = committed.clone();
+        uncommitted.execution.private_actions[0].commitment =
+            Commitment::new(&account_id, &Account::funded(1_000));
+
+        assert!(
+            kc.sync_updates_via_nullifiers(&uncommitted, &mut index)
+                .is_empty()
         );
         assert_eq!(
-            kc.shared_private_account(account_id).unwrap().account,
-            updated
+            kc.private_account(account_id).unwrap().account,
+            &Account::default()
+        );
+
+        kc.sync_updates_via_nullifiers(&committed, &mut index);
+        assert_eq!(
+            kc.private_account(account_id).unwrap().account,
+            &initialized
+        );
+    }
+
+    #[test]
+    fn restoration_discovers_a_private_pda_under_its_keys_only_from_a_committed_note() {
+        let mut kc = UserKeyChain::default();
+        let (_, chain_index) = kc.generate_new_privacy_preserving_transaction_key_chain(None);
+        let key_chain = kc
+            .private_account_key_chain_by_index(&chain_index)
+            .unwrap()
+            .clone();
+        let nsk = key_chain.private_key_holder.nullifier_secret_key();
+        let kind = PrivateAccountKind::Pda {
+            account_id: AccountId::new([4; 32]),
+            seed: PdaSeed::new([5; 32]),
+        };
+        let pda_id = AccountId::for_private_account(
+            &key_chain.nullifier_public_key,
+            &key_chain.viewing_public_key,
+            &kind,
+        );
+        let mut index = kc.build_latest_nullifier_index();
+        let restore = |kc: &mut UserKeyChain, index: &mut NullifierIndex, message: &Message| {
+            let followed = kc.sync_updates_via_nullifiers(message, index);
+            kc.discover_unfollowed(message, &followed, index);
+        };
+        let initialized = Account::funded(70);
+        let funding = transition_message(
+            pda_id,
+            &kind,
+            &key_chain.viewing_public_key,
+            Nullifier::for_account_initialization(&pda_id, &nsk),
+            &initialized,
+        );
+        let mut uncommitted = funding.clone();
+        uncommitted.execution.private_actions[0].commitment =
+            Commitment::new(&pda_id, &Account::funded(1_000));
+
+        restore(&mut kc, &mut index, &uncommitted);
+        assert!(kc.private_account(pda_id).is_none());
+
+        restore(&mut kc, &mut index, &funding);
+        let updated = Account::funded(90);
+        kc.sync_updates_via_nullifiers(
+            &transition_message(
+                pda_id,
+                &kind,
+                &key_chain.viewing_public_key,
+                Nullifier::for_account_update(&Commitment::new(&pda_id, &initialized), &nsk),
+                &updated,
+            ),
+            &mut index,
+        );
+        assert_eq!(kc.private_account(pda_id).unwrap().account, &updated);
+    }
+
+    #[test]
+    fn a_recovery_records_its_destination_only_once_its_whole_history_arrives() {
+        let mut kc = UserKeyChain::default();
+        let (_, chain_index) = kc.generate_new_privacy_preserving_transaction_key_chain(None);
+        let key_chain = kc
+            .private_account_key_chain_by_index(&chain_index)
+            .unwrap()
+            .clone();
+        let nsk = key_chain.private_key_holder.nullifier_secret_key();
+        let recipient = Recipient {
+            npk: key_chain.nullifier_public_key,
+            vpk: key_chain.viewing_public_key,
+            kind: PrivateAccountKind::Pda {
+                account_id: AccountId::new([4; 32]),
+                seed: PdaSeed::new([5; 32]),
+            },
+            opening: None,
+        };
+        let pda_id = recipient.account_id();
+        let initialized = Account::funded(70);
+        let initialization = block_of(
+            1,
+            transition_message(
+                pda_id,
+                &recipient.kind,
+                &recipient.vpk,
+                Nullifier::for_account_initialization(&pda_id, &nsk),
+                &initialized,
+            ),
+        );
+        let tip = common::test_utils::produce_dummy_block(2, None, Vec::new());
+        let recover = |kc: &mut UserKeyChain, history: Vec<Result<Block>>| {
+            block_on(kc.record_caught_up(
+                |kc| kc.record_received(&recipient),
+                pda_id,
+                &nsk,
+                2,
+                futures::stream::iter(history),
+            ))
+        };
+        let before = kc.clone();
+
+        for history in [
+            vec![Ok(initialization.clone()), Err(anyhow!("unavailable"))],
+            vec![Ok(initialization.clone())],
+            vec![Ok(tip.clone())],
+        ] {
+            assert!(recover(&mut kc, history).is_err());
+            assert_eq!(kc, before);
+        }
+
+        recover(&mut kc, vec![Ok(initialization), Ok(tip)]).unwrap();
+        assert_eq!(kc.private_account(pda_id).unwrap().account, &initialized);
+    }
+
+    #[test]
+    fn a_kind_received_under_shared_keys_is_recorded_under_their_derivation() {
+        let mut kc = UserKeyChain::default();
+        let label = Label::new("group");
+        kc.insert_group_key_holder(label.clone(), GroupKeyHolder::from_gms([0; 32]), false);
+        let regular = SharedAccountEntry {
+            group_label: label,
+            derivation: SharedAccountDerivation::Regular {
+                derivation_id: [1; 32],
+            },
+            kind: PrivateAccountKind::Regular,
+            account: Account::default(),
+        };
+        let keys = kc.derive_shared_account_keys(&regular).unwrap();
+        let (npk, vpk) = (
+            keys.generate_nullifier_public_key(),
+            keys.generate_viewing_public_key(),
+        );
+        kc.insert_shared_private_account(AccountId::from((&npk, &vpk)), regular.clone());
+        let recipient = Recipient {
+            npk,
+            vpk,
+            kind: PrivateAccountKind::Pda {
+                account_id: AccountId::new([4; 32]),
+                seed: PdaSeed::new([5; 32]),
+            },
+            opening: None,
+        };
+
+        kc.record_received(&recipient).unwrap();
+
+        assert_eq!(
+            kc.shared_private_account(recipient.account_id()),
+            Some(&SharedAccountEntry {
+                kind: recipient.kind.clone(),
+                ..regular
+            })
+        );
+    }
+
+    #[test]
+    fn a_private_pda_recorded_beside_its_key_nodes_account_stays_followed_once_persisted() {
+        let mut kc = UserKeyChain::default();
+        let (account_id, chain_index) =
+            kc.generate_new_privacy_preserving_transaction_key_chain(None);
+        let key_chain = kc
+            .private_account_key_chain_by_index(&chain_index)
+            .unwrap()
+            .clone();
+        let kind = PrivateAccountKind::Pda {
+            account_id: AccountId::new([4; 32]),
+            seed: PdaSeed::new([5; 32]),
+        };
+        let pda_id = AccountId::for_private_account(
+            &key_chain.nullifier_public_key,
+            &key_chain.viewing_public_key,
+            &kind,
+        );
+        let recorded = Account::funded(70);
+        kc.insert_private_account(pda_id, kind, recorded.clone())
+            .unwrap();
+
+        let restored = UserKeyChain::from_persistent(kc.to_persistent()).unwrap();
+
+        assert!(restored.private_account(account_id).is_some());
+        assert_eq!(restored.private_account(pda_id).unwrap().account, &recorded);
+        assert_eq!(
+            restored
+                .build_latest_nullifier_index()
+                .account_for(&Nullifier::for_account_update(
+                    &Commitment::new(&pda_id, &recorded),
+                    &key_chain.private_key_holder.nullifier_secret_key(),
+                )),
+            Some(pda_id)
         );
     }
 
@@ -1109,14 +1722,13 @@ mod tests {
         let mut kc = UserKeyChain::default();
 
         let key_chain = KeyChain::new_os_random();
-        let identifier = Identifier::ZERO;
         let account_id = AccountId::for_private_account(
             &key_chain.nullifier_public_key,
             &key_chain.viewing_public_key,
-            &PrivateAccountKind::Regular(identifier),
+            &PrivateAccountKind::Regular,
         );
         let account = Account::default();
-        kc.add_imported_private_account(key_chain, None, identifier, account.clone());
+        kc.add_imported_private_account(key_chain, None, account.clone());
 
         let mut index = kc.build_latest_nullifier_index();
         let unindexed = Nullifier::for_account_update(
@@ -1124,16 +1736,18 @@ mod tests {
             &[9; 32],
         );
         let message = Message {
-            private_actions: vec![PrivateAction {
-                nullifier: unindexed,
+            execution: ProvenExecution {
+                private_actions: vec![PrivateAction {
+                    nullifier: unindexed,
+                    ..Default::default()
+                }],
                 ..Default::default()
-            }],
+            },
             ..Default::default()
         };
 
-        let handled = kc.sync_updates_via_nullifiers(&message, &mut index);
+        kc.sync_updates_via_nullifiers(&message, &mut index);
 
-        assert!(handled.is_empty());
         assert_eq!(kc.private_account(account_id).unwrap().account, &account);
     }
 
@@ -1158,12 +1772,12 @@ mod tests {
     fn add_imported_public_account() {
         let mut user_data = UserKeyChain::default();
 
-        let private_key = lee::PrivateKey::new_os_random();
-        let account_id = AccountId::from(&lee::PublicKey::new_from_private_key(&private_key));
+        let secret = PublicAccountSecret::new_os_random();
+        let account_id = TestSigner::from(&secret).account_id();
 
-        user_data.add_imported_public_account(private_key);
+        user_data.add_imported_public_account(secret);
 
-        let is_account_added = user_data.pub_account_signing_key(account_id).is_some();
+        let is_account_added = user_data.pub_account_initial_key(account_id).is_some();
 
         assert!(is_account_added);
     }
@@ -1176,11 +1790,10 @@ mod tests {
         let account_id = AccountId::from((
             &key_chain.nullifier_public_key,
             &key_chain.viewing_public_key,
-            Identifier::ZERO,
         ));
         let account = lee_core::account::Account::default();
 
-        user_data.add_imported_private_account(key_chain, None, Identifier::ZERO, account);
+        user_data.add_imported_private_account(key_chain, None, account);
 
         let is_account_added = user_data.private_account(account_id).is_some();
 
@@ -1195,11 +1808,10 @@ mod tests {
         let account_id = AccountId::from((
             &key_chain.nullifier_public_key,
             &key_chain.viewing_public_key,
-            Identifier::ZERO,
         ));
         let account = lee_core::account::Account::default();
 
-        user_data.add_imported_private_account(key_chain, None, Identifier::ZERO, account.clone());
+        user_data.add_imported_private_account(key_chain, None, account.clone());
 
         let new_account = lee_core::account::Account {
             nonce: account.nonce,
@@ -1207,11 +1819,7 @@ mod tests {
         };
 
         user_data
-            .insert_private_account(
-                account_id,
-                PrivateAccountKind::Regular(Identifier::ZERO),
-                new_account,
-            )
+            .insert_private_account(account_id, PrivateAccountKind::Regular, new_account)
             .unwrap();
 
         let retrieved_account = &user_data.private_account(account_id).unwrap();
@@ -1220,6 +1828,53 @@ mod tests {
             retrieved_account.account.data.native_balance().unwrap(),
             100
         );
+    }
+
+    #[test]
+    fn insert_and_restore_private_imported_accounts_of_unknown_kinds() {
+        let mut user_data = UserKeyChain::default();
+
+        let key_chain = KeyChain::new_os_random();
+        let kinds = [5, 6].map(|seed| PrivateAccountKind::Pda {
+            account_id: AccountId::new([4; 32]),
+            seed: lee_core::program::PdaSeed::new([seed; 32]),
+        });
+        let account_ids = kinds.clone().map(|kind| {
+            AccountId::for_private_account(
+                &key_chain.nullifier_public_key,
+                &key_chain.viewing_public_key,
+                &kind,
+            )
+        });
+        user_data.add_imported_private_account(
+            key_chain,
+            None,
+            lee_core::account::Account::default(),
+        );
+
+        for ((account_id, kind), balance) in account_ids.into_iter().zip(kinds).zip([100, 200]) {
+            user_data
+                .insert_private_account(
+                    account_id,
+                    kind,
+                    lee_core::account::Account::funded(balance),
+                )
+                .unwrap();
+        }
+        let restored = UserKeyChain::from_persistent(user_data.to_persistent()).unwrap();
+
+        for (account_id, balance) in account_ids.into_iter().zip([100, 200]) {
+            assert_eq!(
+                restored
+                    .private_account(account_id)
+                    .unwrap()
+                    .account
+                    .data
+                    .native_balance()
+                    .unwrap(),
+                balance
+            );
+        }
     }
 
     #[test]
@@ -1232,11 +1887,7 @@ mod tests {
         let new_account = lee_core::account::Account::funded(100);
 
         user_data
-            .insert_private_account(
-                account_id,
-                PrivateAccountKind::Regular(Identifier::ZERO),
-                new_account,
-            )
+            .insert_private_account(account_id, PrivateAccountKind::Regular, new_account)
             .unwrap();
 
         let retrieved_account = &user_data.private_account(account_id).unwrap();
@@ -1255,16 +1906,12 @@ mod tests {
         let account_id = AccountId::from((
             &key_chain.nullifier_public_key,
             &key_chain.viewing_public_key,
-            Identifier::ZERO,
         ));
 
         let new_account = lee_core::account::Account::funded(100);
 
-        let result = user_data.insert_private_account(
-            account_id,
-            PrivateAccountKind::Regular(Identifier::ZERO),
-            new_account,
-        );
+        let result =
+            user_data.insert_private_account(account_id, PrivateAccountKind::Regular, new_account);
 
         assert!(result.is_err());
     }
@@ -1277,10 +1924,9 @@ mod tests {
         let account_id1 = AccountId::from((
             &key_chain.nullifier_public_key,
             &key_chain.viewing_public_key,
-            Identifier::ZERO,
         ));
         let account = lee_core::account::Account::default();
-        user_data.add_imported_private_account(key_chain, None, Identifier::ZERO, account);
+        user_data.add_imported_private_account(key_chain, None, account);
 
         let (account_id2, chain_index2) = user_data
             .generate_new_privacy_preserving_transaction_key_chain(Some(ChainIndex::root()));
@@ -1312,12 +1958,27 @@ mod tests {
         );
 
         let holder = GroupKeyHolder::from_gms([42_u8; 32]);
-        user_data.insert_group_key_holder(Label::new("test-group"), holder.clone());
+        user_data.insert_group_key_holder(Label::new("test-group"), holder.clone(), false);
 
         let retrieved = user_data
             .group_key_holder(&Label::new("test-group"))
             .expect("should exist");
         assert_eq!(retrieved.dangerous_raw_gms(), holder.dangerous_raw_gms());
+    }
+
+    #[test]
+    fn only_a_created_group_is_recorded_as_local_and_removal_forgets_it() {
+        let mut user_data = UserKeyChain::default();
+        let mine = Label::new("mine");
+        let theirs = Label::new("theirs");
+
+        user_data.insert_group_key_holder(mine.clone(), GroupKeyHolder::new(), true);
+        user_data.insert_group_key_holder(theirs.clone(), GroupKeyHolder::new(), false);
+        assert!(user_data.is_locally_created_group(&mine));
+        assert!(!user_data.is_locally_created_group(&theirs));
+
+        user_data.remove_group_key_holder(&mine);
+        assert!(!user_data.is_locally_created_group(&mine));
     }
 
     #[test]
@@ -1328,53 +1989,61 @@ mod tests {
     }
 
     #[test]
-    fn shared_account_entry_serde_round_trip() {
-        use lee_core::program::PdaSeed;
-
-        let entry = SharedAccountEntry {
-            group_label: Label::new("test-group"),
-            identifier: Identifier::new([42; 32]),
-            pda_seed: None,
-            authority_program_id: None,
-            account: lee_core::account::Account::default(),
+    fn distinct_derivation_ids_select_distinct_shared_regular_accounts() {
+        let label = Label::new("group");
+        let mut kc = UserKeyChain::default();
+        kc.insert_group_key_holder(label.clone(), GroupKeyHolder::new(), false);
+        let account_id = |derivation_id| {
+            let keys = kc
+                .derive_shared_account_keys(&SharedAccountEntry {
+                    group_label: label.clone(),
+                    derivation: SharedAccountDerivation::Regular { derivation_id },
+                    kind: PrivateAccountKind::Regular,
+                    account: Account::default(),
+                })
+                .expect("the group is held");
+            AccountId::from((
+                &keys.generate_nullifier_public_key(),
+                &keys.generate_viewing_public_key(),
+            ))
         };
-        let encoded = bincode::serialize(&entry).expect("serialize");
-        let decoded: SharedAccountEntry = bincode::deserialize(&encoded).expect("deserialize");
-        assert_eq!(decoded.group_label, Label::new("test-group"));
-        assert_eq!(decoded.identifier, Identifier::new([42; 32]));
-        assert!(decoded.pda_seed.is_none());
 
-        let pda_entry = SharedAccountEntry {
-            group_label: Label::new("pda-group"),
-            identifier: Identifier::new([u8::MAX; 32]),
-            pda_seed: Some(PdaSeed::new([7_u8; 32])),
-            authority_program_id: Some([9; 8]),
-            account: lee_core::account::Account::default(),
-        };
-        let pda_encoded = bincode::serialize(&pda_entry).expect("serialize pda");
-        let pda_decoded: SharedAccountEntry =
-            bincode::deserialize(&pda_encoded).expect("deserialize pda");
-        assert_eq!(pda_decoded.group_label, Label::new("pda-group"));
-        assert_eq!(pda_decoded.identifier, Identifier::new([u8::MAX; 32]));
-        assert_eq!(pda_decoded.pda_seed.unwrap(), PdaSeed::new([7_u8; 32]));
+        assert_eq!(account_id([1; 32]), account_id([1; 32]));
+        assert_ne!(account_id([1; 32]), account_id([2; 32]));
     }
 
     #[test]
-    fn shared_account_entry_none_pda_seed_round_trips() {
-        // Verify that an entry with pda_seed=None serializes and deserializes correctly,
-        // confirming the #[serde(default)] attribute works for backward compatibility.
-        let entry = SharedAccountEntry {
-            group_label: Label::new("old"),
-            identifier: Identifier::new([1; 32]),
-            pda_seed: None,
-            authority_program_id: None,
-            account: lee_core::account::Account::default(),
-        };
-        let encoded = bincode::serialize(&entry).expect("serialize");
-        let decoded: SharedAccountEntry = bincode::deserialize(&encoded).expect("deserialize");
-        assert_eq!(decoded.group_label, Label::new("old"));
-        assert_eq!(decoded.identifier, Identifier::new([1; 32]));
-        assert!(decoded.pda_seed.is_none());
+    fn shared_account_entry_serde_round_trip() {
+        use lee_core::program::PdaSeed;
+
+        for (derivation, kind) in [
+            (
+                SharedAccountDerivation::Regular {
+                    derivation_id: [42; 32],
+                },
+                PrivateAccountKind::Regular,
+            ),
+            (
+                SharedAccountDerivation::Pda {
+                    seed: PdaSeed::new([7_u8; 32]),
+                    program_id: [9; 8],
+                },
+                PrivateAccountKind::Pda {
+                    account_id: AccountId::from_builtin_program([9; 8]),
+                    seed: PdaSeed::new([7_u8; 32]),
+                },
+            ),
+        ] {
+            let entry = SharedAccountEntry {
+                group_label: Label::new("test-group"),
+                derivation,
+                kind,
+                account: lee_core::account::Account::default(),
+            };
+            let encoded = bincode::serialize(&entry).expect("serialize");
+            let decoded: SharedAccountEntry = bincode::deserialize(&encoded).expect("deserialize");
+            assert_eq!(decoded, entry);
+        }
     }
 
     #[test]
@@ -1383,7 +2052,7 @@ mod tests {
 
         let mut user_data = UserKeyChain::default();
         let gms_holder = GroupKeyHolder::from_gms([42_u8; 32]);
-        user_data.insert_group_key_holder(Label::new("my-group"), gms_holder);
+        user_data.insert_group_key_holder(Label::new("my-group"), gms_holder, false);
 
         let holder = user_data.group_key_holder(&Label::new("my-group")).unwrap();
 
@@ -1410,5 +2079,54 @@ mod tests {
             keys_a.generate_nullifier_public_key(),
             pda_keys_a.generate_nullifier_public_key(),
         );
+    }
+
+    #[test]
+    fn an_imported_secret_gives_the_account_and_key_of_its_hd_node() {
+        let mut generator = UserKeyChain::default();
+        let (account_id, _) = generator.generate_new_public_transaction_private_key(None);
+        let secret = generator
+            .public_key_tree
+            .get_node(account_id)
+            .unwrap()
+            .secret
+            .clone();
+
+        let mut importer = UserKeyChain::default();
+        importer.add_imported_public_account(secret);
+
+        assert_eq!(
+            importer
+                .public_account_ids()
+                .filter(|(_, chain_index)| chain_index.is_none())
+                .map(|(imported, _)| imported)
+                .collect::<Vec<_>>(),
+            vec![account_id]
+        );
+        let node_key = generator.pub_account_initial_key(account_id);
+        assert!(node_key.is_some());
+        assert_eq!(importer.pub_account_initial_key(account_id), node_key);
+    }
+
+    #[test]
+    fn a_created_public_account_signs_a_transaction_passing_the_stateless_check() {
+        let mut user_data = UserKeyChain::default();
+        let (account_id, _) = user_data.generate_new_public_transaction_private_key(None);
+        let signer = TestSigner::from(user_data.pub_account_secret(account_id).unwrap());
+
+        let message = lee::public_transaction::Message::try_new(
+            Actor::native_balance(account_id),
+            vec![(Actor::native_balance(account_id), lee::Authority::Signer)],
+            BTreeMap::from([(account_id, lee_core::account::Nonce(0))]),
+            lee_core::native_token::Message::Transfer {
+                to: account_id,
+                amount: 1,
+            },
+        )
+        .unwrap();
+        let witness_set = witness_for(&message, &[&signer]);
+        let tx = lee::PublicTransaction::new(message, witness_set);
+
+        assert_eq!(tx.check_stateless(), Ok(vec![account_id]));
     }
 }

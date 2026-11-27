@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use common::HashType;
 use lee::AccountId;
+use logos_blockchain_zone_sdk::testing_framework_app::{AppHostEnv, DeployContext};
 use sequencer_service_rpc::SequencerClient;
-use testing_framework_app::{AppHostEnv, DeployContext};
 
 use crate::{
     config::SequencerPartialConfig,
@@ -180,13 +180,13 @@ impl LezScenarioContext {
             .map_err(StepError::query_failed_boxed)
     }
 
-    /// Returns the public signing key for an imported public account.
-    pub async fn public_account_signing_key(
+    /// Returns the initial key of a held public account.
+    pub async fn public_account_initial_key(
         &self,
         account_id: AccountId,
-    ) -> Result<Option<lee::PublicKey>, StepError> {
+    ) -> Result<Option<lee_core::signing_key::SigningKeyState>, StepError> {
         self.wallet()
-            .public_account_signing_key(account_id)
+            .public_account_initial_key(account_id)
             .await
             .map_err(StepError::query_failed_boxed)
     }
@@ -258,16 +258,16 @@ impl LezScenarioContext {
             .map_err(StepError::query_failed_boxed)
     }
 
-    /// Signs and submits a public transaction against an arbitrary program
-    /// through the scenario wallet.
+    /// Signs and submits a public transaction delivering `message` to the actor of
+    /// `accounts[root]` through the scenario wallet.
     pub async fn send_program_transaction(
         &self,
         accounts: Vec<wallet::AccountMention>,
-        instruction_data: lee_core::program::InstructionData,
-        program_id: lee::AccountId,
+        root: usize,
+        message: lee_core::program::MessageData,
     ) -> Result<HashType, StepError> {
         self.wallet()
-            .send_program_transaction(accounts, instruction_data, program_id)
+            .send_program_transaction(accounts, root, message)
             .await
             .map_err(StepError::query_failed_boxed)
     }

@@ -1,10 +1,16 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::account::AccountId;
+use lee_core::{
+    account::{AccountId, Nonce},
+    signing_key::SigningKeyState,
+};
 use sha2::{Digest as _, digest::FixedOutput as _};
 
-use crate::public_transaction::{Message, WitnessSet};
+use crate::{
+    InvalidTransaction, SignedTransaction,
+    public_transaction::{Message, WitnessEntry, WitnessSet},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PublicTransaction {
@@ -32,11 +38,7 @@ impl PublicTransaction {
     }
 
     pub(crate) fn signer_account_ids(&self) -> Vec<AccountId> {
-        self.witness_set
-            .signatures_and_public_keys()
-            .iter()
-            .map(|(_, public_key)| AccountId::from(public_key))
-            .collect()
+        self.message.nonces.keys().copied().collect()
     }
 
     #[must_use]
@@ -45,7 +47,14 @@ impl PublicTransaction {
             .signer_account_ids()
             .into_iter()
             .collect::<HashSet<_>>();
-        acc_set.extend(self.message.shard_selectors.iter().map(|p| p.account_id));
+        acc_set.insert(self.message.execution.root.to.account_id);
+        acc_set.extend(
+            self.message
+                .public_context
+                .actors
+                .keys()
+                .map(|actor| actor.account_id),
+        );
 
         acc_set.into_iter().collect()
     }
@@ -59,27 +68,69 @@ impl PublicTransaction {
     }
 }
 
+impl SignedTransaction for PublicTransaction {
+    fn check_stateless(&self) -> Result<Vec<AccountId>, InvalidTransaction> {
+        if !self.message.public_context.promotions.is_empty() {
+            return Err(InvalidTransaction::PublicPromotions);
+        }
+        if !self.message.public_context.private_signers.is_empty() {
+            return Err(InvalidTransaction::PublicPrivateSigners);
+        }
+        let signers = self.signer_account_ids();
+        if self.witness_set.entries().len() != signers.len() {
+            return Err(InvalidTransaction::Nonces);
+        }
+        self.message.check_signers()?;
+        crate::transaction_message::check_auth_data(&signers, self.witness_set.entries())?;
+        Ok(signers)
+    }
+
+    fn nonces(&self) -> &BTreeMap<AccountId, Nonce> {
+        &self.message.nonces
+    }
+
+    fn witness_entries(&self) -> &[WitnessEntry] {
+        self.witness_set.entries()
+    }
+
+    fn message_with_keys(&self, next: &[SigningKeyState]) -> [u8; 32] {
+        self.message.message_with_keys(next)
+    }
+}
+
 #[cfg(test)]
 pub mod tests {
+    use std::collections::BTreeMap;
+
     use lee_core::{
-        account::ProgramShardSelector,
-        native_token::{Instruction as NativeInstruction, NATIVE_TOKEN_PROGRAM_ID},
+        account::{Account, Actor, Nonce},
+        native_token::Message as NativeMessage,
+        signing_key::signature_program_id,
     };
     use sha2::{Digest as _, digest::FixedOutput as _};
 
     use crate::{
-        AccountId, PrivateKey, PublicKey, PublicTransaction, Signature, V03State,
+        AccountId, Authority, InvalidTransaction, PublicTransaction, SignedTransaction as _,
+        V03State,
         error::LeeError,
         public_transaction::{Message, WitnessSet},
+        test_utils::{TestSigner, witness_for},
         validated_state_diff::ValidatedStateDiff,
     };
 
-    fn keys_for_tests() -> (PrivateKey, PrivateKey, AccountId, AccountId) {
-        let key1 = PrivateKey::try_new([1; 32]).unwrap();
-        let key2 = PrivateKey::try_new([2; 32]).unwrap();
-        let addr1 = AccountId::from(&PublicKey::new_from_private_key(&key1));
-        let addr2 = AccountId::from(&PublicKey::new_from_private_key(&key2));
+    fn keys_for_tests() -> (TestSigner, TestSigner, AccountId, AccountId) {
+        let key1 = TestSigner::new(1);
+        let key2 = TestSigner::new(2);
+        let addr1 = key1.account_id();
+        let addr2 = key2.account_id();
         (key1, key2, addr1, addr2)
+    }
+
+    const fn transfer_to(recipient: AccountId) -> NativeMessage {
+        NativeMessage::Transfer {
+            to: recipient,
+            amount: 1337,
+        }
     }
 
     fn state_for_tests() -> V03State {
@@ -88,23 +139,26 @@ pub mod tests {
         V03State::new().with_public_account_balances(initial_data)
     }
 
+    fn signed(message: Message, keys: &[&TestSigner]) -> PublicTransaction {
+        let witness_set = witness_for(&message, keys);
+        PublicTransaction::new(message, witness_set)
+    }
+
     fn transaction_for_tests() -> PublicTransaction {
         let (key1, key2, addr1, addr2) = keys_for_tests();
-        let nonces = vec![0_u128.into(), 0_u128.into()];
-        let instruction = NativeInstruction::Transfer { amount: 1337 };
+        let nonces = BTreeMap::from([(addr1, Nonce(0)), (addr2, Nonce(0))]);
         let message = Message::try_new(
-            NATIVE_TOKEN_PROGRAM_ID,
+            Actor::native_balance(addr1),
             vec![
-                ProgramShardSelector::native_balance(addr1),
-                ProgramShardSelector::native_balance(addr2),
+                (Actor::native_balance(addr1), Authority::Signer),
+                (Actor::native_balance(addr2), Authority::Signer),
             ],
             nonces,
-            instruction,
+            transfer_to(addr2),
         )
         .unwrap();
 
-        let witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
-        PublicTransaction::new(message, witness_set)
+        signed(message, &[&key1, &key2])
     }
 
     #[test]
@@ -134,12 +188,12 @@ pub mod tests {
         let tx = transaction_for_tests();
         let expected_signer_account_ids = vec![
             AccountId::new([
-                148, 179, 206, 253, 199, 51, 82, 86, 232, 2, 152, 122, 80, 243, 54, 207, 237, 112,
-                83, 153, 44, 59, 204, 49, 128, 84, 160, 227, 216, 149, 97, 102,
+                114, 83, 166, 143, 160, 156, 94, 122, 224, 105, 223, 2, 29, 64, 102, 35, 77, 69,
+                163, 112, 86, 191, 187, 179, 35, 250, 63, 42, 139, 197, 161, 45,
             ]),
             AccountId::new([
-                30, 145, 107, 3, 207, 73, 192, 230, 160, 63, 238, 207, 18, 69, 54, 216, 103, 244,
-                92, 94, 124, 248, 42, 16, 141, 19, 119, 18, 14, 226, 140, 204,
+                181, 34, 253, 23, 228, 197, 158, 103, 215, 145, 57, 36, 172, 61, 169, 218, 159,
+                133, 254, 66, 40, 25, 75, 112, 207, 251, 110, 125, 246, 232, 196, 243,
             ]),
         ];
         let signer_account_ids = tx.signer_account_ids();
@@ -168,121 +222,169 @@ pub mod tests {
     }
 
     #[test]
-    fn account_id_list_cant_have_duplicates() {
-        let (key1, _, addr1, _) = keys_for_tests();
+    fn witness_set_cannot_have_duplicate_signers() {
+        let (key1, _, _, addr2) = keys_for_tests();
         let state = state_for_tests();
-        let nonces = vec![0_u128.into(), 0_u128.into()];
-        let instruction = NativeInstruction::Transfer { amount: 1337 };
-        let message = Message::try_new(
-            NATIVE_TOKEN_PROGRAM_ID,
-            vec![
-                ProgramShardSelector::native_balance(addr1),
-                ProgramShardSelector::native_balance(addr1),
-            ],
-            nonces,
-            instruction,
-        )
-        .unwrap();
+        // its nonce matches the current state, so only the repeat is at fault
+        let mut message = transaction_for_tests().message;
+        message.nonces.remove(&addr2);
+        message.public_context.authorized_accounts.remove(&addr2);
 
-        let witness_set = WitnessSet::for_message(&message, &[&key1, &key1]);
-        let tx = PublicTransaction::new(message, witness_set);
-        let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);
-        assert!(matches!(result, Err(LeeError::InvalidInput(_))));
-    }
-
-    #[test]
-    fn witness_set_cannot_have_dulicate_signers() {
-        let (key1, _, addr1, addr2) = keys_for_tests();
-        let state = state_for_tests();
-        // both nonces match the current state, so only the repeat is at fault
-        let nonces = vec![0_u128.into(), 0_u128.into()];
-        let instruction = NativeInstruction::Transfer { amount: 1337 };
-        let message = Message::try_new(
-            NATIVE_TOKEN_PROGRAM_ID,
-            vec![
-                ProgramShardSelector::native_balance(addr1),
-                ProgramShardSelector::native_balance(addr2),
-            ],
-            nonces,
-            instruction,
-        )
-        .unwrap();
-
-        let witness_set = WitnessSet::for_message(&message, &[&key1, &key1]);
-        let tx = PublicTransaction::new(message, witness_set);
+        let tx = signed(message, &[&key1, &key1]);
         let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);
         assert!(matches!(
             result,
-            Err(LeeError::InvalidInput(msg)) if msg.contains("Duplicate signers")
+            Err(LeeError::InvalidInput(msg)) if msg == InvalidTransaction::Nonces.to_string()
         ));
     }
 
     #[test]
-    fn number_of_nonces_must_match_number_of_signatures() {
-        let (key1, key2, addr1, addr2) = keys_for_tests();
-        let state = state_for_tests();
-        let nonces = vec![0_u128.into()];
-        let instruction = NativeInstruction::Transfer { amount: 1337 };
-        let message = Message::try_new(
-            NATIVE_TOKEN_PROGRAM_ID,
-            vec![
-                ProgramShardSelector::native_balance(addr1),
-                ProgramShardSelector::native_balance(addr2),
-            ],
-            nonces,
-            instruction,
-        )
-        .unwrap();
+    fn nonces_must_name_exactly_the_signers() {
+        let (key1, key2, _, addr2) = keys_for_tests();
+        let mut message = transaction_for_tests().message;
+        message.nonces.remove(&addr2);
 
-        let witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
+        let message_with_keys =
+            message.message_with_keys(&[key1.key_state(Nonce(1)), key2.key_state(Nonce(1))]);
+        let witness_set = WitnessSet::from_raw_parts(vec![
+            key1.entry(Nonce(0), &message_with_keys),
+            key2.entry(Nonce(0), &message_with_keys),
+        ]);
         let tx = PublicTransaction::new(message, witness_set);
-        let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);
-        assert!(matches!(result, Err(LeeError::InvalidInput(_))));
+        assert_eq!(tx.check_stateless(), Err(InvalidTransaction::Nonces));
+    }
+
+    #[test]
+    fn nonces_cannot_name_an_account_that_does_not_sign() {
+        let (key1, ..) = keys_for_tests();
+        let tx = signed(transaction_for_tests().message, &[&key1]);
+        assert_eq!(tx.check_stateless(), Err(InvalidTransaction::Nonces));
+    }
+
+    #[test]
+    fn authorized_accounts_must_be_the_signers() {
+        let (key1, key2, _, addr2) = keys_for_tests();
+        let mut message = transaction_for_tests().message;
+        message.public_context.authorized_accounts.remove(&addr2);
+
+        let tx = signed(message, &[&key1, &key2]);
+        assert_eq!(
+            tx.check_stateless(),
+            Err(InvalidTransaction::AuthorizedAccounts)
+        );
+    }
+
+    #[test]
+    fn a_signer_authority_needs_its_account_to_sign() {
+        let (key1, key2, ..) = keys_for_tests();
+        let mut message = transaction_for_tests().message;
+        let unsigned = Actor::native_balance(AccountId::new([9; 32]));
+        message
+            .public_context
+            .actors
+            .insert(unsigned, Authority::Signer);
+
+        let tx = signed(message, &[&key1, &key2]);
+        let rejection = InvalidTransaction::UnsignedAuthority;
+        assert_eq!(tx.check_stateless(), Err(rejection));
+        assert!(matches!(
+            ValidatedStateDiff::from_public_transaction(&tx, &state_for_tests(), 1, 0),
+            Err(LeeError::InvalidInput(msg)) if msg == rejection.to_string()
+        ));
+    }
+
+    #[test]
+    fn an_unsigned_actor_may_be_declared_without_authority() {
+        let (key1, key2, ..) = keys_for_tests();
+        let mut message = transaction_for_tests().message;
+        message.public_context.actors.insert(
+            Actor::native_balance(AccountId::new([9; 32])),
+            Authority::None,
+        );
+
+        let tx = signed(message, &[&key1, &key2]);
+        assert!(tx.check_stateless().is_ok());
+    }
+
+    #[test]
+    fn each_nonce_pairs_with_its_account_whatever_the_signature_order() {
+        let (key1, key2, addr1, addr2) = keys_for_tests();
+        let state = V03State::new().with_public_accounts([
+            (addr1, Account::funded(10000)),
+            (
+                addr2,
+                Account {
+                    nonce: Nonce(1),
+                    ..Account::funded(20000)
+                }
+                .with_actor_state(signature_program_id(), key2.key_state(Nonce(1)).encode()),
+            ),
+        ]);
+        let mut message = transaction_for_tests().message;
+        message.nonces.insert(addr2, Nonce(1));
+
+        for keys in [[&key1, &key2], [&key2, &key1]] {
+            let tx = signed(message.clone(), &keys);
+            assert!(ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0).is_ok());
+        }
+    }
+
+    #[test]
+    fn a_public_transaction_cannot_select_promotions() {
+        let (key1, key2, ..) = keys_for_tests();
+        let mut message = transaction_for_tests().message;
+        message.public_context.promotions.insert(0);
+
+        let tx = signed(message, &[&key1, &key2]);
+        let rejection = InvalidTransaction::PublicPromotions;
+        assert_eq!(tx.check_stateless(), Err(rejection));
+        assert!(matches!(
+            ValidatedStateDiff::from_public_transaction(&tx, &state_for_tests(), 1, 0),
+            Err(LeeError::InvalidInput(msg)) if msg == rejection.to_string()
+        ));
+    }
+
+    #[test]
+    fn a_public_transaction_cannot_declare_private_signers() {
+        let (key1, key2, ..) = keys_for_tests();
+        let mut message = transaction_for_tests().message;
+        message
+            .public_context
+            .private_signers
+            .insert(Actor::new(AccountId::new([7; 32]), AccountId::new([8; 32])));
+
+        let tx = signed(message, &[&key1, &key2]);
+        let rejection = InvalidTransaction::PublicPrivateSigners;
+        assert_eq!(tx.check_stateless(), Err(rejection));
+        assert!(matches!(
+            ValidatedStateDiff::from_public_transaction(&tx, &state_for_tests(), 1, 0),
+            Err(LeeError::InvalidInput(msg)) if msg == rejection.to_string()
+        ));
     }
 
     #[test]
     fn all_signatures_must_be_valid() {
-        let (key1, key2, addr1, addr2) = keys_for_tests();
         let state = state_for_tests();
-        let nonces = vec![0_u128.into(), 0_u128.into()];
-        let instruction = NativeInstruction::Transfer { amount: 1337 };
-        let message = Message::try_new(
-            NATIVE_TOKEN_PROGRAM_ID,
-            vec![
-                ProgramShardSelector::native_balance(addr1),
-                ProgramShardSelector::native_balance(addr2),
-            ],
-            nonces,
-            instruction,
-        )
-        .unwrap();
-
-        let mut witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
-        witness_set.signatures_and_public_keys[0].0 = Signature::new_for_tests([1; 64]);
-        let tx = PublicTransaction::new(message, witness_set);
+        let mut tx = transaction_for_tests();
+        let first = tx.signer_account_ids()[0];
+        let last = tx.witness_set.entries[0].auth_data.len() - 1;
+        tx.witness_set.entries[0].auth_data[last] ^= 1;
         let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);
-        assert!(matches!(result, Err(LeeError::InvalidInput(_))));
+        assert!(matches!(
+            result,
+            Err(LeeError::InvalidInput(msg))
+                if msg == format!("Signer {first} fails authentication: invalid signature")
+        ));
     }
 
     #[test]
     fn nonces_must_match_the_state_current_nonces() {
-        let (key1, key2, addr1, addr2) = keys_for_tests();
+        let (key1, key2, _, addr2) = keys_for_tests();
         let state = state_for_tests();
-        let nonces = vec![0_u128.into(), 1_u128.into()];
-        let instruction = NativeInstruction::Transfer { amount: 1337 };
-        let message = Message::try_new(
-            NATIVE_TOKEN_PROGRAM_ID,
-            vec![
-                ProgramShardSelector::native_balance(addr1),
-                ProgramShardSelector::native_balance(addr2),
-            ],
-            nonces,
-            instruction,
-        )
-        .unwrap();
+        let mut message = transaction_for_tests().message;
+        message.nonces.insert(addr2, Nonce(1));
 
-        let witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
-        let tx = PublicTransaction::new(message, witness_set);
+        let tx = signed(message, &[&key1, &key2]);
         let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);
         assert!(matches!(result, Err(LeeError::InvalidInput(_))));
     }
@@ -290,8 +392,13 @@ pub mod tests {
     #[test]
     fn empty_transaction_is_rejected() {
         let state = state_for_tests();
-        let message =
-            Message::new_preserialized(NATIVE_TOKEN_PROGRAM_ID, vec![], vec![], vec![0; 4], None);
+        let message = Message::new_preserialized(
+            Actor::native_balance(AccountId::default()),
+            vec![0; 4],
+            vec![],
+            BTreeMap::new(),
+            None,
+        );
         let witness_set = WitnessSet::from_raw_parts(vec![]);
         let tx = PublicTransaction::new(message, witness_set);
         let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);
@@ -299,31 +406,58 @@ pub mod tests {
     }
 
     #[test]
-    fn program_id_must_belong_to_bulitin_program_ids() {
+    fn program_id_must_belong_to_builtin_program_ids() {
         let (key1, key2, addr1, addr2) = keys_for_tests();
         let state = state_for_tests();
-        let nonces = vec![0_u128.into(), 0_u128.into()];
+        let nonces = BTreeMap::from([(addr1, Nonce(0)), (addr2, Nonce(0))]);
         let instruction = 1337;
         let unknown_program_id = AccountId::from_builtin_program([0xdead_beef; 8]);
+        let to = Actor::new(addr1, unknown_program_id);
         let message = Message::try_new(
-            unknown_program_id,
+            to,
             vec![
-                ProgramShardSelector::native_balance(addr1),
-                ProgramShardSelector::native_balance(addr2),
+                (to, Authority::Signer),
+                (Actor::native_balance(addr2), Authority::Signer),
             ],
             nonces,
             instruction,
         )
         .unwrap();
 
-        let witness_set = WitnessSet::for_message(&message, &[&key1, &key2]);
-        let tx = PublicTransaction::new(message, witness_set);
+        let tx = signed(message, &[&key1, &key2]);
         let result = ValidatedStateDiff::from_public_transaction(&tx, &state, 1, 0);
-        // Named top-level by the transaction (not by a chained call), so it is
-        // detectable before execution and stays non-chargeable.
+        // Named at the transaction root, so it is detectable before execution and stays
+        // non-chargeable.
         assert!(matches!(
             result,
-            Err(LeeError::UnknownProgram { chained: false })
+            Err(LeeError::UnknownProgram { at_root: true })
+        ));
+    }
+
+    #[test]
+    fn witness_entries_must_follow_the_nonces_order() {
+        let tx = transaction_for_tests();
+        let mut entries = tx.witness_set.into_raw_parts();
+        entries.swap(0, 1);
+
+        let tx = PublicTransaction::new(tx.message, WitnessSet::from_raw_parts(entries));
+        assert!(matches!(
+            ValidatedStateDiff::from_public_transaction(&tx, &state_for_tests(), 1, 0),
+            Err(LeeError::InvalidInput(msg)) if msg == InvalidTransaction::AuthData.to_string()
+        ));
+    }
+
+    #[test]
+    fn a_witness_entry_of_an_unlisted_account_is_rejected() {
+        let mut tx = transaction_for_tests();
+        let stranger = TestSigner::new(3);
+        let message_with_keys = tx
+            .message
+            .message_with_keys(&[stranger.key_state(Nonce(1)), tx.witness_set.entries[1].next]);
+        tx.witness_set.entries[0] = stranger.entry(Nonce(0), &message_with_keys);
+        assert!(matches!(
+            ValidatedStateDiff::from_public_transaction(&tx, &state_for_tests(), 1, 0),
+            Err(LeeError::InvalidInput(msg)) if msg == InvalidTransaction::AuthData.to_string()
         ));
     }
 }

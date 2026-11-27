@@ -1,8 +1,9 @@
 use anyhow::{Context as _, Result};
+use bridge_core::BridgeAmount;
 use clap::Subcommand;
 
 use crate::{
-    WalletCore,
+    WalletCore, WalletSequencerClient,
     account::AccountIdWithPrivacy,
     cli::{CliAccountMention, SubcommandReturnValue, WalletSubcommand},
     program_facades::bridge::Bridge,
@@ -18,7 +19,7 @@ pub enum BridgeSubcommand {
         from: CliAccountMention,
         /// Amount of native tokens to withdraw.
         #[arg(long)]
-        amount: u64,
+        amount: BridgeAmount,
         /// Bedrock account public key encoded as a 32-byte hex string.
         #[arg(long)]
         bedrock_account_pk: String,
@@ -26,9 +27,9 @@ pub enum BridgeSubcommand {
 }
 
 impl WalletSubcommand for BridgeSubcommand {
-    async fn handle_subcommand(
+    async fn handle_subcommand<C: WalletSequencerClient>(
         self,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         match self {
             Self::Withdraw {
@@ -48,7 +49,7 @@ impl WalletSubcommand for BridgeSubcommand {
                     .await?;
 
                 wallet_core
-                    .poll_and_finalize_public_transaction(tx_hash)
+                    .finish_transaction(tx_hash)
                     .await
                     .context("Transaction finalization error")
             }

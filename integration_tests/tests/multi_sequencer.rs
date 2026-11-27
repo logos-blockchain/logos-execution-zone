@@ -12,11 +12,12 @@ use std::time::Duration;
 use anyhow::{Context as _, Result, ensure};
 use indexer_service_rpc::RpcClient as _;
 use integration_tests::{
-    assert_same_chain, committee,
+    committee,
     config::{self, SequencerPartialConfig},
-    init_logger, wait_until,
+    init_logger, wait_for_same_chain, wait_until,
 };
-use logos_blockchain_key_management_system_service::keys::Ed25519Key;
+use lee::test_utils::TestSigner;
+use logos_blockchain_zone_sdk::key_management_system_service::keys::Ed25519Key;
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use test_fixtures::{
     MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
@@ -26,7 +27,7 @@ use testnet_initial_state::{initial_pub_accounts_private_keys, initial_public_us
 use tokio::test;
 
 const TRANSFER_AMOUNT: u128 = 10;
-/// ≈4 turn windows, at the `system_accounts` posting timeframe and 5 s blocks.
+/// Several turn windows, at the test posting timeframe and 5 s blocks.
 const ROTATION_BLOCKS: u64 = 8;
 
 #[test]
@@ -60,16 +61,16 @@ async fn multi_sequencer_committee_converges() -> Result<()> {
         .context("Missing sequencer B")?;
     let indexer = ctx.indexer_client();
 
-    let pub_a = Ed25519Key::from_bytes(&config::BEDROCK_SIGNING_KEY).public_key();
+    let pub_a = Ed25519Key::from_bytes(&config::CHANNEL_SIGNING_KEY).public_key();
     let pub_b = config::sequencer_signing_key_from_seed(1).public_key();
 
-    let observer = spawn_channel_observer(ctx.bedrock_addr(), channel).await?;
+    let observer = spawn_channel_observer(ctx.bedrock_addr(), channel)?;
 
     // Phase 1: both keys accredited from channel creation.
     let mut want = vec![pub_a.to_bytes(), pub_b.to_bytes()];
     want.sort_unstable();
     wait_until("Bedrock to accredit both staked keys", || async {
-        Ok(committee(&observer).await?.0 == want)
+        Ok(committee(&observer, channel).await?.0 == want)
     })
     .await?;
 
@@ -88,16 +89,16 @@ async fn multi_sequencer_committee_converges() -> Result<()> {
     .await?;
     wait_for_height(b, rotation_target, "B to follow across turn windows").await?;
     wait_until("the round-robin turn to reach B", || async {
-        Ok(committee(&observer).await?.1 == Some(pub_b))
+        Ok(committee(&observer, channel).await?.1 == Some(pub_b))
     })
     .await?;
-    assert_same_chain(a, b).await?;
+    wait_for_same_chain(a, b).await?;
 
     // Phase 4: a tx submitted only to B is included by B and visible on A.
     let accounts = initial_public_user_accounts();
     let from = accounts[0].account_id;
     let to = accounts[1].account_id;
-    let sign_key = initial_pub_accounts_private_keys()[0].pub_sign_key.clone();
+    let signer = TestSigner::from(&initial_pub_accounts_private_keys()[0].secret);
 
     let to_balance_before = a.get_account_balance(to).await?;
     let nonce = b.get_accounts_nonces(vec![from]).await?[0];
@@ -106,7 +107,7 @@ async fn multi_sequencer_committee_converges() -> Result<()> {
         nonce.0,
         to,
         TRANSFER_AMOUNT,
-        &sign_key,
+        &signer,
     );
     b.send_transaction(tx)
         .await

@@ -1,4 +1,6 @@
-use indexer_service_protocol::{AccountId, AccountSummary, Block, BlockId, HashType, Transaction};
+use indexer_service_protocol::{
+    AccountId, AccountSummary, Block, BlockId, HashType, Transaction, TransactionReceipt,
+};
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -14,9 +16,9 @@ pub struct SearchResults {
 #[cfg(feature = "ssr")]
 pub type IndexerRpcClient = jsonrpsee::http_client::HttpClient;
 
-/// Get an account's balance, nonce, and per-shard sizes.
+/// Get an account's balance, nonce, and per-actor-state sizes.
 ///
-/// Deliberately not the whole account: shard contents are unbounded and any third
+/// Deliberately not the whole account: actor state contents are unbounded and any third
 /// party can add to them, so a full read can be made to exceed the response cap for
 /// a chosen account permanently. Everything this explorer renders is covered here.
 #[server]
@@ -125,6 +127,19 @@ pub async fn get_transaction(tx_hash: HashType) -> Result<Transaction, ServerFnE
         })
 }
 
+/// Get a transaction's receipt by its hash; `None` for a block's fee and clock transactions.
+#[server]
+pub async fn get_transaction_receipt(
+    tx_hash: HashType,
+) -> Result<Option<TransactionReceipt>, ServerFnError> {
+    use indexer_service_rpc::RpcClient as _;
+    let client = expect_context::<IndexerRpcClient>();
+    client
+        .get_transaction_receipt(tx_hash)
+        .await
+        .map_err(|e| ServerFnError::ServerError(format!("RPC error: {e}")))
+}
+
 /// Get blocks with pagination
 #[server]
 pub async fn get_blocks(before: Option<BlockId>, limit: u64) -> Result<Vec<Block>, ServerFnError> {
@@ -156,7 +171,7 @@ pub async fn get_transactions_by_account(
 pub fn create_indexer_rpc_client(url: &url::Url) -> Result<IndexerRpcClient, String> {
     use jsonrpsee::http_client::HttpClientBuilder;
 
-    log::info!("Connecting to Indexer RPC on URL: {url}");
+    tracing::info!(%url, "Connecting to Indexer RPC");
 
     HttpClientBuilder::default()
         .build(url.as_str())

@@ -3,24 +3,23 @@ use std::time::Duration;
 use anyhow::Result;
 use common::{HashType, block::Block, transaction::LeeTransaction};
 use lee_core::BlockId;
-use log::warn;
-use sequencer_service_rpc::{RpcClient as _, SequencerClient};
+use tracing::warn;
 
-use crate::config::WalletConfig;
+use crate::{WalletSequencerClient, config::WalletConfig};
 
 #[derive(Clone)]
 /// Helperstruct to poll transactions.
-pub struct TxPoller {
+pub struct TxPoller<C: WalletSequencerClient> {
     polling_max_blocks_to_query: usize,
     polling_max_error_attempts: u64,
     polling_delay: Duration,
     block_poll_max_amount: u64,
-    client: SequencerClient,
+    client: C,
 }
 
-impl TxPoller {
+impl<C: WalletSequencerClient> TxPoller<C> {
     #[must_use]
-    pub const fn new(config: &WalletConfig, client: SequencerClient) -> Self {
+    pub const fn new(config: &WalletConfig, client: C) -> Self {
         Self {
             polling_delay: config.seq_poll_timeout,
             polling_max_blocks_to_query: config.seq_tx_poll_max_blocks,
@@ -34,9 +33,9 @@ impl TxPoller {
     pub async fn poll_tx(&self, tx_hash: HashType) -> Result<(LeeTransaction, BlockId)> {
         let max_blocks_to_query = self.polling_max_blocks_to_query;
 
-        log::info!("Starting poll for transaction {tx_hash}");
+        tracing::info!(%tx_hash, "Starting poll for transaction");
         for poll_id in 1..max_blocks_to_query {
-            log::info!("Poll {poll_id}");
+            tracing::info!(poll_id, "Polling");
 
             let mut try_error_counter = 0_u64;
 
@@ -45,7 +44,7 @@ impl TxPoller {
                     Ok(Some((tx, block_id))) => return Ok((tx, block_id)),
                     Ok(None) => {}
                     Err(err) => {
-                        warn!("Failed to get transaction by hash {tx_hash} with error: {err:#?}");
+                        warn!(%tx_hash, error = ?err, "Failed to get transaction by hash");
                     }
                 }
 
@@ -74,7 +73,7 @@ impl TxPoller {
             loop {
                 let chunk_end = std::cmp::min(chunk_start.saturating_add(self.block_poll_max_amount).saturating_sub(1), *range.end());
 
-                let blocks = self.client.get_block_range(chunk_start, chunk_end).await?;
+                let blocks = self.client.get_block_range(chunk_start, chunk_end).await.map_err(anyhow::Error::from)?;
                 for block in blocks {
                     yield Ok(block);
                 }

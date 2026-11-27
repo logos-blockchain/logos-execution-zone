@@ -1,0 +1,24 @@
+[package]
+name = "sequencer_channel_signing_actor"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+logos-blockchain-zone-sdk.workspace = true
+
+kameo.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = [
+  "rt-multi-thread",
+  "macros",
+  "sync",
+  "time",
+] }

@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include "ffi_types.h"
 
 /**
  * Largest block span a single `query_events` range request may cover.
@@ -102,14 +103,7 @@ typedef struct LastBlockIdResult {
 
 typedef uint64_t FfiBlockId;
 
-/**
- * 32-byte array type for `AccountId`, keys, hashes, etc.
- */
-typedef struct FfiBytes32 {
-  uint8_t data[32];
-} FfiBytes32;
-
-typedef struct FfiBytes32 FfiHashType;
+typedef FfiBytes32 FfiHashType;
 
 typedef uint64_t FfiTimestamp;
 
@@ -120,156 +114,59 @@ typedef struct FfiBlockHeader {
   FfiTimestamp timestamp;
 } FfiBlockHeader;
 
-typedef struct FfiBytes32 FfiAccountId;
-
-/**
- * Selects one of an account's program shards.
- */
-typedef struct FfiProgramShardSelector {
-  FfiAccountId account_id;
-  FfiAccountId program_account_id;
-} FfiProgramShardSelector;
-
-typedef struct FfiVec_FfiProgramShardSelector {
-  struct FfiProgramShardSelector *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiProgramShardSelector;
-
-typedef struct FfiVec_FfiProgramShardSelector FfiProgramShardSelectorList;
-
-/**
- * U128 - 16 bytes little endian.
- */
-typedef struct FfiU128 {
-  uint8_t data[16];
-} FfiU128;
-
-typedef struct FfiU128 FfiNonce;
-
-typedef struct FfiVec_FfiNonce {
-  FfiNonce *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiNonce;
-
-typedef struct FfiVec_FfiNonce FfiNonceList;
-
-typedef struct FfiVec_u8 {
-  uint8_t *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_u8;
-
-typedef struct FfiVec_u8 FfiInstructionDataList;
-
-/**
- * Fee declaration of a public transaction. Held inline (not behind a
- * pointer): a fee-exempt transaction carries `has_fee == false` and a zeroed
- * declaration.
- */
-typedef struct FfiFeeDeclaration {
-  FfiAccountId payer;
-  uint64_t gas_limit;
-  uint64_t tip;
-  struct FfiU128 max_fee;
-} FfiFeeDeclaration;
-
 typedef struct FfiPublicMessage {
-  FfiAccountId program_account_id;
-  FfiProgramShardSelectorList shard_selectors;
-  FfiNonceList nonces;
-  FfiInstructionDataList instruction_data;
+  FfiPublicExecutionContext public_context;
+  FfiRootCall root;
   bool has_fee;
-  struct FfiFeeDeclaration fee;
+  FfiFeeDeclaration fee;
+  FfiNonceList nonces;
+  FfiPublicAccountEvidenceList admission_evidence;
 } FfiPublicMessage;
-
-/**
- * 64-byte array type for signatures, etc.
- */
-typedef struct FfiBytes64 {
-  uint8_t data[64];
-} FfiBytes64;
-
-typedef struct FfiBytes64 FfiSignature;
-
-typedef struct FfiBytes32 FfiPublicKey;
-
-typedef struct FfiSignaturePubKeyEntry {
-  FfiSignature signature;
-  FfiPublicKey public_key;
-} FfiSignaturePubKeyEntry;
-
-typedef struct FfiVec_FfiSignaturePubKeyEntry {
-  struct FfiSignaturePubKeyEntry *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiSignaturePubKeyEntry;
-
-typedef struct FfiVec_FfiSignaturePubKeyEntry FfiSignaturePubKeyList;
 
 typedef struct FfiPublicTransactionBody {
   FfiHashType hash;
   struct FfiPublicMessage message;
-  FfiSignaturePubKeyList witness_set;
+  FfiWitnessEntryList witness_set;
 } FfiPublicTransactionBody;
 
-typedef struct FfiVec_u8 FfiVecU8;
-
-typedef struct FfiPublicEffect {
-  FfiAccountId program_account_id;
-  FfiAccountId shard_program_account_id;
-  FfiVecU8 data;
-} FfiPublicEffect;
-
-typedef struct FfiVec_FfiPublicEffect {
-  struct FfiPublicEffect *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiPublicEffect;
-
-typedef struct FfiVec_FfiPublicEffect FfiPublicEffectList;
-
-typedef struct FfiPublicAction {
-  FfiAccountId account_id;
-  FfiPublicEffectList effects;
-} FfiPublicAction;
-
-typedef struct FfiVec_FfiPublicAction {
-  struct FfiPublicAction *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiPublicAction;
-
-typedef struct FfiVec_FfiPublicAction FfiPublicActionList;
-
-typedef struct FfiEncryptedAccountData {
-  FfiVecU8 ciphertext;
-  FfiVecU8 epk;
-  uint8_t view_tag;
-} FfiEncryptedAccountData;
-
-typedef struct FfiPrivateAction {
-  struct FfiBytes32 nullifier;
-  struct FfiBytes32 root;
-  struct FfiBytes32 commitment;
-  struct FfiEncryptedAccountData encrypted_post_state;
-} FfiPrivateAction;
-
-typedef struct FfiVec_FfiPrivateAction {
-  struct FfiPrivateAction *entries;
-  uintptr_t len;
-  uintptr_t capacity;
-} FfiVec_FfiPrivateAction;
-
-typedef struct FfiVec_FfiPrivateAction FfiPrivateActionList;
+/**
+ * What a proof commits about its in-proof fee. The `has_*` flags mark which parts are present;
+ * an absent part holds an empty value.
+ */
+typedef struct FfiProvenFee {
+  bool has_refund_to;
+  FfiAccountId refund_to;
+  uint64_t tip;
+  bool has_fallback;
+  FfiBytes32 fallback_nullifier;
+  FfiBytes32 fallback_root;
+  FfiBytes32 fallback_commitment;
+  /**
+   * Under the ephemeral key of the private action spending `fallback_nullifier`.
+   */
+  FfiVecU8 fallback_ciphertext;
+  FfiBoundaryStepList fallback_boundary;
+} FfiProvenFee;
 
 typedef struct FfiPrivacyPreservingMessage {
-  FfiPublicActionList public_actions;
+  FfiPublicExecutionContext public_context;
+  FfiBoundaryStepList boundary;
+  FfiPublicationList async_messages;
+  FfiRecoveryBindingList recovery_bindings;
+  bool has_public_root;
+  FfiRootCall public_root;
   FfiNonceList nonces;
   FfiPrivateActionList private_actions;
   uint64_t block_validity_window[2];
   uint64_t timestamp_validity_window[2];
+  FfiPublicAccountEvidenceList admission_evidence;
+  bool has_proven_fee;
+  struct FfiProvenFee proven_fee;
+  /**
+   * The fee declaration, paid by a public signer instead of inside the proof.
+   */
+  bool has_fee;
+  FfiFeeDeclaration fee;
 } FfiPrivacyPreservingMessage;
 
 typedef FfiVecU8 FfiProof;
@@ -277,7 +174,7 @@ typedef FfiVecU8 FfiProof;
 typedef struct FfiPrivateTransactionBody {
   FfiHashType hash;
   struct FfiPrivacyPreservingMessage message;
-  FfiSignaturePubKeyList witness_set;
+  FfiWitnessEntryList witness_set;
   FfiProof proof;
 } FfiPrivateTransactionBody;
 
@@ -299,9 +196,39 @@ typedef struct FfiVec_FfiTransaction {
 
 typedef struct FfiVec_FfiTransaction FfiBlockBody;
 
+/**
+ * The fee one transaction paid; all zeros for a fee-exempt one.
+ */
+typedef struct FfiFeeReceipt {
+  uint64_t gas_exec;
+  uint64_t gas_stor;
+  FfiU128 fee_base;
+  FfiU128 tip;
+  FfiU128 refund;
+} FfiFeeReceipt;
+
+typedef struct FfiTransactionReceipt {
+  /**
+   * `true`: applied; `false`: the action reverted, and its fee was still charged.
+   */
+  bool success;
+  struct FfiFeeReceipt fee;
+} FfiTransactionReceipt;
+
+typedef struct FfiVec_FfiTransactionReceipt {
+  struct FfiTransactionReceipt *entries;
+  uintptr_t len;
+  uintptr_t capacity;
+} FfiVec_FfiTransactionReceipt;
+
 typedef struct FfiBlock {
   struct FfiBlockHeader header;
   FfiBlockBody body;
+  /**
+   * One per user transaction, parallel to `body`; the trailing fee and clock transactions
+   * have none.
+   */
+  struct FfiVec_FfiTransactionReceipt receipts;
   enum FfiBedrockStatus bedrock_status;
 } FfiBlock;
 
@@ -324,44 +251,49 @@ typedef struct PointerResult_FfiBlockOpt__OperationStatus {
 } PointerResult_FfiBlockOpt__OperationStatus;
 
 /**
- * One program's shard on an account.
+ * One program's actor state on an account.
  */
-typedef struct FfiShard {
-  struct FfiBytes32 program;
+typedef struct FfiActorState {
+  FfiBytes32 program;
   /**
-   * Pointer to shard data bytes.
+   * Pointer to actor state data bytes.
    */
   uint8_t *data;
   /**
-   * Length of shard data.
+   * Length of actor state data.
    */
   uintptr_t data_len;
   /**
-   * Capacity of shard data.
+   * Capacity of actor state data.
    */
   uintptr_t data_cap;
-} FfiShard;
+} FfiActorState;
 
 /**
  * Account data structure - C-compatible version of lee Account.
  *
  * Note: `nonce` is a u128 value represented as a little-endian byte array since C doesn't have
- * native u128 support. The native balance is the shard of the native token program.
+ * native u128 support. The native balance is the actor state of the native token program.
  */
 typedef struct FfiAccount {
   /**
    * Nonce as little-endian [u8; 16].
    */
-  struct FfiU128 nonce;
+  FfiU128 nonce;
   /**
-   * Pointer to the account's shards.
+   * Pointer to the account's actor states.
    */
-  struct FfiShard *shards;
+  struct FfiActorState *actor_states;
   /**
-   * Number of shards.
+   * Number of actor states.
    */
-  uintptr_t shards_len;
+  uintptr_t actor_states_len;
 } FfiAccount;
+
+typedef struct FfiOption_FfiAccount {
+  struct FfiAccount *value;
+  bool is_some;
+} FfiOption_FfiAccount;
 
 /**
  * Simple wrapper around a pointer to a value or an error.
@@ -369,10 +301,10 @@ typedef struct FfiAccount {
  * Pointer is not guaranteed. You should check the error field before
  * dereferencing the pointer.
  */
-typedef struct PointerResult_FfiAccount__OperationStatus {
-  struct FfiAccount *value;
+typedef struct PointerResult_FfiOption_FfiAccount_____OperationStatus {
+  struct FfiOption_FfiAccount *value;
   enum OperationStatus error;
-} PointerResult_FfiAccount__OperationStatus;
+} PointerResult_FfiOption_FfiAccount_____OperationStatus;
 
 typedef struct FfiOption_FfiTransaction {
   struct FfiTransaction *value;
@@ -389,6 +321,22 @@ typedef struct PointerResult_FfiOption_FfiTransaction_____OperationStatus {
   struct FfiOption_FfiTransaction *value;
   enum OperationStatus error;
 } PointerResult_FfiOption_FfiTransaction_____OperationStatus;
+
+typedef struct FfiOption_FfiTransactionReceipt {
+  struct FfiTransactionReceipt *value;
+  bool is_some;
+} FfiOption_FfiTransactionReceipt;
+
+/**
+ * Simple wrapper around a pointer to a value or an error.
+ *
+ * Pointer is not guaranteed. You should check the error field before
+ * dereferencing the pointer.
+ */
+typedef struct PointerResult_FfiOption_FfiTransactionReceipt_____OperationStatus {
+  struct FfiOption_FfiTransactionReceipt *value;
+  enum OperationStatus error;
+} PointerResult_FfiOption_FfiTransactionReceipt_____OperationStatus;
 
 typedef struct FfiVec_FfiBlock {
   struct FfiBlock *entries;
@@ -458,6 +406,8 @@ typedef struct PointerResult_FfiVec_FfiEventRecord_____OperationStatus {
   enum OperationStatus error;
 } PointerResult_FfiVec_FfiEventRecord_____OperationStatus;
 
+typedef struct FfiOption_FfiTransactionReceipt FfiTransactionReceiptOpt;
+
 #ifdef __cplusplus
 extern "C" {
 #endif // __cplusplus
@@ -516,7 +466,7 @@ enum OperationStatus stop_indexer(struct IndexerServiceFFI *indexer);
  * - `level` is a null-terminated string (`off`/`error`/`warn`/`info`/`debug`/ `trace`,
  *   case-insensitive); null or unparseable falls back to `info`.
  *
- * Only the `indexer_ffi` and `indexer_core` targets are enabled!
+ * `RUST_LOG`, when set, overrides `level` (e.g. `info,indexer_core=debug`).
  *
  * # Safety
  * - `level` must be a valid null-terminated C string, or null.
@@ -555,12 +505,9 @@ struct LastBlockIdResult query_last_block(const struct IndexerServiceFFI *indexe
  * Query the indexer's current sync status as a JSON C-string.
  *
  * The JSON schema is owned by `indexer_core` (`IndexerStatus`): an object with
- * `state` (`Starting`/`Syncing`/`CaughtUp`/`Error`/`Stalled`/`Halted`),
- * `indexed_block_id`, `last_error`, `stall_reason`, `cross_zone_halt`, and
- * `cross_zone_peers`. Each peer entry's `health` is one of
- * `Live`/`Lagging`/`Holed`/`Suspended`/`Halted`; treat a string you do not
- * know as not known healthy. Lets a client distinguish "still catching up"
- * from "something went wrong".
+ * `state` (`Starting`/`Syncing`/`CaughtUp`/`Error`/`Stalled`),
+ * `indexed_block_id`, `last_error` and `stall_reason`. Lets a client
+ * distinguish "still catching up" from "something went wrong".
  *
  * # Arguments
  *
@@ -629,15 +576,15 @@ struct PointerResult_FfiBlockOpt__OperationStatus query_block_by_hash(const stru
  *
  * # Returns
  *
- * A `PointerResult<FfiAccount, OperationStatus>` indicating success or failure.
+ * A `PointerResult<FfiOption<FfiAccount>, OperationStatus>` indicating success or failure.
  *
  * # Safety
  *
  * The caller must ensure that:
  * - `indexer` is a valid pointer to a [`IndexerServiceFFI`] instance.
  */
-struct PointerResult_FfiAccount__OperationStatus query_account(const struct IndexerServiceFFI *indexer,
-                                                               FfiAccountId account_id);
+struct PointerResult_FfiOption_FfiAccount_____OperationStatus query_account(const struct IndexerServiceFFI *indexer,
+                                                                            FfiAccountId account_id);
 
 /**
  * Query the transaction by hash from indexer.
@@ -658,6 +605,28 @@ struct PointerResult_FfiAccount__OperationStatus query_account(const struct Inde
  */
 struct PointerResult_FfiOption_FfiTransaction_____OperationStatus query_transaction(const struct IndexerServiceFFI *indexer,
                                                                                     FfiHashType hash);
+
+/**
+ * Query a transaction's receipt by its hash from indexer.
+ *
+ * # Arguments
+ *
+ * - `indexer`: A pointer to the [`IndexerServiceFFI`] instance to be queried.
+ * - `hash`: `FfiHashType` - hash of transaction
+ *
+ * # Returns
+ *
+ * A `PointerResult<FfiOption<FfiTransactionReceipt>, OperationStatus>` indicating success or
+ * failure. The option is empty for an unknown transaction, and for a block's trailing fee and
+ * clock transactions. Free it with `free_ffi_transaction_receipt_opt`.
+ *
+ * # Safety
+ *
+ * The caller must ensure that:
+ * - `indexer` is a valid pointer to a [`IndexerServiceFFI`] instance.
+ */
+struct PointerResult_FfiOption_FfiTransactionReceipt_____OperationStatus query_transaction_receipt(const struct IndexerServiceFFI *indexer,
+                                                                                                   FfiHashType hash);
 
 /**
  * Query the blocks by block range from indexer.
@@ -746,20 +715,21 @@ struct PointerResult_FfiVec_FfiEventRecord_____OperationStatus query_events(cons
                                                                             const FfiSelector *selector);
 
 /**
- * Frees an account, its shard array, and each shard's data buffer.
+ * Frees an account option, its account if present, the account's actor state array, and each
+ * actor state's data buffer.
  *
  * # Safety
  *
  * `val` must be null or an unfreed `PointerResult.value` from an account query.
- * Its shard array and data buffers must remain valid and owned by the account.
+ * Its actor state array and data buffers must remain valid and owned by the account.
  */
-void free_ffi_account(struct FfiAccount *val);
+void free_ffi_account_opt(struct FfiOption_FfiAccount *val);
 
 /**
  * Frees the resources owned by an `FfiBlock` value.
  *
- * This frees the block's transaction bodies (the only heap-owning field); the
- * header/status fields are `Copy`. It operates on the struct by value because
+ * This frees the block's transaction bodies and receipts (the only heap-owning
+ * fields); the header/status fields are `Copy`. It operates on the struct by value because
  * it is an element-level helper, used both for the vector path
  * ([`free_ffi_block_vec`]) and the optional path ([`free_ffi_block_opt`]) — in
  * neither case is an `FfiBlock` itself wrapped in its own outer box.
@@ -822,6 +792,15 @@ void free_ffi_block_opt(FfiBlockOpt *val);
  * - `val` is a pointer to an `FfiVec<FfiBlock>` produced by this library and not yet freed.
  */
 void free_ffi_block_vec(struct FfiVec_FfiBlock *val);
+
+/**
+ * Frees the option a `query_transaction_receipt` call returned, and its receipt if present.
+ *
+ * # Safety
+ *
+ * `val` must be null or an unfreed `PointerResult.value` from `query_transaction_receipt`.
+ */
+void free_ffi_transaction_receipt_opt(FfiTransactionReceiptOpt *val);
 
 /**
  * Frees the resources associated with the given vector of ffi event records.
@@ -907,10 +886,6 @@ void free_ffi_transaction_opt(struct FfiOption_FfiTransaction *val);
  * - `val` is a pointer to an `FfiVec<FfiTransaction>` produced by this library and not yet freed.
  */
 void free_ffi_transaction_vec(struct FfiVec_FfiTransaction *val);
-
-bool is_ok(const enum OperationStatus *self);
-
-bool is_error(const enum OperationStatus *self);
 
 #ifdef __cplusplus
 }  // extern "C"

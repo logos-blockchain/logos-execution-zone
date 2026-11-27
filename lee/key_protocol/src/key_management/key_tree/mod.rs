@@ -2,7 +2,6 @@ use std::collections::BTreeMap;
 
 use anyhow::Result;
 use lee::{Account, AccountId};
-use lee_core::Identifier;
 use serde::{Deserialize, Serialize};
 
 use crate::key_management::{
@@ -257,48 +256,34 @@ impl KeyTree<ChildKeysPrivate> {
         self.generate_new_node_layered()
     }
 
-    /// Register an additional identifier on an existing private key node, inserting the derived
-    /// `AccountId` into `account_id_map`. Returns `None` if the node does not exist or the
-    /// `AccountId` is already registered.
-    pub fn register_identifier_on_node(
-        &mut self,
-        cci: &ChainIndex,
-        identifier: Identifier,
-    ) -> Option<lee::AccountId> {
-        let node = self.key_map.get(cci)?;
-        let account_id = lee::AccountId::for_regular_private_account(
-            &node.value.0.nullifier_public_key,
-            &node.value.0.viewing_public_key,
-            identifier,
-        );
-        if self.account_id_map.contains_key(&account_id) {
-            return None;
-        }
-        self.account_id_map.insert(account_id, cci.clone());
-        Some(account_id)
-    }
-
     /// Cleanup of non-initialized accounts in a private tree.
     ///
-    /// If account has no synced entries, removes it, stops at first initialized account.
+    /// Removes a node whose accounts are all uninitialized and none of them `awaited`, as a pending
+    /// message awaits the account it credits; stops at the first node in use.
     ///
     /// Walks through tree in layers of same depth using `ChainIndex::chain_ids_at_depth()`.
     ///
     /// Chain must be parsed for accounts beforehand.
     ///
     /// Slow, maintains tree consistency.
-    pub fn cleanup_tree_remove_uninit_layered(&mut self, depth: u32) {
+    pub fn cleanup_tree_remove_uninit_layered(
+        &mut self,
+        depth: u32,
+        awaited: &std::collections::HashSet<AccountId>,
+    ) {
         let depth = usize::try_from(depth).expect("Depth is expected to fit in usize");
         'outer: for i in (1..depth).rev() {
             println!("Cleanup of tree at depth {i}");
             for id in ChainIndex::chain_ids_at_depth(i) {
                 if let Some(node) = self.key_map.get(&id).cloned() {
-                    if node.value.1.is_empty()
-                        || node
-                            .value
-                            .1
-                            .iter()
-                            .all(|(_, acc)| acc == &lee::Account::default())
+                    if node
+                        .value
+                        .1
+                        .iter()
+                        .all(|(_, acc)| acc == &lee::Account::default())
+                        && !node
+                            .account_ids()
+                            .any(|account_id| awaited.contains(&account_id))
                     {
                         let account_ids = node.account_ids();
                         self.key_map.remove(&id);
@@ -361,8 +346,8 @@ mod tests {
 
         assert!(tree.key_map.contains_key(&ChainIndex::root()));
         assert!(tree.account_id_map.contains_key(&AccountId::new([
-            215, 164, 47, 51, 250, 90, 227, 248, 132, 109, 120, 59, 116, 142, 34, 79, 242, 112, 89,
-            142, 210, 12, 183, 217, 160, 19, 169, 147, 203, 173, 172, 105
+            110, 125, 111, 198, 184, 104, 121, 139, 210, 17, 104, 106, 188, 89, 89, 91, 14, 148,
+            135, 35, 69, 250, 36, 200, 169, 24, 22, 55, 243, 101, 66, 223
         ])));
     }
 
@@ -556,37 +541,33 @@ mod tests {
             .key_map
             .get_mut(&ChainIndex::from_str("/1").unwrap())
             .unwrap();
-        acc.value.1.insert(
-            PrivateAccountKind::Regular(Identifier::ZERO),
-            lee::Account::funded(2),
-        );
+        acc.value
+            .1
+            .insert(PrivateAccountKind::Regular, lee::Account::funded(2));
 
         let acc = tree
             .key_map
             .get_mut(&ChainIndex::from_str("/2").unwrap())
             .unwrap();
-        acc.value.1.insert(
-            PrivateAccountKind::Regular(Identifier::ZERO),
-            lee::Account::funded(3),
-        );
+        acc.value
+            .1
+            .insert(PrivateAccountKind::Regular, lee::Account::funded(3));
 
         let acc = tree
             .key_map
             .get_mut(&ChainIndex::from_str("/0/1").unwrap())
             .unwrap();
-        acc.value.1.insert(
-            PrivateAccountKind::Regular(Identifier::ZERO),
-            lee::Account::funded(5),
-        );
+        acc.value
+            .1
+            .insert(PrivateAccountKind::Regular, lee::Account::funded(5));
 
         let acc = tree
             .key_map
             .get_mut(&ChainIndex::from_str("/1/0").unwrap())
             .unwrap();
-        acc.value.1.insert(
-            PrivateAccountKind::Regular(Identifier::ZERO),
-            lee::Account::funded(6),
-        );
+        acc.value
+            .1
+            .insert(PrivateAccountKind::Regular, lee::Account::funded(6));
 
         // Update account_id_map for nodes that now have entries
         for chain_index_str in ["/1", "/2", "/0/1", "/1/0"] {
@@ -598,7 +579,7 @@ mod tests {
             }
         }
 
-        tree.cleanup_tree_remove_uninit_layered(10);
+        tree.cleanup_tree_remove_uninit_layered(10, &HashSet::new());
 
         let mut key_set_res = HashSet::new();
         key_set_res.insert("/0".to_owned());
@@ -619,7 +600,7 @@ mod tests {
 
         let acc = &tree.key_map[&ChainIndex::from_str("/1").unwrap()];
         assert_eq!(
-            acc.value.1[&PrivateAccountKind::Regular(Identifier::ZERO)]
+            acc.value.1[&PrivateAccountKind::Regular]
                 .data
                 .native_balance()
                 .unwrap(),
@@ -628,7 +609,7 @@ mod tests {
 
         let acc = &tree.key_map[&ChainIndex::from_str("/2").unwrap()];
         assert_eq!(
-            acc.value.1[&PrivateAccountKind::Regular(Identifier::ZERO)]
+            acc.value.1[&PrivateAccountKind::Regular]
                 .data
                 .native_balance()
                 .unwrap(),
@@ -637,7 +618,7 @@ mod tests {
 
         let acc = &tree.key_map[&ChainIndex::from_str("/0/1").unwrap()];
         assert_eq!(
-            acc.value.1[&PrivateAccountKind::Regular(Identifier::ZERO)]
+            acc.value.1[&PrivateAccountKind::Regular]
                 .data
                 .native_balance()
                 .unwrap(),
@@ -646,11 +627,31 @@ mod tests {
 
         let acc = &tree.key_map[&ChainIndex::from_str("/1/0").unwrap()];
         assert_eq!(
-            acc.value.1[&PrivateAccountKind::Regular(Identifier::ZERO)]
+            acc.value.1[&PrivateAccountKind::Regular]
                 .data
                 .native_balance()
                 .unwrap(),
             6
         );
+    }
+
+    #[test]
+    fn cleanup_keeps_a_default_node_a_pending_credit_awaits() {
+        let awaited_node = ChainIndex::from_str("/1/0").unwrap();
+        let mut tree = KeyTreePrivate::new(&seed_holder_for_tests());
+        tree.generate_tree_for_depth(10);
+        let awaited: HashSet<AccountId> = tree.key_map[&awaited_node].account_ids().collect();
+        let mut unawaited = tree.clone();
+
+        tree.cleanup_tree_remove_uninit_layered(10, &awaited);
+        unawaited.cleanup_tree_remove_uninit_layered(10, &HashSet::new());
+
+        assert!(
+            awaited
+                .iter()
+                .all(|account_id| tree.account_id_map[account_id] == awaited_node)
+        );
+        assert!(tree.key_map.contains_key(&awaited_node));
+        assert!(!unawaited.key_map.contains_key(&awaited_node));
     }
 }

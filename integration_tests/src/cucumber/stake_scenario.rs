@@ -4,7 +4,7 @@
 //! The scenarios run against a deployed LEZ stack: transactions are signed and
 //! submitted through the scenario wallet and every assertion reads state back
 //! through the sequencer's RPC API. This module owns only the per-scenario
-//! bookkeeping — the cast of account ids, the amount vocabulary, instruction
+//! bookkeeping — the cast of account ids, the amount vocabulary, message
 //! builders and the record of the last submission. Chain access lives in the
 //! step helpers.
 //!
@@ -18,12 +18,12 @@ use std::{str::FromStr, time::Duration};
 
 use common::HashType;
 use lee::{Account, AccountId, program::Program};
-use lee_core::{native_token, program::InstructionData};
+use lee_core::{native_token, program::MessageData};
 use sequencer_stake_core::SequencerKey;
 
 use crate::cucumber::error::StepError;
 
-/// Deterministic Bedrock signing seeds, fed through the shared
+/// Deterministic channel signing seeds, fed through the shared
 /// `sequencer_signing_key_from_seed` fixture derivation: each scenario runs
 /// against a fresh chain, so fixed seeds cannot collide across scenarios.
 const SEQUENCER_KEY_SEED: u32 = 0x51;
@@ -287,16 +287,17 @@ impl StakeScenario {
     }
 }
 
-/// Borsh mirror of `sequencer_stake_core::Instruction::Stake` with the
+/// Borsh mirror of `sequencer_stake_core::Message::Stake` with the
 /// `SequencerKey` field widened to raw bytes, so an off-curve key can be
-/// serialized into otherwise well-formed instruction data (case P-24). The
-/// variant index and field order match the real instruction.
+/// serialized into an otherwise well-formed message (case P-24). The variant
+/// index and field order match the real message.
 #[derive(borsh::BorshSerialize)]
-enum RawStakeInstruction {
+enum RawStakeMessage {
     Stake {
         sequencer_key: [u8; 32],
         amount: u128,
         has_record: bool,
+        funding: AccountId,
     },
 }
 
@@ -306,93 +307,98 @@ fn sequencer_key_from_seed(seed: u32) -> SequencerKey {
     let bytes = crate::config::sequencer_signing_key_from_seed(seed)
         .public_key()
         .to_bytes();
-    SequencerKey::new(bytes).expect("a Bedrock public key is a valid Ed25519 public key")
+    SequencerKey::new(bytes).expect("a channel signing public key is a valid Ed25519 public key")
 }
 
-/// Serialized native `Transfer` moving `amount`.
-pub fn transfer_instruction(amount: u128) -> Result<InstructionData, StepError> {
-    Program::serialize_instruction(native_token::Instruction::Transfer { amount }).map_err(
-        |error| StepError::LogicalError {
-            message: format!("failed to serialize the transfer instruction: {error}"),
-        },
-    )
+/// Serialized native `Transfer` moving `amount` to `to`.
+pub fn transfer_message(to: AccountId, amount: u128) -> Result<MessageData, StepError> {
+    Program::serialize_message(native_token::Message::Transfer { to, amount }).map_err(|error| {
+        StepError::LogicalError {
+            message: format!("failed to serialize the transfer message: {error}"),
+        }
+    })
 }
 
-/// Serialized `sequencer_stake::Stake` for `sequencer_key`; `has_record` says
-/// whether the ownership account already holds a stake record.
-pub fn stake_instruction(
+/// Serialized `sequencer_stake::Stake` for `sequencer_key`, paid from `funding`;
+/// `has_record` says whether the ownership account already holds a stake record.
+pub fn stake_message(
     sequencer_key: SequencerKey,
     amount: u128,
     has_record: bool,
-) -> Result<InstructionData, StepError> {
-    Program::serialize_instruction(sequencer_stake_core::Instruction::Stake {
+    funding: AccountId,
+) -> Result<MessageData, StepError> {
+    Program::serialize_message(sequencer_stake_core::Message::Stake {
         sequencer_key,
         amount,
         has_record,
+        funding,
     })
     .map_err(|error| StepError::LogicalError {
-        message: format!("failed to serialize the Stake instruction: {error}"),
+        message: format!("failed to serialize the Stake message: {error}"),
     })
 }
 
 /// Serialized `Stake` carrying `key_bytes` in the `SequencerKey` position
 /// (case P-24).
-pub fn raw_stake_instruction(
+pub fn raw_stake_message(
     key_bytes: [u8; 32],
     amount: u128,
-) -> Result<InstructionData, StepError> {
-    Program::serialize_instruction(RawStakeInstruction::Stake {
+    funding: AccountId,
+) -> Result<MessageData, StepError> {
+    Program::serialize_message(RawStakeMessage::Stake {
         sequencer_key: key_bytes,
         amount,
         has_record: false,
+        funding,
     })
     .map_err(|error| StepError::LogicalError {
-        message: format!("failed to serialize the raw Stake instruction: {error}"),
+        message: format!("failed to serialize the raw Stake message: {error}"),
     })
 }
 
-/// Layout guard for [`RawStakeInstruction`]: a raw instruction carrying
-/// on-curve key bytes must round-trip into the real `Instruction::Stake`.
-/// Without this positive control, any drift in the `Instruction` enum would
-/// make every raw instruction fail to decode and case P-24 pass vacuously.
-fn assert_raw_stake_layout_matches(amount: u128) -> Result<(), StepError> {
+/// Layout guard for [`RawStakeMessage`]: a raw message carrying on-curve key
+/// bytes must round-trip into the real `Message::Stake`. Without this positive
+/// control, any drift in the `Message` enum would make every raw message fail
+/// to decode and case P-24 pass vacuously.
+fn assert_raw_stake_layout_matches(amount: u128, funding: AccountId) -> Result<(), StepError> {
     let control_key = sequencer_key_from_seed(SEQUENCER_KEY_SEED);
-    let bytes = raw_stake_instruction(control_key.to_bytes(), amount)?;
-    let decoded =
-        borsh::from_slice::<sequencer_stake_core::Instruction>(&bytes).map_err(|error| {
-            StepError::LogicalError {
-                message: format!(
-                    "RawStakeInstruction no longer mirrors Instruction::Stake: an on-curve control \
-                     key fails to decode: {error}"
-                ),
-            }
-        })?;
-    let expected = sequencer_stake_core::Instruction::Stake {
+    let bytes = raw_stake_message(control_key.to_bytes(), amount, funding)?;
+    let decoded = borsh::from_slice::<sequencer_stake_core::Message>(&bytes).map_err(|error| {
+        StepError::LogicalError {
+            message: format!(
+                "RawStakeMessage no longer mirrors Message::Stake: an on-curve control key fails \
+                 to decode: {error}"
+            ),
+        }
+    })?;
+    let expected = sequencer_stake_core::Message::Stake {
         sequencer_key: control_key,
         amount,
         has_record: false,
+        funding,
     };
     if decoded != expected {
         return Err(StepError::LogicalError {
             message: format!(
-                "RawStakeInstruction no longer mirrors Instruction::Stake: the on-curve control \
-                 key decodes as {decoded:?}"
+                "RawStakeMessage no longer mirrors Message::Stake: the on-curve control key \
+                 decodes as {decoded:?}"
             ),
         });
     }
     Ok(())
 }
 
-/// Whether instruction data carrying `key_bytes` in the `SequencerKey`
-/// position fails to deserialize (the instruction half of case P-24).
+/// Whether a message carrying `key_bytes` in the `SequencerKey` position fails
+/// to deserialize (the message half of case P-24).
 ///
 /// Guarded by a positive control so the failure is attributable to
-/// `key_bytes` rather than to instruction-layout drift.
-pub fn raw_key_instruction_fails_to_decode(
+/// `key_bytes` rather than to message-layout drift.
+pub fn raw_key_message_fails_to_decode(
     key_bytes: [u8; 32],
     amount: u128,
+    funding: AccountId,
 ) -> Result<bool, StepError> {
-    assert_raw_stake_layout_matches(amount)?;
-    let bytes = raw_stake_instruction(key_bytes, amount)?;
-    Ok(borsh::from_slice::<sequencer_stake_core::Instruction>(&bytes).is_err())
+    assert_raw_stake_layout_matches(amount, funding)?;
+    let bytes = raw_stake_message(key_bytes, amount, funding)?;
+    Ok(borsh::from_slice::<sequencer_stake_core::Message>(&bytes).is_err())
 }

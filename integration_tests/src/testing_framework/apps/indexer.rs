@@ -7,9 +7,11 @@ use std::{
 use anyhow::Context as _;
 use async_trait::async_trait;
 use indexer_service::IndexerHandle;
+use logos_blockchain_zone_sdk::{
+    testing_framework_app::{AppDeployment, AppHostEnv, DeployContext},
+    testing_framework_core::scenario::DynError,
+};
 use tempfile::TempDir;
-use testing_framework_app::{AppDeployment, AppHostEnv, DeployContext};
-use testing_framework_core::scenario::DynError;
 
 use crate::{
     config::{self, UrlProtocol},
@@ -101,7 +103,6 @@ impl AppDeployment<AppHostEnv> for IndexerApp {
             service = crate::setup::setup_indexer_at(
                 self.bedrock_addr,
                 config::bedrock_channel_id(),
-                None,
                 &home,
             )
             .await
@@ -109,7 +110,7 @@ impl AppDeployment<AppHostEnv> for IndexerApp {
             state_dir = None;
         } else {
             let (indexer, temp_dir) =
-                setup_indexer(self.bedrock_addr, config::bedrock_channel_id(), None)
+                setup_indexer(self.bedrock_addr, config::bedrock_channel_id())
                     .await
                     .context("failed to set up LEZ indexer")?;
             service = indexer;

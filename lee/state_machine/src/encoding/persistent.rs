@@ -1,14 +1,14 @@
 //! Borsh encodings of the persistent collections the state is built on, byte-identical to the
-//! `HashMap`, `HashSet` and `Vec` each one replaced, so stored states keep decoding.
+//! `HashMap`, `HashSet`, `BTreeMap` and `Vec` each one replaced, so stored states keep decoding.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     hash::Hash,
     io::{Read, Result, Write},
 };
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use rpds::{HashTrieMapSync, HashTrieSetSync, VectorSync};
+use rpds::{HashTrieMapSync, HashTrieSetSync, RedBlackTreeMapSync, VectorSync};
 
 pub fn serialize_map<K, V, W>(map: &HashTrieMapSync<K, V>, writer: &mut W) -> Result<()>
 where
@@ -28,6 +28,26 @@ where
     R: Read,
 {
     Ok(HashMap::<K, V>::deserialize_reader(reader)?
+        .into_iter()
+        .collect())
+}
+
+pub fn serialize_ordered_map<K, V, W>(map: &RedBlackTreeMapSync<K, V>, writer: &mut W) -> Result<()>
+where
+    K: BorshSerialize + Ord,
+    V: BorshSerialize,
+    W: Write,
+{
+    map.iter().collect::<Vec<(&K, &V)>>().serialize(writer)
+}
+
+pub fn deserialize_ordered_map<K, V, R>(reader: &mut R) -> Result<RedBlackTreeMapSync<K, V>>
+where
+    K: BorshDeserialize + Ord,
+    V: BorshDeserialize,
+    R: Read,
+{
+    Ok(BTreeMap::<K, V>::deserialize_reader(reader)?
         .into_iter()
         .collect())
 }
@@ -89,6 +109,34 @@ mod tests {
             deserialize_map::<u32, u64, _>(&mut bytes.as_slice()).unwrap(),
             map
         );
+    }
+
+    #[test]
+    fn an_ordered_map_encodes_and_decodes_as_a_btree_map() {
+        let std: BTreeMap<u32, u64> = (0..100).map(|key| (key, u64::from(key))).collect();
+        let map: RedBlackTreeMapSync<u32, u64> = std.clone().into_iter().collect();
+
+        let bytes = encoded(|writer| serialize_ordered_map(&map, writer));
+        assert_eq!(bytes, borsh::to_vec(&std).unwrap());
+        assert_eq!(
+            deserialize_ordered_map::<u32, u64, _>(&mut bytes.as_slice()).unwrap(),
+            map
+        );
+    }
+
+    #[test]
+    fn an_ordered_map_refuses_repeated_or_unordered_keys() {
+        // A map's encoding with entries in exactly this order, which a `BTreeMap` would normalize.
+        let entries = |keys: [u32; 2]| {
+            borsh::to_vec(&Vec::from(keys.map(|key| (key, u64::from(key))))).unwrap()
+        };
+
+        for keys in [[1, 1], [2, 1]] {
+            assert!(
+                deserialize_ordered_map::<u32, u64, _>(&mut entries(keys).as_slice()).is_err(),
+                "{keys:?}"
+            );
+        }
     }
 
     #[test]

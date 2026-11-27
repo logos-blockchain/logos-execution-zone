@@ -63,7 +63,7 @@ Feature: Sequencer registration
     Then the stake transaction is accepted
     And the config entry tracks the staked amount with no pending unstake
     And the config entry points at the ownership account
-    And the ownership account is claimed by sequencer_stake backing the sequencer key with no pending unstake
+    And the ownership account is claimed by sequencer_stake backing the sequencer key
     And the funds account balance increased by the staked amount
     And the funding account balance decreased by the staked amount
 
@@ -84,7 +84,7 @@ Feature: Sequencer registration
     And the config entry tracks the staked amount with no pending unstake
 
   @stake_registration_ci @P-25 @P0 @L3
-  # In-program reason: the native transfer Stake chains fails on the
+  # In-program reason: the native transfer Stake sends fails on the
   # funding balance, so the whole transaction is rejected atomically. The most
   # common real-world rejection on the stake-in walk.
   Scenario: Funding account holds less than the amount
@@ -98,9 +98,9 @@ Feature: Sequencer registration
   @stake_registration_ci @P-23 @P1 @L3
   # The plan expects a donation made before the first Stake to be absorbed
   # into the stake (expected_balance_after = donation + amount). Two dev
-  # changes move the goalposts: a credit lands on the native shard and
-  # leaves the stake shard empty, so the first Stake still claims the account; and the stake is custodied
-  # in the funds PDA, so the donation stays on the ownership account and the
+  # changes move the goalposts: a credit lands on the native actor state and
+  # leaves the stake actor state empty, so the first Stake still claims the account; and the stake
+  # is custodied in the funds PDA, so the donation stays on the ownership account and the
   # entry tracks only the staked amount. Revisit with the plan's §15.8
   # decision.
   Scenario: A donation to the unclaimed ownership account stays outside the first Stake
@@ -112,6 +112,6 @@ Feature: Sequencer registration
     When a Stake of "twice the minimum stake" is submitted
     Then the stake transaction is accepted
     And the config entry tracks the staked amount with no pending unstake
-    And the ownership account is claimed by sequencer_stake backing the sequencer key with no pending unstake
+    And the ownership account is claimed by sequencer_stake backing the sequencer key
     And the funds account balance increased by the staked amount
     And the ownership account balance is unchanged

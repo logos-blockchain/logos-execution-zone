@@ -1,27 +1,11 @@
-use crate::api::types::{
-    FfiNonce, FfiVec,
-    transaction::{
-        FfiPrivateAction, FfiProgramShardSelector, FfiPublicAction, FfiPublicEffect,
-        FfiSignaturePubKeyEntry, FfiTransaction,
-    },
+pub use ffi_types::{
+    FfiAccountIdList, FfiActorList, FfiBoundaryStepList, FfiMessageDataList, FfiNonceList,
+    FfiPdaSeedList, FfiPrivateActionList, FfiPromotionList, FfiPublicAccountEvidenceList,
+    FfiPublicationList, FfiRecoveryBindingList, FfiVecU8, FfiWitnessEntryList,
 };
 
-pub type FfiVecU8 = FfiVec<u8>;
-
-pub type FfiProgramShardSelectorList = FfiVec<FfiProgramShardSelector>;
+use crate::api::types::{FfiVec, transaction::FfiTransaction};
 
 pub type FfiBlockBody = FfiVec<FfiTransaction>;
 
-pub type FfiNonceList = FfiVec<FfiNonce>;
-
-pub type FfiInstructionDataList = FfiVec<u8>;
-
-pub type FfiSignaturePubKeyList = FfiVec<FfiSignaturePubKeyEntry>;
-
 pub type FfiProof = FfiVecU8;
-
-pub type FfiPublicActionList = FfiVec<FfiPublicAction>;
-
-pub type FfiPrivateActionList = FfiVec<FfiPrivateAction>;
-
-pub type FfiPublicEffectList = FfiVec<FfiPublicEffect>;

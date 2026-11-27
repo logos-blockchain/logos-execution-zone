@@ -7,21 +7,26 @@ use ml_kem;
 use rand::{RngCore as _, rngs::OsRng};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, digest::FixedOutput as _};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Seed holder. Non-clonable to ensure that different holders use different seeds.
 /// Produces `TopSecretKeyHolder` objects.
-#[derive(Debug)]
+#[derive(Debug, Zeroize, ZeroizeOnDrop)]
 pub struct SeedHolder {
     // ToDo: Needs to be vec as serde derives is not implemented for [u8; 64]
     pub(crate) seed: Vec<u8>,
 }
 
 /// Secret spending key object. Can produce `PrivateKeyHolder` objects.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Zeroize, ZeroizeOnDrop,
+)]
 pub struct SecretSpendingKey(pub [u8; 32]);
 /// Viewing secret key: the FIPS 203 KEM seed split into its two 32-byte halves `d` and `z`,
 /// from which the ML-KEM-768 decapsulation key is derived deterministically.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(
+    Serialize, Deserialize, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Zeroize, ZeroizeOnDrop,
+)]
 pub struct ViewingSecretKey {
     pub d: [u8; 32],
     pub z: [u8; 32],
@@ -40,6 +45,13 @@ impl ViewingSecretKey {
 pub struct PrivateKeyHolder {
     pub authorization_secret_key: AuthorizationSecretKey,
     pub viewing_secret_key: ViewingSecretKey,
+}
+
+impl Drop for PrivateKeyHolder {
+    fn drop(&mut self) {
+        // `ViewingSecretKey` wipes itself; `AuthorizationSecretKey` is `Copy`, so it cannot.
+        self.authorization_secret_key.0.zeroize();
+    }
 }
 
 impl SeedHolder {

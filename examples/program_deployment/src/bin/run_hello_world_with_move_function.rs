@@ -1,14 +1,13 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use clap::{Parser, Subcommand};
 use common::transaction::LeeTransaction;
 use lee::{
-    AccountId, ProgramShardSelector, PublicTransaction,
-    privacy_preserving_transaction::circuit::ProgramWithDependencies, program::Program,
-    public_transaction,
+    AccountId, Actor, Authority, PublicTransaction,
+    privacy_preserving_transaction::circuit::ProgramCatalog, program::Program, public_transaction,
 };
-use program_deployment::deploy_program;
-use sequencer_service_rpc::RpcClient as _;
+use program_deployment::{admission_evidence, deploy_or_reuse, fee_paid_by};
+use sequencer_service_rpc::{RpcClient as _, SequencerClient};
 use wallet::{AccountIdentity, WalletCore};
 
 // Before running this example, compile the `hello_world_with_move_function.rs` guest program with:
@@ -22,7 +21,10 @@ use wallet::{AccountIdentity, WalletCore};
 //
 // Usage:
 //   cargo run --bin run_hello_world_with_move_function \
-//     /path/to/guest/binary <payer_account_id> <function> <params>
+//     /path/to/guest/binary <payer_account_id> [--program-id <program_id>] <function> <params>
+//
+// Note: each run without --program-id deploys a new instance of the program, which has its own
+// actor states. To work on the same data across runs, pass the program ID the first run printed.
 //
 // Example:
 //   cargo run --bin run_hello_world_with_move_function \
@@ -30,10 +32,10 @@ use wallet::{AccountIdentity, WalletCore};
 //     <funded payer account_id> \
 //     write-public Ds8q5PjLcKwwV97Zi7duhRVF9uwA2PuYMoLL7FwCzsXE Hola
 
+// The guest's `Message::Write(data)`, `Message::MoveData { data, to }` and `Message::Append(data)`,
+// borsh-encoded as a variant index followed by the fields.
 const WRITE_FUNCTION_ID: u8 = 0;
 const MOVE_DATA_FUNCTION_ID: u8 = 1;
-
-type Instruction = (u8, Vec<u8>);
 
 #[derive(Parser, Debug)]
 struct Cli {
@@ -42,6 +44,10 @@ struct Cli {
 
     /// An existing, funded account to pay the deployment fee.
     payer: AccountId,
+
+    /// An already deployed instance of the program to call, instead of deploying a new one.
+    #[arg(long)]
+    program_id: Option<AccountId>,
 
     #[command(subcommand)]
     command: Command,
@@ -69,17 +75,18 @@ enum Command {
     },
 }
 
-async fn shard_bytes(
-    wallet_core: &WalletCore,
+async fn actor_state_bytes(
+    wallet_core: &WalletCore<SequencerClient>,
     account_id: AccountId,
     program_account_id: AccountId,
 ) -> Vec<u8> {
     wallet_core
-        .get_account_view(ProgramShardSelector::new(account_id, program_account_id))
+        .get_account_view(Actor::new(account_id, program_account_id))
         .await
         .unwrap()
+        .unwrap_or_default()
         .data
-        .shard(program_account_id)
+        .actor_state(program_account_id)
         .as_ref()
         .to_vec()
 }
@@ -95,28 +102,36 @@ async fn main() {
     // the local proving bundle for the private-tx arms.
     let bytecode: Vec<u8> = std::fs::read(cli.program_path).unwrap();
     let program = Program::new(bytecode.clone().into()).unwrap();
-    let program_account_id = deploy_program(&mut wallet_core, bytecode, cli.payer)
+    let program_account_id = deploy_or_reuse(&mut wallet_core, bytecode, cli.payer, cli.program_id)
         .await
         .unwrap();
-    let program_with_dependencies =
-        ProgramWithDependencies::new(program, program_account_id, HashMap::new());
+    let programs = ProgramCatalog::from([(program_account_id, program)]);
 
     match cli.command {
         Command::WritePublic {
             account_id,
             greeting,
         } => {
-            let instruction: Instruction = (WRITE_FUNCTION_ID, greeting.into_bytes());
+            let message = (WRITE_FUNCTION_ID, greeting.into_bytes());
             let account_id = account_id.parse().unwrap();
-            let nonces = vec![];
-            let message = public_transaction::Message::try_new(
-                program_account_id,
-                vec![ProgramShardSelector::new(account_id, program_account_id)],
-                nonces,
-                instruction,
-            )
-            .unwrap();
-            let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+            let account = Actor::new(account_id, program_account_id);
+            let (fee, payer_nonce, payer_signer) =
+                fee_paid_by(&wallet_core, cli.payer).await.unwrap();
+            let nonces = BTreeMap::from([(cli.payer, payer_nonce)]);
+            let message = public_transaction::Message {
+                admission_evidence: admission_evidence(&wallet_core, account_id)
+                    .into_iter()
+                    .collect(),
+                ..public_transaction::Message::try_new_with_fees(
+                    account,
+                    vec![(account, Authority::None)],
+                    nonces,
+                    message,
+                    fee,
+                )
+                .unwrap()
+            };
+            let witness_set = public_transaction::WitnessSet::sign(&message, &[payer_signer]);
             let tx = PublicTransaction::new(message, witness_set);
 
             // Submit the transaction
@@ -130,17 +145,16 @@ async fn main() {
             account_id,
             greeting,
         } => {
-            let instruction: Instruction = (WRITE_FUNCTION_ID, greeting.into_bytes());
-            let account_id = account_id.parse().unwrap();
-            let accounts = vec![
-                AccountIdentity::PrivateOwned(account_id).select_program_shard(program_account_id),
-            ];
+            let message = (WRITE_FUNCTION_ID, greeting.into_bytes());
+            let account = AccountIdentity::PrivateOwned(account_id.parse().unwrap())
+                .select_program_actor_state(program_account_id);
 
             wallet_core
                 .send_privacy_preserving_tx(
-                    accounts,
-                    Program::serialize_instruction(instruction).unwrap(),
-                    &program_with_dependencies,
+                    vec![account],
+                    0,
+                    Program::serialize_message(message).unwrap(),
+                    &programs,
                 )
                 .await
                 .unwrap();
@@ -148,20 +162,28 @@ async fn main() {
         Command::MoveDataPublicToPublic { from, to } => {
             let from = from.parse().unwrap();
             let to = to.parse().unwrap();
-            let moved = shard_bytes(&wallet_core, from, program_account_id).await;
-            let instruction: Instruction = (MOVE_DATA_FUNCTION_ID, moved);
-            let nonces = vec![];
-            let message = public_transaction::Message::try_new(
-                program_account_id,
-                vec![
-                    ProgramShardSelector::new(from, program_account_id),
-                    ProgramShardSelector::new(to, program_account_id),
-                ],
-                nonces,
-                instruction,
-            )
-            .unwrap();
-            let witness_set = public_transaction::WitnessSet::for_message(&message, &[]);
+            let moved = actor_state_bytes(&wallet_core, from, program_account_id).await;
+            let source = Actor::new(from, program_account_id);
+            let destination = Actor::new(to, program_account_id);
+            let message = (MOVE_DATA_FUNCTION_ID, moved, to);
+            let (fee, payer_nonce, payer_signer) =
+                fee_paid_by(&wallet_core, cli.payer).await.unwrap();
+            let nonces = BTreeMap::from([(cli.payer, payer_nonce)]);
+            let message = public_transaction::Message {
+                admission_evidence: [from, to]
+                    .into_iter()
+                    .filter_map(|account_id| admission_evidence(&wallet_core, account_id))
+                    .collect(),
+                ..public_transaction::Message::try_new_with_fees(
+                    source,
+                    vec![(source, Authority::None), (destination, Authority::None)],
+                    nonces,
+                    message,
+                    fee,
+                )
+                .unwrap()
+            };
+            let witness_set = public_transaction::WitnessSet::sign(&message, &[payer_signer]);
             let tx = PublicTransaction::new(message, witness_set);
 
             // Submit the transaction
@@ -174,19 +196,20 @@ async fn main() {
         Command::MoveDataPublicToPrivate { from, to } => {
             let from = from.parse().unwrap();
             let to = to.parse().unwrap();
-            let moved = shard_bytes(&wallet_core, from, program_account_id).await;
-            let instruction: Instruction = (MOVE_DATA_FUNCTION_ID, moved);
-
-            let accounts = vec![
-                AccountIdentity::Public(from).select_program_shard(program_account_id),
-                AccountIdentity::PrivateOwned(to).select_program_shard(program_account_id),
-            ];
+            let moved = actor_state_bytes(&wallet_core, from, program_account_id).await;
+            let source =
+                AccountIdentity::Public(from).select_program_actor_state(program_account_id);
+            let destination =
+                AccountIdentity::PrivateOwned(to).select_program_actor_state(program_account_id);
+            let accounts = vec![source, destination];
+            let message = (MOVE_DATA_FUNCTION_ID, moved, to);
 
             wallet_core
                 .send_privacy_preserving_tx(
                     accounts,
-                    Program::serialize_instruction(instruction).unwrap(),
-                    &program_with_dependencies,
+                    0,
+                    Program::serialize_message(message).unwrap(),
+                    &programs,
                 )
                 .await
                 .unwrap();

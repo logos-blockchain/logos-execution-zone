@@ -161,6 +161,12 @@ impl<C: ColumnFamilies> Database<C> {
         Ok(Some(value))
     }
 
+    /// The stored bytes for `key`, undecoded.
+    pub fn get_bytes<T: Storable<C>>(&self, key: &T::Key) -> Result<Option<Vec<u8>>> {
+        let cf = self.column_family::<T>();
+        Ok(self.db.get_cf(cf, Self::encode_key::<T>(key))?)
+    }
+
     /// Get an iterator over all items of the given type.
     ///
     /// Order of items is determined by lexicographic order of their encoded keys, see

@@ -11,8 +11,8 @@ use integration_tests::{
     utils::{get_account, new_account},
 };
 use key_protocol::key_management::KeyChain;
-use lee::Account;
-use lee_core::Identifier;
+use lee::{Account, test_utils::TestSigner};
+use lee_core::{account::Nonce, signing_key::signature_program_id};
 use tokio::test;
 use wallet::{
     account::{AccountIdWithPrivacy, HumanReadableAccount, Label},
@@ -27,17 +27,27 @@ use wallet::{
 async fn get_existing_account() -> Result<()> {
     let ctx = TestContext::new().await?;
 
-    let account = get_account(&ctx, ctx.existing_public_accounts()[0]).await?;
+    let account_id = ctx.existing_public_accounts()[0];
+    let account = get_account(&ctx, account_id).await?;
+    let signer = TestSigner::from(
+        ctx.wallet()
+            .storage()
+            .key_chain()
+            .pub_account_secret(account_id)
+            .context("the wallet holds the account")?,
+    );
 
-    // Genesis credits the account.
+    // It gets used as a funder for private accounts on genesis twice, so it signed twice.
+    assert_eq!(account.nonce.0, 2);
+    // Genesis credits the account, and its key rotated with each signature.
     assert_eq!(
         account.data,
-        Account::funded(INITIAL_PUBLIC_BALANCES_FOR_WALLET[0]).data
+        Account::funded(INITIAL_PUBLIC_BALANCES_FOR_WALLET[0])
+            .with_actor_state(signature_program_id(), signer.key_state(Nonce(2)).encode())
+            .data
     );
-    // It also gets used as a funder for private accounts on genesis twice.
-    assert_eq!(account.nonce.0, 2);
 
-    log::info!("Successfully retrieved account with correct details");
+    tracing::info!("Successfully retrieved account with correct details");
 
     Ok(())
 }
@@ -64,7 +74,7 @@ async fn new_public_account_with_label() -> Result<()> {
 
     assert_eq!(resolved, Some(AccountIdWithPrivacy::Public(account_id)));
 
-    log::info!("Successfully created public account with label");
+    tracing::info!("Successfully created public account with label");
 
     Ok(())
 }
@@ -86,7 +96,7 @@ async fn add_label_to_existing_account() -> Result<()> {
 
     assert_eq!(resolved, Some(AccountIdWithPrivacy::Private(account_id)));
 
-    log::info!("Successfully set label on existing private account");
+    tracing::info!("Successfully set label on existing private account");
 
     Ok(())
 }
@@ -107,7 +117,7 @@ async fn new_public_account_without_label() -> Result<()> {
         "No label should be stored when not provided"
     );
 
-    log::info!("Successfully created public account without label");
+    tracing::info!("Successfully created public account without label");
 
     Ok(())
 }
@@ -116,11 +126,11 @@ async fn new_public_account_without_label() -> Result<()> {
 async fn import_public_account() -> Result<()> {
     let mut ctx = TestContext::new().await?;
 
-    let private_key = lee::PrivateKey::new_os_random();
-    let account_id = lee::AccountId::from(&lee::PublicKey::new_from_private_key(&private_key));
+    let secret = lee::signature::PublicAccountSecret::new_os_random();
+    let account_id = TestSigner::from(&secret).account_id();
 
     let command = Command::Account(AccountSubcommand::Import(ImportSubcommand::Public {
-        private_key,
+        secret,
     }));
     let sub_ret = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
     let SubcommandReturnValue::Empty = sub_ret else {
@@ -131,7 +141,7 @@ async fn import_public_account() -> Result<()> {
         .wallet()
         .storage()
         .key_chain()
-        .pub_account_signing_key(account_id);
+        .pub_account_initial_key(account_id);
     assert!(
         imported_key.is_some(),
         "Imported public account should be present"
@@ -148,7 +158,6 @@ async fn import_private_account() -> Result<()> {
     let account_id = lee::AccountId::from((
         &key_chain.nullifier_public_key,
         &key_chain.viewing_public_key,
-        Identifier::ZERO,
     ));
     let account = lee::Account::funded(777);
 
@@ -160,7 +169,6 @@ async fn import_private_account() -> Result<()> {
         key_chain_json,
         account_state,
         chain_index: None,
-        identifier: Some(lee_core::Identifier::ZERO),
     }));
     let sub_ret = wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
     let SubcommandReturnValue::Empty = sub_ret else {
@@ -189,7 +197,7 @@ async fn import_private_account() -> Result<()> {
 
     assert_eq!(imported_acc.chain_index, None);
 
-    assert_eq!(imported_acc.kind.identifier(), Identifier::ZERO);
+    assert_eq!(imported_acc.kind, &lee_core::PrivateAccountKind::Regular);
 
     assert_eq!(imported_acc.account, &account);
 
@@ -204,7 +212,6 @@ async fn import_private_account_second_time_overrides_account_data() -> Result<(
     let account_id = lee::AccountId::from((
         &key_chain.nullifier_public_key,
         &key_chain.viewing_public_key,
-        Identifier::ZERO,
     ));
     let key_chain_json =
         serde_json::to_string(&key_chain).context("Failed to serialize key chain")?;
@@ -218,7 +225,6 @@ async fn import_private_account_second_time_overrides_account_data() -> Result<(
             key_chain_json: key_chain_json.clone(),
             account_state: HumanReadableAccount::from(initial_account),
             chain_index: None,
-            identifier: Some(lee_core::Identifier::ZERO),
         })),
     )
     .await?;
@@ -232,7 +238,6 @@ async fn import_private_account_second_time_overrides_account_data() -> Result<(
             key_chain_json,
             account_state: HumanReadableAccount::from(updated_account.clone()),
             chain_index: None,
-            identifier: Some(lee_core::Identifier::ZERO),
         })),
     )
     .await?;

@@ -1,0 +1,175 @@
+use common::HashType;
+use lee::{
+    AccountId, Balance, error::LeeError, privacy_preserving_transaction::circuit::ProgramCatalog,
+    program::Program,
+};
+use lee_core::SharedSecretKey;
+use sequencer_stake_core::{ChannelParams, Message, SequencerKey, StakeRecord, stake_funds_seed};
+
+use crate::{
+    AccountIdentity, AccountMention, AsyncDelivery, ExecutionFailureKind, WalletCore,
+    WalletSequencerClient, account_manager::random_bytes,
+};
+
+pub struct SequencerStake<'wallet, C: WalletSequencerClient>(pub &'wallet WalletCore<C>);
+
+impl<C: WalletSequencerClient> SequencerStake<'_, C> {
+    // The signing ownership account's stake actor is the root, and `funding`'s native balance pays,
+    // publicly or privately: the ownership transition requests exactly that transfer into the
+    // funds.
+    pub async fn send_stake(
+        &self,
+        ownership: AccountIdentity,
+        funding: AccountIdentity,
+        sequencer_key: SequencerKey,
+        amount: Balance,
+    ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
+        let program = programs::sequencer_stake_account_id();
+        let has_record = !super::actor_state(self.0, &ownership, program)
+            .await?
+            .is_empty();
+        let funds = AccountIdentity::PublicPda {
+            program,
+            seed: stake_funds_seed(&ownership.account_id()),
+        };
+        // A private funder's grant is held under the address its opening gives, so the message
+        // names that address.
+        let opening = funding.is_private().then(random_bytes);
+        let funding_id = funding.account_id();
+        let funding_address = opening.map_or(funding_id, |opening| funding_id.blinded(&opening));
+        let funding_mention = AccountMention {
+            address_openings: opening.into_iter().collect(),
+            ..funding.balance()
+        };
+        let message = Program::serialize_message(Message::Stake {
+            sequencer_key,
+            amount,
+            has_record,
+            funding: funding_address,
+        })
+        .expect("Message should serialize");
+        // A private owner's fee payouts are published under its recovery binding.
+        let async_delivery = if ownership.is_private() {
+            self.0.async_destination(ownership.clone().balance())?.1
+        } else {
+            AsyncDelivery::default()
+        };
+        let accounts = vec![
+            ownership.select_program_actor_state(program),
+            funds.balance().without_authorization(),
+            funding_mention,
+            AccountIdentity::PublicNoSign(system_accounts::sequencer_stake_config_account_id())
+                .select_program_actor_state(program),
+        ];
+        self.0
+            .send_tx(
+                accounts,
+                0,
+                message,
+                &ProgramCatalog::from([(program, programs::sequencer_stake())]),
+                None,
+                async_delivery,
+            )
+            .await
+    }
+
+    pub async fn send_unstake_request(
+        &self,
+        ownership: AccountId,
+        amount: Balance,
+        destination: AccountId,
+    ) -> Result<HashType, ExecutionFailureKind> {
+        let payable = self
+            .0
+            .get_account_public(destination)
+            .await
+            .map_err(ExecutionFailureKind::SequencerError)?
+            .is_some()
+            || self
+                .0
+                .get_recovery_binding(destination)
+                .await
+                .map_err(ExecutionFailureKind::SequencerError)?
+                .is_some();
+        if !payable {
+            return Err(ExecutionFailureKind::TransactionBuildError(
+                LeeError::InvalidInput(format!(
+                    "FinalizeUnstake cannot pay {destination}: it is neither a public account nor \
+                     a bound private address"
+                )),
+            ));
+        }
+        let program = programs::sequencer_stake_account_id();
+        let owner = AccountIdentity::Public(ownership);
+        let record = StakeRecord::from_bytes(&super::actor_state(self.0, &owner, program).await?)
+            .ok_or(ExecutionFailureKind::AccountDataError(ownership))?;
+        let message = Program::serialize_message(Message::UnstakeRequest {
+            sequencer_key: record.sequencer_key,
+            amount,
+            destination,
+        })
+        .expect("Message should serialize");
+        let accounts = vec![
+            owner.select_program_actor_state(program),
+            AccountIdentity::PublicNoSign(system_accounts::sequencer_stake_config_account_id())
+                .select_program_actor_state(program),
+        ];
+        self.0.send_pub_tx(accounts, 0, message).await
+    }
+
+    /// Votes for `params` as the key `ownership` backs. `payer` covers the fee, `ownership` if
+    /// `None`.
+    pub async fn send_params_vote(
+        &self,
+        ownership: AccountId,
+        params: ChannelParams,
+        payer: Option<AccountId>,
+    ) -> Result<HashType, ExecutionFailureKind> {
+        self.send_vote_message(
+            ownership,
+            |sequencer_key| Message::VoteChannelParams {
+                sequencer_key,
+                params,
+            },
+            payer,
+        )
+        .await
+    }
+
+    /// Withdraws the vote of the key `ownership` backs. `payer` covers the fee, `ownership` if
+    /// `None`.
+    pub async fn send_params_vote_withdrawal(
+        &self,
+        ownership: AccountId,
+        payer: Option<AccountId>,
+    ) -> Result<HashType, ExecutionFailureKind> {
+        self.send_vote_message(
+            ownership,
+            |sequencer_key| Message::WithdrawChannelParamsVote { sequencer_key },
+            payer,
+        )
+        .await
+    }
+
+    async fn send_vote_message(
+        &self,
+        ownership: AccountId,
+        message: impl FnOnce(SequencerKey) -> Message,
+        payer: Option<AccountId>,
+    ) -> Result<HashType, ExecutionFailureKind> {
+        let program = programs::sequencer_stake_account_id();
+        let owner = AccountIdentity::Public(ownership);
+        let record = StakeRecord::from_bytes(&super::actor_state(self.0, &owner, program).await?)
+            .ok_or(ExecutionFailureKind::AccountDataError(ownership))?;
+        let message = Program::serialize_message(message(record.sequencer_key))
+            .expect("Message should serialize");
+        let accounts = vec![
+            owner.select_program_actor_state(program),
+            AccountIdentity::PublicNoSign(system_accounts::sequencer_stake_config_account_id())
+                .select_program_actor_state(program),
+        ];
+        self.0
+            .send_pub_tx_paid_by(accounts, 0, message, payer)
+            .await
+    }
+}

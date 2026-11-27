@@ -6,7 +6,7 @@ use std::{
 
 use common::{
     HashType,
-    block::{BedrockStatus, Block, BlockMeta, PeerChainTip},
+    block::{BedrockStatus, Block, BlockMeta, TransactionReceipt},
     transaction::{LeeTransaction, TxEvents},
 };
 use itertools::Itertools as _;
@@ -18,27 +18,24 @@ use kameo::{
 };
 use lee::{AccountId, V03State};
 use lee_core::BlockId;
-use log::debug;
+use tracing::debug;
 
 #[cfg(feature = "test-utils")]
 use crate::protocol::ResetAllBlocksToPending;
 use crate::{
     Result, StorageActorTrait,
-    actor::{event_filter::EventFilter, tx_index::TransactionIndex},
+    actor::tx_index::TransactionIndex,
     error::Error,
     protocol::{
-        AddPendingCrossZoneDispatches, AtomicUpdate, DbDump, DeadLetterDispatch, DeadLetterRequeue,
-        DeleteBlock, DeleteCrossZonePeerFloor, DeleteZoneCheckpoint, DispatchFailure,
-        DropSettledCrossZoneDispatches, DumpDb, GetAccountTransactions, GetAllBlocks, GetBlock,
-        GetBlockByHash, GetBlockEvents, GetChannelViewBytes, GetCrossZonePeerFloorBytes,
-        GetCrossZonePeerTip, GetDeadLetterDispatchCount, GetDeadLetterDispatches, GetEventFilter,
-        GetFinalSnapshot, GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState,
-        GetPendingCrossZoneDispatches, GetPendingDepositEvents, GetSlashRecordBytes,
-        GetTransactionByHash, GetTxHashToBlockIdMapItem, GetZoneAnchor, GetZoneCheckpoint,
-        PendingCrossZoneDispatchRecord, PendingDepositEventRecord, PutSlashRecordBytes,
-        RecordDispatchFailure, RequeueDeadLetterDispatch, SetCrossZonePeerFloorBytes,
-        SetCrossZonePeerTip, SetZoneAnchor, StoreUpdateOutcome, UpdateZoneCheckpoint,
-        WithdrawalReconciliationKey, ZoneAnchorRecord, ZoneCheckpointRecord,
+        AtomicUpdate, DbDump, DeleteBlock, DeleteZoneCheckpoint, DumpDb, EventFilter,
+        GetAccountTransactions, GetAllBlocks, GetBlock, GetBlockByHash, GetBlockEvents,
+        GetChannelViewBytes, GetEventFilter, GetFinalConfigsBytes, GetFinalSnapshot,
+        GetFirstBlockId, GetLastBlockId, GetLatestBlockMeta, GetLeeState, GetPendingDepositEvents,
+        GetSlashRecordBytes, GetSystemApprovalsBytes, GetTransactionByHash,
+        GetTransactionReceiptByHash, GetTxHashToBlockIdMapItem, GetZoneAnchor, GetZoneCheckpoint,
+        PendingDepositEventRecord, PutFinalConfigsBytes, PutSlashRecordBytes,
+        PutSystemApprovalsBytes, SetZoneAnchor, StoreUpdateOutcome, UpdateZoneCheckpoint,
+        WithdrawalReconciliationKey, ZoneAnchorRecord,
     },
 };
 
@@ -50,10 +47,6 @@ pub mod event_filter;
 #[cfg(test)]
 mod tests;
 mod tx_index;
-
-// TODO: Remove this hardcoding unrelated to the storage actor and make it configurable by
-// the ExecutorActor (or CrossZoneRelayerActor in future).
-const MAX_PENDING_CROSS_ZONE_DISPATCHES: usize = 4096;
 
 pub struct StorageActor {
     /// `None` after [`Actor::on_stop`] closed the database.
@@ -107,6 +100,26 @@ impl StorageActor {
             .expect("Database is closed, the actor has already stopped")
     }
 
+    /// The block holding `hash`, and the transaction's position in it.
+    fn block_with_transaction(&self, hash: HashType) -> Result<Option<(Block, usize)>> {
+        let Some(block_id) = self.tx_index.block_for_tx(&hash) else {
+            return Ok(None);
+        };
+        let Some(block) = self
+            .db()
+            .get::<entities::Block>(&encoding::BigEndian::new(&block_id))?
+        else {
+            return Ok(None);
+        };
+        let block = block.block;
+        Ok(block
+            .body
+            .transactions
+            .iter()
+            .position(|transaction| transaction.hash() == hash)
+            .map(|position| (block, position)))
+    }
+
     fn build_tx_index(db: &db::Database<entities::ColumnFamily>) -> Result<TransactionIndex> {
         debug!("Building the transaction index");
 
@@ -119,8 +132,8 @@ impl StorageActor {
             })?;
 
         debug!(
-            "Transaction index built, holding {} transactions",
-            index.transaction_count()
+            transaction_count = index.transaction_count(),
+            "Transaction index built"
         );
 
         Ok(index)
@@ -441,36 +454,6 @@ impl StorageActor {
         Ok(())
     }
 
-    /// Stages `checkpoint`, if it's newer than the one already stored.
-    fn stage_zone_checkpoint(
-        &self,
-        batch: &mut db::WriteBatch,
-        checkpoint: ZoneCheckpointRecord,
-    ) -> Result<()> {
-        let stored = self
-            .db()
-            .get::<entities::ZoneCheckpoint>(&encoding::SingletonKey)?;
-
-        if let Some(stored) = stored
-            && stored.seq >= checkpoint.seq
-        {
-            log::debug!(
-                "Dropping a zone checkpoint at sequence {} for the stored one at {}",
-                checkpoint.seq,
-                stored.seq,
-            );
-            return Ok(());
-        }
-
-        self.db()
-            .put_batch(
-                batch,
-                &encoding::SingletonKey,
-                &entities::ZoneCheckpoint::from(checkpoint),
-            )
-            .map_err(Into::into)
-    }
-
     /// Records the deposits `new_deposit_events` observes and drops the records
     /// of `finalized_deposit_records`, returning how many were newly recorded.
     fn update_pending_deposits(
@@ -557,47 +540,6 @@ impl StorageActor {
         }
 
         Ok(unmatched_withdrawals)
-    }
-
-    /// Drops the records of the deliveries `settled_dispatches` reports as
-    /// settled for good.
-    fn stage_settled_dispatches(
-        &self,
-        batch: &mut db::WriteBatch,
-        settled_dispatches: impl IntoIterator<Item = entities::CrossZoneMessageKey>,
-    ) -> Result<()> {
-        let mut dead_letters = self
-            .db()
-            .get::<entities::DeadLetterDispatches>(&encoding::SingletonKey)?;
-        let mut reconciled = false;
-
-        for key in settled_dispatches.into_iter().unique() {
-            // A point read before the delete so a key naming no record stages
-            // nothing, keeping an update that settles nothing out of the batch.
-            if self
-                .db()
-                .get::<entities::PendingCrossZoneDispatch>(&key)?
-                .is_some()
-            {
-                self.db()
-                    .delete_batch::<entities::PendingCrossZoneDispatch>(batch, &key);
-            }
-
-            if let Some(dead_letters) = dead_letters.as_mut()
-                && dead_letters.remove(&key).is_some()
-            {
-                reconciled = true;
-            }
-        }
-
-        if let Some(dead_letters) = dead_letters
-            && reconciled
-        {
-            self.db()
-                .put_batch(batch, &encoding::SingletonKey, &dead_letters)?;
-        }
-
-        Ok(())
     }
 
     fn get_affecting_txs_for_account_id(
@@ -742,23 +684,28 @@ impl Message<GetTransactionByHash> for StorageActor {
         GetTransactionByHash { hash }: GetTransactionByHash,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let Some(block_id) = self.tx_index.block_for_tx(&hash) else {
-            return Ok(None);
-        };
-        let Some(block) = self
-            .db()
-            .get::<entities::Block>(&encoding::BigEndian::new(&block_id))?
-        else {
-            return Ok(None);
-        };
+        Ok(self
+            .block_with_transaction(hash)?
+            .map(|(mut block, position)| {
+                (
+                    block.body.transactions.swap_remove(position),
+                    block.header.block_id,
+                )
+            }))
+    }
+}
 
-        Ok(block
-            .block
-            .body
-            .transactions
-            .into_iter()
-            .find(|transaction| transaction.hash() == hash)
-            .map(|transaction| (transaction, block_id)))
+impl Message<GetTransactionReceiptByHash> for StorageActor {
+    type Reply = Result<Option<TransactionReceipt>>;
+
+    async fn handle(
+        &mut self,
+        GetTransactionReceiptByHash { hash }: GetTransactionReceiptByHash,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self
+            .block_with_transaction(hash)?
+            .and_then(|(block, position)| block.body.receipts.get(position).copied()))
     }
 }
 
@@ -836,7 +783,7 @@ impl Message<GetLeeState> for StorageActor {
 }
 
 impl Message<GetZoneCheckpoint> for StorageActor {
-    type Reply = Result<Option<ZoneCheckpointRecord>>;
+    type Reply = Result<Option<Vec<u8>>>;
 
     async fn handle(
         &mut self,
@@ -846,7 +793,7 @@ impl Message<GetZoneCheckpoint> for StorageActor {
         Ok(self
             .db()
             .get::<entities::ZoneCheckpoint>(&encoding::SingletonKey)?
-            .map(Into::into))
+            .map(|checkpoint| checkpoint.bytes))
     }
 }
 
@@ -855,12 +802,12 @@ impl Message<UpdateZoneCheckpoint> for StorageActor {
 
     async fn handle(
         &mut self,
-        UpdateZoneCheckpoint { checkpoint }: UpdateZoneCheckpoint,
+        UpdateZoneCheckpoint { bytes }: UpdateZoneCheckpoint,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        let mut batch = db::WriteBatch::default();
-        self.stage_zone_checkpoint(&mut batch, checkpoint)?;
-        self.db().write(batch).map_err(Into::into)
+        self.db()
+            .put(&encoding::SingletonKey, &entities::ZoneCheckpoint { bytes })
+            .map_err(Into::into)
     }
 }
 
@@ -889,6 +836,67 @@ impl Message<PutSlashRecordBytes> for StorageActor {
     ) -> Self::Reply {
         self.db()
             .put(&encoding::SingletonKey, &entities::SlashRecord { bytes })
+            .map_err(Into::into)
+    }
+}
+
+impl Message<GetSystemApprovalsBytes> for StorageActor {
+    type Reply = Result<Option<Vec<u8>>>;
+
+    async fn handle(
+        &mut self,
+        GetSystemApprovalsBytes: GetSystemApprovalsBytes,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self
+            .db()
+            .get::<entities::SystemApprovalsRecord>(&encoding::SingletonKey)?
+            .map(|record| record.bytes))
+    }
+}
+
+impl Message<PutSystemApprovalsBytes> for StorageActor {
+    type Reply = Result<()>;
+
+    async fn handle(
+        &mut self,
+        PutSystemApprovalsBytes { bytes }: PutSystemApprovalsBytes,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.db()
+            .put(
+                &encoding::SingletonKey,
+                &entities::SystemApprovalsRecord { bytes },
+            )
+            .map_err(Into::into)
+    }
+}
+
+impl Message<GetFinalConfigsBytes> for StorageActor {
+    type Reply = Result<Option<Vec<u8>>>;
+
+    async fn handle(
+        &mut self,
+        GetFinalConfigsBytes: GetFinalConfigsBytes,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        Ok(self
+            .db()
+            .get::<entities::FinalConfigs>(&encoding::SingletonKey)?
+            .map(|record| record.bytes))
+    }
+}
+
+impl Message<PutFinalConfigsBytes> for StorageActor {
+    type Reply = Result<()>;
+
+    async fn handle(
+        &mut self,
+        PutFinalConfigsBytes { bytes }: PutFinalConfigsBytes,
+        _ctx: &mut Context<Self, Self::Reply>,
+    ) -> Self::Reply {
+        self.db()
+            .put(&encoding::SingletonKey, &entities::FinalConfigs { bytes })
             .map_err(Into::into)
     }
 }
@@ -990,7 +998,6 @@ impl Message<AtomicUpdate> for StorageActor {
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
         let AtomicUpdate {
-            checkpoint,
             blocks,
             channel_view,
             head_tip,
@@ -1001,7 +1008,6 @@ impl Message<AtomicUpdate> for StorageActor {
             finalized_deposit_records,
             consumed_withdrawals,
             new_withdraw_intents,
-            finalized_dispatch_records,
             zone_anchor,
             events,
         } = msg;
@@ -1015,11 +1021,6 @@ impl Message<AtomicUpdate> for StorageActor {
                 &encoding::SingletonKey,
                 &entities::ChannelView { bytes },
             )?;
-        }
-
-        // Checkpoint
-        if let Some(checkpoint) = checkpoint {
-            self.stage_zone_checkpoint(&mut batch, checkpoint)?;
         }
 
         // Zone anchor
@@ -1047,9 +1048,6 @@ impl Message<AtomicUpdate> for StorageActor {
             new_withdraw_intents,
             &consumed_withdrawals,
         )?;
-
-        // Cross-zone dispatches
-        self.stage_settled_dispatches(&mut batch, finalized_dispatch_records)?;
 
         // State
         if updated_blocks.chain_moved || final_snapshot.is_some() {
@@ -1111,312 +1109,6 @@ impl Message<GetFinalSnapshot> for StorageActor {
                     Arc::into_inner(snapshot.state.0).expect("This is the only strong reference");
                 (state, snapshot.meta)
             }))
-    }
-}
-
-impl Message<GetPendingCrossZoneDispatches> for StorageActor {
-    type Reply = Result<Vec<PendingCrossZoneDispatchRecord>>;
-
-    async fn handle(
-        &mut self,
-        GetPendingCrossZoneDispatches: GetPendingCrossZoneDispatches,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.db()
-            .iter::<entities::PendingCrossZoneDispatch>()
-            .map_ok(|dispatch| PendingCrossZoneDispatchRecord {
-                message_key: dispatch.message_key,
-                transaction: dispatch.transaction,
-                failed_attempts: dispatch.failed_attempts,
-            })
-            .collect::<db::Result<_>>()
-            .map_err(Into::into)
-    }
-}
-
-impl Message<AddPendingCrossZoneDispatches> for StorageActor {
-    type Reply = Result<usize>;
-
-    async fn handle(
-        &mut self,
-        AddPendingCrossZoneDispatches { dispatches }: AddPendingCrossZoneDispatches,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        if dispatches.is_empty() {
-            return Ok(0);
-        }
-
-        let mut deduped_dispatches = Vec::new();
-        for dispatch in dispatches
-            .into_iter()
-            .unique_by(|dispatch| dispatch.message_key)
-        {
-            if self
-                .db()
-                .get::<entities::PendingCrossZoneDispatch>(&dispatch.message_key)?
-                .is_none()
-            {
-                deduped_dispatches.push(dispatch);
-            }
-        }
-
-        let accepted = deduped_dispatches.len();
-        if accepted == 0 {
-            return Ok(0);
-        }
-
-        let pending = self.db().count::<entities::PendingCrossZoneDispatch>();
-        if pending.saturating_add(accepted) > MAX_PENDING_CROSS_ZONE_DISPATCHES {
-            return Err(Error::TooManyPendingCrossZoneDispatches {
-                max: MAX_PENDING_CROSS_ZONE_DISPATCHES,
-            });
-        }
-
-        let mut batch = db::WriteBatch::default();
-        for dispatch in deduped_dispatches {
-            self.db().put_batch(
-                &mut batch,
-                &dispatch.message_key,
-                &entities::PendingCrossZoneDispatch {
-                    message_key: dispatch.message_key,
-                    transaction: dispatch.transaction,
-                    failed_attempts: dispatch.failed_attempts,
-                },
-            )?;
-        }
-        self.db().write(batch)?;
-
-        Ok(accepted)
-    }
-}
-
-impl Message<DropSettledCrossZoneDispatches> for StorageActor {
-    type Reply = Result<()>;
-
-    async fn handle(
-        &mut self,
-        DropSettledCrossZoneDispatches { message_keys }: DropSettledCrossZoneDispatches,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        let mut batch = db::WriteBatch::default();
-        self.stage_settled_dispatches(&mut batch, message_keys)?;
-        self.db().write(batch)?;
-
-        Ok(())
-    }
-}
-
-impl Message<RecordDispatchFailure> for StorageActor {
-    type Reply = Result<DispatchFailure>;
-
-    async fn handle(
-        &mut self,
-        RecordDispatchFailure {
-            message_key,
-            retire_at,
-            origin,
-        }: RecordDispatchFailure,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        let Some(mut pending) = self
-            .db()
-            .get::<entities::PendingCrossZoneDispatch>(&message_key)?
-        else {
-            return Ok(DispatchFailure::Absent);
-        };
-
-        pending.failed_attempts = pending.failed_attempts.saturating_add(1);
-        let failed_attempts = pending.failed_attempts;
-        if failed_attempts < retire_at {
-            self.db().put(&message_key, &pending)?;
-            return Ok(DispatchFailure::Retried { failed_attempts });
-        }
-
-        let dead_letter = entities::DeadLetterDispatch::retiring(
-            message_key,
-            origin.into(),
-            failed_attempts,
-            pending.transaction,
-        );
-        let mut dead_letters = self
-            .db()
-            .get::<entities::DeadLetterDispatches>(&encoding::SingletonKey)?
-            .unwrap_or_default();
-        dead_letters.push(dead_letter.clone());
-
-        let mut batch = db::WriteBatch::default();
-        self.db()
-            .delete_batch::<entities::PendingCrossZoneDispatch>(&mut batch, &message_key);
-        self.db()
-            .put_batch(&mut batch, &encoding::SingletonKey, &dead_letters)?;
-        self.db().write(batch)?;
-
-        Ok(DispatchFailure::Retired(Box::new(dead_letter.into())))
-    }
-}
-
-impl Message<RequeueDeadLetterDispatch> for StorageActor {
-    type Reply = Result<DeadLetterRequeue>;
-
-    async fn handle(
-        &mut self,
-        RequeueDeadLetterDispatch { message_key }: RequeueDeadLetterDispatch,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        let mut dead_letters = self
-            .db()
-            .get::<entities::DeadLetterDispatches>(&encoding::SingletonKey)?
-            .unwrap_or_default();
-
-        let Some(dead_letter) = dead_letters.remove(&message_key) else {
-            return Ok(DeadLetterRequeue::NotFound);
-        };
-        let Some(transaction) = dead_letter.transaction else {
-            return Ok(DeadLetterRequeue::NotRetained);
-        };
-
-        let already_pending = self
-            .db()
-            .get::<entities::PendingCrossZoneDispatch>(&message_key)?
-            .is_some();
-
-        let mut batch = db::WriteBatch::default();
-        self.db()
-            .put_batch(&mut batch, &encoding::SingletonKey, &dead_letters)?;
-
-        if already_pending {
-            self.db().write(batch)?;
-            return Ok(DeadLetterRequeue::AlreadyPending);
-        }
-
-        if self
-            .db()
-            .count::<entities::PendingCrossZoneDispatch>()
-            .saturating_add(1)
-            > MAX_PENDING_CROSS_ZONE_DISPATCHES
-        {
-            return Err(Error::TooManyPendingCrossZoneDispatches {
-                max: MAX_PENDING_CROSS_ZONE_DISPATCHES,
-            });
-        }
-
-        self.db().put_batch(
-            &mut batch,
-            &message_key,
-            &entities::PendingCrossZoneDispatch {
-                message_key,
-                transaction,
-                failed_attempts: 0,
-            },
-        )?;
-        self.db().write(batch)?;
-
-        Ok(DeadLetterRequeue::Requeued)
-    }
-}
-
-impl Message<GetDeadLetterDispatches> for StorageActor {
-    type Reply = Result<Vec<DeadLetterDispatch>>;
-
-    async fn handle(
-        &mut self,
-        GetDeadLetterDispatches: GetDeadLetterDispatches,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        Ok(self
-            .db()
-            .get::<entities::DeadLetterDispatches>(&encoding::SingletonKey)?
-            .into_iter()
-            .flat_map(|dispatches| dispatches.records.into_iter())
-            .map(Into::into)
-            .collect())
-    }
-}
-
-impl Message<GetDeadLetterDispatchCount> for StorageActor {
-    type Reply = Result<u64>;
-
-    async fn handle(
-        &mut self,
-        GetDeadLetterDispatchCount: GetDeadLetterDispatchCount,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        Ok(self
-            .db()
-            .get::<entities::DeadLetterDispatches>(&encoding::SingletonKey)?
-            .map_or(0, |dispatches| dispatches.total))
-    }
-}
-
-impl Message<GetCrossZonePeerFloorBytes> for StorageActor {
-    type Reply = Result<Option<Vec<u8>>>;
-
-    async fn handle(
-        &mut self,
-        GetCrossZonePeerFloorBytes { peer_zone }: GetCrossZonePeerFloorBytes,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        Ok(self
-            .db()
-            .get::<entities::CrossZonePeerFloor>(&peer_zone)?
-            .map(|floor| floor.bytes))
-    }
-}
-
-impl Message<SetCrossZonePeerFloorBytes> for StorageActor {
-    type Reply = Result<()>;
-
-    async fn handle(
-        &mut self,
-        SetCrossZonePeerFloorBytes { peer_zone, bytes }: SetCrossZonePeerFloorBytes,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.db()
-            .put(&peer_zone, &entities::CrossZonePeerFloor { bytes })
-            .map_err(Into::into)
-    }
-}
-
-impl Message<DeleteCrossZonePeerFloor> for StorageActor {
-    type Reply = Result<()>;
-
-    async fn handle(
-        &mut self,
-        DeleteCrossZonePeerFloor { peer_zone }: DeleteCrossZonePeerFloor,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.db()
-            .delete::<entities::CrossZonePeerFloor>(&peer_zone)
-            .map_err(Into::into)
-    }
-}
-
-impl Message<GetCrossZonePeerTip> for StorageActor {
-    type Reply = Result<Option<PeerChainTip>>;
-
-    async fn handle(
-        &mut self,
-        GetCrossZonePeerTip { peer_zone }: GetCrossZonePeerTip,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        Ok(self
-            .db()
-            .get::<entities::CrossZonePeerTip>(&peer_zone)?
-            .map(|peer| peer.tip))
-    }
-}
-
-impl Message<SetCrossZonePeerTip> for StorageActor {
-    type Reply = Result<()>;
-
-    async fn handle(
-        &mut self,
-        SetCrossZonePeerTip { peer_zone, tip }: SetCrossZonePeerTip,
-        _ctx: &mut Context<Self, Self::Reply>,
-    ) -> Self::Reply {
-        self.db()
-            .put(&peer_zone, &entities::CrossZonePeerTip { tip })
-            .map_err(Into::into)
     }
 }
 

@@ -1,7 +1,7 @@
 //! Persistent fee market state, stored in the fee-state account's data.
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use lee_core::account::Fee;
+use lee_core::account::{AccountId, Balance, Fee};
 
 use crate::{BlockFeeSummary, market};
 
@@ -20,6 +20,17 @@ pub struct FeeState {
     pub payout_carry: u128,
     /// Block height; an increment at 2^64 - 1 is a consensus fault.
     pub height: u64,
+    /// The distribution awaiting its inbox balance read; set and cleared within one transaction.
+    pub pending: Option<PendingDistribution>,
+}
+
+/// What a distribution pays once the inbox balance is confirmed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct PendingDistribution {
+    pub revenue_base: Balance,
+    pub revenue_tip: Balance,
+    pub payout: Balance,
+    pub producer: AccountId,
 }
 
 impl FeeState {
@@ -33,6 +44,7 @@ impl FeeState {
             window: [0; market::SMOOTHING_WINDOW],
             payout_carry: 0,
             height: 0,
+            pending: None,
         }
     }
 
@@ -133,7 +145,7 @@ mod tests {
     fn serialized_layout_is_pinned() {
         // The state lives in consensus account data, so its byte layout is part
         // of the protocol: 8 (base_fee_exec) + 8 (base_fee_stor) + 50·16
-        // (window) + 16 (payout_carry) + 8 (height), Borsh LE, no length prefix
+        // (window) + 16 (payout_carry) + 8 (height) + 1 (pending: None), Borsh LE, no length prefix
         // on the fixed array. A field reorder, a type change, or a
         // SMOOTHING_WINDOW bump would change this and must be a deliberate
         // format change (genesis restart), not a silent one.
@@ -141,8 +153,9 @@ mod tests {
             + size_of::<u64>() // base_fee_stor
             + market::SMOOTHING_WINDOW * size_of::<u128>() // window
             + size_of::<u128>() // payout_carry
-            + size_of::<u64>(); // height
-        assert_eq!(EXPECTED_LEN, 840);
+            + size_of::<u64>() // height
+            + size_of::<u8>(); // pending: None
+        assert_eq!(EXPECTED_LEN, 841);
 
         let bytes = FeeState::genesis().to_bytes();
         assert_eq!(bytes.len(), EXPECTED_LEN);

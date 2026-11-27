@@ -1,119 +1,205 @@
 //! Clock Program.
 //!
-//! A system program that records the current block ID and timestamp into dedicated clock accounts.
-//! Three accounts are maintained, updated at different block intervals (every 1, 10, and 50
-//! blocks), allowing programs to read recent timestamps at various granularities.
+//! A system program that records the current block ID and timestamp into a single clock account.
+//! A read names its granularity: the clock rounds the value down to a multiple of it.
 //!
-//! Only the sequencer may invoke this program, as the last transaction in every block.
-//! Each clock account uses this program's shard.
+//! Only the sequencer may tick this program, as the last transaction in every block.
+//! The clock account uses this program's actor state.
 
-use clock_core::{
-    CLOCK_01_PROGRAM_ACCOUNT_ID, CLOCK_10_PROGRAM_ACCOUNT_ID, CLOCK_50_PROGRAM_ACCOUNT_ID,
-    ClockAccountData, Instruction,
-};
-use lee_core::program::{Plan, PlanInput, run_program};
+use clock_core::{CLOCK_PROGRAM_ACCOUNT_ID, ClockAccountData, Message, Reply};
+use lee_core::program::{ReceiveInput, Response, SyncMessage};
 
-#[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
-enum Effect {
-    Advance(ClockAccountData),
-    Record(ClockAccountData),
-}
+lee_core::actor_entrypoint!(handle_message);
 
-fn main() {
-    run_program(plan, apply)
-}
-
-#[expect(
-    clippy::unnecessary_wraps,
-    reason = "run_program's apply returns None to keep a shard"
-)]
-fn apply(effect: Effect, pre_data: &[u8]) -> Option<Vec<u8>> {
-    Some(match effect {
-        Effect::Advance(data) => {
-            let previous = ClockAccountData::from_bytes(pre_data);
+fn handle_message(input: &ReceiveInput, message: Message) -> Response {
+    assert_eq!(
+        input.receiver.account_id, CLOCK_PROGRAM_ACCOUNT_ID,
+        "The clock program runs only on the clock account"
+    );
+    let clock = ClockAccountData::from_bytes(&input.pre_state);
+    match message {
+        Message::Tick {
+            timestamp,
+            block_id,
+        } => {
             assert_eq!(
-                previous.block_id.checked_add(1),
-                Some(data.block_id),
+                clock.block_id.checked_add(1),
+                Some(block_id),
                 "Clock block id must advance by exactly one from the account's own"
             );
-            data.to_bytes()
+            Response::set_state(
+                ClockAccountData {
+                    block_id,
+                    timestamp,
+                }
+                .to_bytes(),
+            )
         }
-        Effect::Record(data) => data.to_bytes(),
-    })
+        Message::ReadBlockId { granularity } => send_back(
+            input,
+            Reply::BlockId(round_down(clock.block_id, granularity)),
+        ),
+        Message::ReadTimestamp { granularity } => send_back(
+            input,
+            Reply::Timestamp(round_down(clock.timestamp, granularity)),
+        ),
+    }
 }
 
-fn plan(input: &PlanInput, instruction: Instruction) -> Plan {
-    let Ok([pre_01, pre_10, pre_50]) = <&[_; 3]>::try_from(input.accounts.as_slice()) else {
-        panic!("Invalid number of input accounts");
-    };
+fn send_back(input: &ReceiveInput, reply: Reply) -> Response {
+    let sender = input
+        .from
+        .expect("The clock replies to its sender, so a root call cannot read it");
+    // The reply returns the grant the sender lent, so its handler can act on it.
+    Response::keep_state().send(SyncMessage::new(sender, &reply).with_lent_grant(input))
+}
 
-    // Verify the accounts correspond to the expected clock account IDs.
-    if pre_01.account_id != CLOCK_01_PROGRAM_ACCOUNT_ID
-        || pre_10.account_id != CLOCK_10_PROGRAM_ACCOUNT_ID
-        || pre_50.account_id != CLOCK_50_PROGRAM_ACCOUNT_ID
-    {
-        panic!("Invalid input accounts");
-    }
-
-    let Instruction {
-        timestamp,
-        block_id,
-    } = instruction;
-    let updated_data = ClockAccountData {
-        block_id,
-        timestamp,
-    };
-
-    let mut plan = Plan::new(input);
-    // The schedule below is decided from the proposed block ID, which the transaction is only
-    // accepted with if `Advance` finds it one past the every-block account's own.
-    plan.effect(pre_01, &Effect::Advance(updated_data));
-    if block_id.is_multiple_of(10) {
-        plan.effect(pre_10, &Effect::Record(updated_data));
-    }
-    if block_id.is_multiple_of(50) {
-        plan.effect(pre_50, &Effect::Record(updated_data));
-    }
-    plan
+fn round_down(value: u64, granularity: u64) -> u64 {
+    assert!(granularity > 0, "Clock granularity must be positive");
+    value - value % granularity
 }
 
 #[cfg(test)]
 mod tests {
+    use lee_core::{
+        account::{AccountId, Actor, ActorState},
+        program::{SyncMessage, Transition},
+    };
+
     use super::*;
+
+    const CLOCK: AccountId = AccountId::new([1; 32]);
 
     fn data(block_id: u64) -> ClockAccountData {
         ClockAccountData {
             block_id,
-            timestamp: 1_700_000_000,
+            timestamp: 1_700_000_057,
         }
     }
 
+    fn tick(block_id: u64) -> Message {
+        Message::Tick {
+            timestamp: 1_700_000_057,
+            block_id,
+        }
+    }
+
+    fn run_on(
+        account_id: AccountId,
+        from: Option<Actor>,
+        pre: ClockAccountData,
+        message: Message,
+    ) -> Transition {
+        let receiver = Actor::new(account_id, CLOCK);
+        let input = ReceiveInput {
+            receiver,
+            from,
+            grants: std::collections::BTreeSet::new(),
+            pre_state: ActorState::from(pre.to_bytes()),
+            message: borsh::to_vec(&message).unwrap(),
+        };
+        handle_message(&input, message).into_transition(input)
+    }
+
+    fn run(pre: ClockAccountData, message: Message) -> Transition {
+        run_on(CLOCK_PROGRAM_ACCOUNT_ID, None, pre, message)
+    }
+
     #[test]
-    fn the_every_block_account_advances_by_one() {
+    fn a_tick_advances_the_clock_by_one() {
+        let transition = run(data(7), tick(8));
+
         assert_eq!(
-            apply(Effect::Advance(data(8)), &data(7).to_bytes()),
-            Some(data(8).to_bytes())
+            transition.response.post_state,
+            Some(ActorState::from(data(8).to_bytes()))
+        );
+        assert!(
+            transition.response.sync_messages.is_empty()
+                && transition.response.async_messages.is_empty()
         );
     }
 
     #[test]
     #[should_panic(expected = "Clock block id must advance by exactly one")]
     fn a_block_id_that_skips_ahead_is_refused() {
-        // The block ID drives the 10/50 schedule, so a forged one would off schedule.
-        apply(Effect::Advance(data(9)), &data(7).to_bytes());
+        let _transition = run(data(7), tick(9));
     }
 
     #[test]
     #[should_panic(expected = "Clock block id must advance by exactly one")]
     fn a_block_id_that_repeats_is_refused() {
-        apply(Effect::Advance(data(7)), &data(7).to_bytes());
+        let _transition = run(data(7), tick(7));
     }
 
     #[test]
-    fn a_coarser_account_stores_the_same_values() {
+    #[should_panic(expected = "The clock program runs only on the clock account")]
+    fn another_account_is_refused() {
+        let _transition = run_on(AccountId::new([2; 32]), None, data(9), tick(10));
+    }
+
+    #[test]
+    fn a_read_sends_the_rounded_value_back_to_its_sender() {
+        let sender = Actor::new(AccountId::new([3; 32]), AccountId::new([4; 32]));
+        for (message, reply) in [
+            (Message::ReadBlockId { granularity: 1 }, Reply::BlockId(57)),
+            (Message::ReadBlockId { granularity: 10 }, Reply::BlockId(50)),
+            (Message::ReadBlockId { granularity: 100 }, Reply::BlockId(0)),
+            (
+                Message::ReadTimestamp { granularity: 1 },
+                Reply::Timestamp(1_700_000_057),
+            ),
+            (
+                Message::ReadTimestamp { granularity: 1_000 },
+                Reply::Timestamp(1_700_000_000),
+            ),
+        ] {
+            let transition = run_on(CLOCK_PROGRAM_ACCOUNT_ID, Some(sender), data(57), message);
+
+            assert_eq!(transition.response.post_state, None);
+            assert_eq!(
+                transition.response.sync_messages,
+                vec![SyncMessage::new(sender, &reply)]
+            );
+            assert!(transition.response.async_messages.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_read_returns_only_the_grant_its_sender_lent() {
+        let sender = Actor::new(AccountId::new([3; 32]), AccountId::new([4; 32]));
+        let other = Actor::new(AccountId::new([5; 32]), AccountId::new([4; 32]));
+        let message = Message::ReadBlockId { granularity: 1 };
+        let input = ReceiveInput {
+            receiver: Actor::new(CLOCK_PROGRAM_ACCOUNT_ID, CLOCK),
+            from: Some(sender),
+            grants: std::collections::BTreeSet::from([sender, other]),
+            pre_state: ActorState::from(data(57).to_bytes()),
+            message: borsh::to_vec(&message).unwrap(),
+        };
+
+        let transition = handle_message(&input, message).into_transition(input);
+
         assert_eq!(
-            apply(Effect::Record(data(50)), &data(40).to_bytes()),
-            Some(data(50).to_bytes())
+            transition.response.sync_messages,
+            vec![SyncMessage::new(sender, &Reply::BlockId(57)).with_grants([sender])]
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "The clock replies to its sender, so a root call cannot read it")]
+    fn a_read_from_a_root_call_is_refused() {
+        let _transition = run(data(57), Message::ReadTimestamp { granularity: 1 });
+    }
+
+    #[test]
+    #[should_panic(expected = "Clock granularity must be positive")]
+    fn a_zero_granularity_is_refused() {
+        let sender = Actor::new(AccountId::new([3; 32]), AccountId::new([4; 32]));
+        let _transition = run_on(
+            CLOCK_PROGRAM_ACCOUNT_ID,
+            Some(sender),
+            data(57),
+            Message::ReadTimestamp { granularity: 0 },
         );
     }
 }

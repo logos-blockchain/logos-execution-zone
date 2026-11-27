@@ -1,23 +1,24 @@
 //! Shared test/bench fixtures: spins up bedrock + sequencer + indexer + wallet
 //! end-to-end against docker-compose, exposes a `TestContext` callers can drive.
 
-use std::{collections::HashMap, net::SocketAddr, path::Path, sync::LazyLock, time::Duration};
+use std::{collections::HashMap, net::SocketAddr, path::Path, sync::LazyLock};
 
 use anyhow::{Context as _, Result};
 use common::{HashType, transaction::LeeTransaction};
 use futures::FutureExt as _;
 use indexer_service::{ChannelId, IndexerHandle};
 use kameo::actor::{ActorRef, Spawn as _};
-use lee::{AccountId, PrivacyPreservingTransaction, PrivateKey};
+use lee::{AccountId, PrivacyPreservingTransaction, signature::PublicAccountSecret};
 use lee_core::Commitment;
-use log::{debug, error};
-use logos_blockchain_key_management_system_service::keys::UnsecuredEd25519Key;
+use logos_blockchain_zone_sdk::key_management_system_service::keys::UnsecuredEd25519Key;
 use sequencer_core::config::GenesisAction;
-use sequencer_service::{CrossZoneConfig, GossipConfig, SequencerHandle};
+use sequencer_service::{GossipConfig, SequencerHandle};
 use sequencer_service_rpc::{RpcClient as _, SequencerClient};
+use sequencer_storage_actor::mock::MockStorageActor;
 use serde::Serialize;
 use tempfile::TempDir;
 use testcontainers::compose::DockerCompose;
+use tracing::{debug, error, info};
 use wallet::{
     WalletCore, account::AccountIdWithPrivacy, cli::CliAccountMention,
     config::WalletConfigOverrides,
@@ -27,8 +28,8 @@ use crate::{
     config::{InitialPrivateAccountForWallet, MultiNodeTestContextConfig, SequencerPartialConfig},
     indexer_client::IndexerClient,
     setup::{
-        SequencerSetup, fund_private_accounts, setup_bedrock_node, setup_indexer, setup_wallet,
-        sync_wallet_from_prebuilt,
+        SequencerSetup, fund_private_accounts, setup_bedrock_node_with_settings, setup_indexer,
+        setup_wallet, sync_wallet_from_prebuilt,
     },
 };
 
@@ -42,7 +43,13 @@ pub const TIME_TO_WAIT_FOR_BLOCK_SECONDS: u64 = 12;
 pub(crate) const BEDROCK_SERVICE_WITH_OPEN_PORT: &str = "logos-blockchain-node-0";
 pub(crate) const BEDROCK_SERVICE_PORT: u16 = 18080;
 
-static LOGGER: LazyLock<()> = LazyLock::new(env_logger::init);
+static LOGGER: LazyLock<()> = LazyLock::new(|| {
+    let _res = logging::try_init();
+});
+
+/// [`sequencer_bedrock_actor::BedrockActor`] running outside any sequencer, streaming the channel
+/// from genesis.
+pub type StandaloneBedrockActor = sequencer_bedrock_actor::BedrockActor<MockStorageActor>;
 
 struct IndexerComponents {
     indexer_handle: IndexerHandle,
@@ -79,7 +86,7 @@ pub struct SequencerComponents {
 }
 
 pub struct WalletComponents {
-    wallet: WalletCore,
+    wallet: WalletCore<SequencerClient>,
     wallet_password: String,
     temp_wallet_dir: TempDir,
 }
@@ -190,7 +197,7 @@ impl TestContext {
     ///
     /// Panics in case if there is more than one zone.
     #[must_use]
-    pub fn wallet(&self) -> &WalletCore {
+    pub fn wallet(&self) -> &WalletCore<SequencerClient> {
         &self.default_zone().wallet.as_ref().unwrap().wallet
     }
 
@@ -205,13 +212,13 @@ impl TestContext {
     /// Get mutable reference to default the wallet.
     ///
     /// Panics in case if there is more than one zone.
-    pub fn wallet_mut(&mut self) -> &mut WalletCore {
+    pub fn wallet_mut(&mut self) -> &mut WalletCore<SequencerClient> {
         &mut self.default_zone_mut().wallet.as_mut().unwrap().wallet
     }
 
     /// Get reference to the zone wallet.
     #[must_use]
-    pub fn wallet_zone(&self, channel_id: ChannelId) -> Option<&WalletCore> {
+    pub fn wallet_zone(&self, channel_id: ChannelId) -> Option<&WalletCore<SequencerClient>> {
         self.zones
             .get(&channel_id)
             .map(|val| &val.wallet.as_ref().unwrap().wallet)
@@ -226,7 +233,10 @@ impl TestContext {
     }
 
     /// Get mutable reference to the zone wallet.
-    pub fn wallet_mut_zone(&mut self, channel_id: ChannelId) -> Option<&mut WalletCore> {
+    pub fn wallet_mut_zone(
+        &mut self,
+        channel_id: ChannelId,
+    ) -> Option<&mut WalletCore<SequencerClient>> {
         self.zones
             .get_mut(&channel_id)
             .map(|val| &mut val.wallet.as_mut().unwrap().wallet)
@@ -459,7 +469,8 @@ impl Drop for TestContext {
                         .now_or_never()
                         .expect("Sequencer handle should not be running");
                     error!(
-                        "Sequencer handle has unexpectedly stopped before TestContext drop with error: {err:#}"
+                        error = format_args!("{err:#}"),
+                        "Sequencer handle has unexpectedly stopped before TestContext drop"
                     );
                 }
             }
@@ -478,8 +489,9 @@ impl Drop for TestContext {
             .expect("Failed to parse docker inspect output as String");
         if stdout.trim() != "true" {
             error!(
-                "Bedrock container `{}` is not running during TestContext drop, docker inspect output: {stdout}",
-                container.id()
+                container = container.id(),
+                docker_inspect = %stdout,
+                "Bedrock container is not running during TestContext drop"
             );
         }
     }
@@ -500,7 +512,6 @@ pub struct ZoneTestContextBuilder {
     wallet_config_overrides: WalletConfigOverrides,
     from_scratch: bool,
     mn_config: MultiNodeTestContextConfig,
-    cross_zone_config: Option<CrossZoneConfig>,
 }
 
 impl ZoneTestContextBuilder {
@@ -516,9 +527,6 @@ impl ZoneTestContextBuilder {
             wallet_config_overrides: WalletConfigOverrides::default(),
             from_scratch: false,
             mn_config,
-            // There is no point providing cross zone config here, it is easier to provide it from
-            // builder pattern.
-            cross_zone_config: None,
         }
     }
 
@@ -605,14 +613,6 @@ impl ZoneTestContextBuilder {
         self
     }
 
-    /// Set the cross zone config to apply when initializing the zone.
-    /// If not set, the zone will be initialized with default one.
-    #[must_use]
-    pub fn with_cross_zone(mut self, cross_zone_config: Option<CrossZoneConfig>) -> Self {
-        self.cross_zone_config = cross_zone_config;
-        self
-    }
-
     pub async fn build(self, bedrock_addr: SocketAddr) -> Result<TestContextZone> {
         Box::pin(self.build_inner(bedrock_addr)).await
     }
@@ -628,13 +628,12 @@ impl ZoneTestContextBuilder {
             wallet_config_overrides,
             from_scratch,
             mn_config,
-            cross_zone_config,
         } = self;
 
         debug!("Test context setup");
 
         let mut sequencer_keys = vec![UnsecuredEd25519Key::from_bytes(
-            &config::BEDROCK_SIGNING_KEY,
+            &config::CHANNEL_SIGNING_KEY,
         )];
         sequencer_keys.extend((1..mn_config.num_nodes).map(|i| {
             config::sequencer_signing_key_from_seed(
@@ -658,18 +657,18 @@ impl ZoneTestContextBuilder {
             Some(actions)
         };
 
-        // The fixture bakes in the default accounts + genesis, so custom genesis / from_scratch
-        // must build live. Otherwise load the fixture (fails if it is missing).
-        let use_prebuilt = !from_scratch && genesis_transactions.is_none();
+        // The fixture bakes in the default accounts + genesis, so custom genesis, channel params
+        // or from_scratch must build live. Otherwise load the fixture (fails if it is missing).
+        let use_prebuilt = !from_scratch
+            && genesis_transactions.is_none()
+            && sequencer_partial_config.unwrap_or_default().channel_params
+                == config::SequencerPartialConfig::default().channel_params;
 
         let indexer_components = if enable_indexer {
-            let (indexer_handle, temp_indexer_dir) = setup_indexer(
-                bedrock_addr,
-                mn_config.bedrock_channel,
-                cross_zone_config.clone(),
-            )
-            .await
-            .context("Failed to setup Indexer")?;
+            let (indexer_handle, temp_indexer_dir) =
+                setup_indexer(bedrock_addr, mn_config.bedrock_channel)
+                    .await
+                    .context("Failed to setup Indexer")?;
             let indexer_client = setup::indexer_client(indexer_handle.addr())
                 .await
                 .context("Failed to create indexer client")?;
@@ -704,9 +703,8 @@ impl ZoneTestContextBuilder {
             &initial_public_accounts,
             &initial_private_accounts,
             genesis_transactions.clone(),
-            UnsecuredEd25519Key::from_bytes(&config::BEDROCK_SIGNING_KEY),
+            UnsecuredEd25519Key::from_bytes(&config::CHANNEL_SIGNING_KEY),
             mn_config.bedrock_channel,
-            cross_zone_config.clone(),
             leader_gossip,
         )
         .await?;
@@ -734,7 +732,7 @@ impl ZoneTestContextBuilder {
             .await
             .context("Encountered an error while waiting for the channel to land on Bedrock")?;
 
-        log::info!("Passed wait untill genesis");
+        info!("Passed wait until genesis");
 
         sequencer_components.push(leader_components);
 
@@ -750,7 +748,6 @@ impl ZoneTestContextBuilder {
                 genesis_transactions.clone(),
                 sequencer_key,
                 mn_config.bedrock_channel,
-                cross_zone_config.clone(),
                 follower_gossip.clone(),
             )
             .await?;
@@ -814,6 +811,7 @@ impl ZoneTestContextBuilder {
 #[derive(Default)]
 pub struct MultiZoneTestContextBuilder {
     zone_builders: HashMap<ChannelId, ZoneTestContextBuilder>,
+    bedrock_settings: Option<String>,
 }
 
 impl MultiZoneTestContextBuilder {
@@ -822,9 +820,10 @@ impl MultiZoneTestContextBuilder {
             // Ensure logger is initialized only once
             *LOGGER;
 
-            let (bedrock_compose, bedrock_addr) = setup_bedrock_node()
-                .await
-                .context("Failed to setup Bedrock node")?;
+            let (bedrock_compose, bedrock_addr) =
+                setup_bedrock_node_with_settings(self.bedrock_settings.as_deref())
+                    .await
+                    .context("Failed to setup Bedrock node")?;
 
             let mut zones = HashMap::new();
 
@@ -835,7 +834,7 @@ impl MultiZoneTestContextBuilder {
             for (channel_id, zone_builder) in self.zone_builders {
                 let zone_ctx = zone_builder.build(bedrock_addr).await?;
 
-                log::info!("Built context for {channel_id}");
+                info!(%channel_id, "Built zone context");
 
                 zones.insert(channel_id, zone_ctx);
             }
@@ -847,6 +846,13 @@ impl MultiZoneTestContextBuilder {
             })
         })
         .await
+    }
+
+    /// A file under `bedrock/` mounted in place of `deployment-settings.yaml`.
+    #[must_use]
+    pub fn with_bedrock_settings(mut self, settings_file: &str) -> Self {
+        self.bedrock_settings = Some(settings_file.to_owned());
+        self
     }
 
     #[must_use]
@@ -957,7 +963,11 @@ impl BlockingTestContext {
             ZoneTestContextBuilder::new(MultiNodeTestContextConfig::default()),
         );
 
-        MultiZoneTestContextBuilder { zone_builders }.build_blocking()
+        MultiZoneTestContextBuilder {
+            zone_builders,
+            ..MultiZoneTestContextBuilder::default()
+        }
+        .build_blocking()
     }
 
     pub const fn ctx(&self) -> &TestContext {
@@ -1035,10 +1045,10 @@ pub async fn verify_commitment_is_in_state(
     seq_client: &SequencerClient,
 ) -> bool {
     seq_client
-        .get_proofs_and_root(vec![commitment])
+        .get_proofs_and_root(vec![commitment], Vec::new())
         .await
         .ok()
-        .and_then(|(proofs, _)| proofs.into_iter().next().flatten())
+        .and_then(|(proofs, _, _)| proofs.into_iter().next().flatten())
         .is_some()
 }
 
@@ -1070,7 +1080,7 @@ fn dir_size_bytes(path: &Path) -> u64 {
 }
 
 async fn wait_until_genesis(client: &SequencerClient) -> Result<()> {
-    log::info!("Waiting for leader to send genesis");
+    info!("Waiting for leader to send genesis");
 
     let wait = async {
         loop {
@@ -1085,57 +1095,55 @@ async fn wait_until_genesis(client: &SequencerClient) -> Result<()> {
         .with_context(|| "Timed out waiting for genesis")?
 }
 
-/// Spawns a [`sequencer_bedrock_actor::BedrockActor`] outside any sequencer, resuming
-/// from no checkpoint.
-pub async fn spawn_standalone_bedrock_actor(
-    bedrock_config: sequencer_bedrock_actor::config::Config,
-) -> Result<ActorRef<sequencer_bedrock_actor::BedrockActor>> {
-    let mut mock_storage = sequencer_storage_actor::mock::MockStorageActor::default();
-    mock_storage
+/// Spawns a [`sequencer_bedrock_actor::BedrockActor`] on `channel_id` outside any sequencer.
+///
+/// It resumes from no checkpoint and can't publish until it receives
+/// [`sequencer_bedrock_actor::protocol::InitializeChannelPublisher`].
+pub fn spawn_standalone_bedrock_actor(
+    bedrock_addr: SocketAddr,
+    channel_id: ChannelId,
+) -> Result<ActorRef<StandaloneBedrockActor>> {
+    let mut storage = MockStorageActor::default();
+    storage
         .expect_handle_get_zone_checkpoint()
         .returning(|_msg, _ctx| Ok(None));
-    let mock_storage_ref = sequencer_storage_actor::mock::MockStorageActor::spawn(mock_storage);
+    storage
+        .expect_handle_put_final_configs_bytes()
+        .returning(|_msg, _ctx| Ok(()));
+    storage
+        .expect_handle_update_zone_checkpoint()
+        .returning(|_msg, _ctx| Ok(()));
+    let storage_ref = MockStorageActor::spawn(storage);
 
-    let broker_ref = kameo_actors::broker::Broker::spawn(kameo_actors::broker::Broker::new(
-        kameo_actors::DeliveryStrategy::Guaranteed,
-    ));
-
-    let bedrock =
-        sequencer_bedrock_actor::BedrockActor::new(bedrock_config, mock_storage_ref, broker_ref)
-            .await
-            .context("Failed to setup Bedrock Actor")?;
-    Ok(sequencer_bedrock_actor::BedrockActor::spawn(bedrock))
+    Ok(StandaloneBedrockActor::spawn(
+        sequencer_bedrock_actor::actor::Args {
+            node_url: config::addr_to_url(config::UrlProtocol::Http, bedrock_addr)?,
+            basic_auth: None,
+            channel_id,
+            storage_ref,
+            backfill_batch_slots: sequencer_core::config::default_backfill_batch_slots(),
+        },
+    ))
 }
 
 /// Spawns a [`sequencer_bedrock_actor::BedrockActor`] on `channel_id` for tests to
 /// query the channel through. It never publishes.
-pub async fn spawn_channel_observer(
+pub fn spawn_channel_observer(
     bedrock_addr: SocketAddr,
     channel_id: ChannelId,
-) -> Result<ActorRef<sequencer_bedrock_actor::BedrockActor>> {
-    spawn_standalone_bedrock_actor(sequencer_bedrock_actor::config::Config {
-        node_url: config::addr_to_url(config::UrlProtocol::Http, bedrock_addr)?,
-        basic_auth: None,
-        channel_id,
-        bedrock_signing_key: sequencer_bedrock_actor::config::Ed25519Key::from_bytes(
-            &config::BEDROCK_SIGNING_KEY,
-        ),
-        funding_pk: config::bedrock_funding_key(),
-        priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
-        resubmit_interval: Duration::from_secs(2),
-    })
-    .await
+) -> Result<ActorRef<StandaloneBedrockActor>> {
+    spawn_standalone_bedrock_actor(bedrock_addr, channel_id)
 }
 
 async fn wait_until_channel_exists(bedrock_addr: SocketAddr, channel_id: ChannelId) -> Result<()> {
-    log::info!("Waiting for the channel to land on Bedrock");
+    info!("Waiting for the channel to land on Bedrock");
 
-    let bedrock_ref = spawn_channel_observer(bedrock_addr, channel_id).await?;
+    let bedrock_ref = spawn_channel_observer(bedrock_addr, channel_id)?;
 
     let wait = async {
         loop {
             let channel_exists = bedrock_ref
-                .ask(sequencer_bedrock_actor::protocol::CheckChannelExists)
+                .ask(sequencer_bedrock_actor::protocol::CheckChannelExists { channel_id })
                 .await?;
             if channel_exists {
                 return Ok::<(), anyhow::Error>(());
@@ -1154,12 +1162,11 @@ async fn build_sequencer_components(
     bedrock_addr: SocketAddr,
     enable_wallet: bool,
     use_prebuilt: bool,
-    initial_public_accounts: &[(PrivateKey, u128)],
+    initial_public_accounts: &[(PublicAccountSecret, u128)],
     initial_private_accounts: &[InitialPrivateAccountForWallet],
     genesis_transactions: Option<Vec<GenesisAction>>,
     sequencer_key: UnsecuredEd25519Key,
     bedrock_channel_id: ChannelId,
-    cross_zone_config: Option<CrossZoneConfig>,
     gossip: Option<GossipConfig>,
 ) -> Result<(SocketAddr, SequencerComponents)> {
     let mut sequencer_setup = SequencerSetup::new(partial_config, bedrock_addr);
@@ -1170,7 +1177,7 @@ async fn build_sequencer_components(
         // When a test supplies custom genesis, merge rather than replace.
         let wallet_genesis = config::genesis_from_accounts(
             initial_public_accounts,
-            config::private_total(initial_private_accounts),
+            config::private_funding_cost(initial_private_accounts),
         );
         match genesis_transactions {
             Some(mut custom) => {
@@ -1188,18 +1195,14 @@ async fn build_sequencer_components(
     if !use_prebuilt {
         sequencer_setup = sequencer_setup
             .with_genesis(genesis_actions)
-            .with_bedrock_signing_key(sequencer_key);
+            .with_channel_signing_key(sequencer_key);
     }
     sequencer_setup = sequencer_setup.with_channel_id(bedrock_channel_id);
-    if let Some(cross_zone_config) = cross_zone_config.clone() {
-        sequencer_setup = sequencer_setup.with_cross_zone(cross_zone_config);
-    }
     if let Some(gossip) = gossip {
         sequencer_setup = sequencer_setup.with_gossip(gossip);
     }
 
-    let (sequencer_handle, temp_sequencer_dir) = sequencer_setup
-        .setup()
+    let (sequencer_handle, temp_sequencer_dir) = Box::pin(sequencer_setup.setup())
         .await
         .context("Failed to setup Sequencer")?;
 

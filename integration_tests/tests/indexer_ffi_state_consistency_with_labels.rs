@@ -1,7 +1,7 @@
 #![expect(
     clippy::shadow_unrelated,
     clippy::tests_outside_test_module,
-    clippy::undocumented_unsafe_blocks,
+    clippy::arithmetic_side_effects,
     reason = "We don't care about these in tests"
 )]
 
@@ -49,12 +49,12 @@ fn indexer_ffi_state_consistency_with_labels() -> Result<()> {
         to_vpk: None,
         to_keys: None,
         amount: 100,
-        to_identifier: Some(lee_core::Identifier::ZERO),
+        to_initial_key: None,
     });
 
     ctx.block_on_mut(|ctx| wallet::cli::execute_subcommand(ctx.wallet_mut(), command))?;
 
-    log::info!("Waiting for next block creation");
+    tracing::info!("Waiting for next block creation");
     std::thread::sleep(Duration::from_secs(TIME_TO_WAIT_FOR_BLOCK_SECONDS));
 
     let acc_1_balance = ctx.block_on(|ctx| {
@@ -81,20 +81,13 @@ fn indexer_ffi_state_consistency_with_labels() -> Result<()> {
         "the sender must pay a positive fee within the protocol ceiling, got {fee}",
     );
 
-    log::info!("Waiting for indexer to parse blocks");
+    tracing::info!("Waiting for indexer to parse blocks");
     std::thread::sleep(L2_TO_L1_TIMEOUT);
 
-    let acc1_ind_state_ffi = unsafe {
-        indexer_ffi_helpers::query_account(
-            &raw const indexer_ffi,
-            (&ctx.ctx().existing_public_accounts()[0]).into(),
-        )
-    };
-
-    assert!(acc1_ind_state_ffi.error.is_ok());
-
-    let acc1_ind_state_pre = unsafe { &*acc1_ind_state_ffi.value };
-    let acc1_ind_state: Account = acc1_ind_state_pre.into();
+    let acc1_ind_state = indexer_ffi_helpers::indexed_account(
+        &indexer_ffi,
+        &ctx.ctx().existing_public_accounts()[0],
+    );
 
     let acc1_seq_state = ctx.block_on(|ctx| {
         sequencer_service_rpc::RpcClient::get_account(
@@ -103,9 +96,9 @@ fn indexer_ffi_state_consistency_with_labels() -> Result<()> {
         )
     })?;
 
-    assert_eq!(acc1_ind_state, acc1_seq_state.into());
+    assert_eq!(acc1_ind_state, acc1_seq_state.map(Account::from));
 
-    log::info!("Indexer state is consistent after label-based transfer");
+    tracing::info!("Indexer state is consistent after label-based transfer");
 
     Ok(())
 }

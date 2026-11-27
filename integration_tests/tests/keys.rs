@@ -10,7 +10,10 @@ use anyhow::{Context as _, Result};
 use integration_tests::{
     TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, fetch_privacy_preserving_tx, private_mention,
     public_mention,
-    utils::{assert_public_account_restored, new_account, restored_private_account, send},
+    utils::{
+        assert_public_account_restored, new_account, receive_pending, restored_private_account,
+        send,
+    },
     verify_commitment_is_in_state,
 };
 use key_protocol::key_management::key_tree::chain_index::ChainIndex;
@@ -52,7 +55,7 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
             to_account.key_chain.viewing_public_key.to_bytes(),
         )),
         to_keys: None,
-        to_identifier: Some(to_account.kind.identifier()),
+        to_initial_key: None,
         amount: 100,
     });
 
@@ -64,26 +67,36 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
     let tx = fetch_privacy_preserving_tx(ctx.sequencer_client(), tx_hash).await;
 
     // Sync the wallet to discover the new account
-    let command = Command::Account(AccountSubcommand::SyncPrivate {});
+    let command = Command::Account(AccountSubcommand::SyncPrivate {
+        rescan: false,
+        yes: true,
+    });
     wallet::cli::execute_subcommand(ctx.wallet_mut(), command).await?;
 
     let new_commitment1 = ctx
         .wallet()
         .get_private_account_commitment(from)
         .context("Failed to get private account commitment for sender")?;
-    assert!(tx.message.commitments().contains(&new_commitment1));
+    assert!(
+        tx.message
+            .execution
+            .commitments()
+            .contains(&new_commitment1)
+    );
 
-    for commitment in tx.message.commitments() {
+    for commitment in tx.message.execution.commitments() {
         assert!(verify_commitment_is_in_state(commitment, ctx.sequencer_client()).await);
     }
 
+    // Sent by keys, the credit is pending until the owner receives it.
+    receive_pending(&mut ctx).await?;
     let to_res_acc = ctx
         .wallet()
         .get_account_private(to_account_id)
         .context("Failed to get recipient's private account")?;
     assert_eq!(to_res_acc.data.native_balance().unwrap(), 100);
 
-    log::info!("Successfully transferred");
+    tracing::info!("Successfully transferred");
 
     Ok(())
 }
@@ -92,8 +105,10 @@ async fn sync_private_account_with_non_zero_chain_index() -> Result<()> {
 async fn restore_keys_from_seed() -> Result<()> {
     // Well above a single transfer's fee reserve, and distinct so restoration
     // maps each balance to the right account.
-    const ACC3_FUNDING: u128 = 1_000_000_000;
-    const ACC4_FUNDING: u128 = 1_000_000_001;
+    const ACC1_FUNDING: u128 = 1_000_000_000;
+    const ACC2_FUNDING: u128 = 1_000_000_001;
+    const ACC3_FUNDING: u128 = 1_000_000_002;
+    const ACC4_FUNDING: u128 = 1_000_000_003;
 
     let mut ctx = TestContext::new().await?;
 
@@ -103,19 +118,19 @@ async fn restore_keys_from_seed() -> Result<()> {
     let to_account_id1 = new_account(&mut ctx, true, Some(ChainIndex::root())).await?;
     let to_account_id2 = new_account(&mut ctx, true, Some(ChainIndex::from_str("/0")?)).await?;
 
-    // Send to both private accounts
+    // Send to both private accounts; they pay an in-proof fee when they transact below.
     send(
         &mut ctx,
         private_mention(from),
         private_mention(to_account_id1),
-        100,
+        ACC1_FUNDING,
     )
     .await?;
     send(
         &mut ctx,
         private_mention(from),
         private_mention(to_account_id2),
-        101,
+        ACC2_FUNDING,
     )
     .await?;
 
@@ -126,7 +141,7 @@ async fn restore_keys_from_seed() -> Result<()> {
     let to_account_id4 = new_account(&mut ctx, false, Some(ChainIndex::from_str("/0")?)).await?;
 
     // Send to both public accounts. Public transfers pay a real fee, so these accounts must hold
-    // enough to cover one when they transact below (unlike the fee-exempt private accounts above).
+    // enough to cover one when they transact below.
     send(
         &mut ctx,
         public_mention(from),
@@ -142,10 +157,10 @@ async fn restore_keys_from_seed() -> Result<()> {
     )
     .await?;
 
-    log::info!("Preparation complete, performing keys restoration");
+    tracing::info!("Preparation complete, performing keys restoration");
 
     // Restore keys from seed
-    wallet::cli::execute_keys_restoration(ctx.wallet_mut(), 10).await?;
+    ctx.wallet_mut().restore_keys(10).await?;
 
     // Verify restored private accounts
     let acc1 = restored_private_account(&ctx, to_account_id1, "Acc 1");
@@ -155,10 +170,10 @@ async fn restore_keys_from_seed() -> Result<()> {
     assert_public_account_restored(&ctx, to_account_id3, "Acc 3");
     assert_public_account_restored(&ctx, to_account_id4, "Acc 4");
 
-    assert_eq!(acc1.account.data, Account::funded(100).data);
-    assert_eq!(acc2.account.data, Account::funded(101).data);
+    assert_eq!(acc1.account.data, Account::funded(ACC1_FUNDING).data);
+    assert_eq!(acc2.account.data, Account::funded(ACC2_FUNDING).data);
 
-    log::info!("Tree checks passed, testing restored accounts can transact");
+    tracing::info!("Tree checks passed, testing restored accounts can transact");
 
     // Test that restored accounts can send transactions
     send(
@@ -209,7 +224,7 @@ async fn restore_keys_from_seed() -> Result<()> {
         "sender must also pay a fee on the transfer, got {acc3}"
     );
 
-    log::info!("Successfully restored keys and verified transactions");
+    tracing::info!("Successfully restored keys and verified transactions");
 
     Ok(())
 }

@@ -1,6 +1,6 @@
 use aes_gcm::{Aes256Gcm, KeyInit as _, aead::Aead as _};
 use lee_core::{
-    Identifier, SharedSecretKey,
+    SharedSecretKey,
     encryption::{EphemeralPublicKey, ML_KEM_768_CIPHERTEXT_LEN, ViewingPublicKey},
     program::{PdaSeed, ProgramId},
 };
@@ -135,7 +135,7 @@ impl GroupKeyHolder {
     ///
     /// Uses a distinct domain separator from `derive_keys_for_pda` to prevent cross-domain
     /// key collisions. The `derivation_seed` should be a stable, unique 32-byte value
-    /// (e.g. derived deterministically from the account's identifier).
+    /// (e.g. derived deterministically from the account's derivation id).
     #[must_use]
     pub fn derive_keys_for_shared_account(&self, derivation_seed: &[u8; 32]) -> PrivateKeyHolder {
         const PREFIX: &[u8; 32] = b"/LEE/v0.3/GroupKeyDerivation/SHA";
@@ -146,19 +146,16 @@ impl GroupKeyHolder {
         SecretSpendingKey(hasher.finalize_fixed().into()).produce_private_key_holder(None)
     }
 
-    /// Derive keys for a shared regular account from its `identifier`.
+    /// Derive keys for a shared regular account from its wallet-local `derivation_id`.
     ///
     /// Computes the derivation seed via the `SharedAccountTag` domain separator, then delegates
     /// to [`Self::derive_keys_for_shared_account`].
     #[must_use]
-    pub fn derive_regular_shared_account_keys_from_identifier(
-        &self,
-        identifier: Identifier,
-    ) -> PrivateKeyHolder {
+    pub fn derive_regular_shared_account_keys(&self, derivation_id: &[u8; 32]) -> PrivateKeyHolder {
         const PREFIX: &[u8; 32] = b"/LEE/v0.3/SharedAccountTag/\x00\x00\x00\x00\x00";
         let mut hasher = sha2::Sha256::new();
         hasher.update(PREFIX);
-        hasher.update(identifier.value());
+        hasher.update(derivation_id);
         let derivation_seed: [u8; 32] = hasher.finalize().into();
         self.derive_keys_for_shared_account(&derivation_seed)
     }
@@ -354,13 +351,7 @@ mod tests {
         let keys = holder.derive_keys_for_pda(&TEST_PROGRAM_ID, &seed);
         let npk = keys.generate_nullifier_public_key();
         let vpk = keys.generate_viewing_public_key();
-        let account_id = AccountId::for_private_pda(
-            &program_id,
-            &seed,
-            &npk,
-            &vpk,
-            Identifier::new([u8::MAX; 32]),
-        );
+        let account_id = AccountId::for_private_pda(&program_id, &seed, &npk, &vpk);
 
         let expected_npk = NullifierPublicKey([
             59, 136, 7, 185, 56, 46, 38, 4, 195, 155, 85, 32, 161, 24, 119, 14, 148, 100, 26, 152,
@@ -368,16 +359,26 @@ mod tests {
         ]);
         // AccountId is derived from (program_id, seed, npk), so it changes when npk changes.
         // We verify npk is pinned, and AccountId is deterministically derived from it.
-        let expected_account_id = AccountId::for_private_pda(
-            &program_id,
-            &seed,
-            &expected_npk,
-            &vpk,
-            Identifier::new([u8::MAX; 32]),
-        );
+        let expected_account_id =
+            AccountId::for_private_pda(&program_id, &seed, &expected_npk, &vpk);
 
         assert_eq!(npk, expected_npk);
         assert_eq!(account_id, expected_account_id);
+    }
+
+    #[test]
+    fn pinned_derivation_for_regular_shared_account() {
+        let npk = GroupKeyHolder::from_gms([0; 32])
+            .derive_regular_shared_account_keys(&[1; 32])
+            .generate_nullifier_public_key();
+
+        assert_eq!(
+            npk,
+            NullifierPublicKey([
+                95, 196, 13, 161, 174, 146, 1, 121, 36, 71, 99, 170, 92, 141, 201, 145, 173, 234,
+                243, 174, 81, 0, 163, 131, 163, 79, 81, 76, 149, 162, 218, 107,
+            ])
+        );
     }
 
     /// Wallets persist `GroupKeyHolder` to disk and reload it on startup. This test pins
@@ -431,12 +432,12 @@ mod tests {
         let recipient_ssk = SecretSpendingKey([7_u8; 32]);
         let recipient_keys = recipient_ssk.produce_private_key_holder(None);
         let recipient_vpk = recipient_keys.generate_viewing_public_key();
-        let recipient_vsk = recipient_keys.viewing_secret_key;
+        let recipient_vsk = &recipient_keys.viewing_secret_key;
 
         let sealed = holder.seal_for(&SealingPublicKey::from_bytes(
             recipient_vpk.to_bytes().to_vec(),
         ));
-        let restored = GroupKeyHolder::unseal(&sealed, &recipient_vsk).expect("unseal");
+        let restored = GroupKeyHolder::unseal(&sealed, recipient_vsk).expect("unseal");
 
         assert_eq!(restored.dangerous_raw_gms(), holder.dangerous_raw_gms());
 
@@ -461,14 +462,13 @@ mod tests {
             .produce_private_key_holder(None)
             .generate_viewing_public_key();
 
-        let wrong_vsk = SecretSpendingKey([99_u8; 32])
-            .produce_private_key_holder(None)
-            .viewing_secret_key;
+        let wrong_keys = SecretSpendingKey([99_u8; 32]).produce_private_key_holder(None);
+        let wrong_vsk = &wrong_keys.viewing_secret_key;
 
         let sealed = holder.seal_for(&SealingPublicKey::from_bytes(
             recipient_vpk.to_bytes().to_vec(),
         ));
-        let result = GroupKeyHolder::unseal(&sealed, &wrong_vsk);
+        let result = GroupKeyHolder::unseal(&sealed, wrong_vsk);
         assert!(matches!(result, Err(super::SealError::DecryptionFailed)));
     }
 
@@ -480,7 +480,7 @@ mod tests {
         let recipient_ssk = SecretSpendingKey([7_u8; 32]);
         let recipient_keys = recipient_ssk.produce_private_key_holder(None);
         let recipient_vpk = recipient_keys.generate_viewing_public_key();
-        let recipient_vsk = recipient_keys.viewing_secret_key;
+        let recipient_vsk = &recipient_keys.viewing_secret_key;
 
         let mut sealed = holder.seal_for(&SealingPublicKey::from_bytes(
             recipient_vpk.to_bytes().to_vec(),
@@ -489,7 +489,7 @@ mod tests {
         let last = sealed.len() - 1;
         sealed[last] ^= 0xFF;
 
-        let result = GroupKeyHolder::unseal(&sealed, &recipient_vsk);
+        let result = GroupKeyHolder::unseal(&sealed, recipient_vsk);
         assert!(matches!(result, Err(super::SealError::DecryptionFailed)));
     }
 
@@ -564,12 +564,12 @@ mod tests {
         let bob_ssk = SecretSpendingKey([77_u8; 32]);
         let bob_keys = bob_ssk.produce_private_key_holder(None);
         let bob_vpk = bob_keys.generate_viewing_public_key();
-        let bob_vsk = bob_keys.viewing_secret_key;
+        let bob_vsk = &bob_keys.viewing_secret_key;
 
         let sealed =
             alice_holder.seal_for(&SealingPublicKey::from_bytes(bob_vpk.to_bytes().to_vec()));
         let bob_holder =
-            GroupKeyHolder::unseal(&sealed, &bob_vsk).expect("Bob should unseal the GMS");
+            GroupKeyHolder::unseal(&sealed, bob_vsk).expect("Bob should unseal the GMS");
 
         let bob_group_keys = bob_holder.derive_keys_for_pda(&TEST_PROGRAM_ID, &pda_seed);
         let bob_npk = bob_group_keys.generate_nullifier_public_key();
@@ -577,20 +577,10 @@ mod tests {
 
         let alice_vpk = alice_keys.generate_viewing_public_key();
         let bob_group_vpk = bob_group_keys.generate_viewing_public_key();
-        let alice_account_id = AccountId::for_private_pda(
-            &program_id,
-            &pda_seed,
-            &alice_npk,
-            &alice_vpk,
-            Identifier::ZERO,
-        );
-        let bob_account_id = AccountId::for_private_pda(
-            &program_id,
-            &pda_seed,
-            &bob_npk,
-            &bob_group_vpk,
-            Identifier::ZERO,
-        );
+        let alice_account_id =
+            AccountId::for_private_pda(&program_id, &pda_seed, &alice_npk, &alice_vpk);
+        let bob_account_id =
+            AccountId::for_private_pda(&program_id, &pda_seed, &bob_npk, &bob_group_vpk);
         assert_eq!(alice_account_id, bob_account_id);
     }
 

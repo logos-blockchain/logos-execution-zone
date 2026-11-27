@@ -1,7 +1,19 @@
 //! Discovery process for the `sequencer_stake` committee.
 
-use log::warn;
-use sequencer_stake_core::{PendingUnstake, SequencerKey, SequencerStakeConfig, StakeRecord};
+use std::num::NonZero;
+
+use sequencer_stake_core::{SequencerKey, SequencerStakeConfig};
+use tracing::warn;
+
+/// What the live Bedrock channel config holds.
+#[derive(Clone, Copy, Debug)]
+pub struct LiveChannel<'keys> {
+    pub accredited_keys: &'keys [SequencerKey],
+    pub configuration_threshold: u16,
+    pub transfer_threshold: u16,
+    pub posting_timeframe: u32,
+    pub posting_timeout: u32,
+}
 
 /// Signatures a `ChannelConfigOp` must carry: two thirds of the accredited
 /// keys, capped at `committee_size - 1`, floored at one.
@@ -21,36 +33,34 @@ use sequencer_stake_core::{PendingUnstake, SequencerKey, SequencerStakeConfig, S
 ///
 /// The op carries the threshold for the *next* config; the one it must satisfy
 /// itself is whatever the live channel already records.
+///
+/// Channel transfers take the same threshold, since a config op can rewrite theirs.
 #[must_use]
-pub fn channel_config_threshold(committee_size: usize) -> u16 {
+pub fn channel_config_threshold(committee_size: usize) -> NonZero<u16> {
     let threshold = committee_size
         .saturating_mul(2)
         .div_ceil(3)
-        .min(committee_size.saturating_sub(1))
-        .max(1);
+        .min(committee_size.saturating_sub(1));
+    let threshold = NonZero::new(threshold).unwrap_or(NonZero::<usize>::MIN);
 
-    u16::try_from(threshold).unwrap_or(u16::MAX)
+    NonZero::<u16>::try_from(threshold).unwrap_or(NonZero::<u16>::MAX)
 }
 
 /// The accredited-keys list LEZ state says the channel should have, or `None`
-/// if the live Bedrock committee already matches it, threshold included.
+/// if the live Bedrock config already matches it, thresholds and posting params included.
 ///
 /// Level-triggered: re-fires on every block where the two disagree, not just
 /// the block a key crossed the minimum in, so a submission that never lands
 /// on Bedrock gets retried instead of being asked for once and forgotten.
-///
-/// Doesn't cover channel administration params like `posting_timeframe` —
-/// those are fixed constants supplied separately when building the
-/// `ChannelConfigOp`.
 #[must_use]
 pub fn committee_update(
     state: &lee::V03State,
-    live_accredited_keys: &[SequencerKey],
-    live_configuration_threshold: u16,
+    live: &LiveChannel<'_>,
 ) -> Option<Vec<SequencerKey>> {
     let config = read_config(state)?;
     // Absent only before genesis, which no committee update can precede.
-    let minimum_sequencer_stake = config.channel_params?.minimum_sequencer_stake;
+    let params = config.channel_params?;
+    let minimum_sequencer_stake = params.minimum_sequencer_stake;
 
     // Sorted by key bytes so the list is deterministic across calls: a
     // `ChannelConfigOp`'s `keys` field must reproduce the same order every
@@ -72,62 +82,46 @@ pub fn committee_update(
         return None;
     }
 
-    let mut live = live_accredited_keys.to_vec();
-    live.sort_unstable();
+    let mut live_keys = live.accredited_keys.to_vec();
+    live_keys.sort_unstable();
 
-    // A mismatch in the threshold triggers a channel update too.
-    let stale_threshold = live_configuration_threshold != channel_config_threshold(desired.len());
+    // A mismatch in either threshold or either posting param triggers a channel update too.
+    let threshold = channel_config_threshold(desired.len()).get();
+    let stale_threshold =
+        live.configuration_threshold != threshold || live.transfer_threshold != threshold;
+    let stale_posting = live.posting_timeframe != params.posting_timeframe
+        || live.posting_timeout != params.posting_timeout;
 
-    (desired != live || stale_threshold).then_some(desired)
+    (desired != live_keys || stale_threshold || stale_posting).then_some(desired)
 }
 
-/// Ownership-account id + pending-release details for every release that may
-/// land in the block after the one the clock in `state` holds.
+/// Ownership-account id, sequencer key and payout destination for every pending release.
 #[must_use]
 pub fn finalize_unstake_candidates(
     state: &lee::V03State,
-) -> Vec<(lee::AccountId, SequencerKey, PendingUnstake)> {
+) -> Vec<(lee::AccountId, SequencerKey, lee::AccountId)> {
     let Some(config) = read_config(state) else {
-        return Vec::new();
-    };
-    let Some(params) = config.channel_params else {
-        return Vec::new();
-    };
-    let Some(next_block_id) = clock_block_id(state).map(|block_id| block_id.saturating_add(1))
-    else {
         return Vec::new();
     };
 
     config
         .entries
-        .into_values()
-        .filter_map(|entry| {
-            let record = stake_record(state, entry.account_id)?;
-            let pending = record.pending_unstake?;
-            (next_block_id >= pending.releasable_at(params.exit_delay)).then_some((
-                entry.account_id,
-                record.sequencer_key,
-                pending,
-            ))
+        .into_iter()
+        .filter_map(|(sequencer_key, entry)| {
+            let pending = entry.pending_unstake?;
+            Some((entry.account_id, sequencer_key, pending.destination))
         })
         .collect()
 }
 
-/// The block id the per-block clock account holds, or `None` if it does not decode.
-pub(crate) fn clock_block_id(state: &lee::V03State) -> Option<u64> {
-    let clock = state.get_account_by_id(system_accounts::clock_account_ids()[0]);
-    borsh::from_slice::<clock_core::ClockAccountData>(
-        clock.data.shard(programs::clock_account_id()),
-    )
-    .ok()
-    .map(|clock| clock.block_id)
-}
-
-/// Reads the `sequencer_stake` config account — a single account read, not a
-/// scan, since every `Stake`/`UnstakeRequest`/`FinalizeUnstake` keeps its
-/// `entries` map current as it executes. `None` only if the account is absent
-/// or undecodable, which genesis rules out.
-pub(crate) fn read_config(state: &lee::V03State) -> Option<SequencerStakeConfig> {
+/// Reads the `sequencer_stake` config account.
+///
+/// A single account read, not a scan, since every
+/// `Stake`/`UnstakeRequest`/`FinalizeUnstake` keeps its `entries` map current
+/// as it executes. `None` only if the account is absent or undecodable, which
+/// genesis rules out.
+#[must_use]
+pub fn read_config(state: &lee::V03State) -> Option<SequencerStakeConfig> {
     let Some(account) =
         state.get_account_by_id_ref(system_accounts::sequencer_stake_config_account_id())
     else {
@@ -135,42 +129,37 @@ pub(crate) fn read_config(state: &lee::V03State) -> Option<SequencerStakeConfig>
         return None;
     };
     let sequencer_stake_program_id = programs::sequencer_stake_account_id();
-    let config =
-        SequencerStakeConfig::from_bytes(account.data.shard(sequencer_stake_program_id).as_ref());
+    let config = SequencerStakeConfig::from_bytes(
+        account
+            .data
+            .actor_state(sequencer_stake_program_id)
+            .as_ref(),
+    );
     if config.is_none() {
         warn!("sequencer_stake config account did not decode as SequencerStakeConfig");
     }
     config
 }
 
-/// Channel posting params from the config account. `None` before genesis set
-/// them, which a live chain rules out.
-pub(crate) fn channel_params(state: &lee::V03State) -> Option<crate::config::ChannelParams> {
+/// Channel params from the config account. `None` before genesis set them, which a live chain
+/// rules out.
+#[must_use]
+pub fn channel_params(state: &lee::V03State) -> Option<crate::config::ChannelParams> {
     read_config(state)?.channel_params
-}
-
-/// The `StakeRecord` an ownership account carries: which key it backs, plus
-/// whatever release is pending against it.
-fn stake_record(state: &lee::V03State, ownership_id: lee::AccountId) -> Option<StakeRecord> {
-    let account = state.get_account_by_id_ref(ownership_id)?;
-    let sequencer_stake_program_id = programs::sequencer_stake_account_id();
-    StakeRecord::from_bytes(account.data.shard(sequencer_stake_program_id).as_ref())
 }
 
 #[cfg(test)]
 mod tests {
 
     use lee_core::account::Account;
-    use logos_blockchain_key_management_system_service::keys::Ed25519Key;
-    use sequencer_stake_core::SequencerEntry;
+    use logos_blockchain_zone_sdk::key_management_system_service::keys::Ed25519Key;
+    use sequencer_stake_core::{PendingUnstake, SequencerEntry};
 
     use super::*;
 
     const MINIMUM: u128 = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
-    /// Blocks an unstake waits in [`state_with`].
-    const EXIT_DELAY: u64 = 10;
 
-    /// One staked key: the config entry plus the ownership account backing it.
+    /// One staked key's config entry.
     #[derive(Clone, Copy)]
     struct Staked {
         key: SequencerKey,
@@ -178,9 +167,6 @@ mod tests {
         /// The config entry's tracked stake.
         total: u128,
         pending: Option<PendingUnstake>,
-        /// The ownership account's, which sits above `total_staked` once
-        /// anyone donates to it.
-        balance: u128,
     }
 
     impl Staked {
@@ -190,64 +176,43 @@ mod tests {
                 account_id: lee::AccountId::new([tag.wrapping_add(100); 32]),
                 total,
                 pending: None,
-                balance: total,
             }
         }
 
-        fn pending(mut self, amount: u128, requested_at: u64) -> Self {
+        fn pending(mut self, amount: u128) -> Self {
             self.pending = Some(PendingUnstake {
                 amount,
                 destination: lee::AccountId::new([200; 32]),
-                requested_at,
             });
             self
         }
     }
 
-    /// [`state_with`], with the clock at `block_id`.
-    fn state_at(stakes: impl IntoIterator<Item = Staked>, block_id: u64) -> lee::V03State {
-        let clock = Account::default().with_shard(
-            programs::clock_account_id(),
-            clock_core::ClockAccountData {
-                block_id,
-                timestamp: 0,
-            }
-            .to_bytes()
-            .try_into()
-            .expect("clock data fits"),
-        );
-        state_with(stakes).with_public_accounts([(system_accounts::clock_account_ids()[0], clock)])
+    /// A live channel at the default posting params.
+    fn live(keys: &[SequencerKey], configuration: u16, transfer: u16) -> LiveChannel<'_> {
+        LiveChannel {
+            accredited_keys: keys,
+            configuration_threshold: configuration,
+            transfer_threshold: transfer,
+            posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
+            posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
+        }
     }
 
-    /// LEZ state holding the config account plus one ownership account per key.
+    /// LEZ state holding the config account.
     fn state_with(stakes: impl IntoIterator<Item = Staked>) -> lee::V03State {
         let stakes: Vec<Staked> = stakes.into_iter().collect();
         let sequencer_stake_program_id = programs::sequencer_stake_account_id();
 
-        let ownership_accounts = stakes.iter().map(|staked| {
-            (
-                staked.account_id,
-                Account::funded(staked.balance).with_shard(
-                    sequencer_stake_program_id,
-                    StakeRecord {
-                        sequencer_key: staked.key,
-                        pending_unstake: staked.pending,
-                    }
-                    .to_bytes()
-                    .try_into()
-                    .expect("stake record fits"),
-                ),
-            )
-        });
-
-        let config = Account::default().with_shard(
+        let config = Account::default().with_actor_state(
             sequencer_stake_program_id,
             SequencerStakeConfig {
                 channel_params: Some(sequencer_stake_core::ChannelParams {
                     minimum_sequencer_stake: MINIMUM,
                     posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME,
                     posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT,
-                    exit_delay: EXIT_DELAY,
+                    max_block_size: 1 << 20,
+                    finality_depth: 5,
                 }),
                 channel_id: Some([0xC1; 32]),
                 entries: stakes
@@ -258,21 +223,18 @@ mod tests {
                             SequencerEntry {
                                 account_id: staked.account_id,
                                 total_staked: staked.total,
-                                total_pending_unstake: staked
-                                    .pending
-                                    .map_or(0, |pending| pending.amount),
+                                pending_unstake: staked.pending,
                             },
                         )
                     })
                     .collect(),
+                params_votes: std::collections::BTreeMap::new(),
             }
             .to_bytes()
-            .try_into()
-            .expect("config fits"),
+            .into(),
         );
 
         lee::V03State::new()
-            .with_public_accounts(ownership_accounts)
             .with_public_accounts([(system_accounts::sequencer_stake_config_account_id(), config)])
     }
 
@@ -296,7 +258,7 @@ mod tests {
         ];
         for (committee_size, threshold) in expected {
             assert_eq!(
-                channel_config_threshold(committee_size),
+                channel_config_threshold(committee_size).get(),
                 threshold,
                 "committee of {committee_size}"
             );
@@ -313,7 +275,7 @@ mod tests {
         // the committee has to clear the bar without it. Slashing needs this.
         for committee_size in 2..=64_usize {
             assert!(
-                usize::from(channel_config_threshold(committee_size)) < committee_size,
+                usize::from(channel_config_threshold(committee_size).get()) < committee_size,
                 "a committee of {committee_size} could never eject a member"
             );
         }
@@ -323,7 +285,7 @@ mod tests {
     fn candidate_below_minimum_is_not_accredited() {
         let staked = Staked::new(1, MINIMUM - 1);
 
-        assert!(committee_update(&state_with([staked]), &[], 1).is_none());
+        assert!(committee_update(&state_with([staked]), &live(&[], 1, 1)).is_none());
     }
 
     #[test]
@@ -331,7 +293,7 @@ mod tests {
         let staked = Staked::new(2, MINIMUM);
 
         assert_eq!(
-            committee_update(&state_with([staked]), &[], 1),
+            committee_update(&state_with([staked]), &live(&[], 1, 1)),
             Some(vec![staked.key])
         );
     }
@@ -340,7 +302,7 @@ mod tests {
     fn already_matching_live_committee_is_not_re_submitted() {
         let staked = Staked::new(3, MINIMUM);
 
-        assert!(committee_update(&state_with([staked]), &[staked.key], 1).is_none());
+        assert!(committee_update(&state_with([staked]), &live(&[staked.key], 1, 1)).is_none());
     }
 
     #[test]
@@ -350,26 +312,41 @@ mod tests {
             Staked::new(2, MINIMUM),
             Staked::new(3, MINIMUM),
         ];
-        let mut live = committee.map(|staked| staked.key);
-        live.sort_unstable();
+        let mut keys = committee.map(|staked| staked.key);
+        keys.sort_unstable();
 
         assert_eq!(
-            committee_update(&state_with(committee), &live, 1),
-            Some(live.to_vec())
+            committee_update(&state_with(committee), &live(&keys, 1, 2)),
+            Some(keys.to_vec())
         );
-        assert!(committee_update(&state_with(committee), &live, 2).is_none());
+        assert!(committee_update(&state_with(committee), &live(&keys, 2, 2)).is_none());
+    }
+
+    #[test]
+    fn matching_keys_at_a_stale_transfer_threshold_are_re_submitted() {
+        let committee = [
+            Staked::new(1, MINIMUM),
+            Staked::new(2, MINIMUM),
+            Staked::new(3, MINIMUM),
+        ];
+        let mut keys = committee.map(|staked| staked.key);
+        keys.sort_unstable();
+
+        assert_eq!(
+            committee_update(&state_with(committee), &live(&keys, 2, 1)),
+            Some(keys.to_vec())
+        );
     }
 
     #[test]
     fn key_below_minimum_but_still_live_is_removed() {
-        let exiting = Staked::new(4, MINIMUM).pending(MINIMUM, 0);
+        let exiting = Staked::new(4, MINIMUM).pending(MINIMUM);
         let staying = Staked::new(6, MINIMUM);
 
         assert_eq!(
             committee_update(
                 &state_with([exiting, staying]),
-                &[exiting.key, staying.key],
-                1
+                &live(&[exiting.key, staying.key], 1, 1)
             ),
             Some(vec![staying.key])
         );
@@ -377,14 +354,13 @@ mod tests {
 
     #[test]
     fn a_pending_unstake_discounts_the_stake_backing_a_key() {
-        let discounted = Staked::new(5, 2 * MINIMUM).pending(2 * MINIMUM, 0);
+        let discounted = Staked::new(5, 2 * MINIMUM).pending(2 * MINIMUM);
         let staying = Staked::new(7, MINIMUM);
 
         assert_eq!(
             committee_update(
                 &state_with([discounted, staying]),
-                &[discounted.key, staying.key],
-                1,
+                &live(&[discounted.key, staying.key], 1, 1),
             ),
             Some(vec![staying.key])
         );
@@ -392,11 +368,41 @@ mod tests {
 
     #[test]
     fn an_empty_committee_is_never_submitted() {
-        let exiting = Staked::new(4, MINIMUM).pending(MINIMUM, 0);
+        let exiting = Staked::new(4, MINIMUM).pending(MINIMUM);
 
         assert_eq!(
-            committee_update(&state_with([exiting]), &[exiting.key], 1),
+            committee_update(&state_with([exiting]), &live(&[exiting.key], 1, 1)),
             None
+        );
+    }
+
+    #[test]
+    fn matching_keys_at_stale_posting_params_are_re_submitted() {
+        let committee = [
+            Staked::new(1, MINIMUM),
+            Staked::new(2, MINIMUM),
+            Staked::new(3, MINIMUM),
+        ];
+        let mut keys = committee.map(|staked| staked.key);
+        keys.sort_unstable();
+        let state = state_with(committee);
+
+        assert!(committee_update(&state, &live(&keys, 2, 2)).is_none());
+        let stale_timeframe = LiveChannel {
+            posting_timeframe: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEFRAME + 1,
+            ..live(&keys, 2, 2)
+        };
+        assert_eq!(
+            committee_update(&state, &stale_timeframe),
+            Some(keys.to_vec())
+        );
+        let stale_timeout = LiveChannel {
+            posting_timeout: system_accounts::DEFAULT_SEQUENCER_POSTING_TIMEOUT + 1,
+            ..live(&keys, 2, 2)
+        };
+        assert_eq!(
+            committee_update(&state, &stale_timeout),
+            Some(keys.to_vec())
         );
     }
 
@@ -406,8 +412,8 @@ mod tests {
         // asked for once and forgotten.
         let state = state_with([Staked::new(8, MINIMUM)]);
 
-        assert!(committee_update(&state, &[], 1).is_some());
-        assert!(committee_update(&state, &[], 1).is_some());
+        assert!(committee_update(&state, &live(&[], 1, 1)).is_some());
+        assert!(committee_update(&state, &live(&[], 1, 1)).is_some());
     }
 
     #[test]
@@ -416,20 +422,22 @@ mod tests {
         let low = Staked::new(1, MINIMUM);
 
         assert_eq!(
-            committee_update(&state_with([high, low]), &[], 1),
+            committee_update(&state_with([high, low]), &live(&[], 1, 1)),
             Some(vec![low.key, high.key])
         );
     }
 
     #[test]
-    fn a_release_is_a_candidate_once_its_exit_delay_passes() {
-        let staked = Staked::new(5, MINIMUM).pending(MINIMUM, 3);
-        let releasable_at = 3 + EXIT_DELAY;
+    fn a_pending_release_is_a_candidate() {
+        let staked = Staked::new(5, MINIMUM).pending(MINIMUM);
 
-        assert!(finalize_unstake_candidates(&state_at([staked], releasable_at - 2)).is_empty());
         assert_eq!(
-            finalize_unstake_candidates(&state_at([staked], releasable_at - 1)),
-            vec![(staked.account_id, staked.key, staked.pending.unwrap())]
+            finalize_unstake_candidates(&state_with([staked])),
+            vec![(
+                staked.account_id,
+                staked.key,
+                lee::AccountId::new([200; 32])
+            )]
         );
     }
 
@@ -437,6 +445,6 @@ mod tests {
     fn an_entry_with_no_pending_unstake_is_not_a_candidate() {
         let staked = Staked::new(7, MINIMUM);
 
-        assert!(finalize_unstake_candidates(&state_at([staked], 100)).is_empty());
+        assert!(finalize_unstake_candidates(&state_with([staked])).is_empty());
     }
 }

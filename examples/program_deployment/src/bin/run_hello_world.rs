@@ -1,9 +1,11 @@
+use std::collections::BTreeMap;
+
 use common::transaction::LeeTransaction;
 use lee::{
-    AccountId, ProgramShardSelector, PublicTransaction,
+    AccountId, Actor, Authority, PublicTransaction,
     public_transaction::{Message, WitnessSet},
 };
-use program_deployment::deploy_program;
+use program_deployment::{admission_evidence, deploy_program, fee_paid_by};
 use sequencer_service_rpc::RpcClient as _;
 use wallet::WalletCore;
 
@@ -41,7 +43,7 @@ async fn main() {
         .unwrap()
         .parse()
         .unwrap();
-    // Third argument is an existing, funded account to pay the deployment fee
+    // Third argument is an existing, funded account to pay the deployment and transaction fees
     let payer: AccountId = std::env::args_os()
         .nth(3)
         .unwrap()
@@ -60,18 +62,23 @@ async fn main() {
     let greeting: Vec<u8> = vec![72, 111, 108, 97, 32, 109, 117, 110, 100, 111, 33];
 
     // Construct the public transaction
-    // No nonces nor signing keys are needed for this example. Check out the
-    // `run_hello_world_with_authorization` on how to use them.
-    let nonces = vec![];
-    let signing_keys = [];
-    let message = Message::try_new(
-        program_account_id,
-        vec![ProgramShardSelector::new(account_id, program_account_id)],
-        nonces,
-        greeting,
-    )
-    .unwrap();
-    let witness_set = WitnessSet::for_message(&message, &signing_keys);
+    // The program needs no authorization from `account_id` (see
+    // `run_hello_world_with_authorization` for that), but the fee is charged to `payer`, so the
+    // payer's nonce is listed and its key signs the message.
+    let (fee, payer_nonce, payer_signer) = fee_paid_by(&wallet_core, payer).await.unwrap();
+    let nonces = BTreeMap::from([(payer, payer_nonce)]);
+    let signing_keys = [payer_signer];
+    let hello = Actor::new(account_id, program_account_id);
+    // `account_id` doesn't sign and may not exist on chain yet, so the sequencer only admits it
+    // as a public actor with evidence: its public key, which hashes to the account id.
+    let message = Message {
+        admission_evidence: admission_evidence(&wallet_core, account_id)
+            .into_iter()
+            .collect(),
+        ..Message::try_new_with_fees(hello, vec![(hello, Authority::None)], nonces, greeting, fee)
+            .unwrap()
+    };
+    let witness_set = WitnessSet::sign(&message, &signing_keys);
     let tx = PublicTransaction::new(message, witness_set);
 
     // Submit the transaction

@@ -9,25 +9,29 @@
     reason = "We don't care about these in tests"
 )]
 
-use std::time::{Duration, Instant};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context as _, Result};
-use bytesize::ByteSize;
 use common::transaction::LeeTransaction;
-use integration_tests::config::SequencerPartialConfig;
+use integration_tests::{config::SequencerPartialConfig, no_seal};
 use lee::{
-    Account, AccountId, PrivacyPreservingTransaction, PrivateKey, ProgramShardSelector,
-    ProvingInput, PublicKey, PublicTransaction,
+    Account, AccountId, Actor, PrivacyPreservingTransaction, ProvingInput, PublicExecutionContext,
+    PublicTransaction, SenderPresentation,
     privacy_preserving_transaction::{self as pptx, circuit},
     program::Program,
     public_transaction as putx,
+    signature::PublicAccountSecret,
+    test_utils::{TestSigner, privacy_witness_for, witness_for},
 };
 use lee_core::{
-    AuthorizationSecretKey, DUMMY_COMMITMENT_HASH, Identifier, MembershipProof, NullifierPublicKey,
-    NullifierSecretKey, NullifierWitness, PrivateWitness, WitnessKind, account::Nonce,
-    encryption::ViewingPublicKey,
+    AuthorizationSecretKey, DUMMY_COMMITMENT_HASH, MembershipProof, NullifierPublicKey,
+    NullifierSecretKey, NullifierWitness, PrivateWitness, RegularKey, RootCall, WitnessKind,
+    account::Nonce, encryption::ViewingPublicKey, execution_state::TransactionEntry,
 };
-use sequencer_core::config::GenesisAction;
+use sequencer_core::config::{ChannelParams, DepositRecipient, GenesisAction};
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
     MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
@@ -46,7 +50,7 @@ const TPS_ACCOUNT_SUPPLY: u64 = 10_000_000;
 const TPS_TRANSFER_GAS_LIMIT: u64 = 100_000;
 
 pub(crate) struct TpsTestManager {
-    public_keypairs: Vec<(PrivateKey, AccountId)>,
+    public_keypairs: Vec<(TestSigner, AccountId)>,
     target_tps: u64,
 }
 
@@ -58,10 +62,9 @@ impl TpsTestManager {
             .map(|i| {
                 let mut private_key_bytes = [0_u8; 32];
                 private_key_bytes[..8].copy_from_slice(&i.to_le_bytes());
-                let private_key = PrivateKey::try_new(private_key_bytes).unwrap();
-                let public_key = PublicKey::new_from_private_key(&private_key);
-                let account_id = AccountId::from(&public_key);
-                (private_key, account_id)
+                let signer = TestSigner::from(&PublicAccountSecret::new(private_key_bytes));
+                let account_id = signer.account_id();
+                (signer, account_id)
             })
             .collect();
         Self {
@@ -87,22 +90,23 @@ impl TpsTestManager {
             .windows(2)
             .map(|pair| {
                 let amount: u128 = 1;
+                let sender = Actor::native_balance(pair[0].1);
+                let recipient = Actor::native_balance(pair[1].1);
                 let message = putx::Message::try_new_with_fees(
-                    lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
-                    vec![
-                        ProgramShardSelector::native_balance(pair[0].1),
-                        ProgramShardSelector::native_balance(pair[1].1),
-                    ],
-                    [Nonce(0_u128)].to_vec(),
-                    lee_core::native_token::Instruction::Transfer { amount },
+                    sender,
+                    lee::test_utils::signed_by(vec![sender, recipient], [pair[0].1]),
+                    BTreeMap::from([(pair[0].1, Nonce(0_u128))]),
+                    lee_core::native_token::Message::Transfer {
+                        to: recipient.account_id,
+                        amount,
+                    },
                     // A generous max_fee (a ceiling, not the fee paid) so the
                     // base-fee rise this test's own sustained load causes cannot
                     // push the reserve past it and drop later txs.
                     lee::FeeDeclaration::new(pair[0].1, TPS_TRANSFER_GAS_LIMIT, 0, DEFAULT_MAX_FEE),
                 )
                 .unwrap();
-                let witness_set =
-                    lee::public_transaction::WitnessSet::for_message(&message, &[&pair[0].0]);
+                let witness_set = witness_for(&message, &[&pair[0].0]);
                 PublicTransaction::new(message, witness_set)
             })
             .collect();
@@ -116,8 +120,8 @@ impl TpsTestManager {
     fn generate_genesis(&self) -> Vec<GenesisAction> {
         self.public_keypairs
             .iter()
-            .map(|(_, account_id)| GenesisAction::SupplyAccount {
-                account_id: *account_id,
+            .map(|(signer, _)| GenesisAction::SupplyAccount {
+                recipient: DepositRecipient::Identified(signer.evidence()),
                 balance: TPS_ACCOUNT_SUPPLY,
             })
             .collect()
@@ -126,12 +130,14 @@ impl TpsTestManager {
     fn generate_sequencer_partial_config() -> SequencerPartialConfig {
         SequencerPartialConfig {
             max_num_tx_in_block: 300,
-            // The largest block Bedrock can carry as one inscription.
-            max_block_size: ByteSize::b(sequencer_core::config::MAX_PUBLISHABLE_BLOCK_SIZE),
             mempool_max_size: 10_000,
             block_create_timeout: Duration::from_secs(12),
             priority_fee_percent: sequencer_core::config::default_priority_fee_percent(),
-            channel_params: test_fixtures::config::SequencerPartialConfig::default().channel_params,
+            channel_params: ChannelParams {
+                // The largest block Bedrock can carry as one inscription.
+                max_block_size: sequencer_core::config::MAX_PUBLISHABLE_BLOCK_SIZE,
+                ..test_fixtures::config::SequencerPartialConfig::default().channel_params
+            },
         }
     }
 }
@@ -154,9 +160,7 @@ pub async fn tps_test() -> Result<()> {
         .await?;
 
     let target_time = tps_test.target_time();
-    log::info!(
-        "TPS test begin. Target time is {target_time:?} for {num_transactions} transactions ({target_tps} TPS)"
-    );
+    tracing::info!(?target_time, num_transactions, target_tps, "TPS test begin");
 
     let txs = tps_test.build_public_txs();
     let now = Instant::now();
@@ -168,7 +172,7 @@ pub async fn tps_test() -> Result<()> {
             .send_transaction(LeeTransaction::Public(tx))
             .await
             .unwrap();
-        log::info!("Sent tx {i}");
+        tracing::info!(index = i, "Sent tx");
         tx_hashes.push(tx_hash);
     }
 
@@ -184,11 +188,11 @@ pub async fn tps_test() -> Result<()> {
                 .get_transaction(*tx_hash)
                 .await
                 .inspect_err(|err| {
-                    log::warn!("Failed to get transaction by hash {tx_hash} with error: {err:#?}");
+                    tracing::warn!(%tx_hash, error = ?err, "Failed to get transaction by hash");
                 });
 
             if tx_obj.is_ok_and(|opt| opt.is_some()) {
-                log::info!("Found tx {i} with hash {tx_hash}");
+                tracing::info!(index = i, %tx_hash, "Found tx");
                 break;
             }
         }
@@ -197,7 +201,12 @@ pub async fn tps_test() -> Result<()> {
 
     let tx_processed = tx_hashes.len();
     let actual_tps = tx_processed as u64 / time_elapsed;
-    log::info!("Processed {tx_processed} transactions in {time_elapsed:?} ({actual_tps} TPS)");
+    tracing::info!(
+        tx_processed,
+        ?time_elapsed,
+        actual_tps,
+        "Processed transactions"
+    );
 
     assert_eq!(tx_processed, num_transactions);
 
@@ -226,7 +235,7 @@ pub async fn tps_test() -> Result<()> {
          (revert-keeps-fee), so no funds actually moved"
     );
 
-    log::info!("TPS test finished successfully");
+    tracing::info!("TPS test finished successfully");
 
     Ok(())
 }
@@ -241,8 +250,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     let sender_nsk = NullifierSecretKey::from(&sender_ask);
     let sender_vpk = ViewingPublicKey::from_seed(&[99_u8; 32], &[100_u8; 32]);
     let sender_npk = NullifierPublicKey::from(&sender_nsk);
-    let sender_id =
-        AccountId::for_regular_private_account(&sender_npk, &sender_vpk, Identifier::ZERO);
+    let sender_id = AccountId::for_regular_private_account(&sender_npk, &sender_vpk);
     let sender_account = Account {
         nonce: Nonce(0xdead_beef),
         ..Account::funded(100)
@@ -251,8 +259,7 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     let recipient_nsk = NullifierSecretKey::from(&recipient_ask);
     let recipient_vpk = ViewingPublicKey::from_seed(&[101_u8; 32], &[102_u8; 32]);
     let recipient_npk = NullifierPublicKey::from(&recipient_nsk);
-    let recipient_id =
-        AccountId::for_regular_private_account(&recipient_npk, &recipient_vpk, Identifier::ZERO);
+    let recipient_id = AccountId::for_regular_private_account(&recipient_npk, &recipient_vpk);
 
     let balance_to_move: u128 = 1;
     let proof: MembershipProof = (
@@ -264,50 +271,57 @@ fn build_privacy_transaction() -> PrivacyPreservingTransaction {
     );
     let (output, proof) = circuit::execute_and_prove(
         ProvingInput {
-            shard_selectors: vec![
-                ProgramShardSelector::native_balance(sender_id),
-                ProgramShardSelector::native_balance(recipient_id),
-            ],
+            claims: Vec::new(),
+            root: TransactionEntry::Sync(RootCall {
+                to: Actor::native_balance(sender_id),
+                message: Program::serialize_message(lee_core::native_token::Message::Transfer {
+                    to: recipient_id,
+                    amount: balance_to_move,
+                })
+                .unwrap(),
+            }),
+            public_context: PublicExecutionContext::default(),
             private_witnesses: vec![
                 PrivateWitness {
                     vpk: sender_vpk,
                     random_seed: [0; 32],
-                    identifier: Identifier::ZERO,
-                    kind: WitnessKind::Regular {
-                        ask: Some(sender_ask),
-                    },
+                    kind: WitnessKind::Regular(RegularKey::Authorized(sender_ask)),
                     nullifier: NullifierWitness::Update {
                         account: sender_account,
-                        view_tag: 0,
-                        nsk: sender_nsk,
                         membership_proof: proof,
                     },
+                    address_openings: BTreeSet::new(),
+                    signer_programs: BTreeSet::from([
+                        lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
+                    ]),
                 },
                 PrivateWitness {
                     vpk: recipient_vpk,
                     random_seed: [0; 32],
-                    identifier: Identifier::ZERO,
-                    kind: WitnessKind::Regular {
-                        ask: Some(recipient_ask),
-                    },
+                    kind: WitnessKind::Regular(RegularKey::Authorized(recipient_ask)),
                     nullifier: NullifierWitness::Init {
-                        npk: recipient_npk,
                         commitment_root: DUMMY_COMMITMENT_HASH,
                     },
+                    address_openings: BTreeSet::new(),
+                    signer_programs: BTreeSet::from([
+                        lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID,
+                    ]),
                 },
             ],
-            instruction_data: Program::serialize_instruction(
-                lee_core::native_token::Instruction::Transfer {
-                    amount: balance_to_move,
-                },
-            )
-            .unwrap(),
-            ..Default::default()
+            dummy_inputs: Vec::new(),
+            ciphertext_padding: None,
+            recoveries: Vec::new(),
+            private_promotions: BTreeSet::new(),
+            fee: None,
         },
-        &lee::privacy_preserving_transaction::circuit::ProgramWithDependencies::native(),
+        &circuit::Simulation::default(),
+        &lee::privacy_preserving_transaction::circuit::ProgramCatalog::default(),
+        |_| SenderPresentation::Canonical,
+        |_, body| body.to.account_id == recipient_id,
+        no_seal,
     )
     .unwrap();
-    let message = pptx::message::Message::from_circuit_output(vec![], output);
-    let witness_set = pptx::witness_set::WitnessSet::for_message(&message, proof, &[]);
+    let message = pptx::message::Message::from_circuit_output(BTreeMap::new(), output);
+    let witness_set = privacy_witness_for(&message, proof, &[]);
     pptx::PrivacyPreservingTransaction::new(message, witness_set)
 }

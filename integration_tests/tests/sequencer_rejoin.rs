@@ -1,6 +1,7 @@
 #![expect(
     clippy::tests_outside_test_module,
-    reason = "top-level test functions are conventional for integration tests"
+    clippy::arithmetic_side_effects,
+    reason = "We don't care about these in tests"
 )]
 
 //! B unstakes in full, leaves the committee, gets its stake back, then rejoins.
@@ -9,10 +10,9 @@ use std::time::Duration;
 
 use anyhow::{Context as _, Result, ensure};
 use integration_tests::{
-    account_balance, assert_same_chain, committee, get_account, init_logger, wait_until,
+    account_balance, committee, get_account, init_logger, wait_for_same_chain, wait_until,
 };
-use lee::{AccountId, PublicKey, program::Program};
-use log::info;
+use lee::{AccountId, program::Program, test_utils::TestSigner};
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
     MultiZoneTestContextBuilder, TestContext, ZoneTestContextBuilder,
@@ -20,7 +20,8 @@ use test_fixtures::{
     spawn_channel_observer,
 };
 use tokio::test;
-use wallet::{AccountIdentity, AccountMention};
+use tracing::info;
+use wallet::{AccountIdentity, AccountMention, program_facades::sequencer_stake::SequencerStake};
 
 /// What genesis stakes each founding sequencer.
 const STAKE: u128 = system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
@@ -52,13 +53,13 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
 
     let key_b = config::sequencer_signing_key_from_seed(1).public_key();
     let stake_key_b = sequencer_stake_core::SequencerKey::new(key_b.to_bytes())
-        .context("Sequencer B's Bedrock key is not a valid Ed25519 point")?;
+        .context("Sequencer B's channel signing public key is not a valid Ed25519 point")?;
 
-    let observer = spawn_channel_observer(ctx.bedrock_addr(), channel).await?;
+    let observer = spawn_channel_observer(ctx.bedrock_addr(), channel)?;
 
     // B's genesis stake sits on an account only this key can sign for.
-    let owner_b = config::founding_stake_owner_key(1)?;
-    let ownership_b = AccountId::from(&PublicKey::new_from_private_key(&owner_b));
+    let owner_b = config::founding_stake_owner_secret(1);
+    let ownership_b = TestSigner::from(&owner_b).account_id();
     let funds_b = system_accounts::stake_funds_account_id(&ownership_b);
     ctx.wallet_mut()
         .storage_mut()
@@ -68,34 +69,28 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     let config_id = system_accounts::sequencer_stake_config_account_id();
     let stake_id = programs::sequencer_stake_account_id();
 
-    let settlement = AccountId::from(&PublicKey::new_from_private_key(
-        &config::default_public_accounts_for_wallet()[0].0,
-    ));
+    let settlement =
+        TestSigner::from(&config::default_public_accounts_for_wallet()[0].0).account_id();
 
     wait_until("both staked keys to be accredited", || async {
-        Ok(committee(&observer).await?.0.contains(&key_b.to_bytes()))
+        Ok(committee(&observer, channel)
+            .await?
+            .0
+            .contains(&key_b.to_bytes()))
     })
     .await?;
     info!("Both sequencers accredited from channel creation");
 
     // B leaves.
     let settlement_before = account_balance(&ctx, settlement).await?;
-    let requested_at = ctx
-        .sequencer_client()
-        .get_last_block_id()
-        .await?
-        .saturating_add(sequencer_stake_core::UNSTAKE_REQUEST_WINDOW);
     send_stake_tx(
         &ctx,
-        vec![
-            AccountIdentity::Public(ownership_b).select_program_shard(stake_id),
-            AccountIdentity::PublicNoSign(config_id).select_program_shard(stake_id),
-        ],
-        &sequencer_stake_core::Instruction::UnstakeRequest {
+        ownership_b,
+        vec![AccountIdentity::PublicNoSign(config_id).select_program_actor_state(stake_id)],
+        &sequencer_stake_core::Message::UnstakeRequest {
             sequencer_key: stake_key_b,
             amount: STAKE,
             destination: settlement,
-            requested_at,
         },
     )
     .await
@@ -103,7 +98,10 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     info!("B requested a full unstake");
 
     wait_until("B to leave the committee", || async {
-        Ok(!committee(&observer).await?.0.contains(&key_b.to_bytes()))
+        Ok(!committee(&observer, channel)
+            .await?
+            .0
+            .contains(&key_b.to_bytes()))
     })
     .await?;
     info!("B removed from the Bedrock committee");
@@ -128,28 +126,15 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     info!("B's stake released in full");
 
     // B rejoins on the same ownership account, which stays claimed after an exit.
-    let has_record = !get_account(&ctx, ownership_b)
+    SequencerStake(ctx.wallet())
+        .send_stake(
+            AccountIdentity::Public(ownership_b),
+            AccountIdentity::Public(settlement),
+            stake_key_b,
+            STAKE,
+        )
         .await
-        .context("Failed to read B's stake ownership account")?
-        .data
-        .shard(stake_id)
-        .is_empty();
-    send_stake_tx(
-        &ctx,
-        vec![
-            AccountIdentity::Public(settlement).balance(),
-            AccountIdentity::Public(ownership_b).select_program_shard(stake_id),
-            AccountIdentity::PublicNoSign(funds_b).balance(),
-            AccountIdentity::PublicNoSign(config_id).select_program_shard(stake_id),
-        ],
-        &sequencer_stake_core::Instruction::Stake {
-            sequencer_key: stake_key_b,
-            amount: STAKE,
-            has_record,
-        },
-    )
-    .await
-    .context("Failed to submit B's re-stake")?;
+        .map_err(|err| anyhow::anyhow!("Failed to submit B's re-stake: {err:?}"))?;
 
     wait_until("B's re-stake to land", || async {
         Ok(get_account(&ctx, funds_b)
@@ -163,14 +148,17 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
     info!("B staked again");
 
     wait_until("B to be accredited again", || async {
-        Ok(committee(&observer).await?.0.contains(&key_b.to_bytes()))
+        Ok(committee(&observer, channel)
+            .await?
+            .0
+            .contains(&key_b.to_bytes()))
     })
     .await?;
     info!("B back in the Bedrock committee");
 
     // Rejoining is only real if B writes to the channel again.
     wait_until("the round-robin turn to reach B again", || async {
-        Ok(committee(&observer).await?.1 == Some(key_b))
+        Ok(committee(&observer, channel).await?.1 == Some(key_b))
     })
     .await?;
 
@@ -185,22 +173,27 @@ async fn a_sequencer_leaves_the_committee_and_rejoins() -> Result<()> {
         Ok(a.get_last_block_id().await? > resumed_at)
     })
     .await?;
-    assert_same_chain(a, b).await?;
+    wait_for_same_chain(a, b).await?;
     info!("B produces again and both sequencers agree on the chain");
 
     Ok(())
 }
 
-/// Sends `instruction` to `sequencer_stake` over `accounts`.
+/// Sends `message` to `ownership`'s `sequencer_stake` actor, declaring `others` too.
 async fn send_stake_tx(
     ctx: &TestContext,
-    accounts: Vec<AccountMention>,
-    instruction: &sequencer_stake_core::Instruction,
+    ownership: AccountId,
+    others: Vec<AccountMention>,
+    message: &sequencer_stake_core::Message,
 ) -> Result<()> {
-    let data = Program::serialize_instruction(instruction.clone())
-        .context("Failed to serialize the sequencer_stake instruction")?;
+    let data = Program::serialize_message(message.clone())
+        .context("Failed to serialize the sequencer_stake message")?;
+    let root = AccountIdentity::Public(ownership)
+        .select_program_actor_state(programs::sequencer_stake_account_id());
+    let mut accounts = vec![root];
+    accounts.extend(others);
     ctx.wallet()
-        .send_pub_tx(accounts, data, programs::sequencer_stake_account_id())
+        .send_pub_tx(accounts, 0, data)
         .await
         .map_err(|err| anyhow::anyhow!("Failed to submit sequencer_stake transaction: {err:?}"))?;
     Ok(())
@@ -217,7 +210,7 @@ async fn stake_entry(
     let config = sequencer_stake_core::SequencerStakeConfig::from_bytes(
         account
             .data
-            .shard(programs::sequencer_stake_account_id())
+            .actor_state(programs::sequencer_stake_account_id())
             .as_ref(),
     )
     .context("config account data did not decode as a SequencerStakeConfig")?;

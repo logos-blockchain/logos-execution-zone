@@ -4,19 +4,22 @@ use anyhow::{Context as _, Result};
 use clap::Subcommand;
 use itertools::Itertools as _;
 use key_protocol::key_management::{KeyChain, key_tree::chain_index::ChainIndex};
-use lee::{Account, AccountId, ProgramShardSelector, PublicKey};
+use lee::{
+    Account, AccountId, Actor,
+    signature::{PublicAccountSecret, public_account_id},
+};
 use lee_core::{account::AccountIdError, native_token::NATIVE_TOKEN_PROGRAM_ID};
 
 use crate::{
-    WalletCore,
+    WalletCore, WalletSequencerClient,
     account::{AccountIdWithPrivacy, HumanReadableAccount, Label},
-    cli::{CliAccountMention, SubcommandReturnValue, WalletSubcommand},
+    cli::{CliAccountMention, SubcommandReturnValue, WalletSubcommand, confirm},
 };
 
 #[derive(Debug, Clone)]
 pub enum ReadScope {
     Balance,
-    Shard(AccountId),
+    ActorState(AccountId),
     All,
 }
 
@@ -27,7 +30,7 @@ impl FromStr for ReadScope {
         match s {
             "balance" => Ok(Self::Balance),
             "all" => Ok(Self::All),
-            _ => AccountId::from_str(s).map(Self::Shard),
+            _ => AccountId::from_str(s).map(Self::ActorState),
         }
     }
 }
@@ -63,7 +66,15 @@ pub enum AccountSubcommand {
     #[command(subcommand)]
     New(NewSubcommand),
     /// Sync private accounts.
-    SyncPrivate,
+    SyncPrivate {
+        /// Rediscover private accounts from genesis instead, keeping every other record and the
+        /// sync cursor.
+        #[arg(long)]
+        rescan: bool,
+        /// Skip the confirmation prompt.
+        #[arg(short, long)]
+        yes: bool,
+    },
     /// List all accounts owned by the wallet.
     #[command(visible_alias = "ls")]
     List {
@@ -111,8 +122,7 @@ pub enum NewSubcommand {
         /// Label to assign to the new account.
         label: Option<Label>,
     },
-    /// Single-account convenience: creates a key node and auto-registers one account with a random
-    /// identifier.
+    /// Creates a key node and registers its private account.
     Private {
         #[arg(long)]
         /// Chain index of a parent node.
@@ -137,14 +147,13 @@ pub enum NewSubcommand {
         #[arg(long, requires = "pda")]
         /// Program ID as hex string.
         program_id: Option<String>,
-        #[arg(long)]
-        /// Identifier selecting the shared account.
+        #[arg(long, conflicts_with = "pda")]
+        /// Derivation id selecting the shared regular account, as a 64-character hex string.
         /// Co-owners must supply the same value to derive the same account.
         /// Defaults to a random value if not specified.
-        identifier: Option<lee_core::Identifier>,
+        derivation_id: Option<String>,
     },
-    /// Recommended for receiving from multiple senders: creates a key node (npk + vpk) without
-    /// registering any account.
+    /// Creates a key node and prints its npk and vpk, for senders who address its account by keys.
     PrivateAccountsKey {
         #[arg(long)]
         /// Chain index of a parent node.
@@ -153,10 +162,10 @@ pub enum NewSubcommand {
 }
 
 impl NewSubcommand {
-    fn handle_public(
+    fn handle_public<C: WalletSequencerClient>(
         cci: Option<ChainIndex>,
         label: Option<Label>,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         if let Some(label) = &label {
             wallet_core.storage().check_label_availability(label)?;
@@ -164,13 +173,11 @@ impl NewSubcommand {
 
         let (account_id, chain_index) = wallet_core.create_new_account_public(cci);
 
-        let private_key = wallet_core
+        let initial_key = wallet_core
             .storage
             .key_chain()
-            .pub_account_signing_key(account_id)
-            .unwrap();
-
-        let public_key = PublicKey::new_from_private_key(private_key);
+            .pub_account_initial_key(account_id)
+            .expect("the account was just created");
 
         if let Some(label) = label {
             wallet_core
@@ -179,17 +186,17 @@ impl NewSubcommand {
         }
 
         println!("Generated new account with account_id Public/{account_id} at path {chain_index}");
-        println!("With pk {}", hex::encode(public_key.value()));
+        println!("With initial key {initial_key}");
 
         wallet_core.store_persistent_data()?;
 
         Ok(SubcommandReturnValue::RegisterAccount { account_id })
     }
 
-    fn handle_private(
+    fn handle_private<C: WalletSequencerClient>(
         cci: Option<ChainIndex>,
         label: Option<Label>,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         if let Some(label) = &label {
             wallet_core.storage().check_label_availability(label)?;
@@ -224,14 +231,14 @@ impl NewSubcommand {
         Ok(SubcommandReturnValue::RegisterAccount { account_id })
     }
 
-    async fn handle_private_gms(
+    async fn handle_private_gms<C: WalletSequencerClient>(
         group: &Label,
         label: Option<Label>,
         pda: bool,
         seed: Option<String>,
         program_id: Option<String>,
-        identifier: Option<lee_core::Identifier>,
-        wallet_core: &mut WalletCore,
+        derivation_id: Option<String>,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         if let Some(label) = &label {
             wallet_core.storage().check_label_availability(label)?;
@@ -257,19 +264,16 @@ impl NewSubcommand {
             }
 
             wallet_core
-                .create_shared_pda_account(
-                    group.clone(),
-                    pda_seed,
-                    pid,
-                    crate::cli::identifier_or_random(identifier),
-                )
+                .create_shared_pda_account(group.clone(), pda_seed, pid)
                 .await?
         } else {
+            let derivation_id = match derivation_id {
+                Some(hex) => <[u8; 32] as hex::FromHex>::from_hex(hex)
+                    .context("Derivation id must be 32 bytes of hex")?,
+                None => rand::random(),
+            };
             wallet_core
-                .create_shared_regular_account_with_identifier(
-                    group.clone(),
-                    crate::cli::identifier_or_random(identifier),
-                )
+                .create_shared_regular_account(group.clone(), derivation_id)
                 .await?
         };
 
@@ -290,9 +294,9 @@ impl NewSubcommand {
         })
     }
 
-    fn handle_private_accounts_key(
+    fn handle_private_accounts_key<C: WalletSequencerClient>(
         cci: Option<ChainIndex>,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         let chain_index = wallet_core.create_private_accounts_key(cci);
         let key_chain = wallet_core
@@ -315,9 +319,9 @@ impl NewSubcommand {
 }
 
 impl WalletSubcommand for NewSubcommand {
-    async fn handle_subcommand(
+    async fn handle_subcommand<C: WalletSequencerClient>(
         self,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         match self {
             Self::Public { cci, label } => Self::handle_public(cci, label, wallet_core),
@@ -328,7 +332,7 @@ impl WalletSubcommand for NewSubcommand {
                 pda,
                 seed,
                 program_id,
-                identifier,
+                derivation_id,
             } => {
                 Self::handle_private_gms(
                     &group,
@@ -336,7 +340,7 @@ impl WalletSubcommand for NewSubcommand {
                     pda,
                     seed,
                     program_id,
-                    identifier,
+                    derivation_id,
                     wallet_core,
                 )
                 .await
@@ -347,12 +351,24 @@ impl WalletSubcommand for NewSubcommand {
 }
 
 impl AccountSubcommand {
-    async fn handle_get(
+    fn confirm_scan(blocks: u64, scan: &str) -> Result<()> {
+        if blocks == 0
+            || confirm(&format!(
+                "{scan} will read {blocks} blocks, which may take a while. Continue?"
+            ))?
+        {
+            Ok(())
+        } else {
+            anyhow::bail!("Sync cancelled")
+        }
+    }
+
+    async fn handle_get<C: WalletSequencerClient>(
         raw: bool,
         keys: bool,
         account_id: CliAccountMention,
         scope: ReadScope,
-        wallet_core: &WalletCore,
+        wallet_core: &WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         let resolved = account_id.resolve(wallet_core.storage())?;
         wallet_core
@@ -364,42 +380,41 @@ impl AccountSubcommand {
 
         let account = match resolved {
             AccountIdWithPrivacy::Public(id) => match &scope {
-                ReadScope::All => wallet_core.get_account_public(id).await?,
-                ReadScope::Balance => {
-                    wallet_core
-                        .get_account_view(ProgramShardSelector::native_balance(id))
-                        .await?
-                }
-                ReadScope::Shard(program) => {
-                    wallet_core
-                        .get_account_view(ProgramShardSelector::new(id, *program))
-                        .await?
-                }
+                ReadScope::All => wallet_core
+                    .get_account_public(id)
+                    .await?
+                    .unwrap_or_default(),
+                ReadScope::Balance => wallet_core
+                    .get_account_view(Actor::native_balance(id))
+                    .await?
+                    .unwrap_or_default(),
+                ReadScope::ActorState(program) => wallet_core
+                    .get_account_view(Actor::new(id, *program))
+                    .await?
+                    .unwrap_or_default(),
             },
             AccountIdWithPrivacy::Private(id) => {
-                let Some(found) = wallet_core.storage().key_chain().private_account(id) else {
+                let Some(account) = wallet_core.private_account_state(id) else {
                     anyhow::bail!("Private account with id {id} not found in storage");
                 };
                 match &scope {
-                    ReadScope::All => found.account.clone(),
-                    ReadScope::Balance => found.account.project([NATIVE_TOKEN_PROGRAM_ID]),
-                    ReadScope::Shard(program) => found.account.project([*program]),
+                    ReadScope::All => account.clone(),
+                    ReadScope::Balance => account.project([NATIVE_TOKEN_PROGRAM_ID]),
+                    ReadScope::ActorState(program) => account.project([*program]),
                 }
             }
         };
 
         // Helper closure to display keys for the account
-        let display_keys = |wallet_core: &WalletCore| -> Result<()> {
+        let display_keys = |wallet_core: &WalletCore<C>| -> Result<()> {
             match resolved {
                 AccountIdWithPrivacy::Public(account_id) => {
-                    let private_key = wallet_core
+                    let initial_key = wallet_core
                         .storage
                         .key_chain()
-                        .pub_account_signing_key(account_id)
+                        .pub_account_initial_key(account_id)
                         .context("Public account not found in storage")?;
-
-                    let public_key = PublicKey::new_from_private_key(private_key);
-                    println!("pk {}", hex::encode(public_key.value()));
+                    println!("initial key {initial_key}");
                 }
                 AccountIdWithPrivacy::Private(account_id) => {
                     let acc = wallet_core
@@ -437,7 +452,7 @@ impl AccountSubcommand {
 
         let balance_read = match &scope {
             ReadScope::All | ReadScope::Balance => true,
-            ReadScope::Shard(program) => *program == NATIVE_TOKEN_PROGRAM_ID,
+            ReadScope::ActorState(program) => *program == NATIVE_TOKEN_PROGRAM_ID,
         };
         print_account_details(&account, "", balance_read);
 
@@ -448,8 +463,8 @@ impl AccountSubcommand {
         Ok(SubcommandReturnValue::Empty)
     }
 
-    fn format_with_label(
-        wallet_core: &WalletCore,
+    fn format_with_label<C: WalletSequencerClient>(
+        wallet_core: &WalletCore<C>,
         id: AccountIdWithPrivacy,
         chain_index: Option<&ChainIndex>,
     ) -> String {
@@ -467,7 +482,10 @@ impl AccountSubcommand {
         }
     }
 
-    async fn handle_list(long: bool, wallet_core: &WalletCore) -> Result<SubcommandReturnValue> {
+    async fn handle_list<C: WalletSequencerClient>(
+        long: bool,
+        wallet_core: &WalletCore<C>,
+    ) -> Result<SubcommandReturnValue> {
         let (public_account_ids, private_account_ids) = {
             let key_chain = &wallet_core.storage.key_chain();
 
@@ -505,10 +523,10 @@ impl AccountSubcommand {
                 )
             );
             match wallet_core
-                .get_account_view(ProgramShardSelector::native_balance(id))
+                .get_account_view(Actor::native_balance(id))
                 .await
             {
-                Ok(account) => print_account_details(&account, "  ", true),
+                Ok(account) => print_account_details(&account.unwrap_or_default(), "  ", true),
                 Err(e) => println!("  Error fetching account: {e}"),
             }
         }
@@ -523,13 +541,9 @@ impl AccountSubcommand {
                     chain_index.as_ref()
                 )
             );
-            match wallet_core.storage().key_chain().private_account(id) {
-                Some(found) => {
-                    print_account_details(
-                        &found.account.project([NATIVE_TOKEN_PROGRAM_ID]),
-                        "  ",
-                        true,
-                    );
+            match wallet_core.private_account_state(id) {
+                Some(account) => {
+                    print_account_details(&account.project([NATIVE_TOKEN_PROGRAM_ID]), "  ", true);
                 }
                 None => println!("  Not found in local storage"),
             }
@@ -538,10 +552,10 @@ impl AccountSubcommand {
         Ok(SubcommandReturnValue::Empty)
     }
 
-    fn handle_label(
+    fn handle_label<C: WalletSequencerClient>(
         account_id: &CliAccountMention,
         label: &Label,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         let account_id = account_id.resolve(wallet_core.storage())?;
 
@@ -556,9 +570,9 @@ impl AccountSubcommand {
         Ok(SubcommandReturnValue::Empty)
     }
 
-    fn handle_show_keys(
+    fn handle_show_keys<C: WalletSequencerClient>(
         account_id: &CliAccountMention,
-        wallet_core: &WalletCore,
+        wallet_core: &WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         let resolved = account_id.resolve(wallet_core.storage())?;
         let AccountIdWithPrivacy::Private(account_id) = resolved else {
@@ -581,9 +595,9 @@ impl AccountSubcommand {
 }
 
 impl WalletSubcommand for AccountSubcommand {
-    async fn handle_subcommand(
+    async fn handle_subcommand<C: WalletSequencerClient>(
         self,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         match self {
             Self::Id { account_id } => {
@@ -601,7 +615,20 @@ impl WalletSubcommand for AccountSubcommand {
                 scope,
             } => Self::handle_get(raw, keys, account_id, scope, wallet_core).await,
             Self::New(new_subcommand) => new_subcommand.handle_subcommand(wallet_core).await,
-            Self::SyncPrivate => {
+            Self::SyncPrivate { rescan: true, yes } => {
+                if !yes {
+                    let blocks = wallet_core.get_last_block_id().await?;
+                    Self::confirm_scan(blocks, "Rescanning from genesis")?;
+                }
+                wallet_core.rescan_private_accounts().await?;
+                Ok(SubcommandReturnValue::Empty)
+            }
+            Self::SyncPrivate { rescan: false, yes } => {
+                if !yes {
+                    let from = wallet_core.storage().last_synced_block();
+                    let blocks = wallet_core.get_last_block_id().await?.saturating_sub(from);
+                    Self::confirm_scan(blocks, "Syncing")?;
+                }
                 let curr_last_block = wallet_core.sync_to_latest_block().await?;
                 Ok(SubcommandReturnValue::SyncedToBlock(curr_last_block))
             }
@@ -619,11 +646,11 @@ impl WalletSubcommand for AccountSubcommand {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum ImportSubcommand {
-    /// Import a public account signing key.
+    /// Import a public account secret.
     Public {
-        /// Private key in hex format.
+        /// Public account secret in hex format.
         #[arg(long)]
-        private_key: lee::PrivateKey,
+        secret: PublicAccountSecret,
     },
     /// Import a private account keychain and account state.
     Private {
@@ -636,26 +663,22 @@ pub enum ImportSubcommand {
         /// Chain index.
         #[arg(long)]
         chain_index: Option<ChainIndex>,
-        /// Identifier. Defaults to zero if not specified.
-        #[arg(long)]
-        identifier: Option<lee_core::Identifier>,
     },
 }
 
 impl WalletSubcommand for ImportSubcommand {
-    async fn handle_subcommand(
+    async fn handle_subcommand<C: WalletSequencerClient>(
         self,
-        wallet_core: &mut WalletCore,
+        wallet_core: &mut WalletCore<C>,
     ) -> Result<SubcommandReturnValue> {
         match self {
-            Self::Public { private_key } => {
-                let account_id =
-                    lee::AccountId::from(&lee::PublicKey::new_from_private_key(&private_key));
+            Self::Public { secret } => {
+                let account_id = public_account_id(&secret);
 
                 wallet_core
                     .storage_mut()
                     .key_chain_mut()
-                    .add_imported_public_account(private_key);
+                    .add_imported_public_account(secret);
 
                 wallet_core.store_persistent_data()?;
 
@@ -667,22 +690,20 @@ impl WalletSubcommand for ImportSubcommand {
                 key_chain_json,
                 account_state,
                 chain_index,
-                identifier,
             } => {
                 let key_chain: KeyChain = serde_json::from_str(&key_chain_json)
                     .map_err(|err| anyhow::anyhow!("Invalid key chain JSON: {err}"))?;
                 let account = lee::Account::from(account_state);
-                let identifier = identifier.unwrap_or(lee_core::Identifier::ZERO);
                 let account_id = lee::AccountId::from((
                     &key_chain.nullifier_public_key,
                     &key_chain.viewing_public_key,
-                    identifier,
                 ));
 
                 wallet_core
                     .storage_mut()
                     .key_chain_mut()
-                    .add_imported_private_account(key_chain, chain_index, identifier, account);
+                    .add_imported_private_account(key_chain, chain_index, account);
+                wallet_core.storage_mut().rewind_skipped_history();
 
                 wallet_core.store_persistent_data()?;
 
@@ -706,7 +727,7 @@ fn print_account_details(account: &Account, indent: &str, balance_read: bool) {
     }
     for (program, data) in account
         .data
-        .shards
+        .actor_states
         .iter()
         .filter(|(program, data)| **program != NATIVE_TOKEN_PROGRAM_ID && !data.is_empty())
     {

@@ -1,11 +1,13 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use lee_core::account::AccountId;
 
+use crate::BridgeAmount;
+
 #[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Deposit {
     pub l1_deposit_op_id: [u8; 32],
     pub recipient_id: AccountId,
-    pub amount: u64,
+    pub amount: BridgeAmount,
 }
 
 impl Deposit {
@@ -27,7 +29,7 @@ impl Deposit {
 #[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct Withdraw {
     pub sender_id: AccountId,
-    pub amount: u64,
+    pub amount: BridgeAmount,
     pub bedrock_account_pk: [u8; 32],
 }
 

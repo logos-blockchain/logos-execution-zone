@@ -51,8 +51,8 @@ Feature: Authenticated transfers
   @auth_transfer_ci
   # Mirrors integration_tests/tests/native_transfer/public.rs::successful_transfer_to_new_account.
   # Coverage is equivalent for funding a previously absent public account. Cucumber additionally
-  # verifies the recipient is absent before submission, transaction inclusion, both required
-  # signatures, indexer convergence, and explicit runtime teardown.
+  # verifies the recipient is absent before submission, transaction inclusion, the sender's
+  # signature alone, indexer convergence, and explicit runtime teardown.
   Scenario: Transfer funds to a new public account
     Given a LEZ stack with configured public accounts
     And a new public account
@@ -60,7 +60,7 @@ Feature: Authenticated transfers
     Then the sender balance for transfer "NEW_ACCOUNT_TRANSFER" decreases by 100
     And the new account balance for transfer "NEW_ACCOUNT_TRANSFER" is 100
     And transfer "NEW_ACCOUNT_TRANSFER" is included in a block within 120 seconds
-    And the sender and new account sign transfer "NEW_ACCOUNT_TRANSFER"
+    And only the sender signs transfer "NEW_ACCOUNT_TRANSFER"
     And the indexer catches up to transfer "NEW_ACCOUNT_TRANSFER" within 120 seconds
     Then I stop the runtime
 
@@ -71,7 +71,7 @@ Feature: Authenticated transfers
   Scenario: Transfer funds between configured private accounts
     Given a LEZ stack with configured private accounts
     When I transfer 100 from the first configured private account to the second as "PRIVATE_TRANSFER"
-    Then the sender private balance for transfer "PRIVATE_TRANSFER" decreases by 100
+    Then the sender private balance for transfer "PRIVATE_TRANSFER" decreases by 100 plus the fee
     And the receiver private balance for transfer "PRIVATE_TRANSFER" increases by 100
     And the sender private commitment for transfer "PRIVATE_TRANSFER" is in sequencer state
     And the receiver private commitment for transfer "PRIVATE_TRANSFER" is in sequencer state

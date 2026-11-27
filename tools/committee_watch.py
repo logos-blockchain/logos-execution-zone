@@ -93,15 +93,15 @@ def program_account_id(pid: list[int]) -> str:
 
 
 def stake_config(repo: str, sequencer: str) -> dict:
-    """Read the stake program's config shard."""
+    """Read the stake program's config actor state."""
     pid = program_id(repo)
     program = program_account_id(pid)
     account = rpc(
         sequencer,
         "getAccountView",
         [{"account_id": pda(pid, CONFIG_SEED), "program_account_id": program}],
-    )
-    return decode_stake_config(bytes(account["data"]["shards"][program]))
+    ) or {"nonce": 0, "data": {"actor_states": {}}}
+    return decode_stake_config(bytes(account["data"]["actor_states"][program]))
 
 
 class Reader:
@@ -118,6 +118,9 @@ class Reader:
     def u32(self) -> int:
         return struct.unpack("<I", self.take(4))[0]
 
+    def u64(self) -> int:
+        return struct.unpack("<Q", self.take(8))[0]
+
     def u128(self) -> int:
         return int.from_bytes(self.take(16), "little")
 
@@ -125,28 +128,31 @@ class Reader:
 def decode_stake_config(data: bytes) -> dict:
     r = Reader(data)
     # `channel_params: Option<ChannelParams>` — one borsh tag byte, then the
-    # three values when present.
+    # values when present.
     if r.take(1)[0]:
         minimum, timeframe, timeout = r.u128(), r.u32(), r.u32()
+        max_block_size, finality_depth = r.u64(), r.u64()
     else:
-        minimum = timeframe = timeout = None
+        minimum = timeframe = timeout = max_block_size = finality_depth = None
     # `channel_id: Option<[u8; 32]>`.
     if r.take(1)[0]:
         r.take(32)
     entries = {}
     for _ in range(r.u32()):
         key = r.take(32).hex()
-        entries[key] = {
-            "owner": b58encode(r.take(32)),
-            "staked": r.u128(),
-            "pending": r.u128(),
-        }
+        entries[key] = {"owner": b58encode(r.take(32)), "staked": r.u128(), "pending": 0}
+        # `pending_unstake: Option<PendingUnstake>` — amount, destination.
+        if r.take(1)[0]:
+            entries[key]["pending"] = r.u128()
+            r.take(32)
     for e in entries.values():
         e["net"] = max(e["staked"] - e["pending"], 0)
     return {
         "minimum": minimum,
         "posting_timeframe": timeframe,
         "posting_timeout": timeout,
+        "max_block_size": max_block_size,
+        "finality_depth": finality_depth,
         "entries": entries,
     }
 

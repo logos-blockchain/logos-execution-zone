@@ -9,7 +9,7 @@ use crate::{
         types::{
             FfiAccountId, FfiBlockId, FfiHashType, FfiOption, FfiSelector, FfiVec,
             account::FfiAccount,
-            block::{FfiBlock, FfiBlockOpt},
+            block::{FfiBlock, FfiBlockOpt, FfiTransactionReceipt},
             event::FfiEventRecord,
             transaction::FfiTransaction,
         },
@@ -74,7 +74,7 @@ impl LastBlockIdResult {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn query_last_block(indexer: *const IndexerServiceFFI) -> LastBlockIdResult {
     if indexer.is_null() {
-        log::error!("Attempted to query a null indexer pointer. This is a bug. Aborting.");
+        tracing::error!("Attempted to query a null indexer pointer. This is a bug. Aborting.");
         return LastBlockIdResult::error(OperationStatus::NullPointer);
     }
 
@@ -82,7 +82,10 @@ pub unsafe extern "C" fn query_last_block(indexer: *const IndexerServiceFFI) -> 
 
     indexer.core().store.get_last_block_id().map_or_else(
         |e| {
-            log::error!("Failed to query last block id: {e:#}");
+            tracing::error!(
+                error = format_args!("{e:#}"),
+                "Failed to query last block id"
+            );
             LastBlockIdResult::error(OperationStatus::ClientError)
         },
         |opt| opt.map_or_else(LastBlockIdResult::none, LastBlockIdResult::some),
@@ -92,12 +95,9 @@ pub unsafe extern "C" fn query_last_block(indexer: *const IndexerServiceFFI) -> 
 /// Query the indexer's current sync status as a JSON C-string.
 ///
 /// The JSON schema is owned by `indexer_core` (`IndexerStatus`): an object with
-/// `state` (`Starting`/`Syncing`/`CaughtUp`/`Error`/`Stalled`/`Halted`),
-/// `indexed_block_id`, `last_error`, `stall_reason`, `cross_zone_halt`, and
-/// `cross_zone_peers`. Each peer entry's `health` is one of
-/// `Live`/`Lagging`/`Holed`/`Suspended`/`Halted`; treat a string you do not
-/// know as not known healthy. Lets a client distinguish "still catching up"
-/// from "something went wrong".
+/// `state` (`Starting`/`Syncing`/`CaughtUp`/`Error`/`Stalled`),
+/// `indexed_block_id`, `last_error` and `stall_reason`. Lets a client
+/// distinguish "still catching up" from "something went wrong".
 ///
 /// # Arguments
 ///
@@ -116,7 +116,7 @@ pub unsafe extern "C" fn query_last_block(indexer: *const IndexerServiceFFI) -> 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn query_status(indexer: *const IndexerServiceFFI) -> *mut c_char {
     if indexer.is_null() {
-        log::error!(
+        tracing::error!(
             "Attempted to query status on a null indexer pointer. This is a bug. Aborting."
         );
         return std::ptr::null_mut();
@@ -128,14 +128,14 @@ pub unsafe extern "C" fn query_status(indexer: *const IndexerServiceFFI) -> *mut
     let json = match serde_json::to_string(&status) {
         Ok(json) => json,
         Err(e) => {
-            log::error!("Failed to serialize indexer status: {e}");
+            tracing::error!(error = %e, "Failed to serialize indexer status");
             return std::ptr::null_mut();
         }
     };
 
     CString::new(json).map_or_else(
         |e| {
-            log::error!("Indexer status JSON contained an interior nul byte: {e}");
+            tracing::error!(error = %e, "Indexer status JSON contained an interior nul byte");
             std::ptr::null_mut()
         },
         CString::into_raw,
@@ -163,7 +163,7 @@ pub unsafe extern "C" fn query_block(
     block_id: FfiBlockId,
 ) -> PointerResult<FfiBlockOpt, OperationStatus> {
     if indexer.is_null() {
-        log::error!("Attempted to query a null indexer pointer. This is a bug. Aborting.");
+        tracing::error!("Attempted to query a null indexer pointer. This is a bug. Aborting.");
         return PointerResult::from_error(OperationStatus::NullPointer);
     }
 
@@ -171,7 +171,7 @@ pub unsafe extern "C" fn query_block(
 
     indexer.core().store.get_block_at_id(block_id).map_or_else(
         |e| {
-            log::error!("Failed to query block by id: {e:#}");
+            tracing::error!(error = format_args!("{e:#}"), "Failed to query block by id");
             PointerResult::from_error(OperationStatus::ClientError)
         },
         |block_opt| {
@@ -206,7 +206,7 @@ pub unsafe extern "C" fn query_block_by_hash(
     hash: FfiHashType,
 ) -> PointerResult<FfiBlockOpt, OperationStatus> {
     if indexer.is_null() {
-        log::error!("Attempted to query a null indexer pointer. This is a bug. Aborting.");
+        tracing::error!("Attempted to query a null indexer pointer. This is a bug. Aborting.");
         return PointerResult::from_error(OperationStatus::NullPointer);
     }
 
@@ -218,7 +218,10 @@ pub unsafe extern "C" fn query_block_by_hash(
         .get_block_by_hash(hash.data)
         .map_or_else(
             |e| {
-                log::error!("Failed to query block by hash: {e:#}");
+                tracing::error!(
+                    error = format_args!("{e:#}"),
+                    "Failed to query block by hash"
+                );
                 PointerResult::from_error(OperationStatus::ClientError)
             },
             |block_opt| {
@@ -241,7 +244,7 @@ pub unsafe extern "C" fn query_block_by_hash(
 ///
 /// # Returns
 ///
-/// A `PointerResult<FfiAccount, OperationStatus>` indicating success or failure.
+/// A `PointerResult<FfiOption<FfiAccount>, OperationStatus>` indicating success or failure.
 ///
 /// # Safety
 ///
@@ -251,9 +254,9 @@ pub unsafe extern "C" fn query_block_by_hash(
 pub unsafe extern "C" fn query_account(
     indexer: *const IndexerServiceFFI,
     account_id: FfiAccountId,
-) -> PointerResult<FfiAccount, OperationStatus> {
+) -> PointerResult<FfiOption<FfiAccount>, OperationStatus> {
     if indexer.is_null() {
-        log::error!("Attempted to query a null indexer pointer. This is a bug. Aborting.");
+        tracing::error!("Attempted to query a null indexer pointer. This is a bug. Aborting.");
         return PointerResult::from_error(OperationStatus::NullPointer);
     }
 
@@ -274,10 +277,14 @@ pub unsafe extern "C" fn query_account(
         )
         .map_or_else(
             |e| {
-                log::error!("Failed to query account: {e:#}");
+                tracing::error!(error = format_args!("{e:#}"), "Failed to query account");
                 PointerResult::from_error(OperationStatus::ClientError)
             },
-            |account| PointerResult::from_value(account.into()),
+            |account| {
+                PointerResult::from_value(account.map_or_else(FfiOption::from_none, |account| {
+                    FfiOption::from_value(FfiAccount::from(account))
+                }))
+            },
         )
 }
 
@@ -302,7 +309,7 @@ pub unsafe extern "C" fn query_transaction(
     hash: FfiHashType,
 ) -> PointerResult<FfiOption<FfiTransaction>, OperationStatus> {
     if indexer.is_null() {
-        log::error!("Attempted to query a null indexer pointer. This is a bug. Aborting.");
+        tracing::error!("Attempted to query a null indexer pointer. This is a bug. Aborting.");
         return PointerResult::from_error(OperationStatus::NullPointer);
     }
 
@@ -314,7 +321,7 @@ pub unsafe extern "C" fn query_transaction(
         .get_transaction_by_hash(hash.data)
         .map_or_else(
             |e| {
-                log::error!("Failed to query transaction: {e:#}");
+                tracing::error!(error = format_args!("{e:#}"), "Failed to query transaction");
                 PointerResult::from_error(OperationStatus::ClientError)
             },
             |tx_opt| {
@@ -324,6 +331,56 @@ pub unsafe extern "C" fn query_transaction(
                 });
 
                 PointerResult::from_value(tx_ffi)
+            },
+        )
+}
+
+/// Query a transaction's receipt by its hash from indexer.
+///
+/// # Arguments
+///
+/// - `indexer`: A pointer to the [`IndexerServiceFFI`] instance to be queried.
+/// - `hash`: `FfiHashType` - hash of transaction
+///
+/// # Returns
+///
+/// A `PointerResult<FfiOption<FfiTransactionReceipt>, OperationStatus>` indicating success or
+/// failure. The option is empty for an unknown transaction, and for a block's trailing fee and
+/// clock transactions. Free it with `free_ffi_transaction_receipt_opt`.
+///
+/// # Safety
+///
+/// The caller must ensure that:
+/// - `indexer` is a valid pointer to a [`IndexerServiceFFI`] instance.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn query_transaction_receipt(
+    indexer: *const IndexerServiceFFI,
+    hash: FfiHashType,
+) -> PointerResult<FfiOption<FfiTransactionReceipt>, OperationStatus> {
+    if indexer.is_null() {
+        tracing::error!("Attempted to query a null indexer pointer. This is a bug. Aborting.");
+        return PointerResult::from_error(OperationStatus::NullPointer);
+    }
+
+    let indexer = unsafe { &*indexer };
+
+    indexer
+        .core()
+        .store
+        .get_transaction_receipt_by_hash(hash.data)
+        .map_or_else(
+            |e| {
+                tracing::error!(
+                    error = format_args!("{e:#}"),
+                    "Failed to query transaction receipt"
+                );
+                PointerResult::from_error(OperationStatus::ClientError)
+            },
+            |receipt| {
+                PointerResult::from_value(receipt.map_or_else(FfiOption::from_none, |receipt| {
+                    let receipt: indexer_service_protocol::TransactionReceipt = receipt.into();
+                    FfiOption::from_value(FfiTransactionReceipt::from(receipt))
+                }))
             },
         )
 }
@@ -351,7 +408,7 @@ pub unsafe extern "C" fn query_block_vec(
     limit: u64,
 ) -> PointerResult<FfiVec<FfiBlock>, OperationStatus> {
     if indexer.is_null() {
-        log::error!("Attempted to query a null indexer pointer. This is a bug. Aborting.");
+        tracing::error!("Attempted to query a null indexer pointer. This is a bug. Aborting.");
         return PointerResult::from_error(OperationStatus::NullPointer);
     }
 
@@ -365,7 +422,7 @@ pub unsafe extern "C" fn query_block_vec(
         .get_block_batch(before_std, limit)
         .map_or_else(
             |e| {
-                log::error!("Failed to query block batch: {e:#}");
+                tracing::error!(error = format_args!("{e:#}"), "Failed to query block batch");
                 PointerResult::from_error(OperationStatus::ClientError)
             },
             |block_vec| {
@@ -408,7 +465,7 @@ pub unsafe extern "C" fn query_transactions_by_account(
     limit: u64,
 ) -> PointerResult<FfiVec<FfiTransaction>, OperationStatus> {
     if indexer.is_null() {
-        log::error!("Attempted to query a null indexer pointer. This is a bug. Aborting.");
+        tracing::error!("Attempted to query a null indexer pointer. This is a bug. Aborting.");
         return PointerResult::from_error(OperationStatus::NullPointer);
     }
 
@@ -420,7 +477,10 @@ pub unsafe extern "C" fn query_transactions_by_account(
         .get_transactions_by_account(account_id.data, offset, limit)
         .map_or_else(
             |e| {
-                log::error!("Failed to query transactions by account: {e:#}");
+                tracing::error!(
+                    error = format_args!("{e:#}"),
+                    "Failed to query transactions by account"
+                );
                 PointerResult::from_error(OperationStatus::ClientError)
             },
             |tx_vec| {
@@ -479,7 +539,7 @@ pub unsafe extern "C" fn query_events(
     selector: *const FfiSelector,
 ) -> PointerResult<FfiVec<FfiEventRecord>, OperationStatus> {
     if indexer.is_null() {
-        log::error!("Attempted to query a null indexer pointer. This is a bug. Aborting.");
+        tracing::error!("Attempted to query a null indexer pointer. This is a bug. Aborting.");
         return PointerResult::from_error(OperationStatus::NullPointer);
     }
 
@@ -494,7 +554,7 @@ pub unsafe extern "C" fn query_events(
         match indexer.core().store.block_id_by_tx_hash(tx_hash.data) {
             Err(e) => Err(e),
             Ok(None) => {
-                log::error!("query_events: no indexed transaction has the requested hash");
+                tracing::error!("query_events: no indexed transaction has the requested hash");
                 return PointerResult::from_error(OperationStatus::InvalidArgument);
             }
             Ok(Some(block_id)) => {
@@ -505,9 +565,10 @@ pub unsafe extern "C" fn query_events(
                     program_account_id.map(lee::AccountId::new),
                     selector.map(|s| s.0),
                 ) {
-                    log::error!(
-                        "query_events: the requested events at block {block_id} are outside this \
-                         indexer's event-filter history"
+                    tracing::error!(
+                        block_id,
+                        "query_events: the requested events are outside this indexer's \
+                         event-filter history"
                     );
                     return PointerResult::from_error(OperationStatus::InvalidArgument);
                 }
@@ -530,12 +591,17 @@ pub unsafe extern "C" fn query_events(
         let tip = match indexer.core().store.get_last_block_id() {
             Ok(tip) => tip.unwrap_or(0),
             Err(e) => {
-                log::error!("Failed to read the indexed tip for query_events: {e:#}");
+                tracing::error!(
+                    error = format_args!("{e:#}"),
+                    "Failed to read the indexed tip for query_events"
+                );
                 return PointerResult::from_error(OperationStatus::ClientError);
             }
         };
         if to_block.is_some && to_block.value.is_null() {
-            log::error!("query_events to_block is flagged present but its value pointer is null");
+            tracing::error!(
+                "query_events to_block is flagged present but its value pointer is null"
+            );
             return PointerResult::from_error(OperationStatus::InvalidArgument);
         }
         let to_block = to_block.is_some.then(|| unsafe { *to_block.value });
@@ -543,7 +609,7 @@ pub unsafe extern "C" fn query_events(
             match indexer_service_protocol::resolve_event_block_range(from_block, to_block, tip) {
                 Ok(range) => range,
                 Err(err) => {
-                    log::error!("query_events: {err}");
+                    tracing::error!(error = %err, "query_events");
                     return PointerResult::from_error(OperationStatus::InvalidArgument);
                 }
             };
@@ -554,9 +620,11 @@ pub unsafe extern "C" fn query_events(
             program_account_id.map(lee::AccountId::new),
             selector.map(|s| s.0),
         ) {
-            log::error!(
-                "query_events: the requested events over blocks {from_block}..={to_block} are \
-                 outside this indexer's event-filter history"
+            tracing::error!(
+                from_block,
+                to_block,
+                "query_events: the requested events are outside this indexer's event-filter \
+                 history"
             );
             return PointerResult::from_error(OperationStatus::InvalidArgument);
         }
@@ -578,7 +646,7 @@ pub unsafe extern "C" fn query_events(
 
     records.map_or_else(
         |e| {
-            log::error!("Failed to query events: {e:#}");
+            tracing::error!(error = format_args!("{e:#}"), "Failed to query events");
             PointerResult::from_error(OperationStatus::ClientError)
         },
         |records| {
