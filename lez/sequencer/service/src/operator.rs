@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use lee::{AccountId, Actor, Balance};
+use sequencer_service::SetupArgs;
 use sequencer_service_rpc::SequencerClient;
 use sequencer_stake_core::{
     ChannelParams, SequencerKey, SequencerStakeConfig, params_vote_threshold,
@@ -49,20 +50,15 @@ impl ParamsArgs {
 
 /// Creates `home` with its config, channel signing key and Bedrock funding public key, and tells
 /// the operator what to do with the key.
-pub fn setup(
-    home: &Path,
-    template: &str,
-    funding_public_key: &str,
-    create_channel: bool,
-) -> Result<()> {
-    let set_up = sequencer_service::setup(home, template, funding_public_key, create_channel)?;
+pub fn setup(home: &Path, args: &SetupArgs) -> Result<()> {
+    let set_up = args.run(home)?;
 
     println!("{} is set up", set_up.home.display());
     println!(
         "  channel signing public key  {}",
         hex::encode(set_up.channel_public_key.to_bytes())
     );
-    if create_channel {
+    if args.create_channel {
         println!("`start` creates the channel if it does not exist yet.");
     }
     if set_up.staked_at_genesis {

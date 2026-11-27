@@ -11262,6 +11262,7 @@ dependencies = [
  "sequencer_slasher_actor",
  "sequencer_stake_core",
  "sequencer_storage_actor",
+ "serde",
  "serde_json",
  "sharding_pool_actor",
  "system_accounts",

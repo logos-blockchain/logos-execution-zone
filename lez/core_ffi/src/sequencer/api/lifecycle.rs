@@ -1,11 +1,9 @@
 use std::{
     ffi::{CStr, c_char},
-    net::SocketAddr,
-    path::PathBuf,
     sync::Arc,
 };
 
-use sequencer_service::{DEFAULT_RPC_LISTEN_ADDRESS, StartArgs, ops::OpsServer};
+use sequencer_service::{SetupArgs, StartArgs, ops::OpsServer};
 
 use crate::{
     error::FfiOperationError,
@@ -15,123 +13,6 @@ use crate::{
 
 pub type InitializedSequencerServiceFFIResult =
     PointerResult<SequencerServiceFFI, FfiOperationError>;
-
-/// Overrides of what a sequencer starts with by default: `sequencer_service start`'s options
-/// besides its home, each overriding the config the same way.
-///
-/// Every string is null-terminated UTF-8, and null keeps its default; zeroed, the struct overrides
-/// nothing. Unlike `start`, no option falls back to a `SEQUENCER_*` env var.
-#[repr(C)]
-pub struct SequencerStartOverrides {
-    /// Null for `<home>/sequencer_config.json`, the config `sequencer_service setup` writes; that
-    /// one keeps its genesis, as `setup` decided.
-    pub config: *const c_char,
-    /// Keeps the genesis of `config`, so the channel is created if it does not exist. Needs
-    /// `config`.
-    pub create_channel: bool,
-    /// Waits for the channel to be created, instead of failing, when it does not exist yet and
-    /// this node has no genesis to create it with.
-    pub wait_for_channel: bool,
-    /// Null for `<home>/channel_signing_key`.
-    pub channel_signing_key_file: *const c_char,
-    /// In hex. Null for the one in `<home>/bedrock_funding_public_key`.
-    pub funding_public_key: *const c_char,
-    /// Overrides the config's `bedrock_config.node_url`.
-    pub bedrock_node_url: *const c_char,
-    /// In hex. Overrides the config's `bedrock_config.channel_id`.
-    pub channel_id: *const c_char,
-    /// `ip:port`. Null for `127.0.0.1:3040`. The RPC has no caller auth, so only widen it behind a
-    /// firewall.
-    pub rpc_listen_address: *const c_char,
-    /// `ip:port` serving `/ping`, `/health` and `/metrics`. Overrides the config's
-    /// `metrics_listen_address`.
-    pub metrics_listen_address: *const c_char,
-    /// Gossip's QUIC (UDP) `ip:port`. Turns gossip on if the config leaves it off.
-    pub gossip_listen_addr: *const c_char,
-    /// `gossip_bootstrap_peers_len` peers, each `host:port` or a multiaddr; null when the length
-    /// is zero. Any peers replace the config's `bootstrap_peers`, and turn gossip on.
-    pub gossip_bootstrap_peers: *const *const c_char,
-    pub gossip_bootstrap_peers_len: usize,
-}
-
-/// Overrides nothing.
-impl Default for SequencerStartOverrides {
-    fn default() -> Self {
-        Self {
-            config: std::ptr::null(),
-            create_channel: false,
-            wait_for_channel: false,
-            channel_signing_key_file: std::ptr::null(),
-            funding_public_key: std::ptr::null(),
-            bedrock_node_url: std::ptr::null(),
-            channel_id: std::ptr::null(),
-            rpc_listen_address: std::ptr::null(),
-            metrics_listen_address: std::ptr::null(),
-            gossip_listen_addr: std::ptr::null(),
-            gossip_bootstrap_peers: std::ptr::null(),
-            gossip_bootstrap_peers_len: 0,
-        }
-    }
-}
-
-impl SequencerStartOverrides {
-    /// `start`'s options for `home` with these overrides.
-    ///
-    /// # Safety
-    /// Every pointer must be null or valid as documented on the field.
-    unsafe fn to_start_args(&self, home: PathBuf) -> Result<StartArgs, FfiOperationError> {
-        let peers = if self.gossip_bootstrap_peers_len == 0 {
-            &[][..]
-        } else if self.gossip_bootstrap_peers.is_null() {
-            tracing::error!("Null gossip_bootstrap_peers with a non-zero length");
-            return Err(FfiOperationError::NullPointer);
-        } else {
-            // SAFETY: the caller guarantees the pointer covers `gossip_bootstrap_peers_len` peers.
-            unsafe {
-                std::slice::from_raw_parts(
-                    self.gossip_bootstrap_peers,
-                    self.gossip_bootstrap_peers_len,
-                )
-            }
-        };
-        let gossip_bootstrap_peer = peers
-            .iter()
-            .map(|&peer| {
-                unsafe { optional_str(peer, "gossip_bootstrap_peers") }?.ok_or_else(|| {
-                    tracing::error!("Null gossip bootstrap peer");
-                    FfiOperationError::NullPointer
-                })
-            })
-            .collect::<Result<_, _>>()?;
-
-        Ok(StartArgs {
-            home,
-            config: unsafe { optional_str(self.config, "config") }?.map(PathBuf::from),
-            create_channel: self.create_channel,
-            wait_for_channel: self.wait_for_channel,
-            channel_signing_key_file: unsafe {
-                optional_str(self.channel_signing_key_file, "channel_signing_key_file")
-            }?
-            .map(PathBuf::from),
-            funding_public_key: unsafe {
-                optional_str(self.funding_public_key, "funding_public_key")
-            }?,
-            bedrock_node_url: unsafe { optional_str(self.bedrock_node_url, "bedrock_node_url") }?,
-            channel_id: unsafe { optional_str(self.channel_id, "channel_id") }?,
-            rpc_listen_address: unsafe {
-                optional_addr(self.rpc_listen_address, "rpc_listen_address")
-            }?
-            .unwrap_or(DEFAULT_RPC_LISTEN_ADDRESS),
-            metrics_listen_address: unsafe {
-                optional_addr(self.metrics_listen_address, "metrics_listen_address")
-            }?,
-            gossip_listen_addr: unsafe {
-                optional_addr(self.gossip_listen_addr, "gossip_listen_addr")
-            }?,
-            gossip_bootstrap_peer,
-        })
-    }
-}
 
 /// The string `ptr` points to, or `None` when it is null.
 ///
@@ -154,24 +35,6 @@ unsafe fn optional_str(
         })
 }
 
-/// The `ip:port` `ptr` points to, or `None` when it is null.
-///
-/// # Safety
-/// As for [`optional_str`].
-unsafe fn optional_addr(
-    ptr: *const c_char,
-    name: &str,
-) -> Result<Option<SocketAddr>, FfiOperationError> {
-    unsafe { optional_str(ptr, name) }?
-        .map(|addr| {
-            addr.parse().map_err(|e| {
-                tracing::error!(error = %e, "{name} is not an `ip:port`: {addr}");
-                FfiOperationError::InvalidArgument
-            })
-        })
-        .transpose()
-}
-
 /// Prepares `home` for [`sequencer_ffi_start_sequencer`] the way `sequencer_service setup` does:
 /// creates it with its config, channel signing key and Bedrock funding public key.
 ///
@@ -182,29 +45,29 @@ unsafe fn optional_addr(
 /// # Arguments
 ///
 /// - `home`: The home to create.
-/// - `config`: Path of the config to copy into it.
-/// - `funding_public_key`: In hex, a funded key in the Bedrock node's wallet; it pays the node's
-///   inscriptions.
-/// - `create_channel`: Keeps the config's genesis, so starting creates the channel if it does not
-///   exist.
+/// - `args_json`: `setup`'s options as a JSON object:
+///   - `config`: Path of the config to copy into the home.
+///   - `funding_public_key`: In hex, a funded key in the Bedrock node's wallet; it pays the node's
+///     inscriptions.
+///   - `create_channel` (optional, `false`): Keeps the config's genesis, so starting creates the
+///     channel if it does not exist.
 /// - `out_channel_public_key`: Receives the channel signing public key, which is the key to stake;
 ///   null to skip it.
 ///
 /// # Returns
 ///
-/// `Success`; `NullPointer` or `InvalidUtf8` for a bad string; `ConfigError` when the home cannot
-/// be set up: an unreadable or invalid config, an invalid funding key, or a home already set up.
+/// `Success`; `NullPointer` or `InvalidUtf8` for a bad string; `InvalidArgument` for `args_json`
+/// that is not an object of those fields; `ConfigError` when the home cannot be set up: an
+/// unreadable or invalid config, an invalid funding key, or a home already set up.
 ///
 /// # Safety
 /// The caller must ensure that:
-/// - `home`, `config` and `funding_public_key` are valid pointers to null-terminated UTF-8 strings.
+/// - `home` and `args_json` are valid pointers to null-terminated UTF-8 strings.
 /// - `out_channel_public_key` is null or a valid pointer to an `FfiBytes32`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sequencer_ffi_setup(
     home: *const c_char,
-    config: *const c_char,
-    funding_public_key: *const c_char,
-    create_channel: bool,
+    args_json: *const c_char,
     out_channel_public_key: *mut FfiBytes32,
 ) -> FfiOperationError {
     let required = |ptr, name| {
@@ -214,26 +77,19 @@ pub unsafe extern "C" fn sequencer_ffi_setup(
             FfiOperationError::NullPointer
         })
     };
-    let (home, config, funding_public_key) = match (
-        required(home, "home"),
-        required(config, "config"),
-        required(funding_public_key, "funding_public_key"),
-    ) {
-        (Ok(home), Ok(config), Ok(funding_public_key)) => (home, config, funding_public_key),
-        (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => return e,
+    let (home, args_json) = match (required(home, "home"), required(args_json, "args_json")) {
+        (Ok(home), Ok(args_json)) => (home, args_json),
+        (Err(e), _) | (_, Err(e)) => return e,
+    };
+    let args: SetupArgs = match serde_json::from_str(&args_json) {
+        Ok(args) => args,
+        Err(e) => {
+            tracing::error!(error = %e, "Invalid sequencer setup args");
+            return FfiOperationError::InvalidArgument;
+        }
     };
 
-    let set_up = std::fs::read_to_string(&config)
-        .map_err(anyhow::Error::from)
-        .and_then(|template| {
-            sequencer_service::setup(
-                home.as_ref(),
-                &template,
-                &funding_public_key,
-                create_channel,
-            )
-        });
-    match set_up {
+    match args.run(home.as_ref()) {
         Ok(set_up) => {
             // SAFETY: the caller guarantees `out_channel_public_key` is null or valid.
             if let Some(out) = unsafe { out_channel_public_key.as_mut() } {
@@ -252,7 +108,7 @@ pub unsafe extern "C" fn sequencer_ffi_setup(
 }
 
 /// Creates and starts a sequencer out of `home` the way `sequencer_service start` does, with
-/// `overrides` over its defaults.
+/// `overrides_json` over its defaults.
 ///
 /// That includes serving the RPC on `rpc_listen_address`, and `/ping`, `/health` and `/metrics` on
 /// the metrics address.
@@ -266,8 +122,14 @@ pub unsafe extern "C" fn sequencer_ffi_setup(
 ///   one.
 /// - `home`: The sequencer's home: it holds the database, and by default the config
 ///   (`<home>/sequencer_config.json`) and keys.
-/// - `overrides`: What to start with other than the defaults, see [`SequencerStartOverrides`]; null
-///   for none.
+/// - `overrides_json`: `start`'s other options as a JSON object of their names, each left out
+///   taking its default: `config` (null for `<home>/sequencer_config.json`, the config `setup`
+///   wrote), `create_channel`, `wait_for_channel`, `channel_signing_key_file`,
+///   `funding_public_key`, `bedrock_node_url`, `channel_id`, `rpc_listen_address` (`127.0.0.1:3040`
+///   unless given), `metrics_listen_address`, `gossip_listen_addr` and `gossip_bootstrap_peers` (an
+///   array). See `sequencer_service start --help`. Unlike `start`, no option falls back to a
+///   `SEQUENCER_*` env var. Null or empty for no overrides; anything else is refused with
+///   `InvalidArgument`.
 ///
 /// # Returns
 ///
@@ -278,16 +140,15 @@ pub unsafe extern "C" fn sequencer_ffi_setup(
 /// The caller must ensure that:
 /// - `runtime` is either null or a valid pointer to a [`Runtime`] that outlives the sequencer.
 /// - `home` is a valid pointer to a null-terminated UTF-8 string.
-/// - `overrides` is null or a valid pointer, whose own pointers are each null or valid as
-///   documented.
+/// - `overrides_json` is null or a valid pointer to a null-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sequencer_ffi_start_sequencer(
     runtime: *const Runtime,
     home: *const c_char,
-    overrides: *const SequencerStartOverrides,
+    overrides_json: *const c_char,
 ) -> InitializedSequencerServiceFFIResult {
     // SAFETY: The caller must ensure the validness of the pointer arguments.
-    unsafe { setup_sequencer(runtime, home, overrides) }.map_or_else(
+    unsafe { setup_sequencer(runtime, home, overrides_json) }.map_or_else(
         InitializedSequencerServiceFFIResult::from_error,
         InitializedSequencerServiceFFIResult::from_value,
     )
@@ -319,18 +180,22 @@ unsafe fn runtime_or_new(runtime: *const Runtime) -> Result<Runtime, FfiOperatio
 unsafe fn setup_sequencer(
     runtime: *const Runtime,
     home: *const c_char,
-    overrides: *const SequencerStartOverrides,
+    overrides_json: *const c_char,
 ) -> Result<SequencerServiceFFI, FfiOperationError> {
     // SAFETY: the caller guarantees `home` is a valid C string.
     let Some(home) = unsafe { optional_str(home, "home") }? else {
         tracing::error!("Attempted to give a null home pointer. This is a bug. Aborting.");
         return Err(FfiOperationError::NullPointer);
     };
-    // SAFETY: the caller guarantees `overrides` is null or valid, and so are its pointers.
-    let args = match unsafe { overrides.as_ref() } {
-        Some(overrides) => unsafe { overrides.to_start_args(home.into()) }?,
-        None => unsafe { SequencerStartOverrides::default().to_start_args(home.into()) }?,
-    };
+    // SAFETY: the caller guarantees `overrides_json` is null or a valid C string.
+    let overrides = unsafe { optional_str(overrides_json, "overrides_json") }?.unwrap_or_default();
+    let args = StartArgs::from_json(home.into(), &overrides).map_err(|e| {
+        tracing::error!(
+            error = format_args!("{e:#}"),
+            "Invalid sequencer start overrides"
+        );
+        FfiOperationError::InvalidArgument
+    })?;
 
     let start = || -> anyhow::Result<_> {
         let config = args.load_config()?;
@@ -452,26 +317,28 @@ mod tests {
             env!("CARGO_MANIFEST_DIR"),
             "/../sequencer/service/networks/local.json"
         );
-        let setup = |out: *mut FfiBytes32| unsafe {
+        let args =
+            serde_json::json!({ "config": config, "funding_public_key": FUNDING_PUBLIC_KEY })
+                .to_string();
+        let setup = |args_json: &str, out: *mut FfiBytes32| unsafe {
             sequencer_ffi_setup(
                 c_string(home.to_str().unwrap()).as_ptr(),
-                c_string(config).as_ptr(),
-                c_string(FUNDING_PUBLIC_KEY).as_ptr(),
-                false,
+                c_string(args_json).as_ptr(),
                 out,
             )
         };
 
         let mut channel_public_key = FfiBytes32::from([0; 32]);
         assert_eq!(
-            setup(&raw mut channel_public_key),
+            setup(&args, &raw mut channel_public_key),
             FfiOperationError::Success
         );
 
         // What `start` needs is all there: no explicit config, keys from the home.
-        let args =
-            unsafe { SequencerStartOverrides::default().to_start_args(home.clone()) }.unwrap();
-        let loaded = args.load_config().unwrap();
+        let loaded = StartArgs::from_json(home.clone(), "")
+            .unwrap()
+            .load_config()
+            .unwrap();
         assert!(
             loaded.genesis.is_none(),
             "a joiner's home drops the genesis"
@@ -486,9 +353,52 @@ mod tests {
         );
 
         assert_eq!(
-            setup(std::ptr::null_mut()),
+            setup(&args, std::ptr::null_mut()),
             FfiOperationError::ConfigError,
             "already set up"
         );
+        assert_eq!(
+            setup(
+                r#"{"config": "c", "funding_public_key": "f", "extra": 1}"#,
+                std::ptr::null_mut()
+            ),
+            FfiOperationError::InvalidArgument,
+            "unknown field"
+        );
+    }
+
+    #[test]
+    fn start_overrides_parse_like_start_options() {
+        let args = StartArgs::from_json(
+            "/seq".into(),
+            r#"{"config": "/etc/seq.json", "create_channel": true, "metrics_listen_address": null,
+                "rpc_listen_address": "0.0.0.0:3040", "gossip_bootstrap_peers": ["a:1", "b:2"]}"#,
+        )
+        .unwrap();
+        assert_eq!(args.home, std::path::Path::new("/seq"));
+        assert_eq!(
+            args.config.as_deref(),
+            Some(std::path::Path::new("/etc/seq.json"))
+        );
+        assert!(args.create_channel && !args.wait_for_channel);
+        assert_eq!(args.rpc_listen_address.to_string(), "0.0.0.0:3040");
+        assert_eq!(args.metrics_listen_address, None);
+        assert_eq!(args.gossip_bootstrap_peer, ["a:1", "b:2"]);
+
+        let defaults = StartArgs::from_json("/seq".into(), "").unwrap();
+        assert_eq!(
+            defaults.rpc_listen_address,
+            sequencer_service::DEFAULT_RPC_LISTEN_ADDRESS
+        );
+        assert!(defaults.config.is_none() && defaults.gossip_bootstrap_peer.is_empty());
+
+        for bad in [
+            r#"{"home": "/elsewhere"}"#,
+            r#"{"nope": 1}"#,
+            r#"{"create_channel": "yes"}"#,
+            "[]",
+        ] {
+            assert!(StartArgs::from_json("/seq".into(), bad).is_err(), "{bad}");
+        }
     }
 }

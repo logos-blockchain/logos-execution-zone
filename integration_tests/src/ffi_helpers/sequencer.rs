@@ -26,7 +26,7 @@ use core_ffi::{
     sequencer::{
         SequencerServiceFFI,
         api::{
-            lifecycle::{InitializedSequencerServiceFFIResult, SequencerStartOverrides},
+            lifecycle::InitializedSequencerServiceFFIResult,
             query::{ExecutorStatusResult, FfiExecutorState, LastBlockIdResult},
         },
     },
@@ -68,7 +68,7 @@ unsafe extern "C" {
     pub unsafe fn sequencer_ffi_start_sequencer(
         runtime: *const Runtime,
         home: *const c_char,
-        overrides: *const SequencerStartOverrides,
+        overrides_json: *const c_char,
     ) -> InitializedSequencerServiceFFIResult;
 
     pub unsafe fn sequencer_ffi_query_account(
@@ -433,20 +433,18 @@ pub unsafe fn start_sequencer_ffi(
     rpc_addr: SocketAddr,
     metrics_addr: SocketAddr,
 ) -> Result<InitializedSequencerServiceFFIResult> {
-    let c_string = |s: &str| CString::new(s).context("Interior NUL");
-    let home = c_string(home.to_str().context("Home is not UTF-8")?)?;
-    let config = c_string(config_path.to_str().context("Config path is not UTF-8")?)?;
-    let rpc_addr = c_string(&rpc_addr.to_string())?;
-    let metrics_addr = c_string(&metrics_addr.to_string())?;
-    let overrides = SequencerStartOverrides {
-        config: config.as_ptr(),
-        rpc_listen_address: rpc_addr.as_ptr(),
-        metrics_listen_address: metrics_addr.as_ptr(),
-        ..SequencerStartOverrides::default()
-    };
+    let home = CString::new(home.to_str().context("Home is not UTF-8")?)?;
+    let overrides = CString::new(
+        serde_json::json!({
+            "config": config_path,
+            "rpc_listen_address": rpc_addr,
+            "metrics_listen_address": metrics_addr,
+        })
+        .to_string(),
+    )?;
 
     // SAFETY: the caller guarantees `runtime` is null or valid, and the strings outlive the call.
-    Ok(unsafe { sequencer_ffi_start_sequencer(runtime, home.as_ptr(), &raw const overrides) })
+    Ok(unsafe { sequencer_ffi_start_sequencer(runtime, home.as_ptr(), overrides.as_ptr()) })
 }
 
 /// Sets up blocking context with one leader node, and joins an FFI node that `start` starts from

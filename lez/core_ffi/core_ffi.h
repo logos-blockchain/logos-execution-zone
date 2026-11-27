@@ -775,67 +775,6 @@ typedef struct PointerResult_SequencerServiceFFI__FfiOperationError {
 typedef struct PointerResult_SequencerServiceFFI__FfiOperationError InitializedSequencerServiceFFIResult;
 
 /**
- * Overrides of what a sequencer starts with by default: `sequencer_service start`'s options
- * besides its home, each overriding the config the same way.
- *
- * Every string is null-terminated UTF-8, and null keeps its default; zeroed, the struct overrides
- * nothing. Unlike `start`, no option falls back to a `SEQUENCER_*` env var.
- */
-typedef struct SequencerStartOverrides {
-  /**
-   * Null for `<home>/sequencer_config.json`, the config `sequencer_service setup` writes; that
-   * one keeps its genesis, as `setup` decided.
-   */
-  const char *config;
-  /**
-   * Keeps the genesis of `config`, so the channel is created if it does not exist. Needs
-   * `config`.
-   */
-  bool create_channel;
-  /**
-   * Waits for the channel to be created, instead of failing, when it does not exist yet and
-   * this node has no genesis to create it with.
-   */
-  bool wait_for_channel;
-  /**
-   * Null for `<home>/channel_signing_key`.
-   */
-  const char *channel_signing_key_file;
-  /**
-   * In hex. Null for the one in `<home>/bedrock_funding_public_key`.
-   */
-  const char *funding_public_key;
-  /**
-   * Overrides the config's `bedrock_config.node_url`.
-   */
-  const char *bedrock_node_url;
-  /**
-   * In hex. Overrides the config's `bedrock_config.channel_id`.
-   */
-  const char *channel_id;
-  /**
-   * `ip:port`. Null for `127.0.0.1:3040`. The RPC has no caller auth, so only widen it behind a
-   * firewall.
-   */
-  const char *rpc_listen_address;
-  /**
-   * `ip:port` serving `/ping`, `/health` and `/metrics`. Overrides the config's
-   * `metrics_listen_address`.
-   */
-  const char *metrics_listen_address;
-  /**
-   * Gossip's QUIC (UDP) `ip:port`. Turns gossip on if the config leaves it off.
-   */
-  const char *gossip_listen_addr;
-  /**
-   * `gossip_bootstrap_peers_len` peers, each `host:port` or a multiaddr; null when the length
-   * is zero. Any peers replace the config's `bootstrap_peers`, and turn gossip on.
-   */
-  const char *const *gossip_bootstrap_peers;
-  uintptr_t gossip_bootstrap_peers_len;
-} SequencerStartOverrides;
-
-/**
  * Result of [`query_last_block`], returned **inline** (no heap allocation, so
  * there is no corresponding `free_*` to call).
  *
@@ -1602,33 +1541,33 @@ void primitives_ffi_free_ffi_transaction_vec(struct FfiVec_FfiTransaction *val);
  * # Arguments
  *
  * - `home`: The home to create.
- * - `config`: Path of the config to copy into it.
- * - `funding_public_key`: In hex, a funded key in the Bedrock node's wallet; it pays the node's
- *   inscriptions.
- * - `create_channel`: Keeps the config's genesis, so starting creates the channel if it does not
- *   exist.
+ * - `args_json`: `setup`'s options as a JSON object:
+ *   - `config`: Path of the config to copy into the home.
+ *   - `funding_public_key`: In hex, a funded key in the Bedrock node's wallet; it pays the node's
+ *     inscriptions.
+ *   - `create_channel` (optional, `false`): Keeps the config's genesis, so starting creates the
+ *     channel if it does not exist.
  * - `out_channel_public_key`: Receives the channel signing public key, which is the key to stake;
  *   null to skip it.
  *
  * # Returns
  *
- * `Success`; `NullPointer` or `InvalidUtf8` for a bad string; `ConfigError` when the home cannot
- * be set up: an unreadable or invalid config, an invalid funding key, or a home already set up.
+ * `Success`; `NullPointer` or `InvalidUtf8` for a bad string; `InvalidArgument` for `args_json`
+ * that is not an object of those fields; `ConfigError` when the home cannot be set up: an
+ * unreadable or invalid config, an invalid funding key, or a home already set up.
  *
  * # Safety
  * The caller must ensure that:
- * - `home`, `config` and `funding_public_key` are valid pointers to null-terminated UTF-8 strings.
+ * - `home` and `args_json` are valid pointers to null-terminated UTF-8 strings.
  * - `out_channel_public_key` is null or a valid pointer to an `FfiBytes32`.
  */
 enum FfiOperationError sequencer_ffi_setup(const char *home,
-                                           const char *config,
-                                           const char *funding_public_key,
-                                           bool create_channel,
+                                           const char *args_json,
                                            struct FfiBytes32 *out_channel_public_key);
 
 /**
  * Creates and starts a sequencer out of `home` the way `sequencer_service start` does, with
- * `overrides` over its defaults.
+ * `overrides_json` over its defaults.
  *
  * That includes serving the RPC on `rpc_listen_address`, and `/ping`, `/health` and `/metrics` on
  * the metrics address.
@@ -1642,8 +1581,14 @@ enum FfiOperationError sequencer_ffi_setup(const char *home,
  *   one.
  * - `home`: The sequencer's home: it holds the database, and by default the config
  *   (`<home>/sequencer_config.json`) and keys.
- * - `overrides`: What to start with other than the defaults, see [`SequencerStartOverrides`]; null
- *   for none.
+ * - `overrides_json`: `start`'s other options as a JSON object of their names, each left out
+ *   taking its default: `config` (null for `<home>/sequencer_config.json`, the config `setup`
+ *   wrote), `create_channel`, `wait_for_channel`, `channel_signing_key_file`,
+ *   `funding_public_key`, `bedrock_node_url`, `channel_id`, `rpc_listen_address` (`127.0.0.1:3040`
+ *   unless given), `metrics_listen_address`, `gossip_listen_addr` and `gossip_bootstrap_peers` (an
+ *   array). See `sequencer_service start --help`. Unlike `start`, no option falls back to a
+ *   `SEQUENCER_*` env var. Null or empty for no overrides; anything else is refused with
+ *   `InvalidArgument`.
  *
  * # Returns
  *
@@ -1654,12 +1599,11 @@ enum FfiOperationError sequencer_ffi_setup(const char *home,
  * The caller must ensure that:
  * - `runtime` is either null or a valid pointer to a [`Runtime`] that outlives the sequencer.
  * - `home` is a valid pointer to a null-terminated UTF-8 string.
- * - `overrides` is null or a valid pointer, whose own pointers are each null or valid as
- *   documented.
+ * - `overrides_json` is null or a valid pointer to a null-terminated UTF-8 string.
  */
 InitializedSequencerServiceFFIResult sequencer_ffi_start_sequencer(const struct Runtime *runtime,
                                                                    const char *home,
-                                                                   const struct SequencerStartOverrides *overrides);
+                                                                   const char *overrides_json);
 
 /**
  * Whether every task of the sequencer is still running, as its `/health` reports.

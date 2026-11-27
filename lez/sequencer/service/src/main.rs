@@ -5,7 +5,9 @@ use clap::{Parser, Subcommand};
 use lee::Balance;
 #[cfg(test)]
 use sequencer_service::ops::prometheus_builder;
-use sequencer_service::{SequencerConfig, StartArgs, channel_public_key, ops::OpsServer};
+use sequencer_service::{
+    SequencerConfig, SetupArgs, StartArgs, channel_public_key, ops::OpsServer,
+};
 use sequencer_stake_core::SequencerKey;
 use tokio::signal::unix::{SignalKind, signal};
 use tokio_util::sync::CancellationToken;
@@ -33,16 +35,8 @@ enum Command {
     /// Creates a home with its config and Bedrock funding public key.
     Setup {
         home: PathBuf,
-        /// Config to copy into the home, e.g. one of `lez/sequencer/service/networks/`.
-        #[clap(long)]
-        config: PathBuf,
-        /// Public key, in hex, of a funded key in the Bedrock node's wallet; it pays the
-        /// node's inscriptions.
-        #[clap(long)]
-        funding_public_key: String,
-        /// Keeps the config's `genesis`, so `start` creates the channel if it does not exist.
-        #[clap(long)]
-        create_channel: bool,
+        #[clap(flatten)]
+        args: SetupArgs,
     },
     /// Runs the sequencer out of a home, following the channel.
     Start(StartArgs),
@@ -118,16 +112,7 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     match args.command {
-        Command::Setup {
-            home,
-            config,
-            funding_public_key,
-            create_channel,
-        } => {
-            let template = std::fs::read_to_string(&config)
-                .with_context(|| format!("Failed to read {}", config.display()))?;
-            operator::setup(&home, &template, &funding_public_key, create_channel)
-        }
+        Command::Setup { home, args } => operator::setup(&home, &args),
         Command::Start(args) => start(args, traces.as_ref()).await,
         Command::Stake {
             sequencer_key,

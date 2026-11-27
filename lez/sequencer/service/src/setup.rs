@@ -6,8 +6,40 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context as _, Result, ensure};
 use sequencer_core::{Ed25519PublicKey, config::GenesisAction};
 use sequencer_stake_core::SequencerKey;
+use serde::Deserialize;
 
 use crate::{CONFIG_FILE, SequencerConfig};
+
+/// What `setup` prepares a home with, as flags or, for embedders, JSON fields of the same names.
+#[derive(Debug, clap::Args, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetupArgs {
+    /// Config to copy into the home, e.g. one of `lez/sequencer/service/networks/`.
+    #[clap(long)]
+    pub config: PathBuf,
+    /// Public key, in hex, of a funded key in the Bedrock node's wallet; it pays the
+    /// node's inscriptions.
+    #[clap(long)]
+    pub funding_public_key: String,
+    /// Keeps the config's `genesis`, so `start` creates the channel if it does not exist.
+    #[clap(long)]
+    #[serde(default)]
+    pub create_channel: bool,
+}
+
+impl SetupArgs {
+    /// Sets up `home` with these args, see [`setup`].
+    pub fn run(&self, home: &Path) -> Result<SetUp> {
+        let template = std::fs::read_to_string(&self.config)
+            .with_context(|| format!("Failed to read {}", self.config.display()))?;
+        setup(
+            home,
+            &template,
+            &self.funding_public_key,
+            self.create_channel,
+        )
+    }
+}
 
 /// A home [`setup`] prepared.
 pub struct SetUp {

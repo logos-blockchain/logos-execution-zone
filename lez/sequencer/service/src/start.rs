@@ -10,6 +10,7 @@ use anyhow::{Context as _, Result, ensure};
 use clap::builder::BoolishValueParser;
 use libp2p::{Multiaddr, multiaddr::Protocol};
 use sequencer_core::{Ed25519PublicKey, config::GossipConfig};
+use serde::Deserialize;
 use tracing::info;
 
 use crate::SequencerConfig;
@@ -23,7 +24,11 @@ pub const DEFAULT_RPC_LISTEN_ADDRESS: SocketAddr =
 
 /// Each option also reads `SEQUENCER_<OPTION>`. A flag wins over its env var, and both win over
 /// the config.
-#[derive(Debug, clap::Args)]
+///
+/// Embedders pass the options besides the home as JSON fields of the same names, see
+/// [`StartArgs::from_json`].
+#[derive(Debug, clap::Args, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct StartArgs {
     /// Holds the database, and by default the config and keys.
     #[clap(env = "SEQUENCER_HOME")]
@@ -35,10 +40,12 @@ pub struct StartArgs {
     /// exist. Without it, a node pointed at the wrong channel fails instead of creating that one.
     /// A home's own config keeps whatever `setup` decided.
     #[clap(long, env = "SEQUENCER_CREATE_CHANNEL", value_parser = BoolishValueParser::new())]
+    #[serde(default)]
     pub create_channel: bool,
     /// Waits for the channel to be created, instead of failing, when it does not exist yet and
     /// this node has no genesis to create it with.
     #[clap(long, env = "SEQUENCER_WAIT_FOR_CHANNEL", value_parser = BoolishValueParser::new())]
+    #[serde(default)]
     pub wait_for_channel: bool,
     /// Defaults to `<home>/channel_signing_key`.
     #[clap(long, env = "SEQUENCER_CHANNEL_SIGNING_KEY_FILE")]
@@ -58,6 +65,7 @@ pub struct StartArgs {
         env = "SEQUENCER_RPC_LISTEN_ADDRESS",
         default_value_t = DEFAULT_RPC_LISTEN_ADDRESS
     )]
+    #[serde(default = "default_rpc_listen_address")]
     pub rpc_listen_address: SocketAddr,
     /// Overrides the config's `metrics_listen_address`.
     #[clap(long, env = "SEQUENCER_METRICS_LISTEN_ADDRESS")]
@@ -68,10 +76,32 @@ pub struct StartArgs {
     /// `host:port` or a multiaddr; repeat, or comma-separate in the env var, for several.
     /// Replaces the config's `bootstrap_peers`, and turns gossip on.
     #[clap(long, env = "SEQUENCER_GOSSIP_BOOTSTRAP_PEER", value_delimiter = ',')]
+    #[serde(default, rename = "gossip_bootstrap_peers")]
     pub gossip_bootstrap_peer: Vec<String>,
 }
 
 impl StartArgs {
+    /// `start`'s options for `home`, the others from `overrides`: a JSON object of the options'
+    /// names (`gossip_bootstrap_peers` an array), each left out taking its default. Empty for no
+    /// overrides. Unlike `start`, no option falls back to a `SEQUENCER_*` env var.
+    pub fn from_json(home: PathBuf, overrides: &str) -> Result<Self> {
+        let mut fields: serde_json::Map<String, serde_json::Value> = if overrides.trim().is_empty()
+        {
+            serde_json::Map::new()
+        } else {
+            serde_json::from_str(overrides).context("Start overrides must be a JSON object")?
+        };
+        ensure!(
+            !fields.contains_key("home"),
+            "The home is given on its own, not among the start overrides"
+        );
+        fields.insert(
+            "home".to_owned(),
+            serde_json::to_value(home).context("Home is not UTF-8")?,
+        );
+        serde_json::from_value(fields.into()).context("Invalid start overrides")
+    }
+
     /// The config file with these args applied over it.
     pub fn load_config(&self) -> Result<SequencerConfig> {
         let args = self;
@@ -146,6 +176,10 @@ impl StartArgs {
         config.load_funding_public_key()?;
         Ok(config)
     }
+}
+
+const fn default_rpc_listen_address() -> SocketAddr {
+    DEFAULT_RPC_LISTEN_ADDRESS
 }
 
 fn quic_multiaddr(address: SocketAddr) -> Multiaddr {

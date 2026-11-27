@@ -33,7 +33,7 @@ use tracing::info;
 
 use crate::{actor_handle::ActorHandle, supervisor::SequencerSupervisor};
 pub use crate::{
-    setup::{SetUp, setup},
+    setup::{SetUp, SetupArgs, setup},
     start::{CONFIG_FILE, DEFAULT_RPC_LISTEN_ADDRESS, StartArgs, channel_public_key},
 };
 
