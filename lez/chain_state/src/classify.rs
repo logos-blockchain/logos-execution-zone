@@ -256,8 +256,7 @@ mod tests {
                 to,
                 message: borsh::to_vec(message).expect("serializes"),
             },
-            inherited_authorizations: BTreeSet::new(),
-            inherits_entry_authorizations: true,
+            grants: BTreeSet::new(),
             pda_seeds: BTreeSet::new(),
         })
     }
@@ -425,8 +424,8 @@ mod tests {
                 refund_to: None,
                 tip: 0,
                 fallback: Some(lee_core::FeeFallback {
-                    action: lee_core::PrivateAction::default(),
                     boundary,
+                    ..lee_core::FeeFallback::default()
                 }),
             });
             LeeTransaction::PrivacyPreserving(PrivacyPreservingTransaction::new(

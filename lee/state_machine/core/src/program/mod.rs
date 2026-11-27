@@ -347,6 +347,8 @@ pub struct SyncMessage {
     pub to: Actor,
     pub message: MessageData,
     pub pda_seeds: BTreeSet<PdaSeed>,
+    /// Grants the sender attaches, each over an actor whose grant it holds.
+    pub grants: BTreeSet<Actor>,
 }
 
 impl SyncMessage {
@@ -355,6 +357,7 @@ impl SyncMessage {
             to,
             message: borsh::to_vec(message).expect("borsh serialization is infallible"),
             pda_seeds: BTreeSet::new(),
+            grants: BTreeSet::new(),
         }
     }
 
@@ -362,6 +365,19 @@ impl SyncMessage {
     pub fn with_pda_seeds(mut self, pda_seeds: impl IntoIterator<Item = PdaSeed>) -> Self {
         self.pda_seeds = pda_seeds.into_iter().collect();
         self
+    }
+
+    #[must_use]
+    pub fn with_grants(mut self, grants: impl IntoIterator<Item = Actor>) -> Self {
+        self.grants.extend(grants);
+        self
+    }
+
+    /// Attaches the grant over the destination that `input` carried, if any.
+    #[must_use]
+    pub fn with_lent_grant(self, input: &ReceiveInput) -> Self {
+        let lent = input.grants.get(&self.to).copied();
+        self.with_grants(lent)
     }
 }
 
@@ -420,8 +436,8 @@ pub struct ReceiveInput {
     /// The actor that sent this message, at the address it presented; `None` when the transaction
     /// itself submitted it.
     pub from: Option<Actor>,
-    /// Input is authorized when signed by the receiver or authorized by owning program.
-    pub is_authorized: bool,
+    /// The actors whose grants this handler holds and may attach to its sync messages.
+    pub grants: BTreeSet<Actor>,
     /// State the actor starts with at the beginning of the message handling.
     pub pre_state: ActorState,
     /// The message received.
@@ -429,6 +445,12 @@ pub struct ReceiveInput {
 }
 
 impl ReceiveInput {
+    /// Whether the delivery carries a grant over the receiver.
+    #[must_use]
+    pub fn is_authorized(&self) -> bool {
+        self.grants.contains(&self.receiver)
+    }
+
     /// Whether the message came from another actor of the receiver's own program.
     #[must_use]
     pub fn from_own_program(&self) -> bool {

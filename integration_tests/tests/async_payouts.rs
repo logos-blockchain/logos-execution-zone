@@ -20,7 +20,10 @@ use lee::{
 };
 use lee_core::{
     Commitment, Nullifier, NullifierWitness, PrivateAccountKind, PrivateWitness, RegularKey,
-    RootCall, WitnessKind, execution_state::TransactionEntry, native_token, program::PdaSeed,
+    RootCall, WitnessKind,
+    execution_state::TransactionEntry,
+    native_token,
+    program::{PdaSeed, SyncMessage},
 };
 use sequencer_service_rpc::RpcClient as _;
 use test_guest_core::{LIVE_PAYOUT_SEED, PayoutRequest, Script};
@@ -92,6 +95,7 @@ async fn spend_input(ctx: &TestContext, input: AccountId, seed: u8) -> Result<Pr
             membership_proof,
         },
         address_openings: BTreeSet::new(),
+        signer_programs: BTreeSet::from([lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID]),
     })
 }
 
@@ -108,13 +112,17 @@ fn prove_trade(
     recoveries: Vec<RecipientEncryption>,
 ) -> Result<PrivacyPreservingTransaction> {
     let payer = Actor::new(custody, programs.live_payout);
+    let debited = Actor::native_balance(input);
     let script = Script::default()
-        .send_sync(
-            Actor::native_balance(input),
-            &native_token::Message::Transfer {
-                to: custody,
-                amount: AMOUNT_IN,
-            },
+        .send(
+            SyncMessage::new(
+                debited,
+                &native_token::Message::Transfer {
+                    to: custody,
+                    amount: AMOUNT_IN,
+                },
+            )
+            .with_grants([debited]),
         )
         .send_sync(payer, &request);
     let (output, proof) = execute_and_prove_with_cross_messages(
@@ -126,11 +134,14 @@ fn prove_trade(
             }),
             // The fee inbox is declared so the reserve crosses to it rather than being published.
             public_context: PublicExecutionContext::new(
-                [
-                    payer,
-                    Actor::native_balance(custody),
-                    Actor::native_balance(system_accounts::fee_inbox_account_id()),
-                ],
+                lee::test_utils::signed_by(
+                    [
+                        payer,
+                        Actor::native_balance(custody),
+                        Actor::native_balance(system_accounts::fee_inbox_account_id()),
+                    ],
+                    [],
+                ),
                 [],
             ),
             private_witnesses: vec![witness],

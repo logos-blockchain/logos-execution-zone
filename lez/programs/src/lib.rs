@@ -213,7 +213,9 @@ mod inner {
             fn system_upgrader_tx(actors: &[Actor], message: &Message) -> PublicTransaction {
                 let message = public_transaction::Message::try_new(
                     registry_actor(),
-                    std::iter::once(registry_actor()).chain(actors.iter().copied()),
+                    std::iter::once(registry_actor())
+                        .chain(actors.iter().copied())
+                        .map(|actor| (actor, lee::Authority::None)),
                     BTreeMap::new(),
                     message,
                 )
@@ -629,7 +631,7 @@ mod inner {
 
                 let message = public_transaction::Message::try_new(
                     header,
-                    [header],
+                    [(header, lee::Authority::None)],
                     BTreeMap::from([(signer_id, lee_core::account::Nonce(0))]),
                     LoaderMessage::UpdateHeader {
                         first_segment: ids[0],
@@ -971,7 +973,10 @@ mod inner {
                 );
                 let message = public_transaction::Message::try_new(
                     sender_actor,
-                    [sender_actor, registry_actor()],
+                    [
+                        (sender_actor, lee::Authority::None),
+                        (registry_actor(), lee::Authority::None),
+                    ],
                     BTreeMap::new(),
                     script,
                 )
@@ -1225,11 +1230,14 @@ mod inner {
                 ..public_transaction::Message::try_new(
                     receipt,
                     vec![
-                        receipt,
-                        Actor::native_balance(bridge_core::compute_bridge_account_id(
-                            bridge_account_id(),
-                        )),
-                        Actor::native_balance(recipient_id),
+                        (receipt, lee::Authority::None),
+                        (
+                            Actor::native_balance(bridge_core::compute_bridge_account_id(
+                                bridge_account_id(),
+                            )),
+                            lee::Authority::None,
+                        ),
+                        (Actor::native_balance(recipient_id), lee::Authority::None),
                     ],
                     std::collections::BTreeMap::new(),
                     bridge_core::Message::Deposit {

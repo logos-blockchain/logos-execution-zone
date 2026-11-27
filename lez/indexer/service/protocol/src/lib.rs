@@ -341,8 +341,7 @@ pub enum PublicAccountEvidence {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct Delivery<S> {
     pub envelope: MessageEnvelope<S>,
-    pub inherited_authorizations: Vec<AccountId>,
-    pub inherits_entry_authorizations: bool,
+    pub grants: Vec<Actor>,
     pub pda_seeds: Vec<PdaSeed>,
 }
 
@@ -356,11 +355,24 @@ pub enum BoundaryStep {
 
 pub type Boundary = Vec<BoundaryStep>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum Authority {
+    None,
+    Signer,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub struct DeclaredActor {
+    pub actor: Actor,
+    pub authority: Authority,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct PublicExecutionContext {
-    pub actors: Vec<Actor>,
+    pub actors: Vec<DeclaredActor>,
     pub authorized_accounts: Vec<AccountId>,
     pub promotions: Vec<u64>,
+    pub private_signers: Vec<Actor>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -385,7 +397,12 @@ pub struct ProvenFee {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct FeeFallback {
-    pub action: PrivateAction,
+    /// The nullifier and root of the payer's private action.
+    pub nullifier: Nullifier,
+    pub root: CommitmentSetDigest,
+    pub commitment: Commitment,
+    /// The post-state's note, under the ephemeral key of the payer's private action.
+    pub ciphertext: Ciphertext,
     pub boundary: Boundary,
 }
 

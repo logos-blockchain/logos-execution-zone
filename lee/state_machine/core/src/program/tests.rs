@@ -5,7 +5,7 @@ fn receive_input() -> ReceiveInput {
     ReceiveInput {
         receiver,
         from: None,
-        is_authorized: false,
+        grants: BTreeSet::new(),
         pre_state: ActorState::empty(),
         message: Vec::new(),
     }
@@ -383,7 +383,7 @@ fn a_transition_journal_frame_has_a_pinned_layout() {
         input: ReceiveInput {
             receiver,
             from: None,
-            is_authorized: true,
+            grants: BTreeSet::from([receiver]),
             pre_state: ActorState::from(b"ab".to_vec()),
             message: b"m".to_vec(),
         },
@@ -393,6 +393,10 @@ fn a_transition_journal_frame_has_a_pinned_layout() {
                 to: Actor::new(AccountId::new([3; 32]), AccountId::new([4; 32])),
                 message: b"q".to_vec(),
                 pda_seeds: BTreeSet::from([PdaSeed::new([9; 32])]),
+                grants: BTreeSet::from([Actor::new(
+                    AccountId::new([5; 32]),
+                    AccountId::new([6; 32]),
+                )]),
             }],
             async_messages: Vec::new(),
             events: Vec::new(),
@@ -401,12 +405,14 @@ fn a_transition_journal_frame_has_a_pinned_layout() {
     };
 
     let expected: Vec<u8> = [
-        &[206, 0, 0, 0][..], // frame length: the 206 bytes below
-        &[1; 32],            // input.receiver.account_id
-        &[2; 32],            // input.receiver.program_account_id
-        &[0],                // input.from: None
-        &[1],                // input.is_authorized
-        &[2, 0, 0, 0],       // input.pre_state
+        &[85, 1, 0, 0][..], // frame length: the 341 bytes below
+        &[1; 32],           // input.receiver.account_id
+        &[2; 32],           // input.receiver.program_account_id
+        &[0],               // input.from: None
+        &[1, 0, 0, 0],      // input.grants: the receiver
+        &[1; 32],
+        &[2; 32],
+        &[2, 0, 0, 0], // input.pre_state
         b"ab",
         &[1, 0, 0, 0], // input.message
         b"m",
@@ -420,6 +426,9 @@ fn a_transition_journal_frame_has_a_pinned_layout() {
         b"q",
         &[1, 0, 0, 0], // pda_seeds: one seed
         &[9; 32],
+        &[1, 0, 0, 0], // grants: one actor
+        &[5; 32],
+        &[6; 32],
         &[0, 0, 0, 0], // async_messages: none
         &[0, 0, 0, 0], // events: none
         &[0, 0],       // validity.blocks: from None, to None

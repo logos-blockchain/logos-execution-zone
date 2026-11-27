@@ -284,8 +284,10 @@ impl Default for FfiAccountIdentity {
     }
 }
 
-/// An account identity with the program actor state it selects, whether the account authorizes,
-/// and the openings of the blinded addresses it is reached at.
+/// An account identity with the program actor state it selects, whether it authorizes, and the
+/// openings of the blinded addresses it is reached at.
+///
+/// `authorizes` covers that actor alone, for a public account and a private one alike.
 ///
 /// `address_openings` must point to `address_openings_size` openings, or be null if that is 0.
 #[repr(C)]

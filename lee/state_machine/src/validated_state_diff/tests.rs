@@ -87,7 +87,7 @@ fn privacy_garbage_proof_is_rejected() {
             public_root: None,
             private_actions: vec![PrivateAction {
                 nullifier: Nullifier::for_dummy(&[0; 32]),
-                root: [0; 32],
+                root: state.commitment_set_digest(),
                 commitment,
                 encrypted_post_state: EncryptedNote {
                     ciphertext: Ciphertext::from_inner(vec![]),
@@ -296,6 +296,7 @@ fn a_sent_transitions_nonzero_exit_adds_its_cycles_to_its_senders() {
                 to: exiting,
                 message: Vec::new(),
                 pda_seeds: BTreeSet::new(),
+                grants: BTreeSet::new(),
             })
         });
         let tx = public_tx(
@@ -567,7 +568,7 @@ fn charged_alike(
             .message()
             .public_context
             .actors
-            .iter()
+            .keys()
             .map(|actor| {
                 let account = state.get_account_by_id(actor.account_id);
                 (

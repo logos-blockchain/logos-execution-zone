@@ -1,7 +1,7 @@
 use lee_core::{
     EphemeralSecretKey, MessageWitness, PrivateAccountKind, PublicationMode, Recipient,
     RecipientEncryption, compute_digest_for_path,
-    execution_state::Placement,
+    execution_state::{Authority, Placement},
     program::{MessageBody, Publication},
 };
 
@@ -78,9 +78,13 @@ fn replying() -> Script {
 // `sender()` runs `script`, publishing each async message to a private receiver with its recovery
 // binding.
 fn publishing(script: Script) -> PublicTransaction {
-    let message =
-        public_transaction::Message::try_new(sender(), vec![sender()], BTreeMap::new(), script)
-            .unwrap();
+    let message = public_transaction::Message::try_new(
+        sender(),
+        vec![(sender(), Authority::None)],
+        BTreeMap::new(),
+        script,
+    )
+    .unwrap();
     let witness_set = witness_for(&message, &[]);
     PublicTransaction::new(message, witness_set)
 }
@@ -259,7 +263,7 @@ fn a_private_receipt_root_that_calls_a_public_actor_needs_no_admission_evidence(
     );
     let proven = execute_and_prove(
         ProvingInput {
-            public_context: PublicExecutionContext::new(vec![receiver()], []),
+            public_context: PublicExecutionContext::new(signed_by(vec![receiver()], []), []),
             private_witnesses: vec![init_witness(&keys)],
             ..proving_input(record.privately(&state))
         },
@@ -308,7 +312,7 @@ fn proven_publishing(
     };
     let proven = execute_and_prove(
         ProvingInput {
-            public_context: PublicExecutionContext::new(public_actors, []),
+            public_context: PublicExecutionContext::new(signed_by(public_actors, []), []),
             private_witnesses: vec![init_witness(&keys)],
             ..proving_input(root(private_actor(), root_script))
         },
@@ -372,12 +376,15 @@ fn delivering(
 ) -> PublicTransaction {
     let message = public_transaction::Message {
         admission_evidence,
-        ..public_transaction::Message::try_new(
-            sender(),
-            vec![sender(), to],
-            signer_nonces(signers, nonces),
-            script,
-        )
+        ..{
+            let nonces = signer_nonces(signers, nonces);
+            public_transaction::Message::try_new(
+                sender(),
+                signed_by(vec![sender(), to], nonces.keys().copied()),
+                nonces,
+                script,
+            )
+        }
         .unwrap()
     };
     let witness_set = witness_for(&message, signers);
@@ -616,7 +623,7 @@ fn admission_evidence_admits_an_absent_account_without_authorizing_it() {
     let evidenced = state.transition_from_public_transaction(
         &delivering(
             receiver(),
-            spend.clone(),
+            spend,
             vec![receiver_signer().evidence()],
             vec![],
             &[],
@@ -633,7 +640,16 @@ fn admission_evidence_admits_an_absent_account_without_authorizing_it() {
     assert_eq!(state, before);
     state
         .transition_from_public_transaction(
-            &delivering(receiver(), spend, vec![], vec![Nonce(0)], &[&key]),
+            &delivering(
+                receiver(),
+                Script::default().send(
+                    SyncMessage::new(receiver(), &Script::default().authorized())
+                        .with_grants([receiver()]),
+                ),
+                vec![],
+                vec![Nonce(0)],
+                &[&key],
+            ),
             1,
             0,
         )
@@ -808,7 +824,7 @@ fn simulation_delivers_each_candidate_its_input_or_its_callback_selects() {
             ProvingInput {
                 public_context: PublicExecutionContext {
                     promotions: selection(Placement::Public),
-                    ..PublicExecutionContext::new(vec![sender()], [])
+                    ..PublicExecutionContext::new(signed_by(vec![sender()], []), [])
                 },
                 private_witnesses: vec![init_witness(&keys), init_witness(&recipient_keys)],
                 private_promotions: selection(Placement::Private),
@@ -1191,7 +1207,7 @@ fn a_private_receipt_whose_live_async_message_cannot_settle_spends_nothing() {
     );
     let proven = execute_and_prove(
         ProvingInput {
-            public_context: PublicExecutionContext::new(vec![receiver()], []),
+            public_context: PublicExecutionContext::new(signed_by(vec![receiver()], []), []),
             private_witnesses: vec![init_witness(&keys)],
             ..proving_input(record.privately(&state))
         },
@@ -1248,7 +1264,7 @@ fn a_call_to_a_private_account_or_its_alias_declared_public_is_refused() {
 fn simulation_refuses_an_unadmitted_public_account_before_proving() {
     let result = execute_and_prove(
         ProvingInput {
-            public_context: PublicExecutionContext::new(vec![sender()], []),
+            public_context: PublicExecutionContext::new(signed_by(vec![sender()], []), []),
             ..proving_input(root(sender(), &Script::default()))
         },
         &Simulation {

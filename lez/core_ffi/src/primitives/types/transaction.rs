@@ -5,8 +5,10 @@ use lee::{
     privacy_preserving_transaction::circuit::Proof, public_transaction::WitnessEntry,
 };
 use lee_core::{
-    FeeFallback, PrivateAction, ProgramImageClaim, ProvenExecution, ProvenFee, RecoveryBinding,
+    Commitment, FeeFallback, Nullifier, PrivateAction, ProgramImageClaim, ProvenExecution,
+    ProvenFee, RecoveryBinding,
     account::AccountId,
+    encryption::Ciphertext,
     program::{Publication, ValidityWindow, ValidityWindows},
 };
 use sequencer_executor_actor::protocol::Transaction;
@@ -16,12 +18,12 @@ use crate::primitives::{
     types::{
         FfiAccountId, FfiBytes32, FfiFeeDeclaration, FfiHashType, FfiOption, FfiVec,
         actor::{
-            FfiNonceEntry, FfiPrivateAction, FfiPublicAccountEvidence, FfiPublicExecutionContext,
-            FfiRootCall, empty_root_call, nonces_from_ffi,
+            FfiNonceEntry, FfiPublicAccountEvidence, FfiPublicExecutionContext, FfiRootCall,
+            empty_root_call, nonces_from_ffi,
         },
         vectors::{
             FfiBoundaryStepList, FfiNonceList, FfiPrivateActionList, FfiProof,
-            FfiPublicAccountEvidenceList, FfiPublicationList, FfiRecoveryBindingList,
+            FfiPublicAccountEvidenceList, FfiPublicationList, FfiRecoveryBindingList, FfiVecU8,
             FfiWitnessEntryList,
         },
     },
@@ -57,7 +59,7 @@ impl From<PublicTransaction> for FfiPublicTransactionBody {
 }
 
 struct OwnedPublicBody {
-    public_context: PublicExecutionContext,
+    public_context: Result<PublicExecutionContext, LeeError>,
     root: RootCall,
     fee: Option<FeeDeclaration>,
     nonces: Vec<FfiNonceEntry>,
@@ -73,7 +75,7 @@ impl From<Box<FfiPublicTransactionBody>> for OwnedPublicBody {
             witness_set,
         } = *value;
         Self {
-            public_context: message.public_context.into(),
+            public_context: message.public_context.try_into(),
             root: message.root.into(),
             fee: message.has_fee.then(|| message.fee.into()),
             nonces: message.nonces.into(),
@@ -97,7 +99,7 @@ impl TryFrom<Box<FfiPublicTransactionBody>> for PublicTransaction {
         } = value.into();
         Ok(Self {
             message: lee::public_transaction::Message {
-                public_context,
+                public_context: public_context.map_err(cast_error)?,
                 execution: lee::public_transaction::PublicExecution { root },
                 nonces: nonces_from_ffi(nonces).map_err(cast_error)?,
                 fee,
@@ -253,7 +255,7 @@ impl From<PrivacyPreservingTransaction> for FfiPrivateTransactionBody {
 }
 
 struct OwnedPrivateBody {
-    public_context: PublicExecutionContext,
+    public_context: Result<PublicExecutionContext, LeeError>,
     boundary: Vec<BoundaryStep>,
     async_messages: Vec<Publication>,
     recovery_bindings: Vec<RecoveryBinding>,
@@ -280,7 +282,7 @@ impl From<Box<FfiPrivateTransactionBody>> for OwnedPrivateBody {
         } = *value;
         let public_root = RootCall::from(message.public_root);
         Self {
-            public_context: message.public_context.into(),
+            public_context: message.public_context.try_into(),
             boundary: owned(message.boundary),
             async_messages: owned(message.async_messages),
             recovery_bindings: owned(message.recovery_bindings),
@@ -326,7 +328,7 @@ impl TryFrom<Box<FfiPrivateTransactionBody>> for PrivacyPreservingTransaction {
         } = value.into();
         Ok(Self {
             message: lee::privacy_preserving_transaction::Message {
-                public_context,
+                public_context: public_context.map_err(cast_error)?,
                 execution: ProvenExecution {
                     boundary,
                     async_messages,
@@ -383,7 +385,11 @@ pub struct FfiProvenFee {
     pub refund_to: FfiAccountId,
     pub tip: u64,
     pub has_fallback: bool,
-    pub fallback_action: FfiPrivateAction,
+    pub fallback_nullifier: FfiBytes32,
+    pub fallback_root: FfiBytes32,
+    pub fallback_commitment: FfiBytes32,
+    /// Under the ephemeral key of the private action spending `fallback_nullifier`.
+    pub fallback_ciphertext: FfiVecU8,
     pub fallback_boundary: FfiBoundaryStepList,
 }
 
@@ -393,16 +399,26 @@ impl From<Option<ProvenFee>> for FfiProvenFee {
             (fee.refund_to, fee.tip, fee.fallback)
         });
         let has_fallback = fallback.is_some();
-        let FeeFallback { action, boundary } = fallback.unwrap_or_else(|| FeeFallback {
-            action: PrivateAction::default(),
-            boundary: Vec::new(),
-        });
+        let FeeFallback {
+            nullifier,
+            root,
+            commitment,
+            ciphertext,
+            boundary,
+        } = fallback.unwrap_or_default();
         Self {
             has_refund_to: refund_to.is_some(),
             refund_to: refund_to.unwrap_or_default().into(),
             tip,
             has_fallback,
-            fallback_action: action.into(),
+            fallback_nullifier: FfiBytes32 {
+                data: nullifier.to_byte_array(),
+            },
+            fallback_root: FfiBytes32 { data: root },
+            fallback_commitment: FfiBytes32 {
+                data: commitment.to_byte_array(),
+            },
+            fallback_ciphertext: ciphertext.into_inner().into(),
             fallback_boundary: boundary
                 .into_iter()
                 .map(Into::into)
@@ -702,11 +718,17 @@ fn proven_fee_from_ffi(has_fee: bool, fee: FfiProvenFee) -> Option<ProvenFee> {
         refund_to,
         tip,
         has_fallback,
-        fallback_action,
+        fallback_nullifier,
+        fallback_root,
+        fallback_commitment,
+        fallback_ciphertext,
         fallback_boundary,
     } = fee;
     let fallback = FeeFallback {
-        action: fallback_action.into(),
+        nullifier: Nullifier::from_byte_array(fallback_nullifier.data),
+        root: fallback_root.data,
+        commitment: Commitment::from_byte_array(fallback_commitment.data),
+        ciphertext: Ciphertext::from_inner(fallback_ciphertext.into()),
         boundary: owned(fallback_boundary),
     };
     has_fee.then(|| ProvenFee {
@@ -833,8 +855,7 @@ mod tests {
                 to,
                 message: vec![message],
             },
-            inherited_authorizations: BTreeSet::new(),
-            inherits_entry_authorizations: true,
+            grants: BTreeSet::new(),
             pda_seeds: BTreeSet::new(),
         }
     }
@@ -846,7 +867,7 @@ mod tests {
                 ..lee::public_transaction::Message::new_preserialized(
                     actor(4, 7),
                     vec![8],
-                    [actor(5, 6)],
+                    lee::test_utils::signed_by([actor(5, 6)], [account_id(9)]),
                     BTreeMap::from([(account_id(9), Nonce(10))]),
                     fee,
                 )
@@ -874,14 +895,14 @@ mod tests {
                     boundary: vec![
                         BoundaryStep::PrivateToPublic(repeated.clone()),
                         BoundaryStep::PrivateToPublic(Delivery {
-                            inherited_authorizations: BTreeSet::from([account_id(14)]),
+                            grants: BTreeSet::from([actor(14, 61)]),
                             pda_seeds: BTreeSet::from([PdaSeed::new([15; 32])]),
                             ..delivery(actor(11, 61), actor(8, 9), 10)
                         }),
                         BoundaryStep::PrivateToPublic(delivery(actor(40, 90), actor(41, 42), 43)),
                         BoundaryStep::PrivateToPublic(repeated),
                         BoundaryStep::PublicToPrivate(Delivery {
-                            inherits_entry_authorizations: false,
+                            grants: BTreeSet::from([actor(1, 71)]),
                             ..delivery(actor(16, 17), actor(18, 19), 20)
                         }),
                         BoundaryStep::EndPrivateSubtree,
@@ -1004,8 +1025,7 @@ mod tests {
                 program_account_id: FfiBytes32::default(),
             },
             message: FfiVec::default(),
-            inherited_authorizations: FfiVec::default(),
-            inherits_entry_authorizations: false,
+            grants: FfiVec::default(),
             pda_seeds: FfiVec::default(),
         }
     }
@@ -1031,7 +1051,7 @@ mod tests {
         edit(&mut body.message.boundary, |steps| {
             for slot in end_of_subtree_deliveries(steps) {
                 let filled = Delivery {
-                    inherited_authorizations: BTreeSet::from([account_id(30)]),
+                    grants: BTreeSet::from([actor(30, 33), actor(0, 71)]),
                     pda_seeds: BTreeSet::from([PdaSeed::new([31; 32])]),
                     ..delivery(actor(32, 33), actor(34, 35), 36)
                 };
@@ -1139,8 +1159,12 @@ mod tests {
     #[test]
     fn a_private_transactions_fee_roundtrips_over_the_ffi() {
         // The proof commits to its fee, so a transaction rebuilt without it fails verification.
+        // Fields apart from each other, so one landing in another's place is caught.
         let fallback = FeeFallback {
-            action: PrivateAction::default(),
+            nullifier: Nullifier::from_byte_array([71; 32]),
+            root: [72; 32],
+            commitment: Commitment::from_byte_array([73; 32]),
+            ciphertext: Ciphertext::from_inner(vec![74; 3]),
             boundary: vec![BoundaryStep::EndPublicSubtree],
         };
         for fee in [

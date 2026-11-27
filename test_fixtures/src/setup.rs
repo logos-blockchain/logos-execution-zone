@@ -20,6 +20,7 @@ use testcontainers::compose::DockerCompose;
 use tracing::{debug, warn};
 use wallet::{
     WalletCore,
+    account::AccountIdWithPrivacy,
     cli::{Command, programs::native_token_transfer::AuthTransferSubcommand},
     config::WalletConfigOverrides,
 };
@@ -620,10 +621,17 @@ pub async fn fund_private_accounts(
 ) -> Result<()> {
     let funder_id = public_account_id(&initial_public_accounts[config::PRIVATE_FUNDER_INDEX].0);
 
+    let mut mispriced = Vec::new();
     for (index, private_account) in initial_private_accounts.iter().enumerate() {
-        // The recipient pays the shielding's in-proof fee out of what it receives, so it is
-        // shielded the fee on top of its balance.
-        wallet.set_private_fee_payer(Some(private_account.account_id()));
+        let before = wallet
+            .get_account_balance(funder_id)
+            .await
+            .context("Failed to read the private funder's balance")?;
+        // The funder declares the shielding's fee: the recipient holds nothing to pay it with.
+        wallet.set_fee_params(wallet::FeeParams {
+            payer: Some(AccountIdWithPrivacy::Public(funder_id)),
+            ..wallet::FeeParams::default()
+        });
         let funded = wallet::cli::execute_subcommand(
             wallet,
             Command::AuthTransfer(AuthTransferSubcommand::Send {
@@ -633,41 +641,44 @@ pub async fn fund_private_accounts(
                 to_vpk: None,
                 to_keys: None,
                 to_initial_key: None,
-                amount: private_account
-                    .balance
-                    .checked_add(config::shield_fee_at(index))
-                    .expect("private funding overflow"),
+                amount: private_account.balance,
             }),
         )
         .await;
-        wallet.set_private_fee_payer(None);
+        wallet.set_fee_params(wallet::FeeParams::default());
+        let _declared = wallet.take_declared_fee();
         funded.with_context(|| {
             format!(
                 "Failed to fund private account {}",
                 private_account.account_id()
             )
         })?;
-        // With no headroom the reserve is the fee, priced off the bytes the wallet measured.
-        let Some(wallet::DeclaredFee::Private(fee)) = wallet.take_declared_fee() else {
-            bail!("The funding shield declared no private fee");
-        };
-        if fee.reserve != config::shield_fee_at(index) {
-            let bytes = fee
-                .reserve
-                .saturating_sub(config::private_fee(0))
-                .checked_div(u128::from(fee_core::market::BASE_FEE_STOR_MIN));
-            bail!(
-                "The funding shield paid {}, not the {} its pinned size prices; re-pin \
-                 `config::SHIELD_BYTES` to {bytes:?}",
-                fee.reserve,
-                config::shield_fee_at(index)
-            );
-        }
 
         wallet
             .sync_to_latest_block()
             .await
             .context("Failed to sync wallet after funding a private account")?;
+
+        // Genesis credits the funder each shield's fee, priced before any transaction exists.
+        let after = wallet
+            .get_account_balance(funder_id)
+            .await
+            .context("Failed to read the private funder's balance")?;
+        let charged = before
+            .saturating_sub(after)
+            .saturating_sub(private_account.balance);
+        if charged != config::shield_fee_at(index) {
+            mispriced.push(format!(
+                "shield {index} charged {charged}, not the pinned {}",
+                config::shield_fee_at(index)
+            ));
+        }
+    }
+    if !mispriced.is_empty() {
+        bail!(
+            "Re-pin `config::FIRST_SHIELD_FEE` (shield 0) and `config::SHIELD_FEE` (the rest): {}",
+            mispriced.join("; ")
+        );
     }
 
     Ok(())

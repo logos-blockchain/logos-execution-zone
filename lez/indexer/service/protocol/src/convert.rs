@@ -5,15 +5,15 @@ use std::collections::BTreeMap;
 use lee_core::account::Nonce;
 
 use crate::{
-    Account, AccountData, AccountId, Actor, ActorState, BedrockStatus, Block, BlockBody,
+    Account, AccountData, AccountId, Actor, ActorState, Authority, BedrockStatus, Block, BlockBody,
     BlockHeader, BlockId, BlockIngestError, BoundaryStep, Ciphertext, Commitment,
-    CommitmentSetDigest, Delivery, EncryptedNote, EphemeralPublicKey, EventRecord, FeeDeclaration,
-    FeeFallback, FeeReceipt, HashType, IndexerStatus, IndexerSyncState, KeyType, MessageEnvelope,
-    Nullifier, PdaSeed, PrivacyPreservingMessage, PrivacyPreservingTransaction, PrivateAction,
-    Proof, ProvenFee, PublicAccountEvidence, PublicExecutionContext, PublicKey, PublicMessage,
-    PublicTransaction, Publication, RecoveryBinding, RootCall, SealedMessage, Selector, Signature,
-    SigningKeyState, StallReason, Transaction, TransactionReceipt, ValidityWindow, WitnessEntry,
-    WitnessSet,
+    CommitmentSetDigest, DeclaredActor, Delivery, EncryptedNote, EphemeralPublicKey, EventRecord,
+    FeeDeclaration, FeeFallback, FeeReceipt, HashType, IndexerStatus, IndexerSyncState, KeyType,
+    MessageEnvelope, Nullifier, PdaSeed, PrivacyPreservingMessage, PrivacyPreservingTransaction,
+    PrivateAction, Proof, ProvenFee, PublicAccountEvidence, PublicExecutionContext, PublicKey,
+    PublicMessage, PublicTransaction, Publication, RecoveryBinding, RootCall, SealedMessage,
+    Selector, Signature, SigningKeyState, StallReason, Transaction, TransactionReceipt,
+    ValidityWindow, WitnessEntry, WitnessSet,
 };
 
 // ============================================================================
@@ -325,7 +325,7 @@ impl TryFrom<PublicMessage> for lee::public_transaction::Message {
             admission_evidence,
         } = value;
         Ok(Self {
-            public_context: public_context.into(),
+            public_context: public_context.try_into()?,
             execution: lee::public_transaction::PublicExecution { root: root.into() },
             nonces: nonce_map(nonces)?,
             fee: fee.map(Into::into),
@@ -421,17 +421,12 @@ impl<S: Into<T>, T> From<lee_core::execution_state::Delivery<S>> for Delivery<T>
     fn from(value: lee_core::execution_state::Delivery<S>) -> Self {
         let lee_core::execution_state::Delivery {
             envelope,
-            inherited_authorizations,
-            inherits_entry_authorizations,
+            grants,
             pda_seeds,
         } = value;
         Self {
             envelope: envelope.into(),
-            inherited_authorizations: inherited_authorizations
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-            inherits_entry_authorizations,
+            grants: grants.into_iter().map(Into::into).collect(),
             pda_seeds: pda_seeds.into_iter().map(Into::into).collect(),
         }
     }
@@ -441,17 +436,12 @@ impl<S: Into<T>, T> From<Delivery<S>> for lee_core::execution_state::Delivery<T>
     fn from(value: Delivery<S>) -> Self {
         let Delivery {
             envelope,
-            inherited_authorizations,
-            inherits_entry_authorizations,
+            grants,
             pda_seeds,
         } = value;
         Self {
             envelope: envelope.into(),
-            inherited_authorizations: inherited_authorizations
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-            inherits_entry_authorizations,
+            grants: grants.into_iter().map(Into::into).collect(),
             pda_seeds: pda_seeds.into_iter().map(Into::into).collect(),
         }
     }
@@ -485,33 +475,67 @@ impl From<BoundaryStep> for lee_core::execution_state::BoundaryStep {
     }
 }
 
+impl From<lee_core::execution_state::Authority> for Authority {
+    fn from(value: lee_core::execution_state::Authority) -> Self {
+        match value {
+            lee_core::execution_state::Authority::None => Self::None,
+            lee_core::execution_state::Authority::Signer => Self::Signer,
+        }
+    }
+}
+
+impl From<Authority> for lee_core::execution_state::Authority {
+    fn from(value: Authority) -> Self {
+        match value {
+            Authority::None => Self::None,
+            Authority::Signer => Self::Signer,
+        }
+    }
+}
+
 impl From<lee_core::execution_state::PublicExecutionContext> for PublicExecutionContext {
     fn from(value: lee_core::execution_state::PublicExecutionContext) -> Self {
         let lee_core::execution_state::PublicExecutionContext {
             actors,
             authorized_accounts,
             promotions,
+            private_signers,
         } = value;
         Self {
-            actors: actors.into_iter().map(Into::into).collect(),
+            actors: actors
+                .into_iter()
+                .map(|(actor, authority)| DeclaredActor {
+                    actor: actor.into(),
+                    authority: authority.into(),
+                })
+                .collect(),
             authorized_accounts: authorized_accounts.into_iter().map(Into::into).collect(),
             promotions: promotions.into_iter().collect(),
+            private_signers: private_signers.into_iter().map(Into::into).collect(),
         }
     }
 }
 
-impl From<PublicExecutionContext> for lee_core::execution_state::PublicExecutionContext {
-    fn from(value: PublicExecutionContext) -> Self {
+impl TryFrom<PublicExecutionContext> for lee_core::execution_state::PublicExecutionContext {
+    type Error = lee::error::LeeError;
+
+    fn try_from(value: PublicExecutionContext) -> Result<Self, Self::Error> {
         let PublicExecutionContext {
             actors,
             authorized_accounts,
             promotions,
+            private_signers,
         } = value;
-        Self {
-            actors: actors.into_iter().map(Into::into).collect(),
+        Ok(Self {
+            actors: lee::actor_map(
+                actors
+                    .into_iter()
+                    .map(|DeclaredActor { actor, authority }| (actor.into(), authority.into())),
+            )?,
             authorized_accounts: authorized_accounts.into_iter().map(Into::into).collect(),
             promotions: promotions.into_iter().collect(),
-        }
+            private_signers: private_signers.into_iter().map(Into::into).collect(),
+        })
     }
 }
 
@@ -633,9 +657,12 @@ impl From<lee_core::ProvenFee> for ProvenFee {
         Self {
             refund_to: refund_to.map(Into::into),
             tip,
-            fallback: fallback.map(|lee_core::FeeFallback { action, boundary }| FeeFallback {
-                action: action.into(),
-                boundary: boundary.into_iter().map(Into::into).collect(),
+            fallback: fallback.map(|fallback| FeeFallback {
+                nullifier: fallback.nullifier.into(),
+                root: fallback.root.into(),
+                commitment: fallback.commitment.into(),
+                ciphertext: fallback.ciphertext.into(),
+                boundary: fallback.boundary.into_iter().map(Into::into).collect(),
             }),
         }
     }
@@ -651,9 +678,12 @@ impl From<ProvenFee> for lee_core::ProvenFee {
         Self {
             refund_to: refund_to.map(Into::into),
             tip,
-            fallback: fallback.map(|FeeFallback { action, boundary }| lee_core::FeeFallback {
-                action: action.into(),
-                boundary: boundary.into_iter().map(Into::into).collect(),
+            fallback: fallback.map(|fallback| lee_core::FeeFallback {
+                nullifier: fallback.nullifier.into(),
+                root: fallback.root.into(),
+                commitment: fallback.commitment.into(),
+                ciphertext: fallback.ciphertext.into(),
+                boundary: fallback.boundary.into_iter().map(Into::into).collect(),
             }),
         }
     }
@@ -692,7 +722,7 @@ impl TryFrom<PrivacyPreservingMessage> for lee::privacy_preserving_transaction::
         let private_actions = private_actions.into_iter().map(Into::into).collect();
 
         Ok(Self {
-            public_context: public_context.into(),
+            public_context: public_context.try_into()?,
             execution: lee_core::ProvenExecution {
                 boundary: boundary.into_iter().map(Into::into).collect(),
                 async_messages: async_messages.into_iter().map(Into::into).collect(),
@@ -1334,6 +1364,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_context_declaring_an_actor_twice_is_refused() {
+        let declared = |authority| DeclaredActor {
+            actor: lee_core::account::Actor::new(
+                lee_core::account::AccountId::new([1; 32]),
+                lee_core::account::AccountId::new([2; 32]),
+            )
+            .into(),
+            authority,
+        };
+        let context = PublicExecutionContext {
+            actors: vec![declared(Authority::None), declared(Authority::Signer)],
+            ..PublicExecutionContext::default()
+        };
+
+        assert!(lee_core::execution_state::PublicExecutionContext::try_from(context).is_err());
+    }
+
+    #[test]
     fn a_nested_account_round_trips_through_the_indexer_mirror() {
         let program = lee_core::account::AccountId::new([3; 32]);
         let account = lee_core::account::Account {
@@ -1391,7 +1439,7 @@ mod tests {
         let to = lee::Actor::new(signer_id, lee::AccountId::new([7; 32]));
         let message = lee::public_transaction::Message::try_new_with_fees(
             to,
-            vec![to],
+            lee::test_utils::signed_by(vec![to], [signer_id]),
             BTreeMap::from([(signer_id, 0_u128.into())]),
             0_u32,
             fee,
@@ -1426,7 +1474,7 @@ mod tests {
         let to = lee::Actor::new(signer_id, lee::AccountId::new([7; 32]));
         let message = lee::public_transaction::Message::try_new(
             to,
-            vec![to],
+            lee::test_utils::signed_by(vec![to], [signer_id]),
             BTreeMap::from([(signer_id, 0_u128.into())]),
             0_u32,
         )
@@ -1465,7 +1513,7 @@ mod tests {
         let message = lee::public_transaction::Message::new(
             actor(3, 4),
             vec![12],
-            vec![actor(5, 6)],
+            lee::test_utils::signed_by(vec![actor(5, 6)], [account_id(13)]),
             BTreeMap::from([(account_id(13), lee_core::account::Nonce(7))]),
             Some(lee::FeeDeclaration::new(account_id(8), 9, 10, 11)),
             admission_evidence(),
@@ -1486,7 +1534,7 @@ mod tests {
         let mut mirrored = PublicMessage::from(lee::public_transaction::Message::new(
             actor(1, 2),
             vec![3],
-            vec![actor(1, 2)],
+            lee::test_utils::signed_by(vec![actor(1, 2)], [account_id(1)]),
             BTreeMap::from([(account_id(1), lee_core::account::Nonce(4))]),
             None,
             Vec::new(),
@@ -1507,8 +1555,7 @@ mod tests {
                 to: actor(4, 5),
                 message: vec![6],
             },
-            inherited_authorizations: BTreeSet::new(),
-            inherits_entry_authorizations: true,
+            grants: BTreeSet::new(),
             pda_seeds: BTreeSet::new(),
         };
         let clear = lee_core::program::Publication::Clear(lee_core::program::MessageEnvelope {
@@ -1519,6 +1566,7 @@ mod tests {
         let message = lee::privacy_preserving_transaction::message::Message {
             public_context: lee_core::execution_state::PublicExecutionContext {
                 promotions: BTreeSet::from([27, 28]),
+                private_signers: BTreeSet::from([actor(29, 92)]),
                 ..lee_core::execution_state::PublicExecutionContext::default()
             },
             execution: lee_core::ProvenExecution {
@@ -1527,7 +1575,10 @@ mod tests {
                     refund_to: Some(account_id(70)),
                     tip: 9,
                     fallback: Some(lee_core::FeeFallback {
-                        action: lee_core::PrivateAction::default(),
+                        nullifier: lee_core::Nullifier::default(),
+                        root: [0; 32],
+                        commitment: lee_core::Commitment::default(),
+                        ciphertext: lee_core::encryption::Ciphertext::from_inner(vec![24; 3]),
                         boundary: vec![
                             lee_core::execution_state::BoundaryStep::PrivateToPublic(
                                 repeated.clone(),
@@ -1545,8 +1596,7 @@ mod tests {
                                 to: actor(8, 9),
                                 message: vec![10],
                             },
-                            inherited_authorizations: BTreeSet::from([account_id(14)]),
-                            inherits_entry_authorizations: true,
+                            grants: BTreeSet::from([actor(14, 90), actor(3, 91)]),
                             pda_seeds: BTreeSet::from([lee_core::program::PdaSeed::new([15; 32])]),
                         },
                     ),
@@ -1557,8 +1607,7 @@ mod tests {
                                 to: actor(41, 42),
                                 message: vec![43],
                             },
-                            inherited_authorizations: BTreeSet::new(),
-                            inherits_entry_authorizations: true,
+                            grants: BTreeSet::new(),
                             pda_seeds: BTreeSet::new(),
                         },
                     ),
@@ -1570,8 +1619,7 @@ mod tests {
                                 to: actor(18, 19),
                                 message: vec![20],
                             },
-                            inherited_authorizations: BTreeSet::new(),
-                            inherits_entry_authorizations: false,
+                            grants: BTreeSet::new(),
                             pda_seeds: BTreeSet::new(),
                         },
                     ),

@@ -1,5 +1,5 @@
 pub use account_preview::AccountPreview;
-pub use actor_list::ActorList;
+pub use actor_list::{ActorList, DeclaredActorList};
 pub use block_preview::BlockPreview;
 pub use search_results::SearchResultsView;
 pub use transaction_details::{PrivacyPreservingTxDetails, PublicTxDetails};

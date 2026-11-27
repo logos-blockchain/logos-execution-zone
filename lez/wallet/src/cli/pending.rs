@@ -40,8 +40,8 @@ pub struct ReceiptInputs {
     /// state it selects.
     #[arg(long, num_args = 2, value_names = ["ACCOUNT", "PROGRAM"])]
     pub actor: Vec<String>,
-    /// An actor the receipt declares with its account's authorization, which covers every
-    /// delivery to that account, the received message included.
+    /// An actor the receipt declares authorized: its account signs, or its key is held, as for
+    /// the fee. The received message carries no grant, so this authorizes nothing it asks.
     #[arg(long, num_args = 2, value_names = ["ACCOUNT", "PROGRAM"])]
     pub authorized_actor: Vec<String>,
     /// A program ELF never deployed on chain, run as a shadow program.

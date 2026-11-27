@@ -17,5 +17,6 @@ fn handle_message(input: &ReceiveInput) -> Response {
         to: clock,
         message: input.message.clone(),
         pda_seeds: BTreeSet::new(),
+        grants: BTreeSet::new(),
     })
 }

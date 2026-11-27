@@ -26,6 +26,11 @@ pub use ppe_impl::prove_native_transfer_in_ppe;
 pub struct PpeBenchResult {
     pub label: String,
     pub chain_depth: usize,
+    /// User cycles of the privacy circuit's own run.
+    pub user_cycles: Option<u64>,
+    /// Its total cycles, which proving pays for: paging and po2 padding included.
+    pub total_cycles: Option<u64>,
+    pub segments: Option<usize>,
     pub prove_wall_ms: Option<f64>,
     /// borsh-serialized `InnerReceipt` length (`S_agg` in the fee model).
     pub proof_bytes: Option<usize>,
@@ -34,13 +39,21 @@ pub struct PpeBenchResult {
 
 #[cfg(not(feature = "ppe"))]
 #[must_use]
-pub const fn run_all() -> Vec<PpeBenchResult> {
+pub const fn run_all(_fee_case: Option<usize>) -> Vec<PpeBenchResult> {
     Vec::new()
 }
 
+/// Runs every case, or only the fee case at `fee_case` in [`ppe_impl::FeeCase::ALL`].
 #[cfg(feature = "ppe")]
 #[must_use]
-pub fn run_all() -> Vec<PpeBenchResult> {
+pub fn run_all(fee_case: Option<usize>) -> Vec<PpeBenchResult> {
+    if let Some(index) = fee_case {
+        return ppe_impl::FeeCase::ALL
+            .get(index)
+            .map(|case| ppe_impl::run_fee_transfer(*case))
+            .into_iter()
+            .collect();
+    }
     let mut results = Vec::new();
 
     // What `AccountManager::PADDED_PRIVATE_ACTIONS` padding actually costs: the transfer's private
@@ -55,6 +68,11 @@ pub fn run_all() -> Vec<PpeBenchResult> {
         results.push(ppe_impl::run_scripted_transfers(depth));
     }
 
+    for case in ppe_impl::FeeCase::ALL {
+        eprintln!("PPE: running a deshielding transfer fee case");
+        results.push(ppe_impl::run_fee_transfer(case));
+    }
+
     results
 }
 
@@ -67,15 +85,18 @@ pub fn print_table(results: &[PpeBenchResult]) {
         .max("label".len());
 
     println!(
-        "\n{:<lw$}  {:>5}  {:>20}  {:>12}  {}",
+        "\n{:<lw$}  {:>5}  {:>11}  {:>12}  {:>8}  {:>20}  {:>12}  {}",
         "label",
         "depth",
+        "user_cycles",
+        "total_cycles",
+        "segments",
         "prove_ms (s)",
         "proof_bytes",
         "error",
         lw = lw,
     );
-    println!("{}", "-".repeat(lw + 60));
+    println!("{}", "-".repeat(lw + 97));
     for r in results {
         let p = r.prove_wall_ms.map_or_else(
             || "-".to_owned(),
@@ -84,11 +105,16 @@ pub fn print_table(results: &[PpeBenchResult]) {
         let b = r
             .proof_bytes
             .map_or_else(|| "-".to_owned(), |n| n.to_string());
+        let count = |n: Option<u64>| n.map_or_else(|| "-".to_owned(), |n| n.to_string());
+        let s = r.segments.map_or_else(|| "-".to_owned(), |n| n.to_string());
         let e = r.error.as_deref().unwrap_or("");
         println!(
-            "{:<lw$}  {:>5}  {:>20}  {:>12}  {}",
+            "{:<lw$}  {:>5}  {:>11}  {:>12}  {:>8}  {:>20}  {:>12}  {}",
             r.label,
             r.chain_depth,
+            count(r.user_cycles),
+            count(r.total_cycles),
+            s,
             p,
             b,
             e,

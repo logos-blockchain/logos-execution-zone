@@ -24,7 +24,7 @@ use lee_core::{
 use program_loader_core::{LoaderActorState as _, ProgramSegment};
 use test_guest_core::{ForgeField, Script};
 
-pub use crate::test_utils::{TestPrivateKeys, init_witness, no_seal, update_witness};
+pub use crate::test_utils::{TestPrivateKeys, init_witness, no_seal, signed_by, update_witness};
 use crate::{
     ProvingInput, PublicAccountEvidence, PublicExecutionContext, PublicTransaction,
     SenderPresentation, Simulation, V03State,
@@ -128,8 +128,7 @@ pub fn credit(from: Actor, to: Actor, amount: Balance) -> Delivery<Actor> {
             to,
             message: borsh::to_vec(&NativeMessage::Credit(amount)).unwrap(),
         },
-        inherited_authorizations: BTreeSet::new(),
-        inherits_entry_authorizations: false,
+        grants: BTreeSet::new(),
         pda_seeds: BTreeSet::new(),
     }
 }
@@ -170,7 +169,7 @@ pub fn binding(
     let public = Actor::new(keys.account_id(), scripted_id());
     let (output, proof) = execute_and_prove(
         ProvingInput {
-            public_context: PublicExecutionContext::new(vec![public], []),
+            public_context: PublicExecutionContext::new(signed_by(vec![public], []), []),
             recoveries,
             ..proving_input(root(public, script))
         },
@@ -196,10 +195,11 @@ pub fn public_tx(
     message: impl BorshSerialize,
     signers: &[&TestSigner],
 ) -> PublicTransaction {
+    let nonces = signer_nonces(signers, nonces);
     let message = public_transaction::Message::try_new(
         to,
-        public_actors,
-        signer_nonces(signers, nonces),
+        signed_by(public_actors, nonces.keys().copied()),
+        nonces,
         message,
     )
     .unwrap();
@@ -343,6 +343,7 @@ pub fn init_pda_witness(keys: &TestPrivateKeys, binding: (AccountId, PdaSeed)) -
             commitment_root: DUMMY_COMMITMENT_HASH,
         },
         address_openings: BTreeSet::new(),
+        signer_programs: BTreeSet::new(),
     }
 }
 
@@ -364,6 +365,7 @@ pub fn update_pda_witness(
             membership_proof,
         },
         address_openings: BTreeSet::new(),
+        signer_programs: BTreeSet::new(),
     }
 }
 
@@ -380,7 +382,10 @@ fn shielded_balance_transfer_for_tests(
 
     let proven = execute_and_prove(
         ProvingInput {
-            public_context: PublicExecutionContext::new(vec![sender], [sender_id]),
+            public_context: PublicExecutionContext::new(
+                signed_by(vec![sender], [sender_id]),
+                [sender_id],
+            ),
             private_witnesses: vec![init_witness(recipient_keys)],
             ..proving_input(root(sender, &transfer(recipient_id, balance_to_move)))
         },
@@ -455,7 +460,7 @@ fn deshielded_balance_transfer_for_tests(
 
     let proven = execute_and_prove(
         ProvingInput {
-            public_context: PublicExecutionContext::new(vec![recipient], []),
+            public_context: PublicExecutionContext::new(signed_by(vec![recipient], []), []),
             private_witnesses: vec![update_witness(
                 sender_keys,
                 sender_private_account.clone(),

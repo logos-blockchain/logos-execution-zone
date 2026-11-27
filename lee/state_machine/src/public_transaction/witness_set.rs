@@ -68,7 +68,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        AccountId,
+        AccountId, Authority,
         signature::{PublicAccountSecret, authenticate, key_state, public_account_id},
     };
 
@@ -79,7 +79,10 @@ mod tests {
         let (addr1, addr2) = (public_account_id(&secret1), public_account_id(&secret2));
         let message = Message::try_new(
             Actor::new(addr1, AccountId::from_builtin_program([0; 8])),
-            vec![Actor::native_balance(addr1), Actor::native_balance(addr2)],
+            vec![
+                (Actor::native_balance(addr1), Authority::Signer),
+                (Actor::native_balance(addr2), Authority::Signer),
+            ],
             BTreeMap::from([(addr1, Nonce(1)), (addr2, Nonce(2))]),
             vec![1, 2, 3, 4],
         )

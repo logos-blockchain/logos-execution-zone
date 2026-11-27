@@ -6,7 +6,8 @@ use std::{
 
 use anyhow::Result;
 use lee::{
-    AccountId, PublicAccountEvidence, Recipient, RecipientEncryption,
+    AccountId, Authority, Presenter, Presenting, PublicAccountEvidence, Recipient,
+    RecipientEncryption,
     signature::{INITIAL_KEY_TYPE, PublicAccountSecret, Signer, initial_key},
 };
 use lee_core::{
@@ -276,16 +277,6 @@ impl AccountMention {
         self
     }
 
-    // A private account that only receives takes part without spending authority.
-    #[must_use]
-    pub const fn receiving(self) -> Self {
-        if self.identity.is_private() {
-            self.without_authorization()
-        } else {
-            self
-        }
-    }
-
     fn normalized(mut self) -> Self {
         if let AccountIdentity::PublicNoSign(account_id) = self.identity {
             self.identity = AccountIdentity::Public(account_id);
@@ -323,6 +314,7 @@ struct PreparedAccount {
 struct Row {
     account: usize,
     program_account_id: AccountId,
+    authorizes: bool,
 }
 
 /// An account's prepared state and credentials.
@@ -377,16 +369,45 @@ impl State {
         }
     }
 
-    fn selected(&self, selector: Actor) -> SelectedActorState {
+    fn selected(&self, selector: Actor, authorizes: bool) -> SelectedActorState {
         SelectedActorState {
             selector,
-            is_authorized: self.is_authorized(),
+            is_authorized: authorizes && self.is_authorized(),
             data: self
                 .account()
                 .account
                 .data
                 .actor_state(selector.program_account_id)
                 .clone(),
+        }
+    }
+}
+
+/// Presents a private account under a fresh random alias for each message or grant, except a grant
+/// over a mentioned actor with openings, under the alias its mention names, and otherwise the fee
+/// payer's native actor, under the alias its refund is bound to.
+pub struct WalletPresenter {
+    private: HashSet<AccountId>,
+    fee_alias: Option<(AccountId, [u8; 32])>,
+    mention_openings: HashMap<Actor, [u8; 32]>,
+}
+
+impl Presenter for WalletPresenter {
+    fn present(&mut self, presenting: Presenting, actor: Actor) -> SenderPresentation {
+        if presenting == Presenting::Grant
+            && let Some(&opening) = self.mention_openings.get(&actor)
+        {
+            return SenderPresentation::Blinded(opening);
+        }
+        if let Some((payer, opening)) = self.fee_alias
+            && actor == Actor::native_balance(payer)
+        {
+            return SenderPresentation::Blinded(opening);
+        }
+        if self.private.contains(&actor.account_id) {
+            SenderPresentation::Blinded(random_bytes())
+        } else {
+            SenderPresentation::Canonical
         }
     }
 }
@@ -400,6 +421,8 @@ pub struct AccountManager {
     message_path: Option<MembershipProof>,
     /// The membership path of each received message the transaction claims before its root.
     claim_paths: Vec<MembershipProof>,
+    /// Each private mention with openings under the alias its first opening gives it.
+    mention_openings: HashMap<Actor, [u8; 32]>,
 }
 
 impl AccountManager {
@@ -426,9 +449,20 @@ impl AccountManager {
         let mut states: Vec<State> = Vec::new();
         let mut rows = Vec::with_capacity(mentions.len());
         let mut prepared: HashMap<AccountId, (usize, AccountIdentity, bool)> = HashMap::new();
+        let mut mention_openings = HashMap::new();
         // Whether the transaction itself authorizes the fee payer; if not, the payer's key
         // authorizes only the fee entry.
         let mut payer_authorized = false;
+        let mentions: Vec<_> = mentions
+            .into_iter()
+            .map(AccountMention::normalized)
+            .collect();
+        // An account signs, or its witness authorizes, when any of its mentions authorizes.
+        let signing: HashSet<AccountId> = mentions
+            .iter()
+            .filter(|mention| mention.authorizes)
+            .map(|mention| mention.identity.account_id())
+            .collect();
 
         for mention in mentions {
             let AccountMention {
@@ -436,13 +470,16 @@ impl AccountManager {
                 program_account_id,
                 authorizes,
                 address_openings,
-            } = mention.normalized();
+            } = mention;
             let account_id = identity.account_id();
             let is_payer = fee_payer == Some(account_id);
+            let marks_signer = authorizes;
             payer_authorized |= is_payer && authorizes;
             // The payer's witness takes its authorization key however it is mentioned, scoped to
-            // the fee entry below unless the transaction authorizes it.
-            let authorizes = authorizes || is_payer;
+            // the fee entry below unless the transaction authorizes it; its rows authorize only as
+            // mentioned.
+            let account_authorizes =
+                signing.contains(&account_id) || (is_payer && !identity.is_public());
             let actor_state_selector = Actor::new(account_id, program_account_id);
 
             let known =
@@ -451,7 +488,8 @@ impl AccountManager {
                     .map(|(index, prepared_identity, prepared_authorizes)| {
                         (
                             *index,
-                            *prepared_identity == identity && *prepared_authorizes == authorizes,
+                            *prepared_identity == identity
+                                && *prepared_authorizes == account_authorizes,
                         )
                     });
 
@@ -473,20 +511,34 @@ impl AccountManager {
                 None => {
                     let index = states.len();
                     states.push(
-                        prepare_account(wallet, identity.clone(), actor_state_selector, authorizes)
-                            .await?,
+                        prepare_account(
+                            wallet,
+                            identity.clone(),
+                            actor_state_selector,
+                            account_authorizes,
+                        )
+                        .await?,
                     );
-                    prepared.insert(account_id, (index, identity, authorizes));
+                    prepared.insert(account_id, (index, identity, account_authorizes));
                     index
                 }
             };
 
             if let State::Private(pre) = &mut states[index] {
+                if let Some(&opening) = address_openings.first() {
+                    mention_openings
+                        .entry(actor_state_selector)
+                        .or_insert(opening);
+                }
+                if marks_signer {
+                    pre.signer_programs.insert(program_account_id);
+                }
                 pre.address_openings.extend(address_openings);
             }
             rows.push(Row {
                 account: index,
                 program_account_id,
+                authorizes,
             });
         }
 
@@ -532,6 +584,7 @@ impl AccountManager {
             dummy_commitment_root,
             message_path,
             claim_paths,
+            mention_openings,
         })
     }
 
@@ -546,7 +599,7 @@ impl AccountManager {
     pub fn selected_actor_states(&self) -> Vec<SelectedActorState> {
         self.rows
             .iter()
-            .map(|row| self.states[row.account].selected(self.row_selector(row)))
+            .map(|row| self.states[row.account].selected(self.row_selector(row), row.authorizes))
             .collect()
     }
 
@@ -556,22 +609,60 @@ impl AccountManager {
             .iter()
             .filter(|row| !matches!(self.states[row.account], State::Private(_)))
             .map(|row| {
-                let actor_state = self.states[row.account].selected(self.row_selector(row));
+                let actor_state =
+                    self.states[row.account].selected(self.row_selector(row), row.authorizes);
                 (actor_state.selector, actor_state.data)
             })
             .collect()
     }
 
-    // In mention order, deduplicated.
-    pub fn public_actors(&self) -> Vec<Actor> {
-        let mut actors = Vec::new();
+    /// The declared public actors in mention order, deduplicated, each `Signer` when a mention of
+    /// it authorizes and its account signs.
+    pub fn public_actor_authority(&self) -> Vec<(Actor, Authority)> {
+        let mut actors: Vec<(Actor, Authority)> = Vec::new();
         for row in &self.rows {
+            let state = &self.states[row.account];
+            if matches!(state, State::Private(_)) {
+                continue;
+            }
             let actor = self.row_selector(row);
-            if !matches!(self.states[row.account], State::Private(_)) && !actors.contains(&actor) {
-                actors.push(actor);
+            let authority = if row.authorizes && state.is_authorized() {
+                Authority::Signer
+            } else {
+                Authority::None
+            };
+            match actors.iter_mut().find(|(declared, _)| *declared == actor) {
+                Some((_, declared)) if authority == Authority::Signer => *declared = authority,
+                Some(_) => {}
+                None => actors.push((actor, authority)),
             }
         }
         actors
+    }
+
+    /// The actors an authorized private witness marks, under the alias their mention names, which a
+    /// public root holds grants over.
+    pub fn private_signers(&self) -> BTreeSet<Actor> {
+        self.private_states()
+            .filter(|pre| pre.kind.is_authorized())
+            .flat_map(|pre| {
+                pre.signer_programs
+                    .iter()
+                    .map(|&program| Actor::new(pre.pre_state.account_id, program))
+            })
+            .filter_map(|actor| {
+                self.mention_openings.get(&actor).map(|opening| {
+                    Actor::new(actor.account_id.blinded(opening), actor.program_account_id)
+                })
+            })
+            .collect()
+    }
+
+    pub fn signer_actors(&self) -> Vec<Actor> {
+        self.public_actor_authority()
+            .into_iter()
+            .filter_map(|(actor, authority)| (authority == Authority::Signer).then_some(actor))
+            .collect()
     }
 
     /// The public accounts whose signature this transaction carries.
@@ -640,19 +731,7 @@ impl AccountManager {
 
     pub fn shared_secrets(&self) -> Vec<SharedSecretKey> {
         self.private_states()
-            .map(|pre| {
-                let nonce = pre
-                    .pre_state
-                    .account
-                    .nonce
-                    .private_account_nonce_increment(&pre.kind.nsk());
-                let esk = lee_core::EphemeralSecretKey::new(
-                    &pre.pre_state.account_id,
-                    &pre.random_seed,
-                    &nonce,
-                );
-                SharedSecretKey::encapsulate_deterministic(&pre.vpk, &esk).0
-            })
+            .map(|pre| SharedSecretKey::encapsulate_deterministic(&pre.vpk, &note_esk(pre)).0)
             .collect()
     }
 
@@ -740,29 +819,20 @@ impl AccountManager {
                         },
                     },
                     address_openings: pre.address_openings.clone(),
+                    signer_programs: pre.signer_programs.clone(),
                 })
             })
             .collect()
     }
 
-    // A private account presents a fresh random alias for each message, except the fee payer's
-    // native actor, which presents under the alias its refund is bound to.
-    pub fn presenter(
-        &self,
-        fee_alias: Option<(AccountId, [u8; 32])>,
-    ) -> impl FnMut(Actor) -> SenderPresentation + Send + 'static {
-        let private: HashSet<AccountId> = self
-            .private_states()
-            .map(|pre| pre.pre_state.account_id)
-            .collect();
-        move |sender| match fee_alias {
-            Some((payer, opening)) if sender == Actor::native_balance(payer) => {
-                SenderPresentation::Blinded(opening)
-            }
-            _ if private.contains(&sender.account_id) => {
-                SenderPresentation::Blinded(random_bytes())
-            }
-            _ => SenderPresentation::Canonical,
+    pub fn presenter(&self, fee_alias: Option<(AccountId, [u8; 32])>) -> WalletPresenter {
+        WalletPresenter {
+            private: self
+                .private_states()
+                .map(|pre| pre.pre_state.account_id)
+                .collect(),
+            fee_alias,
+            mention_openings: self.mention_openings.clone(),
         }
     }
 
@@ -841,7 +911,8 @@ impl AccountManager {
                 kind,
                 opening: Some(opening),
             },
-            esk: EphemeralSecretKey(random_bytes()),
+            // The payer's own note key: the circuit then makes one encapsulation for both.
+            esk: note_esk(pre),
         })
     }
 
@@ -924,18 +995,6 @@ impl AccountManager {
         })
     }
 
-    pub fn public_account_ids(&self) -> Vec<AccountId> {
-        self.states
-            .iter()
-            .filter_map(|state| match state {
-                State::Public { account, .. } | State::PublicKeycard { account, .. } => {
-                    Some(account.account_id)
-                }
-                State::Private(_) => None,
-            })
-            .collect()
-    }
-
     /// What `WitnessSet::sign` takes for each public account whose secret the wallet holds,
     /// signing at its nonce in `nonces`. A Keycard account gets none: it cannot rotate its key.
     pub fn signing_keys(&self, nonces: &BTreeMap<AccountId, Nonce>) -> Vec<Signer> {
@@ -968,6 +1027,18 @@ struct AccountPreparedData {
     proof: Option<MembershipProof>,
     random_seed: [u8; 32],
     address_openings: BTreeSet<[u8; 32]>,
+    /// Programs whose actor on this account the transaction's root may act on.
+    signer_programs: BTreeSet<AccountId>,
+}
+
+/// The ephemeral key the circuit encrypts `pre`'s successor note under.
+fn note_esk(pre: &AccountPreparedData) -> EphemeralSecretKey {
+    let nonce = pre
+        .pre_state
+        .account
+        .nonce
+        .private_account_nonce_increment(&pre.kind.nsk());
+    EphemeralSecretKey::new(&pre.pre_state.account_id, &pre.random_seed, &nonce)
 }
 
 /// Builds a witness kind from the account kind and the key holding the account.
@@ -1152,6 +1223,7 @@ fn prepared_data(
         proof: None,
         random_seed: random_bytes(),
         address_openings: BTreeSet::new(),
+        signer_programs: BTreeSet::new(),
     }
 }
 
@@ -1397,6 +1469,7 @@ mod tests {
             proof: None,
             random_seed: [0; 32],
             address_openings: BTreeSet::new(),
+            signer_programs: BTreeSet::new(),
         }))
     }
 
@@ -1461,6 +1534,7 @@ mod tests {
             .map(|account| Row {
                 account,
                 program_account_id: NATIVE_TOKEN_PROGRAM_ID,
+                authorizes: true,
             })
             .collect();
         AccountManager {
@@ -1470,6 +1544,7 @@ mod tests {
             dummy_commitment_root: [0; 32],
             message_path: None,
             claim_paths: Vec::new(),
+            mention_openings: HashMap::new(),
         }
     }
 
@@ -1487,7 +1562,59 @@ mod tests {
             proof: None,
             random_seed: [0; 32],
             address_openings: BTreeSet::new(),
+            signer_programs: BTreeSet::new(),
         }))
+    }
+
+    // Each witness marks `PROGRAM` and holds two openings; only the authorized one whose actor was
+    // mentioned with an opening is declared, once, under that mention's opening.
+    #[test]
+    fn private_signers_declare_one_alias_per_actor_an_authorized_witness_marks() {
+        const PROGRAM: AccountId = AccountId::new([5; 32]);
+        let marked = |seed: u8, kind: Option<WitnessKind>| {
+            let State::Private(mut pre) = private_signing_state(seed, 0) else {
+                unreachable!("a signing state is private");
+            };
+            if let Some(kind) = kind {
+                pre.kind = kind;
+            }
+            pre.signer_programs.insert(PROGRAM);
+            pre.address_openings
+                .extend([[seed; 32], [seed.wrapping_add(100); 32]]);
+            State::Private(pre)
+        };
+        let states = vec![
+            marked(1, None),
+            marked(
+                2,
+                Some(WitnessKind::Pda {
+                    nsk: NullifierSecretKey::from(&AuthorizationSecretKey([2; 32])),
+                    binding: (AccountId::new([7; 32]), PdaSeed::new([8; 32])),
+                }),
+            ),
+            marked(
+                3,
+                Some(WitnessKind::Regular(RegularKey::FeeOnly(
+                    AuthorizationSecretKey([3; 32]),
+                ))),
+            ),
+            marked(4, None),
+        ];
+        let ids: Vec<AccountId> = states.iter().map(State::account_id).collect();
+        let manager = AccountManager {
+            // The fourth is marked but its mention carried no opening.
+            mention_openings: HashMap::from([
+                (Actor::new(ids[0], PROGRAM), [1; 32]),
+                (Actor::new(ids[1], PROGRAM), [2; 32]),
+                (Actor::new(ids[2], PROGRAM), [3; 32]),
+            ]),
+            ..manager(states)
+        };
+
+        assert_eq!(
+            manager.private_signers(),
+            BTreeSet::from([Actor::new(ids[0].blinded(&[1; 32]), PROGRAM)])
+        );
     }
 
     #[test]
@@ -1523,6 +1650,15 @@ mod tests {
         let recovery = manager.fee_recovery(payer_id, [7; 32]).unwrap();
         assert_eq!(recovery.recipient.account_id(), payer_id);
         assert_eq!(recovery.recipient.address(), payer_id.blinded(&[7; 32]));
+        // Under the key the circuit derives for the payer's note, so it encapsulates once for both.
+        let nsk = NullifierSecretKey::from(&AuthorizationSecretKey([3; 32]));
+        let nonce = Account::funded(1)
+            .nonce
+            .private_account_nonce_increment(&nsk);
+        assert_eq!(
+            recovery.esk.0,
+            EphemeralSecretKey::new(&payer_id, &[0; 32], &nonce).0
+        );
     }
 
     #[test]
@@ -1648,8 +1784,9 @@ mod tests {
             unreachable!("public_signing_state builds a public account");
         };
         let signing_id = account.account_id;
-        let manager = manager(vec![public_state(), signing]);
-        let non_signing_id = manager.public_account_ids()[0];
+        let non_signing = public_state();
+        let non_signing_id = non_signing.account_id();
+        let manager = manager(vec![non_signing, signing]);
         assert!(manager.signs_for(signing_id));
         assert!(!manager.signs_for(non_signing_id));
     }
@@ -1709,6 +1846,7 @@ mod tests {
             proof: None,
             random_seed: [0; 32],
             address_openings: BTreeSet::new(),
+            signer_programs: BTreeSet::new(),
         };
 
         let manager = manager(vec![State::Private(Box::new(pre))]);
@@ -1741,6 +1879,7 @@ mod tests {
             proof: Some((0, Vec::new())),
             random_seed: [0; 32],
             address_openings: BTreeSet::new(),
+            signer_programs: BTreeSet::new(),
         }));
 
         let manager = manager(vec![owned]);
@@ -2049,25 +2188,76 @@ mod tests {
             proof: None,
             random_seed: [0; 32],
             address_openings: BTreeSet::from([[9; 32]]),
+            signer_programs: BTreeSet::new(),
         }))])
         .presenter(None);
 
-        let factors: HashSet<[u8; 32]> =
-            std::iter::repeat_with(|| present(Actor::native_balance(private)))
-                .take(3)
-                .map(|presentation| {
-                    let SenderPresentation::Blinded(factor) = presentation else {
-                        panic!("a private account presents an alias");
-                    };
-                    factor
-                })
-                .collect();
+        let factors: HashSet<[u8; 32]> = std::iter::repeat_with(|| {
+            present.present(Presenting::Sender, Actor::native_balance(private))
+        })
+        .take(3)
+        .map(|presentation| {
+            let SenderPresentation::Blinded(factor) = presentation else {
+                panic!("a private account presents an alias");
+            };
+            factor
+        })
+        .collect();
 
         assert_eq!(factors.len(), 3);
         assert!(!factors.contains(&[9; 32]));
         assert_eq!(
-            present(Actor::native_balance(public)),
+            present.present(Presenting::Sender, Actor::native_balance(public)),
             SenderPresentation::Canonical
+        );
+    }
+
+    #[test]
+    fn the_presenter_presents_a_grant_over_a_mentioned_actor_under_its_mention_opening() {
+        let private = AccountId::new([1; 32]);
+        let mentioned = Actor::native_balance(private);
+        let other = Actor::new(private, AccountId::new([3; 32]));
+        let mut present = AccountManager {
+            mention_openings: HashMap::from([(mentioned, [9; 32])]),
+            ..manager(vec![State::Private(Box::new(AccountPreparedData {
+                kind: WitnessKind::Regular(RegularKey::Nullifying([4; 32])),
+                vpk: ViewingPublicKey::from_seed(&[0; 32], &[0; 32]),
+                pre_state: PreparedAccount {
+                    account_id: private,
+                    account: Account::default(),
+                },
+                proof: None,
+                random_seed: [0; 32],
+                address_openings: BTreeSet::from([[9; 32]]),
+                signer_programs: BTreeSet::new(),
+            }))])
+        }
+        .presenter(None);
+
+        let pinned = SenderPresentation::Blinded([9; 32]);
+        assert_eq!(present.present(Presenting::Grant, mentioned), pinned);
+        assert_eq!(present.present(Presenting::Grant, mentioned), pinned);
+        assert_ne!(present.present(Presenting::Grant, other), pinned);
+        assert_ne!(present.present(Presenting::Sender, mentioned), pinned);
+    }
+
+    #[test]
+    fn the_presenter_presents_a_mentioned_fee_payers_grant_under_its_mention_opening() {
+        let payer = AccountId::new([1; 32]);
+        let balance = Actor::native_balance(payer);
+        let mut present = AccountManager {
+            mention_openings: HashMap::from([(balance, [9; 32])]),
+            ..manager(Vec::new())
+        }
+        .presenter(Some((payer, [8; 32])));
+
+        assert_eq!(
+            present.present(Presenting::Grant, balance),
+            SenderPresentation::Blinded([9; 32])
+        );
+        assert_eq!(
+            present.present(Presenting::Sender, balance),
+            SenderPresentation::Blinded([8; 32])
         );
     }
 }

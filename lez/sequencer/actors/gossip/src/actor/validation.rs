@@ -311,7 +311,7 @@ mod tests {
         let registry = system_upgrader_core::registry_actor();
         let message = lee::public_transaction::Message::try_new(
             registry,
-            [registry],
+            lee::test_utils::signed_by([registry], []),
             std::collections::BTreeMap::new(),
             system_upgrader_core::Message::Apply {
                 name: system_upgrader_core::SystemProgramName::new(b"clock"),

@@ -212,7 +212,7 @@ mod tests {
         let recipient = Actor::native_balance(AccountId::new([9; 32]));
         let message = Message::try_new(
             sender,
-            vec![sender, recipient],
+            lee::test_utils::signed_by(vec![sender, recipient], [signer.account_id()]),
             BTreeMap::from([(signer.account_id(), Nonce(nonce))]),
             lee_core::native_token::Message::Transfer {
                 to: recipient.account_id,

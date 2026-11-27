@@ -10,8 +10,8 @@ use lee_core::{
     RecoveryBinding, RootCall, Timestamp,
     account::{Account, AccountId, Actor, ActorState, Cycles, Nonce},
     execution_state::{
-        BoundaryStep, PublicExecutionContext, PublicOutcome, PublicPart, TransactionEntry,
-        TransitionView, WholeExecution,
+        Authority, BoundaryStep, PublicExecutionContext, PublicOutcome, PublicPart,
+        TransactionEntry, TransitionView, WholeExecution,
     },
     program::{PROGRAM_LOADER_ACCOUNT_ID, Publication, ReceiveInput, TransactionEvent, Transition},
     signing_key::{SigningKeyState, signature_program_id},
@@ -223,7 +223,7 @@ impl ValidatedStateDiff {
     pub fn from_fee_settlement_invocation(
         to: Actor,
         message: &[u8],
-        public_actors: &BTreeSet<Actor>,
+        public_actors: impl IntoIterator<Item = (Actor, Authority)>,
         authorized: &HashSet<AccountId>,
         state: &V03State,
         block_id: BlockId,
@@ -235,7 +235,7 @@ impl ValidatedStateDiff {
                 to,
                 message: message.to_vec(),
             },
-            PublicExecutionContext::new(public_actors.iter().copied(), authorized.iter().copied()),
+            PublicExecutionContext::new(public_actors, authorized.iter().copied()),
             authorized.iter().copied().collect(),
             Vec::new(), // no nonces to advance nor keys to rotate!
             state,
@@ -390,20 +390,20 @@ impl ValidatedStateDiff {
             LeeError::OutOfValidityWindow
         );
 
-        // 4. Proof verification
+        // 4. Commitment freshness
+        state.check_commitments_are_new(&commitments)?;
+
+        // 5. Nullifier uniqueness
+        state.check_nullifiers_are_valid(&nullifiers)?;
+        state.check_recovery_bindings_are_new(&execution.recovery_bindings)?;
+
+        // 6. Proof verification, after the state lookups a replayed transaction fails
         check_privacy_preserving_circuit_proof_is_valid(
             state,
             &tx.witness_set.proof,
             &message.public_context,
             execution,
         )?;
-
-        // 5. Commitment freshness
-        state.check_commitments_are_new(&commitments)?;
-
-        // 6. Nullifier uniqueness
-        state.check_nullifiers_are_valid(&nullifiers)?;
-        state.check_recovery_bindings_are_new(&execution.recovery_bindings)?;
 
         // 7. Entry: the public part runs a public root; a privately received message is spent by
         // its private action alone.
@@ -454,7 +454,7 @@ impl ValidatedStateDiff {
         let (diff, revert) = match (result, fallback) {
             (Ok(diff), _) => (diff, None),
             (Err(err), Some(fallback)) if err.is_chargeable() => {
-                state.check_commitments_are_new(&[fallback.action.commitment])?;
+                state.check_commitments_are_new(&[fallback.commitment])?;
                 let fallback_request = PublicPart::new(
                     message.public_context.clone(),
                     None,
@@ -483,8 +483,8 @@ impl ValidatedStateDiff {
                     timestamp,
                     StateDiff {
                         signers,
-                        new_commitments: vec![fallback.action.commitment],
-                        new_nullifiers: vec![(fallback.action.nullifier, fallback.action.root)],
+                        new_commitments: vec![fallback.commitment],
+                        new_nullifiers: vec![(fallback.nullifier, fallback.root)],
                         recovery_bindings: execution
                             .recovery_bindings
                             .iter()

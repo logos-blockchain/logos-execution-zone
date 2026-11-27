@@ -541,13 +541,17 @@ fn prove_init_with_commitment_root(
                 })?,
             }),
             fee: None,
-            public_context: PublicExecutionContext::new(vec![sender], [sender_id]),
+            public_context: PublicExecutionContext::new(
+                lee::test_utils::signed_by(vec![sender], [sender_id]),
+                [sender_id],
+            ),
             private_witnesses: vec![PrivateWitness {
                 vpk,
                 random_seed: [0; 32],
                 kind: WitnessKind::Regular(RegularKey::Authorized(ask)),
                 nullifier: NullifierWitness::Init { commitment_root },
                 address_openings: BTreeSet::new(),
+                signer_programs: BTreeSet::from([lee_core::native_token::NATIVE_TOKEN_PROGRAM_ID]),
             }],
             dummy_inputs: Vec::new(),
             ciphertext_padding: None,

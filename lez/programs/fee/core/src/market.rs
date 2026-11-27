@@ -42,10 +42,11 @@ pub const MIN_PRIVATE_REFUND: Balance = 1_000_000;
 
 /// Execution gas charged to every private transaction: succinct receipt verification.
 ///
-/// RISC Zero 3.0.5, `G_verify` ≈ 12.2 ms at 33,546 cycles/ms (`docs/benchmarks/cycle_bench.md`).
+/// Pinned from an earlier run of `docs/benchmarks/cycle_bench.md` (RISC Zero 3.0.5): `G_verify`
+/// ≈ 12.2 ms at 33,546 cycles/ms. The document's current figures give about twice that, as its
+/// throughput moves with the programs the calibration is fitted over; the charge is kept.
 /// A flat charge because verification only accepts a succinct receipt, a STARK of RISC Zero's
 /// fixed recursion circuit: its work does not depend on the execution it proves.
-/// Re-pin on a RISC Zero bump.
 pub const PRIVATE_VERIFY_GAS: u64 = 409_764;
 /// The bytes a private transaction's proof is charged at, and the most it may carry: a succinct
 /// receipt with its claim pruned to a digest, whatever the transaction proves.

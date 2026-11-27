@@ -88,7 +88,7 @@ async fn submit(
 ) -> Result<()> {
     let message = lee::public_transaction::Message::try_new_with_fees(
         root,
-        public_actors,
+        lee::test_utils::signed_by(public_actors, nonces.keys().copied()),
         nonces,
         message,
         // A bloat actor state write costs far more than `test_fee_declaration`'s 2M cycle cap,

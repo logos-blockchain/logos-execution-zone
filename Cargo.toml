@@ -231,7 +231,7 @@ async-stream = "0.3.6"
 strum = { version = "0.28.0", features = ["derive"] }
 mockall = "0.15.0"
 
-logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-zone-sdk.git", rev = "1b5073a10caaa63cbbd825bd4397f2f1fb48b33a" }
+logos-blockchain-zone-sdk = { git = "https://github.com/logos-blockchain/logos-zone-sdk.git", tag = "v0.2.1-rc.1" }
 
 keycard-rs = { git = "https://github.com/keycard-tech/keycard-rs", rev = "9535a657ba04b1e6916de51777e22b4837c1a84d" }
 
@@ -263,6 +263,13 @@ num-traits = "0.2.19"
 enum-iterator = "2.3.0"
 cbindgen = "0.29"
 glob = "0.3.4"
+
+# The guests are built with this profile, and every cycle they run is proven.
+# LTO: link-time optimization at "fat" level
+# 1 codegen unit: no splitting, code is optimized wholely
+[profile.release]
+lto = "fat"
+codegen-units = 1
 
 # Profile for leptos WASM release builds
 [profile.wasm-release]

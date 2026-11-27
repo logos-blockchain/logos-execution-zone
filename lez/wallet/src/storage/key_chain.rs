@@ -519,15 +519,21 @@ impl UserKeyChain {
             .proven_fee
             .as_ref()
             .and_then(|fee| fee.fallback.as_ref())
-            .map(|fallback| &fallback.action)
+            .and_then(|fallback| fallback.action(&message.execution.private_actions))
         else {
             return;
         };
+        let action = &action;
         let Some(account_id) = index.account_for(&action.nullifier) else {
             return;
         };
         let committed = HashSet::from([action.commitment]);
-        if let Some(next) = self.apply_nullifier_update(account_id, action, &committed) {
+        if let Some(next) = self.apply_nullifier_update(
+            account_id,
+            action,
+            &committed,
+            crate::decrypt_fee_fallback_note,
+        ) {
             index.update(&action.nullifier, next, account_id);
         }
     }
@@ -549,7 +555,8 @@ impl UserKeyChain {
             };
             // Try decrypting the commitment connected to the nullifier and get the next
             // nullifier to await.
-            if let Some(new_nullifier) = self.apply_nullifier_update(account_id, action, &committed)
+            if let Some(new_nullifier) =
+                self.apply_nullifier_update(account_id, action, &committed, crate::decrypt_note)
             {
                 // Update the index to await for the new state of the account, i.e.
                 // the new nullifier.
@@ -692,14 +699,15 @@ impl UserKeyChain {
         Ok(())
     }
 
-    /// Decrypts `action`'s note for `account_id`, stores the new state if `committed` holds its
-    /// commitment, and returns the account's next update nullifier. `None` if keys or decryption
-    /// fail.
+    /// Decrypts `action`'s note for `account_id` with `decrypt`, stores the new state if
+    /// `committed` holds its commitment, and returns the account's next update nullifier. `None`
+    /// if keys or decryption fail.
     fn apply_nullifier_update(
         &mut self,
         account_id: AccountId,
         action: &PrivateAction,
         committed: &HashSet<Commitment>,
+        decrypt: fn(&PrivateAction, &SharedSecretKey) -> Option<(PrivateAccountKind, Account)>,
     ) -> Option<Nullifier> {
         let keys = self.managed_private_account(account_id)?.keys;
         let secret = SharedSecretKey::decapsulate(
@@ -709,7 +717,7 @@ impl UserKeyChain {
         )?;
         let nsk = keys.nullifier_secret_key();
 
-        let (kind, new_account) = crate::decrypt_note(action, &secret)?;
+        let (kind, new_account) = decrypt(action, &secret)?;
         // The note is the sender's claim: follow it only to a state the message commits.
         if !committed.contains(&Commitment::new(&account_id, &new_account)) {
             return None;
@@ -2108,7 +2116,7 @@ pub(crate) mod tests {
 
         let message = lee::public_transaction::Message::try_new(
             Actor::native_balance(account_id),
-            vec![Actor::native_balance(account_id)],
+            vec![(Actor::native_balance(account_id), lee::Authority::Signer)],
             BTreeMap::from([(account_id, lee_core::account::Nonce(0))]),
             lee_core::native_token::Message::Transfer {
                 to: account_id,

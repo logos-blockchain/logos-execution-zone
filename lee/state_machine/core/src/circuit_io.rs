@@ -8,7 +8,7 @@ use crate::{
     MembershipProof, Nullifier, NullifierPublicKey, NullifierSecretKey,
     account::{Account, AccountId, Actor, Balance, Fee, Nonce},
     compute_digest_for_path,
-    encryption::{EncryptedNote, ViewingPublicKey},
+    encryption::{Ciphertext, EncryptedNote, ViewingPublicKey},
     execution_state::{Boundary, PredictedCrossMessages, PublicExecutionContext, TransactionEntry},
     program::{
         MessageBody, MessageData, PdaSeed, PrivateAccountKind, ProgramHeader, ProgramId,
@@ -169,13 +169,42 @@ pub struct ProvenFee {
 /// The payer's transition after the fee transfer alone: its post-state is its pre-state less the
 /// amount, and the boundary carries only the transfer's crossing.
 ///
-/// Its action spends the payer's nullifier, so it tells the payer's action from the others of
-/// the same transaction; it links nothing across transactions.
+/// It spends the payer's nullifier, so it tells the payer's action from the others of the same
+/// transaction; it links nothing across transactions.
 #[derive(BorshSerialize, BorshDeserialize)]
-#[cfg_attr(any(feature = "host", test), derive(Debug, Clone, PartialEq, Eq))]
+#[cfg_attr(
+    any(feature = "host", test),
+    derive(Debug, Clone, Default, PartialEq, Eq)
+)]
 pub struct FeeFallback {
-    pub action: PrivateAction,
+    /// The nullifier and root of the payer's private action.
+    pub nullifier: Nullifier,
+    pub root: CommitmentSetDigest,
+    pub commitment: Commitment,
+    /// The post-state's note, under the ephemeral key of the payer's private action.
+    pub ciphertext: Ciphertext,
     pub boundary: Boundary,
+}
+
+#[cfg(feature = "host")]
+impl FeeFallback {
+    /// The fallback as the private action settlement applies: its note carries the ephemeral key
+    /// of the action in `actions` that spends the same nullifier. `None` if none does.
+    #[must_use]
+    pub fn action(&self, actions: &[PrivateAction]) -> Option<PrivateAction> {
+        let main = actions
+            .iter()
+            .find(|action| action.nullifier == self.nullifier)?;
+        Some(PrivateAction {
+            nullifier: self.nullifier,
+            root: self.root,
+            commitment: self.commitment,
+            encrypted_post_state: EncryptedNote {
+                ciphertext: self.ciphertext.clone(),
+                epk: main.encrypted_post_state.epk.clone(),
+            },
+        })
+    }
 }
 
 /// Inputs for proving a transaction's private part.
@@ -278,6 +307,8 @@ pub struct PrivateWitness {
     pub nullifier: NullifierWitness,
     /// Blinding factors used for private execution.
     pub address_openings: BTreeSet<[u8; 32]>,
+    /// Programs whose actor on this account an authorized witness grants at the root.
+    pub signer_programs: BTreeSet<AccountId>,
 }
 
 /// Struct representing a presentation of a private sender address.
@@ -368,6 +399,12 @@ impl Default for DummyOutput {
 }
 
 impl PrivateWitness {
+    #[must_use]
+    pub fn with_signer_programs(mut self, programs: impl IntoIterator<Item = AccountId>) -> Self {
+        self.signer_programs.extend(programs);
+        self
+    }
+
     #[must_use]
     pub const fn is_pda(&self) -> bool {
         matches!(self.kind, WitnessKind::Pda { .. })
@@ -553,14 +590,14 @@ impl PrivacyPreservingCircuitOutput {
 #[cfg(feature = "host")]
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use super::*;
     use crate::{
         Commitment, EncryptedNote, Nullifier, SealedMessage,
         account::{Account, AccountId, Actor},
         encryption::{Ciphertext, EphemeralPublicKey},
-        execution_state::{BoundaryStep, Delivery},
+        execution_state::{Authority, BoundaryStep, Delivery},
         program::{MessageBody, MessageEnvelope, Publication},
     };
 
@@ -577,6 +614,7 @@ mod tests {
                 commitment_root: [5; 32],
             },
             address_openings: BTreeSet::from([[6; 32]]),
+            signer_programs: BTreeSet::new(),
         }
     }
 
@@ -624,9 +662,13 @@ mod tests {
         let private = Actor::new(AccountId::new([2; 32]), AccountId::new([3; 32]));
         let output = PrivacyPreservingCircuitOutput {
             public_context: PublicExecutionContext {
-                actors: BTreeSet::from([public]),
+                actors: BTreeMap::from([(public, Authority::None)]),
                 authorized_accounts: BTreeSet::from([AccountId::new([4; 32])]),
                 promotions: BTreeSet::from([5]),
+                private_signers: BTreeSet::from([Actor::new(
+                    AccountId::new([11; 32]),
+                    AccountId::new([12; 32]),
+                )]),
             },
             execution: ProvenExecution {
                 boundary: vec![
@@ -636,8 +678,10 @@ mod tests {
                             to: public,
                             message: vec![6],
                         },
-                        inherited_authorizations: BTreeSet::from([AccountId::new([7; 32])]),
-                        inherits_entry_authorizations: false,
+                        grants: BTreeSet::from([Actor::new(
+                            AccountId::new([7; 32]),
+                            AccountId::new([10; 32]),
+                        )]),
                         pda_seeds: BTreeSet::from([PdaSeed::new([8; 32])]),
                     }),
                     BoundaryStep::PublicToPrivate(Delivery {
@@ -646,8 +690,7 @@ mod tests {
                             to: private,
                             message: vec![9],
                         },
-                        inherited_authorizations: BTreeSet::new(),
-                        inherits_entry_authorizations: true,
+                        grants: BTreeSet::new(),
                         pda_seeds: BTreeSet::new(),
                     }),
                     BoundaryStep::EndPrivateSubtree,
@@ -703,14 +746,18 @@ mod tests {
         };
 
         let expected: Vec<u8> = [
-            &[244, 3, 0, 0][..], // frame length: the 1012 bytes below
-            &[1, 0, 0, 0],       // public_context.actors: one actor
+            &[87, 4, 0, 0][..], // frame length: the 1111 bytes below
+            &[1, 0, 0, 0],      // public_context.actors: one actor
             &[0; 32],
             &[1; 32],
+            &[0],          // Authority::None
             &[1, 0, 0, 0], // public_context.authorized_accounts: one account
             &[4; 32],
             &[1, 0, 0, 0], // public_context.promotions: one selected async message
             &[5, 0, 0, 0, 0, 0, 0, 0],
+            &[1, 0, 0, 0], // public_context.private_signers: one actor
+            &[11; 32],
+            &[12; 32],
             &[4, 0, 0, 0], // boundary: four steps
             &[0],          // BoundaryStep::PrivateToPublic
             &[2; 32],      // from
@@ -719,9 +766,9 @@ mod tests {
             &[1; 32],
             &[1, 0, 0, 0], // message
             &[6],
-            &[1, 0, 0, 0], // inherited_authorizations: one account
+            &[1, 0, 0, 0], // grants: one
             &[7; 32],
-            &[0],          // inherits_entry_authorizations: false
+            &[10; 32],
             &[1, 0, 0, 0], // pda_seeds: one seed
             &[8; 32],
             &[1],     // BoundaryStep::PublicToPrivate
@@ -731,8 +778,7 @@ mod tests {
             &[3; 32],
             &[1, 0, 0, 0], // message
             &[9],
-            &[0, 0, 0, 0], // inherited_authorizations: none
-            &[1],          // inherits_entry_authorizations: true
+            &[0, 0, 0, 0], // grants: none
             &[0, 0, 0, 0], // pda_seeds: none
             &[2],          // BoundaryStep::EndPrivateSubtree
             &[3],          // BoundaryStep::EndPublicSubtree
@@ -809,6 +855,7 @@ mod tests {
                 commitment_root: [5; 32],
             },
             address_openings: BTreeSet::new(),
+            signer_programs: BTreeSet::new(),
         };
         let program = AccountId::new([6; 32]);
         let seed = PdaSeed::new([7; 32]);
@@ -840,6 +887,7 @@ mod tests {
                 account: account.clone(),
                 membership_proof: (4, vec![[11; 32]]),
             },
+            signer_programs: BTreeSet::from([AccountId::new([12; 32])]),
             ..receiver()
         };
         let pda = PrivateWitness {
@@ -865,6 +913,8 @@ mod tests {
             &[11; 32],
             &[1, 0, 0, 0], // address_openings: one
             &[6; 32],
+            &[1, 0, 0, 0], // signer_programs: one
+            &[12; 32],
         ]
         .concat();
         let expected_pda: Vec<u8> = [
@@ -878,6 +928,7 @@ mod tests {
             &[0], // nullifier: Init
             &[5; 32],
             &[0, 0, 0, 0], // address_openings: none
+            &[0, 0, 0, 0], // signer_programs: none
         ]
         .concat();
 
@@ -967,7 +1018,7 @@ mod tests {
             private.account_id.blinded(&[6; 32]),
             private.program_account_id,
         );
-        let public_context = PublicExecutionContext::new(vec![public], []);
+        let public_context = PublicExecutionContext::new(vec![(public, Authority::None)], []);
         let call = |to| {
             TransactionEntry::Sync(RootCall {
                 to,

@@ -11,7 +11,7 @@ pub use lee_core::{
     account::{Account, AccountData, AccountId, Actor, ActorState, Balance, Cycles, Fee, Gas},
     encryption::EphemeralPublicKey,
     execution_state::{
-        Boundary, BoundaryStep, Delivery, Placement, PredictedCrossMessages,
+        Authority, Boundary, BoundaryStep, Delivery, Placement, PredictedCrossMessages,
         PublicExecutionContext, TransactionEntry,
     },
     native_token,
@@ -26,7 +26,8 @@ pub use privacy_preserving_circuit::{
 pub use privacy_preserving_transaction::{
     PrivacyPreservingTransaction,
     circuit::{
-        Simulation, execute_and_prove, execute_and_prove_with_cross_messages, execute_unproven,
+        Presenter, Presenting, Simulation, execute_and_prove,
+        execute_and_prove_with_cross_messages, execute_and_prove_with_stats, execute_unproven,
         execute_unproven_with_cross_messages, simulate_privacy_preserving_transaction,
         simulate_public_transaction,
     },
@@ -36,7 +37,7 @@ pub use signature::{PrivateKey, PublicKey, Signature};
 pub use state::{GenesisBuilder, PublicationsPage, V03State};
 pub use transaction_message::{
     InvalidTransaction, MessageDomain, PublicAccountEvidence, SignedTransaction,
-    TransactionMessage, nonce_map,
+    TransactionMessage, actor_map, nonce_map,
 };
 pub use validated_state_diff::{
     ExecutionCharge, HeadAuthError, ValidatedStateDiff, authenticate_transaction_at_head,

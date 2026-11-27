@@ -21,6 +21,7 @@ pub const ML_KEM_768_CIPHERTEXT_LEN: usize = 1088;
 pub const MAX_CIPHERTEXT_PADDING: u32 = 8 * 1024;
 
 const ACCOUNT_KEY_DOMAIN: &[u8; 20] = b"LEE/v0.3/KDF-SHA256/";
+const FEE_FALLBACK_KEY_DOMAIN: &[u8; 29] = b"LEE/v0.3/KDF-SHA256/Fallback/";
 const MAX_KEY_DOMAIN_LEN: usize = 29;
 
 pub type Scalar = [u8; 32];
@@ -108,6 +109,44 @@ impl EncryptionScheme {
         nullifier: &Nullifier,
         pad_to_len: Option<u32>,
     ) -> Ciphertext {
+        Self::encrypt_under(
+            ACCOUNT_KEY_DOMAIN,
+            account,
+            kind,
+            shared_secret,
+            nullifier,
+            pad_to_len,
+        )
+    }
+
+    /// [`Self::encrypt`] for a fee fallback's note. Its key is apart from the main note's, so
+    /// the two may share a shared secret and a nullifier.
+    #[must_use]
+    pub fn encrypt_fee_fallback(
+        account: &Account,
+        kind: &PrivateAccountKind,
+        shared_secret: &SharedSecretKey,
+        nullifier: &Nullifier,
+        pad_to_len: Option<u32>,
+    ) -> Ciphertext {
+        Self::encrypt_under(
+            FEE_FALLBACK_KEY_DOMAIN,
+            account,
+            kind,
+            shared_secret,
+            nullifier,
+            pad_to_len,
+        )
+    }
+
+    fn encrypt_under(
+        domain: &[u8],
+        account: &Account,
+        kind: &PrivateAccountKind,
+        shared_secret: &SharedSecretKey,
+        nullifier: &Nullifier,
+        pad_to_len: Option<u32>,
+    ) -> Ciphertext {
         // Plaintext: PrivateAccountKind::HEADER_LEN bytes header || account bytes.
         // Both variants produce the same header length — see PrivateAccountKind::to_header_bytes.
         let mut buffer = kind.to_header_bytes().to_vec();
@@ -115,7 +154,7 @@ impl EncryptionScheme {
         pad_to_floor(&mut buffer, pad_to_len);
         apply_keystream(
             &mut buffer,
-            ACCOUNT_KEY_DOMAIN,
+            domain,
             shared_secret,
             &nullifier.to_byte_array(),
         );
@@ -129,11 +168,37 @@ impl EncryptionScheme {
         shared_secret: &SharedSecretKey,
         nullifier: &Nullifier,
     ) -> Option<(PrivateAccountKind, Account)> {
+        Self::decrypt_under(ACCOUNT_KEY_DOMAIN, ciphertext, shared_secret, nullifier)
+    }
+
+    /// [`Self::decrypt`] for a fee fallback's note.
+    #[cfg(feature = "host")]
+    #[must_use]
+    pub fn decrypt_fee_fallback(
+        ciphertext: &Ciphertext,
+        shared_secret: &SharedSecretKey,
+        nullifier: &Nullifier,
+    ) -> Option<(PrivateAccountKind, Account)> {
+        Self::decrypt_under(
+            FEE_FALLBACK_KEY_DOMAIN,
+            ciphertext,
+            shared_secret,
+            nullifier,
+        )
+    }
+
+    #[cfg(feature = "host")]
+    fn decrypt_under(
+        domain: &[u8],
+        ciphertext: &Ciphertext,
+        shared_secret: &SharedSecretKey,
+        nullifier: &Nullifier,
+    ) -> Option<(PrivateAccountKind, Account)> {
         use std::io::Cursor;
         let mut buffer = ciphertext.0.clone();
         apply_keystream(
             &mut buffer,
-            ACCOUNT_KEY_DOMAIN,
+            domain,
             shared_secret,
             &nullifier.to_byte_array(),
         );
