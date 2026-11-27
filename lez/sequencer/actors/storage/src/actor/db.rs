@@ -5,8 +5,9 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use crate::{
     Result, Storable,
     error::Error,
-    protocol::{self, RangeStart, Write},
+    protocol::RangeStart,
     storable::{ColumnFamily, decode_key, encode_key, key_range, range_bounds, start_key},
+    writes::{StagedWrite, StagedWrites, Writes},
 };
 
 /// Memtable size for the families holding small records, well above
@@ -71,27 +72,26 @@ impl Database {
     }
 
     /// Commits every write of `writes` together, in order, encoding their values.
-    pub fn write(&self, writes: protocol::WriteBatch) -> Result<()> {
-        if writes.is_empty() {
+    pub fn write(&self, writes: &dyn Writes) -> Result<()> {
+        let mut staged = StagedWrites::new();
+        writes.write_to(&mut staged)?;
+        if staged.writes.is_empty() {
             return Ok(());
         }
 
         let mut batch = rocksdb::WriteBatch::default();
-        for write in writes.writes {
-            match write {
-                Write::Store { key, value } => {
-                    batch.put_cf(
-                        self.column_family(value.column_family()),
-                        key,
-                        value.encode()?,
-                    );
-                }
-                Write::Delete { column_family, key } => {
-                    batch.delete_cf(self.column_family(column_family), key);
-                }
+        for StagedWrite {
+            column_family,
+            key,
+            value,
+        } in staged.writes
+        {
+            let cf = self.column_family(column_family);
+            match value {
+                Some(value) => batch.put_cf(cf, key, value),
+                None => batch.delete_cf(cf, key),
             }
         }
-
         self.db.write(batch)?;
         Ok(())
     }

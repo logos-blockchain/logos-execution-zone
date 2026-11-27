@@ -10,7 +10,7 @@ use sequencer_storage_actor::{
     ColumnFamily, Storable, Stores,
     error::Error,
     full_type_name,
-    protocol::{Delete, Get, GetRange, Store, WriteBatch},
+    protocol::{Delete, Get, GetRange, Store},
     utils::Pages,
 };
 
@@ -75,6 +75,18 @@ impl Storable for PendingWithdrawalRecord {
     const TYPE_NAME: &'static str = full_type_name!(PendingWithdrawalRecord);
 }
 
+/// Deletes and stores of pending deposits.
+pub type DepositWrites = (
+    Vec<Delete<PendingDepositEventRecord>>,
+    Vec<Store<PendingDepositEventRecord>>,
+);
+
+/// Deletes and stores of withdraw intents.
+pub type WithdrawalWrites = (
+    Vec<Delete<PendingWithdrawalRecord>>,
+    Vec<Store<PendingWithdrawalRecord>>,
+);
+
 /// Writes recording the deposits of `observed` not already pending and dropping the records of
 /// `finalized`, with how many deposits they record.
 ///
@@ -83,15 +95,12 @@ pub async fn deposit_writes<S: Stores<PendingDepositEventRecord>>(
     storage_ref: &ActorRef<S>,
     observed: Vec<PendingDepositEventRecord>,
     finalized: &HashSet<HashType>,
-) -> Result<(WriteBatch, usize), SendError<Get<PendingDepositEventRecord>, Error>> {
-    let mut writes = WriteBatch::new();
-    #[expect(
-        clippy::iter_over_hash_type,
-        reason = "Deletes of distinct keys commute"
-    )]
-    for deposit_op_id in finalized {
-        writes.delete(&Delete::<PendingDepositEventRecord>::new(*deposit_op_id));
-    }
+) -> Result<(DepositWrites, usize), SendError<Get<PendingDepositEventRecord>, Error>> {
+    let deletes = finalized
+        .iter()
+        .map(|deposit_op_id| Delete::new(*deposit_op_id))
+        .collect();
+    let mut stores = Vec::new();
 
     let mut seen = HashSet::new();
     let mut recorded = 0_usize;
@@ -102,12 +111,12 @@ pub async fn deposit_writes<S: Stores<PendingDepositEventRecord>>(
             .ask(Get::<PendingDepositEventRecord>::new(record.deposit_op_id))
             .await?;
         if pending.is_none() {
-            writes.store(Store::new(record.deposit_op_id, record));
+            stores.push(Store::new(record.deposit_op_id, record));
             recorded = recorded.saturating_add(1);
         }
     }
 
-    Ok((writes, recorded))
+    Ok(((deletes, stores), recorded))
 }
 
 /// Writes raising the intents of `published` and settling the intents `consumed` reports, with the
@@ -117,10 +126,10 @@ pub async fn withdrawal_writes<S: Stores<PendingWithdrawalRecord>>(
     published: &HashSet<WithdrawalReconciliationKey>,
     consumed: &HashSet<WithdrawalReconciliationKey>,
 ) -> Result<
-    (WriteBatch, Vec<WithdrawalReconciliationKey>),
+    (WithdrawalWrites, Vec<WithdrawalReconciliationKey>),
     SendError<Get<PendingWithdrawalRecord>, Error>,
 > {
-    let mut writes = WriteBatch::new();
+    let mut deletes = Vec::new();
     let mut unmatched = Vec::new();
     #[expect(
         clippy::iter_over_hash_type,
@@ -134,17 +143,18 @@ pub async fn withdrawal_writes<S: Stores<PendingWithdrawalRecord>>(
                 .await?
                 .is_some();
         if matched {
-            writes.delete(&Delete::<PendingWithdrawalRecord>::new(*key));
+            deletes.push(Delete::new(*key));
         } else {
             unmatched.push(*key);
         }
     }
 
-    for key in published.difference(consumed) {
-        writes.store(Store::new(*key, PendingWithdrawalRecord));
-    }
+    let stores = published
+        .difference(consumed)
+        .map(|key| Store::new(*key, PendingWithdrawalRecord))
+        .collect();
 
-    Ok((writes, unmatched))
+    Ok(((deletes, stores), unmatched))
 }
 
 /// Every pending deposit, in deposit op id order.
@@ -166,7 +176,7 @@ mod tests {
 
     use common::HashType;
     use kameo::actor::{ActorRef, Spawn as _};
-    use sequencer_storage_actor::mock::MockStorageActor;
+    use sequencer_storage_actor::{mock::MockStorageActor, protocol::WriteBatch};
 
     use super::{
         PendingDepositEventRecord, WithdrawalReconciliationKey, deposit_writes, pending_deposits,
@@ -200,7 +210,7 @@ mod tests {
             .await
             .expect("Failed to read the pending deposits");
         storage_ref
-            .ask(writes)
+            .ask(WriteBatch(writes))
             .await
             .expect("Failed to write the deposits");
         recorded
@@ -219,7 +229,7 @@ mod tests {
             .await
             .expect("Failed to read the withdraw intents");
         storage_ref
-            .ask(writes)
+            .ask(WriteBatch(writes))
             .await
             .expect("Failed to write the withdrawals");
         unmatched

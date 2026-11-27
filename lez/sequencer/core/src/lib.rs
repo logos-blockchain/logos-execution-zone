@@ -47,7 +47,7 @@ use sequencer_slasher_actor::{
     protocol::{Propose, Report, ReportedOffence, SetCommittee},
 };
 use sequencer_storage_actor::{
-    protocol::{Get, Store},
+    protocol::{Get, Store, WriteBatch},
     utils::Pages,
 };
 use sharding_pool_actor::ShardingPoolActor;
@@ -478,16 +478,19 @@ impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> SequencerCore<
             self.tell_final_mints(&finalized_deposit_ids).await;
 
             let persisted = async {
-                let mut writes = chain_writes(&stored, &chain, &irreversible, events);
                 let (deposit_records_writes, recorded_deposits) =
                     deposit_writes(&self.storage_ref, deposit_records, &finalized_deposit_ids)
                         .await?;
-                writes.append(deposit_records_writes);
                 let (withdrawal_records_writes, unmatched_withdrawals) =
                     withdrawal_writes(&self.storage_ref, &HashSet::new(), &consumed_withdrawals)
                         .await?;
-                writes.append(withdrawal_records_writes);
-                self.storage_ref.ask(writes).await?;
+                self.storage_ref
+                    .ask(WriteBatch((
+                        chain_writes(&stored, &chain, &irreversible, events),
+                        deposit_records_writes,
+                        withdrawal_records_writes,
+                    )))
+                    .await?;
                 anyhow::Ok((recorded_deposits, unmatched_withdrawals))
             }
             .await;
@@ -2129,15 +2132,18 @@ pub async fn record_published_block<S: CoreStorage>(
                     "Produced block does not apply on the head it was built on"
                 );
             }
-            let mut writes = chain_writes(&stored, chain, &[], Vec::new());
             let published = released_notes
                 .iter()
                 .map(withdrawal_reconciliation_key)
                 .collect();
             let (withdrawals, _unmatched) =
                 withdrawal_writes(storage_ref, &published, &HashSet::new()).await?;
-            writes.append(withdrawals);
-            storage_ref.ask(writes).await?;
+            storage_ref
+                .ask(WriteBatch((
+                    chain_writes(&stored, chain, &[], Vec::new()),
+                    withdrawals,
+                )))
+                .await?;
 
             if record == PublishRecord::Extended {
                 sequencer_core_metrics::record_chain_height(block_id);

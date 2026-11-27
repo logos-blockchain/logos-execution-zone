@@ -9,8 +9,8 @@ use std::{
 use crate::{
     ColumnFamily, Result, Storable,
     error::Error,
-    protocol::{Write, WriteBatch},
     storable::{decode_key, encode_key, key_range, range_bounds},
+    writes::{StagedWrite, StagedWrites, Writes},
 };
 
 /// Encoded values by column family and encoded key, shared by every clone.
@@ -92,25 +92,21 @@ impl StoredValues {
             .count()
     }
 
-    /// Applies every write of `batch` in order, or none if a value fails to encode.
-    pub fn write(&self, batch: WriteBatch) -> Result<()> {
-        let encoded = batch
-            .writes
-            .into_iter()
-            .map(|write| match write {
-                Write::Store { key, value } => Ok((
-                    (value.column_family(), key),
-                    Some(value.encode().map_err(Error::Encoding)?),
-                )),
-                Write::Delete { column_family, key } => Ok(((column_family, key), None)),
-            })
-            .collect::<Result<Vec<_>>>()?;
+    /// Applies every write of `writes` in order, or none if a value fails to encode.
+    pub fn write(&self, writes: &dyn Writes) -> Result<()> {
+        let mut staged = StagedWrites::new();
+        writes.write_to(&mut staged)?;
 
         let mut values = self.lock();
-        for (key, value) in encoded {
+        for StagedWrite {
+            column_family,
+            key,
+            value,
+        } in staged.writes
+        {
             match value {
-                Some(value) => values.insert(key, value),
-                None => values.remove(&key),
+                Some(value) => values.insert((column_family, key), value),
+                None => values.remove(&(column_family, key)),
             };
         }
         Ok(())

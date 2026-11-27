@@ -180,21 +180,19 @@ async fn start_sequencer_bare_on(
         let (genesis, genesis_state, genesis_events) =
             sequencer_genesis::genesis_block_and_state(&genesis_spec);
         let genesis_id = genesis.header.block_id;
-        let mut writes = WriteBatch::new();
-        writes.store(Store::new(
-            BigEndian::new(&genesis_id),
-            BlockEventsRecord {
-                events: genesis_events,
-            },
-        ));
-        writes.store(Store::new(
-            BigEndian::new(&genesis_id),
-            BlockRecord { block: genesis },
-        ));
-        writes.store(Store::from_value(HeadStateRecord {
-            state: BorshArc(Arc::new(genesis_state)),
-        }));
-        storage_ref.ask(writes).await.unwrap();
+        let writes = (
+            Store::new(
+                BigEndian::new(&genesis_id),
+                BlockEventsRecord {
+                    events: genesis_events,
+                },
+            ),
+            Store::new(BigEndian::new(&genesis_id), BlockRecord { block: genesis }),
+            Store::from_value(HeadStateRecord {
+                state: BorshArc(Arc::new(genesis_state)),
+            }),
+        );
+        storage_ref.ask(WriteBatch(writes)).await.unwrap();
     }
 
     let (final_state, final_tip) = storage_ref
@@ -3774,16 +3772,17 @@ async fn a_restart_without_a_view_follows_the_channel_from_the_final_tier() {
         sequencer.run_production_turn().await.unwrap();
         let view = sequencer.chain().lock().await.view().to_vec();
         let block = view[1].block.clone().unwrap();
-        let mut writes = WriteBatch::new();
-        writes.store(Store::from_value(ChannelViewRecord { bytes: vec![0xff] }));
-        writes.store(Store::new(
-            BigEndian::new(&block.header.block_id),
-            BlockRecord { block },
-        ));
-        writes.store(Store::from_value(HeadStateRecord {
-            state: BorshArc(sequencer.chain().lock().await.share_head_state()),
-        }));
-        sequencer.storage_ref.ask(writes).await.unwrap();
+        let writes = (
+            Store::from_value(ChannelViewRecord { bytes: vec![0xff] }),
+            Store::new(
+                BigEndian::new(&block.header.block_id),
+                BlockRecord { block },
+            ),
+            Store::from_value(HeadStateRecord {
+                state: BorshArc(sequencer.chain().lock().await.share_head_state()),
+            }),
+        );
+        sequencer.storage_ref.ask(WriteBatch(writes)).await.unwrap();
         (sequencer.storage_ref.downgrade(), view)
     };
     storage_weak.wait_for_shutdown_with_result(|_| ()).await;

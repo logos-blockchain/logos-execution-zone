@@ -15,7 +15,7 @@ use sequencer_storage_actor::{
     ColumnFamily, Storable,
     encoding::{BigEndian, BorshArc},
     full_type_name,
-    protocol::{Delete, Store, WriteBatch},
+    protocol::{Delete, Store},
 };
 
 use super::{ChannelViewRecord, FinalSnapshotRecord, HeadStateRecord};
@@ -151,6 +151,39 @@ impl StoredChain {
     }
 }
 
+/// Deletes of blocks with their index entries and events.
+pub type BlockDeletes = (
+    Vec<Delete<BlockIdByHashRecord>>,
+    Vec<Delete<BlockIdByTransactionRecord>>,
+    Vec<Delete<AccountBlockRecord>>,
+    Vec<Delete<BlockEventsRecord>>,
+    Vec<Delete<BlockRecord>>,
+);
+
+/// Stores of blocks with their index entries.
+pub type BlockStores = (
+    Vec<Store<BlockIdByHashRecord>>,
+    Vec<Store<BlockIdByTransactionRecord>>,
+    Vec<Store<AccountBlockRecord>>,
+    Vec<Store<BlockRecord>>,
+);
+
+/// Writes moving the store from one chain to another, as [`chain_writes`] builds them.
+///
+/// Deletes come first, so a block replaced at the same height is deleted before its replacement
+/// is stored.
+pub type ChainWrites = (
+    BlockDeletes,
+    BlockStores,
+    Vec<Store<BlockEventsRecord>>,
+    Option<Store<HeadStateRecord>>,
+    Option<Store<FinalSnapshotRecord>>,
+    Store<ChannelViewRecord>,
+);
+
+/// Writes of the head state and the view of a chain.
+pub type HeadWrites = (Store<HeadStateRecord>, Store<ChannelViewRecord>);
+
 /// Writes moving the store from `before` to `chain`.
 ///
 /// Head blocks that left the chain are deleted with their index entries, new head blocks are
@@ -164,9 +197,7 @@ pub fn chain_writes(
     chain: &ChainState,
     finalized: &[Block],
     events: Vec<(BlockId, Vec<TxEvents>)>,
-) -> WriteBatch {
-    let mut writes = WriteBatch::new();
-
+) -> ChainWrites {
     let kept: HashSet<HashType> = chain
         .head_blocks()
         .chain(finalized)
@@ -177,8 +208,9 @@ pub fn chain_writes(
         .iter()
         .filter(|block| !kept.contains(&block.header.hash))
         .collect();
+    let mut deletes = BlockDeletes::default();
     for block in &removed {
-        delete_block(&mut writes, block);
+        delete_block(&mut deletes, block);
     }
 
     let held: HashSet<HashType> = before
@@ -190,88 +222,93 @@ pub fn chain_writes(
         .head_blocks()
         .filter(|block| !held.contains(&block.header.hash))
         .collect();
+    let mut stores = BlockStores::default();
     for block in &added {
-        store_block(&mut writes, (*block).clone());
+        store_block(&mut stores, (*block).clone());
     }
     for block in finalized {
         let mut block = block.clone();
         block.bedrock_status = BedrockStatus::Finalized;
-        store_block(&mut writes, block);
+        store_block(&mut stores, block);
     }
 
-    for (block_id, block_events) in events {
-        writes.store(Store::new(
-            BigEndian::new(&block_id),
-            BlockEventsRecord {
-                events: block_events,
-            },
-        ));
-    }
+    let events = events
+        .into_iter()
+        .map(|(block_id, block_events)| {
+            Store::new(
+                BigEndian::new(&block_id),
+                BlockEventsRecord {
+                    events: block_events,
+                },
+            )
+        })
+        .collect();
 
     let final_tip = chain.final_tip();
     let final_advanced = final_tip != before.final_tip;
     let chain_moved =
         chain.head_tip() != before.head_tip() || !removed.is_empty() || !added.is_empty();
-    if chain_moved || final_advanced {
-        store_head_state(&mut writes, chain);
-    }
-    if final_advanced && let Some(tip) = final_tip {
-        writes.store(Store::from_value(FinalSnapshotRecord {
+    let head_state = (chain_moved || final_advanced).then(|| head_state(chain));
+    let final_snapshot = final_tip.filter(|_| final_advanced).map(|tip| {
+        Store::from_value(FinalSnapshotRecord {
             state: BorshArc(chain.share_final_state()),
             meta: BlockMeta::from(&tip),
-        }));
-    }
-    store_view(&mut writes, chain);
+        })
+    });
 
-    writes
+    (
+        deletes,
+        stores,
+        events,
+        head_state,
+        final_snapshot,
+        view(chain),
+    )
 }
 
 /// Deletes `blocks` with their index entries and events.
 #[must_use]
-pub fn block_deletes(blocks: &[Block]) -> WriteBatch {
-    let mut writes = WriteBatch::new();
+pub fn block_deletes(blocks: &[Block]) -> BlockDeletes {
+    let mut deletes = BlockDeletes::default();
     for block in blocks {
-        delete_block(&mut writes, block);
+        delete_block(&mut deletes, block);
     }
-    writes
+    deletes
 }
 
 /// Writes the head state and the view of `chain`.
 #[must_use]
-pub fn head_writes(chain: &ChainState) -> WriteBatch {
-    let mut writes = WriteBatch::new();
-    store_head_state(&mut writes, chain);
-    store_view(&mut writes, chain);
-    writes
+pub fn head_writes(chain: &ChainState) -> HeadWrites {
+    (head_state(chain), view(chain))
 }
 
-fn store_head_state(writes: &mut WriteBatch, chain: &ChainState) {
-    writes.store(Store::from_value(HeadStateRecord {
+fn head_state(chain: &ChainState) -> Store<HeadStateRecord> {
+    Store::from_value(HeadStateRecord {
         state: BorshArc(chain.share_head_state()),
-    }));
+    })
 }
 
-fn store_view(writes: &mut WriteBatch, chain: &ChainState) {
-    writes.store(Store::from_value(ChannelViewRecord {
+fn view(chain: &ChainState) -> Store<ChannelViewRecord> {
+    Store::from_value(ChannelViewRecord {
         bytes: chain.encode_view(),
-    }));
+    })
 }
 
 /// Stores `block` with its index entries.
-fn store_block(writes: &mut WriteBatch, block: Block) {
+fn store_block((by_hash, by_transaction, by_account, blocks): &mut BlockStores, block: Block) {
     let block_id = block.header.block_id;
-    writes.store(Store::new(
+    by_hash.push(Store::new(
         block.header.hash,
         BlockIdByHashRecord { block_id },
     ));
     for transaction in &block.body.transactions {
-        writes.store(Store::new(
+        by_transaction.push(Store::new(
             transaction.hash(),
             BlockIdByTransactionRecord { block_id },
         ));
     }
     for account_id in affected_accounts(&block) {
-        writes.store(Store::new(
+        by_account.push(Store::new(
             AccountBlockKey::new(account_id, block_id),
             AccountBlockRecord {
                 account_id,
@@ -279,25 +316,24 @@ fn store_block(writes: &mut WriteBatch, block: Block) {
             },
         ));
     }
-    writes.store(Store::new(BigEndian::new(&block_id), BlockRecord { block }));
+    blocks.push(Store::new(BigEndian::new(&block_id), BlockRecord { block }));
 }
 
 /// Deletes `block` with its index entries and events.
-fn delete_block(writes: &mut WriteBatch, block: &Block) {
+fn delete_block(
+    (by_hash, by_transaction, by_account, events, blocks): &mut BlockDeletes,
+    block: &Block,
+) {
     let block_id = block.header.block_id;
-    writes.delete(&Delete::<BlockIdByHashRecord>::new(block.header.hash));
+    by_hash.push(Delete::new(block.header.hash));
     for transaction in &block.body.transactions {
-        writes.delete(&Delete::<BlockIdByTransactionRecord>::new(
-            transaction.hash(),
-        ));
+        by_transaction.push(Delete::new(transaction.hash()));
     }
     for account_id in affected_accounts(block) {
-        writes.delete(&Delete::<AccountBlockRecord>::new(AccountBlockKey::new(
-            account_id, block_id,
-        )));
+        by_account.push(Delete::new(AccountBlockKey::new(account_id, block_id)));
     }
-    writes.delete(&Delete::<BlockEventsRecord>::new(BigEndian::new(&block_id)));
-    writes.delete(&Delete::<BlockRecord>::new(BigEndian::new(&block_id)));
+    events.push(Delete::new(BigEndian::new(&block_id)));
+    blocks.push(Delete::new(BigEndian::new(&block_id)));
 }
 
 /// The public accounts the transactions of `block` affect, each once.
@@ -399,7 +435,7 @@ mod tests {
 
     fn write(values: &StoredValues, stored: &StoredChain, chain: &ChainState, finalized: &[Block]) {
         values
-            .write(chain_writes(stored, chain, finalized, Vec::new()))
+            .write(&chain_writes(stored, chain, finalized, Vec::new()))
             .expect("Failed to write the chain");
     }
 

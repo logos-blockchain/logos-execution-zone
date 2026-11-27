@@ -13,6 +13,7 @@ use crate::{
     protocol::{
         Count, DbDump, Delete, DumpDb, Get, GetFirst, GetLast, GetRange, Store, WriteBatch,
     },
+    writes::Writes,
 };
 
 pub mod db;
@@ -165,15 +166,15 @@ impl<T: Storable> Message<Count<T>> for StorageActor {
     }
 }
 
-impl Message<WriteBatch> for StorageActor {
+impl<W: Writes> Message<WriteBatch<W>> for StorageActor {
     type Reply = Result<()>;
 
     async fn handle(
         &mut self,
-        msg: WriteBatch,
+        WriteBatch(writes): WriteBatch<W>,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.db().write(msg)
+        self.db().write(&writes)
     }
 }
 

@@ -1,10 +1,6 @@
 use std::marker::PhantomData;
 
-use crate::{
-    ColumnFamily, Storable,
-    encoding::SingletonKey,
-    storable::{DynStorable, encode_key},
-};
+use crate::{Storable, encoding::SingletonKey, writes::Writes};
 
 /// Stores `value` under `key`, replacing what was stored there.
 pub struct Store<T: Storable> {
@@ -143,72 +139,10 @@ impl<T: Storable> Default for Count<T> {
     }
 }
 
-/// [`Store`] and [`Delete`] messages of any stored types, committed together
-/// or not at all.
+/// Writes committed together or not at all.
 ///
-/// Writes are applied in the order they were added, so a later write to a key
-/// replaces an earlier one.
-#[derive(Default)]
-pub struct WriteBatch {
-    pub(crate) writes: Vec<Write>,
-}
-
-/// One message of a [`WriteBatch`].
-///
-/// Keys are already prefixed with the name of their type.
-#[cfg_attr(
-    not(any(feature = "actor", feature = "mock")),
-    expect(dead_code, reason = "Only the actor and its mock read the writes")
-)]
-pub(crate) enum Write {
-    Store {
-        key: Vec<u8>,
-        value: Box<dyn DynStorable>,
-    },
-    Delete {
-        column_family: ColumnFamily,
-        key: Vec<u8>,
-    },
-}
-
-impl WriteBatch {
-    #[must_use]
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn store<T: Storable>(&mut self, msg: Store<T>) {
-        self.writes.push(Write::Store {
-            key: encode_key::<T>(&msg.key),
-            value: Box::new(msg.value),
-        });
-    }
-
-    pub fn delete<T: Storable>(&mut self, msg: &Delete<T>) {
-        self.writes.push(Write::Delete {
-            column_family: T::COLUMN_FAMILY,
-            key: encode_key::<T>(&msg.key),
-        });
-    }
-
-    /// Adds the writes of `other` after the ones already added.
-    pub fn append(&mut self, mut other: Self) {
-        self.writes.append(&mut other.writes);
-    }
-
-    #[must_use]
-    pub const fn is_empty(&self) -> bool {
-        self.writes.is_empty()
-    }
-}
-
-impl<T: Storable> From<Store<T>> for WriteBatch {
-    fn from(msg: Store<T>) -> Self {
-        let mut batch = Self::new();
-        batch.store(msg);
-        batch
-    }
-}
+/// Its type names the shape of the writes, e.g. `WriteBatch<(Store<A>, Vec<Delete<B>>)>`.
+pub struct WriteBatch<W: Writes>(pub W);
 
 pub struct DumpDb;
 

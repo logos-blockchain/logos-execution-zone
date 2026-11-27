@@ -106,13 +106,15 @@ async fn generate_prebuilt_fixture(dest: &Path) -> Result<()> {
         .last()
         .map(|(_block_id, record)| BlockMeta::from(&record.block))
         .context("Fixture store has no blocks")?;
-    let mut reset = WriteBatch::new();
-    for (block_id, BlockRecord { mut block }) in blocks {
-        block.bedrock_status = BedrockStatus::Pending;
-        reset.store(Store::new(block_id, BlockRecord { block }));
-    }
+    let reset: Vec<_> = blocks
+        .into_iter()
+        .map(|(block_id, BlockRecord { mut block })| {
+            block.bedrock_status = BedrockStatus::Pending;
+            Store::new(block_id, BlockRecord { block })
+        })
+        .collect();
     storage_ref
-        .ask(reset)
+        .ask(WriteBatch(reset))
         .await
         .context("Failed to reset fixture blocks to pending")?;
 

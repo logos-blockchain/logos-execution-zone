@@ -4,21 +4,23 @@ use std::sync::Arc;
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use common::{HashType, block::BlockMeta};
+use kameo::message::Message;
 use lee::V03State;
 use lee_core::BlockId;
 use sequencer_storage_actor::{
-    ColumnFamily, Storable, Stores,
+    ColumnFamily, Result, Storable, Stores,
     encoding::{BorshArc, SingletonKey},
     full_type_name,
+    protocol::{Store, WriteBatch},
 };
 use trait_set::trait_set;
 
 use self::{
     blocks::{
-        AccountBlockRecord, BlockEventsRecord, BlockIdByHashRecord, BlockIdByTransactionRecord,
-        BlockRecord,
+        AccountBlockRecord, BlockDeletes, BlockEventsRecord, BlockIdByHashRecord,
+        BlockIdByTransactionRecord, BlockRecord, ChainWrites, HeadWrites,
     },
-    bridge::{PendingDepositEventRecord, PendingWithdrawalRecord},
+    bridge::{DepositWrites, PendingDepositEventRecord, PendingWithdrawalRecord, WithdrawalWrites},
 };
 
 pub mod blocks;
@@ -37,8 +39,28 @@ trait_set! {
         + Stores<HeadStateRecord>
         + Stores<FinalSnapshotRecord>
         + Stores<PendingDepositEventRecord>
-        + Stores<PendingWithdrawalRecord>;
+        + Stores<PendingWithdrawalRecord>
+        + Message<WriteBatch<ChainWrites>, Reply = Result<()>>
+        + Message<WriteBatch<FollowWrites>, Reply = Result<()>>
+        + Message<WriteBatch<PublishWrites>, Reply = Result<()>>
+        + Message<WriteBatch<ReplayWrites>, Reply = Result<()>>
+        + Message<WriteBatch<BlockDeletes>, Reply = Result<()>>
+        + Message<WriteBatch<HeadWrites>, Reply = Result<()>>;
 }
+
+/// Writes of a channel update the sequencer follows.
+pub type FollowWrites = (ChainWrites, DepositWrites, WithdrawalWrites);
+
+/// Writes of a block the sequencer publishes.
+pub type PublishWrites = (ChainWrites, WithdrawalWrites);
+
+/// Writes of finalized channel entries replayed while bootstrapping.
+pub type ReplayWrites = (
+    ChainWrites,
+    Option<Store<ZoneAnchorRecord>>,
+    DepositWrites,
+    WithdrawalWrites,
+);
 
 /// The state after the last stored block.
 #[derive(BorshSerialize, BorshDeserialize)]

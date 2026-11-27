@@ -4,6 +4,7 @@
 pub use actor::StorageActor;
 pub use storable::{ColumnFamily, Storable};
 pub use r#trait::{StorageActorTrait, Stores};
+pub use writes::Writes;
 
 #[cfg(feature = "actor")]
 pub mod actor;
@@ -15,5 +16,6 @@ pub mod protocol;
 pub mod storable;
 pub mod r#trait;
 pub mod utils;
+pub mod writes;
 
 pub type Result<T> = std::result::Result<T, error::Error>;

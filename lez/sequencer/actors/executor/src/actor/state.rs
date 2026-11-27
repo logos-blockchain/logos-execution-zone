@@ -24,7 +24,7 @@ use sequencer_core::{
 use sequencer_slasher_actor::SlasherActorTrait;
 use sequencer_storage_actor::{
     encoding::BigEndian,
-    protocol::{Get, GetFirst, GetLast},
+    protocol::{Get, GetFirst, GetLast, WriteBatch},
     utils::Pages,
 };
 use sharding_pool_actor::ShardingPoolActor;
@@ -405,9 +405,9 @@ async fn trim_stored_head<S: CoreStorage>(
             .filter(|block| !held.contains(&block.header.hash))
             .collect();
         if !dropped.is_empty() {
-            storage_ref.ask(block_deletes(&dropped)).await?;
+            storage_ref.ask(WriteBatch(block_deletes(&dropped))).await?;
         }
     }
-    storage_ref.ask(head_writes(chain)).await?;
+    storage_ref.ask(WriteBatch(head_writes(chain))).await?;
     Ok(())
 }

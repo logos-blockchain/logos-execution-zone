@@ -4,15 +4,11 @@ use trait_set::trait_set;
 use crate::{
     Result, Storable,
     error::Error,
-    protocol::{
-        Count, DbDump, Delete, DumpDb, Get, GetFirst, GetLast, GetRange, Store, WriteBatch,
-    },
+    protocol::{Count, DbDump, Delete, DumpDb, Get, GetFirst, GetLast, GetRange, Store},
 };
 
 pub trait StorageActorTrait:
-    Actor<Args = Self, Error = Error>
-    + Message<DumpDb, Reply = Result<DbDump>>
-    + Message<WriteBatch, Reply = Result<()>>
+    Actor<Args = Self, Error = Error> + Message<DumpDb, Reply = Result<DbDump>>
 {
 }
 

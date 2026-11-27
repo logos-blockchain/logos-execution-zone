@@ -62,27 +62,6 @@ pub trait Storable: BorshSerialize + BorshDeserialize + Send + Sync + 'static {
     const TYPE_NAME: &'static str;
 }
 
-/// Dyn-compatible version of [`Storable`], implemented for every type that implements [`Storable`].
-#[cfg_attr(
-    not(any(feature = "actor", feature = "mock")),
-    expect(dead_code, reason = "Only the actor and its mock encode the values")
-)]
-pub(crate) trait DynStorable: Send + Sync {
-    fn column_family(&self) -> ColumnFamily;
-
-    fn encode(&self) -> borsh::io::Result<Vec<u8>>;
-}
-
-impl<T: Storable> DynStorable for T {
-    fn column_family(&self) -> ColumnFamily {
-        T::COLUMN_FAMILY
-    }
-
-    fn encode(&self) -> borsh::io::Result<Vec<u8>> {
-        borsh::to_vec(self)
-    }
-}
-
 impl ColumnFamily {
     /// Every family, in the order a database dump lists them.
     pub const ALL: [Self; 6] = [

@@ -1,8 +1,11 @@
 use borsh::{BorshDeserialize, BorshSerialize};
-use kameo::actor::{ActorRef, Spawn as _};
+use kameo::{
+    actor::{ActorRef, Spawn as _},
+    message::Message,
+};
 
 use crate::{
-    ColumnFamily, Storable, StorageActor, Stores,
+    ColumnFamily, Result, Storable, StorageActor, Stores,
     encoding::{BigEndian, SingletonKey},
     full_type_name,
     protocol::{Count, Delete, Get, GetFirst, GetLast, GetRange, Store, WriteBatch},
@@ -124,23 +127,26 @@ async fn note_range(
 
 /// Stores `text` under the next free id, written against the storage traits
 /// the way a client crate would.
-async fn add_note<S: Stores<Note> + Stores<NextNoteId>>(
-    storage_ref: &ActorRef<S>,
-    text: &str,
-) -> u64 {
+async fn add_note<S>(storage_ref: &ActorRef<S>, text: &str) -> u64
+where
+    S: Stores<Note>
+        + Stores<NextNoteId>
+        + Message<WriteBatch<(Store<Note>, Store<NextNoteId>)>, Reply = Result<()>>,
+{
     let id = storage_ref
         .ask(Get::<NextNoteId>::default())
         .await
         .expect("Failed to get the next id")
         .map_or(0, |next| next.id);
 
-    let mut batch = WriteBatch::new();
-    batch.store(Store::new(BigEndian::new(&id), note(text)));
-    batch.store(Store::from_value(NextNoteId {
+    let next = Store::from_value(NextNoteId {
         id: id.checked_add(1).expect("Note ids must not run out"),
-    }));
+    });
     storage_ref
-        .ask(batch)
+        .ask(WriteBatch((
+            Store::new(BigEndian::new(&id), note(text)),
+            next,
+        )))
         .await
         .expect("Failed to write the batch");
 
@@ -450,13 +456,15 @@ async fn later_writes_in_a_batch_replace_earlier_ones() {
     let dir = tempfile::tempdir().expect("Failed to create temp dir");
     let storage_ref = spawn(&dir);
 
-    let mut batch = WriteBatch::new();
-    batch.store(Store::new(BigEndian::new(&1), note("put then deleted")));
-    batch.delete(&Delete::<Note>::new(BigEndian::new(&1)));
-    batch.store(Store::new(BigEndian::new(&2), note("replaced")));
-    batch.store(Store::new(BigEndian::new(&2), note("kept")));
     storage_ref
-        .ask(batch)
+        .ask(WriteBatch((
+            Store::new(BigEndian::new(&1), note("put then deleted")),
+            Delete::<Note>::new(BigEndian::new(&1)),
+            vec![
+                Store::new(BigEndian::new(&2), note("replaced")),
+                Store::new(BigEndian::new(&2), note("kept")),
+            ],
+        )))
         .await
         .expect("Failed to write the batch");
 
@@ -470,10 +478,12 @@ async fn a_batch_with_a_value_failing_to_encode_writes_nothing() {
     let dir = tempfile::tempdir().expect("Failed to create temp dir");
     let storage_ref = spawn(&dir);
 
-    let mut batch = WriteBatch::new();
-    batch.store(Store::new(BigEndian::new(&1), note("not written")));
-    batch.store(Store::from_value(Unencodable));
-    let result = storage_ref.ask(batch).await;
+    let result = storage_ref
+        .ask(WriteBatch((
+            Store::new(BigEndian::new(&1), note("not written")),
+            Store::from_value(Unencodable),
+        )))
+        .await;
 
     assert!(result.is_err(), "Writing an unencodable value must fail");
     assert_eq!(all_notes(&storage_ref).await, Vec::new());

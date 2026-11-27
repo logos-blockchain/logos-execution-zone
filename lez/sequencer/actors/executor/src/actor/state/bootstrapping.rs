@@ -25,7 +25,7 @@ use sequencer_slasher_actor::{
 };
 use sequencer_storage_actor::{
     encoding::BigEndian,
-    protocol::{Get, Store},
+    protocol::{Get, Store, WriteBatch},
 };
 use tracing::{debug, warn};
 
@@ -158,10 +158,6 @@ impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> BootstrappingS
             anchor,
             settled_deposits,
         } = replayed;
-        let mut writes = chain_writes(&stored, &self.chain, &finalized_blocks, events);
-        if let Some(anchor) = anchor {
-            writes.store(Store::from_value(anchor));
-        }
         let storage_ref = &self.actors.storage_ref;
         let (deposit_records_writes, recorded_deposits) = deposit_writes(
             storage_ref,
@@ -172,7 +168,6 @@ impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> BootstrappingS
             &settled_deposits,
         )
         .await?;
-        writes.append(deposit_records_writes);
         let (withdrawal_records_writes, unmatched_withdrawals) = withdrawal_writes(
             storage_ref,
             &HashSet::new(),
@@ -182,8 +177,14 @@ impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> BootstrappingS
                 .collect(),
         )
         .await?;
-        writes.append(withdrawal_records_writes);
-        storage_ref.ask(writes).await?;
+        storage_ref
+            .ask(WriteBatch((
+                chain_writes(&stored, &self.chain, &finalized_blocks, events),
+                anchor.map(Store::from_value),
+                deposit_records_writes,
+                withdrawal_records_writes,
+            )))
+            .await?;
         sequencer_core::log_recorded_deposits(recorded_deposits);
         sequencer_core::log_unmatched_withdrawals(&unmatched_withdrawals);
 

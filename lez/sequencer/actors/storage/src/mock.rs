@@ -22,6 +22,7 @@ use crate::{
         WriteBatch,
     },
     storable::start_key,
+    writes::Writes,
 };
 
 mod canned_store;
@@ -248,15 +249,15 @@ impl<T: Storable> Message<Count<T>> for MockStorageActor {
     }
 }
 
-impl Message<WriteBatch> for MockStorageActor {
+impl<W: Writes> Message<WriteBatch<W>> for MockStorageActor {
     type Reply = Result<()>;
 
     async fn handle(
         &mut self,
-        msg: WriteBatch,
+        WriteBatch(writes): WriteBatch<W>,
         _ctx: &mut Context<Self, Self::Reply>,
     ) -> Self::Reply {
-        self.values.write(msg)
+        self.values.write(&writes)
     }
 }
 

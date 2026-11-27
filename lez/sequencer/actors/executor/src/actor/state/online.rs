@@ -22,7 +22,7 @@ use sequencer_core::{
 };
 use sequencer_slasher_actor::SlasherActorTrait;
 use sequencer_storage_actor::{
-    protocol::{Get, GetLast},
+    protocol::{Get, GetLast, WriteBatch},
     utils::Pages,
 };
 use sharding_pool_actor::ShardingPoolActor;
@@ -294,7 +294,12 @@ impl<S: CoreStorage, B: BedrockActorTrait, Sl: SlasherActorTrait> OnlineState<S,
         let stored = StoredChain::of(chain);
         chain.apply_conflict(vec![published_entry(&outcome, &block)]);
         storage_ref
-            .ask(chain_writes(&stored, chain, &[], vec![(block_id, events)]))
+            .ask(WriteBatch(chain_writes(
+                &stored,
+                chain,
+                &[],
+                vec![(block_id, events)],
+            )))
             .await?;
 
         Ok(())
