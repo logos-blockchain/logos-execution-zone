@@ -30,6 +30,9 @@ thiserror.workspace = true
 rand.workspace = true
 hex.workspace = true
 
+[dev-dependencies]
+lee = { workspace = true, features = ["test-signer"] }
+
 [lints]
 workspace = true
 
