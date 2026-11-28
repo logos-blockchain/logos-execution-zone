@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use common::transaction::LeeTransaction;
+use common::{HashType, transaction::LeeTransaction};
 use integration_tests::{
     TestContext, get_account, get_account_view, new_account, wait_for_indexer_to_catch_up,
     wait_until,
@@ -223,6 +223,24 @@ async fn every_sequencer_runs(
 /// Has `program`, running the scripted guest, write into a fresh account's actor state, and
 /// checks it did.
 async fn run_scripted_write(ctx: &mut TestContext, program: AccountId) -> Result<()> {
+    let written = vec![1_u8, 2, 3];
+    let (target, _) = run_script(
+        ctx,
+        program,
+        test_guest_core::Script::write(written.clone()),
+    )
+    .await?;
+    let view = get_account_view(ctx, target).await?;
+    assert_eq!(view.data.actor_state(program).as_ref(), written.as_slice());
+    Ok(())
+}
+
+/// Runs `script` on `program` from a fresh account, returning its actor and the transaction.
+async fn run_script(
+    ctx: &mut TestContext,
+    program: AccountId,
+    script: test_guest_core::Script,
+) -> Result<(Actor, HashType)> {
     let payer = ctx.existing_public_accounts()[0];
     let target_id = new_account(ctx, false, None).await?;
     let signers = [target_id, payer];
@@ -230,13 +248,12 @@ async fn run_scripted_write(ctx: &mut TestContext, program: AccountId) -> Result
         .into_iter()
         .zip(ctx.wallet_mut().get_accounts_nonces(&signers).await?)
         .collect();
-    let written = vec![1_u8, 2, 3];
     let target = Actor::new(target_id, program);
     let message = lee::public_transaction::Message::try_new_with_fees(
         target,
         lee::test_utils::signed_by([target], nonces.keys().copied()),
         nonces,
-        test_guest_core::Script::write(written.clone()),
+        script,
         common::test_utils::test_fee_declaration(payer),
     )?;
     let signers = signers.map(|id| {
@@ -257,9 +274,7 @@ async fn run_scripted_write(ctx: &mut TestContext, program: AccountId) -> Result
         )))
         .await?;
     ctx.wallet().poll_transaction(tx_hash).await?;
-    let view = get_account_view(ctx, target).await?;
-    assert_eq!(view.data.actor_state(program).as_ref(), written.as_slice());
-    Ok(())
+    Ok((target, tx_hash))
 }
 
 /// The new code is uploaded, the committee's approvals of `bridge`'s upgrade are submitted to one
@@ -302,8 +317,15 @@ async fn an_approved_system_upgrade_goes_live_at_its_height() -> Result<()> {
         "an upgrade replaces code, not the program's accounts"
     );
 
-    // `bridge` now runs the scripted guest: it writes what it is told into its own actor state.
-    run_scripted_write(&mut ctx, bridge).await?;
+    // `bridge` now runs the scripted guest, which the old code could not decode. Only an injected
+    // deposit may write bridge state, so the script keeps it.
+    let (_, tx_hash) = run_script(&mut ctx, bridge, test_guest_core::Script::default()).await?;
+    let receipt = ctx
+        .sequencer_client()
+        .get_transaction_receipt(tx_hash)
+        .await?
+        .expect("the script's transaction is included");
+    assert!(receipt.success, "the upgraded bridge runs the script");
 
     let upgraded_at = ctx.sequencer_client().get_last_block_id().await?;
     wait_until("blocks to keep coming after the upgrade", || async {
