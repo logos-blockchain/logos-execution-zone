@@ -30,6 +30,7 @@ thiserror.workspace = true
 
 [dev-dependencies]
 lee = { workspace = true, features = ["test-signer"] }
+tempfile.workspace = true
 
 [lints]
 workspace = true

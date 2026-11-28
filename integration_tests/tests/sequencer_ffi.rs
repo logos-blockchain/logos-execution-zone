@@ -579,3 +579,65 @@ fn public_call(tx: &FfiTransaction) -> Option<(Actor, &[FfiDeclaredActor], &[u8]
         unsafe { std::slice::from_raw_parts(root.message.entries, root.message.len) },
     ))
 }
+
+/// A node started like `sequencer_service start` serves its RPC and ops server where told to.
+#[test]
+fn sequencer_ffi_serves_rpc_and_ops() -> Result<()> {
+    let rpc_addr = free_local_addr()?;
+    let metrics_addr = free_local_addr()?;
+    let sequencer_ffi_helpers::JoiningSetup {
+        ctx,
+        sequencer_ffi: sequencer_ffi_res,
+        sequencer_home: _sequencer_home,
+        ..
+    } = sequencer_ffi_helpers::joining_setup_no_stake_on(rpc_addr, metrics_addr)?;
+
+    let sequencer_ffi =
+    // SAFETY: sequencer_ffi_helpers::joining_setup_no_stake_on guarantees validity.
+    unsafe { &*sequencer_ffi_res.value };
+
+    // SAFETY: sequencer_ffi created by FFI, it is valid.
+    assert!(unsafe { sequencer_ffi_helpers::sequencer_ffi_is_healthy(sequencer_ffi) });
+
+    let health = http_get(metrics_addr, "/health")?;
+    assert!(
+        health.starts_with("HTTP/1.1 200") && health.contains(r#""status":"ok""#),
+        "{health}"
+    );
+    let metrics = http_get(metrics_addr, "/metrics")?;
+    assert!(metrics.starts_with("HTTP/1.1 200"), "{metrics}");
+
+    let rpc = test_fixtures::setup::sequencer_client(rpc_addr)?;
+    let rpc_block = ctx.runtime().block_on(rpc.get_last_block_id())?;
+    info!(rpc_block, "Joining sequencer answers on its RPC address");
+
+    // SAFETY: sequencer_ffi created by FFI, it is valid.
+    unsafe {
+        sequencer_ffi_helpers::sequencer_ffi_stop_sequencer(sequencer_ffi_res.value);
+    }
+
+    // Stopping released both addresses.
+    std::net::TcpListener::bind(rpc_addr).context("RPC address still taken")?;
+    std::net::TcpListener::bind(metrics_addr).context("Ops address still taken")?;
+
+    Ok(())
+}
+
+/// A loopback address nothing listens on.
+fn free_local_addr() -> Result<std::net::SocketAddr> {
+    Ok(std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?)
+}
+
+/// The whole response to a plain `GET path`.
+fn http_get(addr: std::net::SocketAddr, path: &str) -> Result<String> {
+    use std::io::{Read as _, Write as _};
+
+    let mut stream = std::net::TcpStream::connect(addr)?;
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+    )?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response)?;
+    Ok(response)
+}

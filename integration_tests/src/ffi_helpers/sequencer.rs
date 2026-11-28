@@ -4,6 +4,8 @@ use std::{
     ffi::{CString, c_char},
     fs::File,
     io::Write as _,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    path::Path,
     time::Duration,
 };
 
@@ -47,10 +49,7 @@ use test_fixtures::{
 };
 use wallet::{AccountIdentity, program_facades::sequencer_stake::SequencerStake};
 
-use crate::{
-    L2_TO_L1_TIMEOUT, account_balance, ffi_helpers::primitives::primitives_ffi_free_cstring,
-    get_account, new_account,
-};
+use crate::{L2_TO_L1_TIMEOUT, account_balance, get_account, new_account};
 
 unsafe extern "C" {
     pub unsafe fn sequencer_ffi_query_executor_status(
@@ -68,7 +67,8 @@ unsafe extern "C" {
 
     pub unsafe fn sequencer_ffi_start_sequencer(
         runtime: *const Runtime,
-        config_path: *const c_char,
+        home: *const c_char,
+        overrides_json: *const c_char,
     ) -> InitializedSequencerServiceFFIResult;
 
     pub unsafe fn sequencer_ffi_query_account(
@@ -103,11 +103,16 @@ unsafe extern "C" {
         selector: *const FfiSelector,
     ) -> PointerResult<FfiVec<FfiEventRecord>, FfiOperationError>;
 
+    pub unsafe fn sequencer_ffi_is_healthy(sequencer: *const SequencerServiceFFI) -> bool;
+
     pub unsafe fn sequencer_ffi_stop_sequencer(sequencer: *mut SequencerServiceFFI);
 }
 
 /// Comfortably above `system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE`.
 pub const FUNDING_BALANCE: u128 = 2 * system_accounts::DEFAULT_MINIMUM_SEQUENCER_STAKE;
+
+/// A loopback address whose port the kernel picks, so nodes running in parallel never collide.
+pub const EPHEMERAL_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
 
 /// Channel signing key of the sequencer that stakes its way in.
 pub const JOINER_SIGNING_KEY: [u8; 32] = [0x42; 32];
@@ -361,19 +366,18 @@ pub fn joining_setup_with_stake() -> Result<JoiningSetup> {
     file.write_all(&config_json)?;
     file.flush()?;
 
-    let config_c_string = CString::new(config_path.to_str().unwrap())?;
-
-    let raw_config_path = config_c_string.into_raw();
-
-    let sequencer_ffi_res =
-    // SAFETY: null runtime → the FFI creates and owns its own tokio runtime,
-    // so there is no external runtime whose address we must keep stable.
-    unsafe { sequencer_ffi_start_sequencer(std::ptr::null(), raw_config_path) };
-
-    // SAFETY: cstring was constructed from valid string.
-    unsafe {
-        primitives_ffi_free_cstring(raw_config_path);
-    }
+    // Null runtime: the FFI creates and owns its own tokio runtime, so there is
+    // no external runtime whose address we must keep stable.
+    // SAFETY: a null runtime is allowed.
+    let sequencer_ffi_res = unsafe {
+        start_sequencer_ffi(
+            std::ptr::null(),
+            temp_sequencer_dir.path(),
+            &config_path,
+            EPHEMERAL_ADDR,
+            EPHEMERAL_ADDR,
+        )
+    }?;
 
     if sequencer_ffi_res.error.is_error() {
         anyhow::bail!("Sequencer FFI error {:?}", sequencer_ffi_res.error);
@@ -401,6 +405,53 @@ pub fn joining_setup_with_stake() -> Result<JoiningSetup> {
 /// Sets up blocking context with one leader node
 /// and joins FFI node without staking flow.
 pub fn joining_setup_no_stake() -> Result<JoiningSetup> {
+    joining_setup_no_stake_on(EPHEMERAL_ADDR, EPHEMERAL_ADDR)
+}
+
+/// Like [`joining_setup_no_stake`], with the FFI node serving its RPC on `rpc_addr` and its ops
+/// server on `metrics_addr`.
+pub fn joining_setup_no_stake_on(
+    rpc_addr: SocketAddr,
+    metrics_addr: SocketAddr,
+) -> Result<JoiningSetup> {
+    no_stake_join(|runtime, home, config_path| {
+        // SAFETY: `no_stake_join` hands over a runtime borrowed from its context, which outlives
+        // the sequencer.
+        unsafe { start_sequencer_ffi(runtime, home, config_path, rpc_addr, metrics_addr) }
+    })
+}
+
+/// Starts an FFI node out of `home` with the config at `config_path`, serving its RPC on
+/// `rpc_addr` and its ops server on `metrics_addr`.
+///
+/// # Safety
+/// `runtime` must be null or a valid pointer to a [`Runtime`] that outlives the sequencer.
+pub unsafe fn start_sequencer_ffi(
+    runtime: *const Runtime,
+    home: &Path,
+    config_path: &Path,
+    rpc_addr: SocketAddr,
+    metrics_addr: SocketAddr,
+) -> Result<InitializedSequencerServiceFFIResult> {
+    let home = CString::new(home.to_str().context("Home is not UTF-8")?)?;
+    let overrides = CString::new(
+        serde_json::json!({
+            "config": config_path,
+            "rpc_listen_address": rpc_addr,
+            "metrics_listen_address": metrics_addr,
+        })
+        .to_string(),
+    )?;
+
+    // SAFETY: the caller guarantees `runtime` is null or valid, and the strings outlive the call.
+    Ok(unsafe { sequencer_ffi_start_sequencer(runtime, home.as_ptr(), overrides.as_ptr()) })
+}
+
+/// Sets up blocking context with one leader node, and joins an FFI node that `start` starts from
+/// its home and config, without staking flow.
+fn no_stake_join(
+    start: impl FnOnce(*const Runtime, &Path, &Path) -> Result<InitializedSequencerServiceFFIResult>,
+) -> Result<JoiningSetup> {
     let ctx = Box::new(
         MultiZoneTestContextBuilder::default()
             .with_zone(
@@ -434,22 +485,15 @@ pub fn joining_setup_no_stake() -> Result<JoiningSetup> {
     file.write_all(&config_json)?;
     file.flush()?;
 
-    let config_c_string = CString::new(config_path.to_str().unwrap())?;
-
-    let raw_config_path = config_c_string.into_raw();
-
     let borrowed_runtime =
         // SAFETY: Runtime from context is valid.
         unsafe { core_ffi::primitives::runtime::Runtime::from_borrowed(ctx.runtime()) };
 
-    let sequencer_ffi_res =
-        // SAFETY: Runtime borrowed from context is valid.
-        unsafe { sequencer_ffi_start_sequencer(&raw const borrowed_runtime, raw_config_path) };
-
-    // SAFETY: cstring was constructed from valid string.
-    unsafe {
-        primitives_ffi_free_cstring(raw_config_path);
-    }
+    let sequencer_ffi_res = start(
+        &raw const borrowed_runtime,
+        temp_sequencer_dir.path(),
+        &config_path,
+    )?;
 
     if sequencer_ffi_res.error.is_error() {
         anyhow::bail!("Sequencer FFI error {:?}", sequencer_ffi_res.error);

@@ -65,6 +65,10 @@ pub struct GossipConfig {
 pub struct SequencerConfig {
     /// Home dir of sequencer storage. Holds `channel_signing_key`, and
     /// `sequencer_stake_signing_key` when a solo sequencer creates the channel.
+    ///
+    /// `sequencer_service`'s `setup` and `start` always set it to the home they are given, so a
+    /// config passed to them may leave it out.
+    #[serde(default)]
     pub home: PathBuf,
     /// Maximum number of user transactions in a block (excludes the mandatory clock transaction).
     pub max_num_tx_in_block: usize,
