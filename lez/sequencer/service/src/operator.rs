@@ -8,8 +8,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use lee::{AccountId, Actor, Balance};
-use sequencer_core::config::GenesisAction;
-use sequencer_service::SequencerConfig;
+use sequencer_service::SetupArgs;
 use sequencer_service_rpc::SequencerClient;
 use sequencer_stake_core::{
     ChannelParams, SequencerKey, SequencerStakeConfig, params_vote_threshold,
@@ -18,9 +17,6 @@ use wallet::{
     AccountIdentity, WalletCore, account::AccountIdWithPrivacy, cli::CliAccountMention,
     program_facades::sequencer_stake::SequencerStake,
 };
-
-/// The node's config, read by `start`.
-pub const CONFIG_FILE: &str = "sequencer_config.json";
 
 /// Channel params to vote for; each one left out keeps the value in force.
 #[derive(Debug, clap::Args)]
@@ -52,80 +48,20 @@ impl ParamsArgs {
     }
 }
 
-/// Creates `home` with its config, channel signing key and Bedrock funding public key.
-pub fn setup(
-    home: &Path,
-    template: &str,
-    funding_public_key: &str,
-    create_channel: bool,
-) -> Result<()> {
-    ensure!(
-        !home.join(CONFIG_FILE).exists(),
-        "{} is already set up",
-        home.display()
-    );
-    sequencer_core::parse_funding_public_key(funding_public_key)
-        .context("Invalid --funding-public-key")?;
-    std::fs::create_dir_all(home)
-        .with_context(|| format!("Failed to create {}", home.display()))?;
-    let home = home
-        .canonicalize()
-        .with_context(|| format!("Failed to resolve {}", home.display()))?;
+/// Creates `home` with its config, channel signing key and Bedrock funding public key, and tells
+/// the operator what to do with the key.
+pub fn setup(home: &Path, args: &SetupArgs) -> Result<()> {
+    let set_up = args.run(home)?;
 
-    // Not `SequencerConfig::from_path`: its genesis checks don't apply to a joiner, who drops it.
-    let mut config: SequencerConfig =
-        serde_json::from_str(template).context("Failed to read the config")?;
-    config.home.clone_from(&home);
-    if create_channel {
-        let genesis = config
-            .genesis
-            .as_ref()
-            .context("--create-channel needs a config with a `genesis`")?;
-        sequencer_core::config::check_channel_params(
-            &genesis.channel_params,
-            config.block_create_timeout,
-        )?;
-    } else {
-        // Without it, a node pointed at the wrong channel fails instead of creating that one.
-        config.genesis = None;
-    }
-    // An existing key is kept: it may already be staked.
-    let channel_key = sequencer_core::load_or_create_signing_key(
-        &home.join(sequencer_core::CHANNEL_SIGNING_KEY_FILE),
-    )?;
-    std::fs::write(
-        home.join(sequencer_core::BEDROCK_FUNDING_PUBLIC_KEY_FILE),
-        funding_public_key.trim(),
-    )
-    .context("Failed to write the funding public key")?;
-    let config_json =
-        serde_json::to_string_pretty(&config).context("Failed to serialize the config")?;
-    std::fs::write(home.join(CONFIG_FILE), config_json).context("Failed to write the config")?;
-
-    println!("{} is set up", home.display());
+    println!("{} is set up", set_up.home.display());
     println!(
         "  channel signing public key  {}",
-        hex::encode(channel_key.public_key().to_bytes())
+        hex::encode(set_up.channel_public_key.to_bytes())
     );
-    // Creating the channel self-stakes the key unless the genesis lists founding stakes.
-    let own_key = SequencerKey::new(channel_key.public_key().to_bytes());
-    let staked_at_genesis = create_channel
-        && config.genesis.as_ref().is_some_and(|genesis| {
-            let founding: Vec<_> = genesis
-                .actions
-                .iter()
-                .filter_map(|action| match action {
-                    GenesisAction::StakeSequencer { sequencer_key, .. } => Some(*sequencer_key),
-                    GenesisAction::SupplyAccount { .. }
-                    | GenesisAction::SupplyPrivateAccount { .. } => None,
-                })
-                .collect();
-            founding.is_empty() || own_key.is_some_and(|key| founding.contains(&key))
-        });
-    if create_channel {
+    if args.create_channel {
         println!("`start` creates the channel if it does not exist yet.");
     }
-    if staked_at_genesis {
+    if set_up.staked_at_genesis {
         println!("Creating the channel stakes that key at genesis.");
     } else {
         println!("Pass that key to `stake --sequencer-key`.");
