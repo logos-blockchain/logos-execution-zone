@@ -52,6 +52,10 @@ jobs:
             dockerfile: ./lez/sequencer/service/Dockerfile
             build_args: |
               FEATURES=prove,mdns
+          # The sequencer run by logosctl with lez_core from the catalog, not built from source.
+          - name: sequencer_service-logosctl
+            dockerfile: ./lez/sequencer/service/logosctl/Dockerfile
+            build_args: ""
           - name: indexer_service
             dockerfile: ./lez/indexer/service/Dockerfile
             build_args: ""
