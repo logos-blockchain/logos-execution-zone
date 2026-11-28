@@ -69,15 +69,14 @@ pub(crate) fn get_wallet_mut(
 }
 
 /// # Safety
-/// `sequencer` must be null or valid, and must outlive the handle built from it.
+/// `sequencer` must be null or valid. The client does not keep it alive.
 unsafe fn client_for(
     config_path: &Path,
     sequencer: *const SequencerServiceFFI,
 ) -> Result<WalletClient, FfiOperationError> {
     if !sequencer.is_null() {
-        let sequencer: &'static SequencerServiceFFI = unsafe { &*sequencer };
         return Ok(WalletClient::Embedded(SequencerServiceFFIWrapper::wrap(
-            sequencer,
+            unsafe { &*sequencer },
         )));
     }
 
@@ -124,7 +123,8 @@ fn c_str_to_path(ptr: *const c_char, name: &str) -> Result<PathBuf, FfiOperation
 /// - `storage_path`: Path where wallet data will be stored
 /// - `password`: Password the wallet storage is encrypted under, or empty to leave it unencrypted
 /// - `sequencer`: A `SequencerServiceFFI` in this process, or null to use the address in
-///   `config_path`
+///   `config_path`. The wallet does not keep it alive: once it stops, sequencer calls fail until
+///   `wallet_ffi_set_sequencer` hands the wallet another.
 ///
 /// # Returns
 /// - Result, which contains opaque wallet handle and mnemonic words on success
@@ -132,7 +132,7 @@ fn c_str_to_path(ptr: *const c_char, name: &str) -> Result<PathBuf, FfiOperation
 ///
 /// # Safety
 /// All string parameters must be valid null-terminated UTF-8 strings. A non-null sequencer must
-/// outlive the returned handle.
+/// be valid for this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn wallet_ffi_create_new(
     config_path: *const c_char,
@@ -204,7 +204,8 @@ pub unsafe extern "C" fn wallet_ffi_create_new(
 ///   storage (see `wallet_ffi_storage_is_encrypted`)
 /// - `out_handle`: Output pointer for the opaque wallet handle
 /// - `sequencer`: A `SequencerServiceFFI` in this process, or null to use the address in
-///   `config_path`
+///   `config_path`. The wallet does not keep it alive: once it stops, sequencer calls fail until
+///   `wallet_ffi_set_sequencer` hands the wallet another.
 ///
 /// # Returns
 /// - `Success` with the handle written to `out_handle`
@@ -214,7 +215,7 @@ pub unsafe extern "C" fn wallet_ffi_create_new(
 ///
 /// # Safety
 /// - All string parameters must be valid null-terminated UTF-8 strings. A non-null sequencer must
-///   outlive the handle written to `out_handle`.
+///   be valid for this call.
 /// - `out_handle` must be a valid pointer to a `WalletHandle *`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn wallet_ffi_open(
@@ -515,4 +516,41 @@ pub unsafe extern "C" fn wallet_ffi_get_sequencer_addr(handle: *mut WalletHandle
             ptr::null_mut()
         }
     }
+}
+
+/// Point a wallet that talks to a sequencer in this process at `sequencer` from now on.
+///
+/// For a wallet given a non-null `sequencer` by `wallet_ffi_create_new` or `wallet_ffi_open`, e.g.
+/// once that one was stopped and another started; null for none, so its sequencer calls fail. The
+/// wallet does not keep `sequencer` alive, so it may be stopped at any time after.
+///
+/// # Returns
+/// `Success`; `NullPointer` for a null `handle`; `NotSupported` for a wallet that talks to its
+/// sequencer over RPC.
+///
+/// # Safety
+/// - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+/// - `sequencer` must be null or a valid `SequencerServiceFFI` for this call
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn wallet_ffi_set_sequencer(
+    handle: *mut WalletHandle,
+    sequencer: *const SequencerServiceFFI,
+) -> FfiOperationError {
+    let wrapper = match get_wallet(handle) {
+        Ok(wrapper) => wrapper,
+        Err(e) => return e,
+    };
+    let wallet = match wrapper.core.lock() {
+        Ok(wallet) => wallet,
+        Err(e) => {
+            print_error(format!("Failed to lock wallet: {e}"));
+            return FfiOperationError::InternalError;
+        }
+    };
+    let WalletClient::Embedded(client) = wallet.client() else {
+        print_error("The wallet talks to its sequencer over RPC, not in this process");
+        return FfiOperationError::NotSupported;
+    };
+    client.rebind(unsafe { sequencer.as_ref() });
+    FfiOperationError::Success
 }
