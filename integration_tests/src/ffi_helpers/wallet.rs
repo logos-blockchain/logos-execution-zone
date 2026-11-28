@@ -15,7 +15,7 @@ use common::HashType;
 use core_ffi::{
     error,
     primitives::types::{
-        FfiBytes32, FfiPrivateAccountKeys, FfiSigningKeyState, account::FfiAccount,
+        FfiAccountId, FfiBytes32, FfiPrivateAccountKeys, FfiSigningKeyState, account::FfiAccount,
     },
     sequencer::SequencerServiceFFI,
     wallet::{
@@ -288,6 +288,37 @@ unsafe extern "C" {
         handle: *mut WalletHandle,
         tx_hash: FfiBytes32,
         transaction_status: *mut bool,
+    ) -> error::FfiOperationError;
+
+    pub fn wallet_ffi_create_new_group(
+        handle: *mut WalletHandle,
+        label_c: *const c_char,
+    ) -> error::FfiOperationError;
+
+    pub fn wallet_ffi_create_sealing_key(
+        handle: *mut WalletHandle,
+        out_sealing_public_key: *mut *mut c_char,
+    ) -> error::FfiOperationError;
+
+    pub fn wallet_ffi_create_private_shared_account(
+        handle: *mut WalletHandle,
+        group_label: *const c_char,
+        derivation_id: FfiBytes32,
+        out_account_id: *mut FfiAccountId,
+        out_keys: *mut FfiPrivateAccountKeys,
+    ) -> error::FfiOperationError;
+
+    pub fn wallet_ffi_invite_shared_account(
+        handle: *mut WalletHandle,
+        key: *const c_char,
+        label_c: *const c_char,
+        out_sealed_message: *mut *mut c_char,
+    ) -> error::FfiOperationError;
+
+    pub fn wallet_ffi_join_shared_account(
+        handle: *mut WalletHandle,
+        sealed_message: *const c_char,
+        label_c: *const c_char,
     ) -> error::FfiOperationError;
 }
 

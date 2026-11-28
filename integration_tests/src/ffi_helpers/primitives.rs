@@ -2,7 +2,6 @@ use std::ffi::c_char;
 
 use core_ffi::primitives::types::{
     FfiOption, FfiPrivateAccountKeys, FfiVec,
-    account::FfiAccount,
     block::{FfiBlock, FfiBlockOpt},
     event::FfiEventRecord,
     transaction::FfiTransaction,
@@ -11,7 +10,6 @@ use core_ffi::primitives::types::{
 unsafe extern "C" {
     pub unsafe fn primitives_ffi_free_private_account_keys(keys: *mut FfiPrivateAccountKeys);
     pub unsafe fn primitives_ffi_free_cstring(block: *mut c_char);
-    pub unsafe fn primitives_ffi_free_ffi_account(val: *mut FfiAccount);
     pub unsafe fn primitives_ffi_free_ffi_block(val: FfiBlock);
     pub unsafe fn primitives_ffi_free_ffi_block_opt(val: *mut FfiBlockOpt);
     pub unsafe fn primitives_ffi_free_ffi_block_vec(val: *mut FfiVec<FfiBlock>);

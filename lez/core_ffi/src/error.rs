@@ -66,6 +66,11 @@ pub enum FfiOperationError {
     WrongPassword = 25,
     /// The transaction reverts when simulated and would still pay its fee, so it was not sent.
     WouldRevert = 26,
+    /// The operation is valid, but can not be done at this wallet state. Example: creation of
+    /// second unique key.
+    Unapplicable = 27,
+    /// Invalid Hex string.
+    InvalidHex = 28,
     /// Internal error (catch-all).
     InternalError = 99,
 }

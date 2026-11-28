@@ -158,6 +158,15 @@ typedef enum FfiOperationError {
    */
   FfiOperationError_WouldRevert = 26,
   /**
+   * The operation is valid, but can not be done at this wallet state. Example: creation of
+   * second unique key.
+   */
+  FfiOperationError_Unapplicable = 27,
+  /**
+   * Invalid Hex string.
+   */
+  FfiOperationError_InvalidHex = 28,
+  /**
    * Internal error (catch-all).
    */
   FfiOperationError_InternalError = 99,
@@ -2309,6 +2318,114 @@ enum FfiOperationError wallet_ffi_poll_transaction_status(struct WalletHandle *h
  * The result must be either null or a valid result from a transaction function.
  */
 void wallet_ffi_free_transaction_result(struct FfiTransactionResult *result);
+
+/**
+ * Create new group at given label.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle,
+ * - `label_c`: null terminated C string.
+ *
+ * # Returns
+ * - `Success` on successful creation, error otherwise.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `label` must be a valid C string.
+ */
+enum FfiOperationError wallet_ffi_create_new_group(struct WalletHandle *handle,
+                                                   const char *label_c);
+
+/**
+ * Create unique wallet sealing key for shared accounts. Mandatory operation for shared accounts
+ * usage.
+ *
+ * Returns sealing public key, encoded with hex.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle.
+ * - `out_sealing_public_key`: valid pointer into C-compatible string.
+ *
+ * # Returns
+ * - `Success` on successful creation, error otherwise.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`.
+ * - `out_sealing_public_key` must be a valid pointer into C-compatible string.
+ */
+enum FfiOperationError wallet_ffi_create_sealing_key(struct WalletHandle *handle,
+                                                     char **out_sealing_public_key);
+
+/**
+ * Create a new private shared account.
+ *
+ * Returns the account id address and account keys.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle
+ * - `group_label`: Label of an underlying group
+ * - `derivation_id`: derivation id of an account
+ * - `out_account_id`: output pointer for account id data
+ * - `out_keys`: Output pointer for the key data (npk + vpk)
+ *
+ * # Returns
+ * - `Success` on successful creation
+ * - Error code on failure
+ *
+ * # Memory
+ * The keys structure must be freed with `wallet_ffi_free_private_account_keys()`.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `out_account_id` must be a valid pointer to a `FfiAccountId` struct
+ * - `out_keys` must be a valid pointer to a `FfiPrivateAccountKeys` struct
+ */
+enum FfiOperationError wallet_ffi_create_private_shared_account(struct WalletHandle *handle,
+                                                                const char *group_label,
+                                                                struct FfiBytes32 derivation_id,
+                                                                FfiAccountId *out_account_id,
+                                                                struct FfiPrivateAccountKeys *out_keys);
+
+/**
+ * Invite user into shared account by its sealing public key.
+ *
+ * Returns hex-encoded sealed message.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle.
+ * - `key`: recipient's sealing public key as C-compatible hex string.
+ * - `label_c`: label of a shared account as C-compatible string.
+ * - `out_sealed_message`: output pointer into C-compatible hex encoded sealed message.
+ *
+ * # Returns
+ * - `Success` on successful creation of a `sealed_message`, error otherwise.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`.
+ * - `out_sealed_message` must be non-null.
+ */
+enum FfiOperationError wallet_ffi_invite_shared_account(struct WalletHandle *handle,
+                                                        const char *key,
+                                                        const char *label_c,
+                                                        char **out_sealed_message);
+
+/**
+ * Join into shared account using sealing message.
+ *
+ * # Parameters
+ * - `handle`: Valid wallet handle.
+ * - `sealed_message`: senders' sealing message as C-compatible hex string.
+ * - `label_c`: label of a shared account as C-compatible string.
+ *
+ * # Returns
+ * - `Success` on successful joining, error otherwise.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`.
+ */
+enum FfiOperationError wallet_ffi_join_shared_account(struct WalletHandle *handle,
+                                                      const char *sealed_message,
+                                                      const char *label_c);
 
 /**
  * Get the initial key of a public account: what others name it by to pay it.

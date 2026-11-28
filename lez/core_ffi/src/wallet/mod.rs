@@ -47,6 +47,7 @@ pub mod bridge;
 pub mod client;
 pub mod fees;
 pub mod generic_transaction;
+pub mod group;
 pub mod keys;
 pub mod label;
 pub mod lifecycle;
