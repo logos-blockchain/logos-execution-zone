@@ -65,7 +65,9 @@ impl SequencerServiceFFI {
         &self.runtime
     }
 
-    fn handle(&self) -> &SequencerHandle {
+    /// The handle itself, for clients that must not keep the sequencer alive.
+    #[must_use]
+    pub const fn shared_handle(&self) -> &Arc<SequencerHandle> {
         unsafe {
             &self
                 .handle
@@ -74,6 +76,10 @@ impl SequencerServiceFFI {
                 .expect("SequencerHandle must be a non-null pointer")
                 .handle
         }
+    }
+
+    fn handle(&self) -> &SequencerHandle {
+        self.shared_handle()
     }
 }
 

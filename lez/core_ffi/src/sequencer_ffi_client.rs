@@ -1,7 +1,10 @@
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, PoisonError, RwLock, Weak},
+};
 
 use anyhow::Result;
-use kameo::error::SendError;
+use kameo::{actor::ActorRef, error::SendError};
 use lee::Actor;
 use lee_core::CommitmentPosition;
 use sequencer_executor_actor::protocol::{
@@ -9,23 +12,63 @@ use sequencer_executor_actor::protocol::{
     GetFeeQuote, GetLastBlockId, GetProofsAndRoot, GetPublications, GetRecoveryBinding,
     GetTransaction, GetTransactionReceipt, Transaction, TransactionOrigin,
 };
-use sequencer_gossip_actor::protocol::Publish;
+use sequencer_gossip_actor::{GossipActor, protocol::Publish};
+use sequencer_service::{ExecutorActor, SequencerHandle};
 use wallet::{ExecutionFailureKind, WalletSequencerClient};
 
 use crate::sequencer::SequencerServiceFFI;
 
+/// Talks to a sequencer in this process, without keeping it alive.
+///
+/// The sequencer may be stopped; calls then fail with [`FfiSequencerClientError::SequencerStopped`]
+/// until [`rebind`](Self::rebind) points this at another. Clones share what they talk to.
 #[derive(Clone)]
-pub struct SequencerServiceFFIWrapper(pub &'static SequencerServiceFFI);
+pub struct SequencerServiceFFIWrapper(Arc<RwLock<Weak<SequencerHandle>>>);
 
 impl SequencerServiceFFIWrapper {
     #[must_use]
-    pub const fn wrap(sequencer: &'static SequencerServiceFFI) -> Self {
-        Self(sequencer)
+    pub fn wrap(sequencer: &SequencerServiceFFI) -> Self {
+        Self(Arc::new(RwLock::new(Arc::downgrade(
+            sequencer.shared_handle(),
+        ))))
+    }
+
+    /// Talks to `sequencer` from now on, or with `None` to none.
+    pub fn rebind(&self, sequencer: Option<&SequencerServiceFFI>) {
+        let handle = sequencer.map_or_else(Weak::new, |sequencer| {
+            Arc::downgrade(sequencer.shared_handle())
+        });
+        *self.0.write().unwrap_or_else(PoisonError::into_inner) = handle;
+    }
+
+    /// Clones what `pick` returns out of the sequencer, if it still runs. Nothing keeps a strong
+    /// reference to it past this call: stopping it must find its handle unshared to shut it down.
+    fn with_handle<T>(
+        &self,
+        pick: impl FnOnce(&SequencerHandle) -> T,
+    ) -> Result<T, FfiSequencerClientError> {
+        let handle = self
+            .0
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .upgrade()
+            .ok_or(FfiSequencerClientError::SequencerStopped)?;
+        Ok(pick(&handle))
+    }
+
+    fn executor(&self) -> Result<ActorRef<ExecutorActor>, FfiSequencerClientError> {
+        self.with_handle(|handle| handle.executor_ref().clone())
+    }
+
+    fn gossip(&self) -> Result<Option<ActorRef<GossipActor>>, FfiSequencerClientError> {
+        self.with_handle(|handle| handle.gossip_ref().cloned())
     }
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum FfiSequencerClientError {
+    #[error("The sequencer is not running")]
+    SequencerStopped,
     #[error("Sequencer executor actor failed")]
     SequencerExecutorError(#[from] sequencer_executor_actor::error::Error),
     #[error("Failed to send request to actor")]
@@ -68,6 +111,9 @@ impl From<FfiSequencerClientError> for ExecutionFailureKind {
                 Self::SequencerClientError(val.to_string())
             }
             FfiSequencerClientError::ActorSendError(val) => Self::SequencerError(val),
+            val @ FfiSequencerClientError::SequencerStopped => {
+                Self::SequencerError(anyhow::Error::from(val))
+            }
         }
     }
 }
@@ -80,8 +126,7 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
         account_id: lee::AccountId,
     ) -> Result<Option<lee::Account>, Self::Error> {
         Ok(self
-            .0
-            .executor_ref()
+            .executor()?
             .ask(GetAccount { account_id })
             .send()
             .await?)
@@ -89,8 +134,7 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
 
     async fn get_account_balance(&self, account_id: lee::AccountId) -> Result<u128, Self::Error> {
         Ok(self
-            .0
-            .executor_ref()
+            .executor()?
             .ask(GetAccountBalance { account_id })
             .send()
             .await?)
@@ -101,8 +145,7 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
         account_ids: Vec<lee::AccountId>,
     ) -> Result<Vec<lee_core::account::Nonce>, Self::Error> {
         Ok(self
-            .0
-            .executor_ref()
+            .executor()?
             .ask(GetAccountNonces { account_ids })
             .send()
             .await?)
@@ -112,12 +155,7 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
         &self,
         block_id: lee_core::BlockId,
     ) -> Result<Option<common::block::Block>, Self::Error> {
-        Ok(self
-            .0
-            .executor_ref()
-            .ask(GetBlock { block_id })
-            .send()
-            .await?)
+        Ok(self.executor()?.ask(GetBlock { block_id }).send().await?)
     }
 
     async fn get_block_range(
@@ -126,8 +164,7 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
         end_block_id: lee_core::BlockId,
     ) -> Result<Vec<common::block::Block>, Self::Error> {
         Ok(self
-            .0
-            .executor_ref()
+            .executor()?
             .ask(GetBlockRange {
                 range: (start_block_id..=end_block_id).try_into().map_err(|err| {
                     FfiSequencerClientError::ArgumentError(anyhow::Error::from(err))
@@ -138,7 +175,7 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
     }
 
     async fn get_last_block_id(&self) -> Result<lee_core::BlockId, Self::Error> {
-        Ok(self.0.executor_ref().ask(GetLastBlockId {}).send().await?)
+        Ok(self.executor()?.ask(GetLastBlockId {}).send().await?)
     }
 
     async fn get_transaction(
@@ -146,8 +183,7 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
         tx_hash: common::HashType,
     ) -> Result<Option<(common::transaction::LeeTransaction, lee_core::BlockId)>, Self::Error> {
         Ok(self
-            .0
-            .executor_ref()
+            .executor()?
             .ask(GetTransaction { tx_hash })
             .send()
             .await?)
@@ -158,8 +194,7 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
         tx_hash: common::HashType,
     ) -> Result<Option<common::block::TransactionReceipt>, Self::Error> {
         Ok(self
-            .0
-            .executor_ref()
+            .executor()?
             .ask(GetTransactionReceipt { tx_hash })
             .send()
             .await?)
@@ -186,8 +221,7 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
             )));
         }
 
-        self.0
-            .executor_ref()
+        self.executor()?
             .ask(Transaction {
                 transaction: checked_tx.clone(),
                 origin: TransactionOrigin::User,
@@ -195,7 +229,7 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
             .send()
             .await?;
 
-        if let Some(gossip_ref) = self.0.gossip_ref() {
+        if let Some(gossip_ref) = self.gossip()? {
             gossip_ref
                 .tell(Publish::Transaction(Box::new(checked_tx)))
                 .await?;
@@ -209,8 +243,7 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
         actor_state_selector: Actor,
     ) -> Result<Option<lee::Account>, Self::Error> {
         Ok(self
-            .0
-            .executor_ref()
+            .executor()?
             .ask(GetAccountView {
                 actor_state_selector,
             })
@@ -243,8 +276,7 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
         Self::Error,
     > {
         let reply = self
-            .0
-            .executor_ref()
+            .executor()?
             .ask(GetProofsAndRoot {
                 commitments,
                 message_positions,
@@ -255,7 +287,7 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
     }
 
     async fn get_fee_state(&self) -> Result<wallet::FeeStateQuote, Self::Error> {
-        let quote = self.0.executor_ref().ask(GetFeeQuote).send().await?;
+        let quote = self.executor()?.ask(GetFeeQuote).send().await?;
         Ok(wallet::FeeStateQuote {
             height: quote.height,
             base_fee_exec: quote.base_fee_exec,
@@ -275,8 +307,7 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
         limit: common::PageLimit,
     ) -> Result<lee::PublicationsPage, Self::Error> {
         Ok(self
-            .0
-            .executor_ref()
+            .executor()?
             .ask(GetPublications {
                 from_position,
                 limit,
@@ -291,8 +322,7 @@ impl WalletSequencerClient for SequencerServiceFFIWrapper {
         address: lee::AccountId,
     ) -> Result<Option<lee::EncryptedNote>, Self::Error> {
         Ok(self
-            .0
-            .executor_ref()
+            .executor()?
             .ask(GetRecoveryBinding { address })
             .send()
             .await?)

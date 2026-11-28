@@ -78,6 +78,78 @@ fn test_wallet_ffi_get_balance_public() -> Result<()> {
     Ok(())
 }
 
+/// A wallet on an in-process sequencer outlives it: once the sequencer stops, its calls fail
+/// rather than touch a freed sequencer, and pointed at a restarted one they work again.
+#[test]
+fn test_wallet_ffi_survives_its_sequencer_stopping() -> Result<()> {
+    let sequencer_ffi_helpers::JoiningSetup {
+        ctx,
+        node: _,
+        ownership_id: _,
+        sequencer_ffi: sequencer_ffi_res,
+        sequencer_home,
+    } = sequencer_ffi_helpers::joining_setup(false)?;
+
+    let account_id = FfiBytes32::from(ctx.ctx().existing_public_accounts()[0]);
+    let home = tempfile::tempdir()?;
+    let FfiCreateWalletOutput {
+        wallet: wallet_ffi_handle,
+        mnemonic: _,
+    } = new_wallet_ffi_with_test_context_config(&ctx, home.path(), sequencer_ffi_res.value)?;
+    let balance = |expect: &str| unsafe {
+        let mut out_balance: [u8; 16] = [0; 16];
+        let error = wallet_ffi_get_balance(
+            wallet_ffi_handle,
+            &raw const account_id,
+            true,
+            &raw mut out_balance,
+        );
+        tracing::info!(?error, "Balance query {expect}");
+        (!error.is_error()).then(|| u128::from_le_bytes(out_balance))
+    };
+    assert_eq!(
+        balance("before the stop"),
+        Some(INITIAL_PUBLIC_BALANCES_FOR_WALLET[0])
+    );
+
+    unsafe {
+        sequencer_ffi_helpers::sequencer_ffi_stop_sequencer(sequencer_ffi_res.value);
+    }
+    assert_eq!(balance("with no sequencer"), None);
+
+    // The same home again, as a restart does.
+    let runtime = unsafe { core_ffi::primitives::runtime::Runtime::from_borrowed(ctx.runtime()) };
+    let restarted = unsafe {
+        sequencer_ffi_helpers::start_sequencer_ffi(
+            &raw const runtime,
+            sequencer_home.path(),
+            &sequencer_home.path().join("config.json"),
+            sequencer_ffi_helpers::EPHEMERAL_ADDR,
+            sequencer_ffi_helpers::EPHEMERAL_ADDR,
+        )?
+    };
+    assert!(
+        !restarted.error.is_error(),
+        "Restart failed: {:?}",
+        restarted.error
+    );
+    sequencer_ffi_helpers::wait_for_sequencer_ffi_online(unsafe { &*restarted.value })?;
+    // Still none until the wallet is pointed at it.
+    assert_eq!(balance("before the rebind"), None);
+
+    unsafe { wallet_ffi_set_sequencer(wallet_ffi_handle, restarted.value) }.unwrap();
+    assert_eq!(
+        balance("after the rebind"),
+        Some(INITIAL_PUBLIC_BALANCES_FOR_WALLET[0])
+    );
+
+    unsafe {
+        wallet_ffi_destroy(wallet_ffi_handle);
+        sequencer_ffi_helpers::sequencer_ffi_stop_sequencer(restarted.value);
+    }
+    Ok(())
+}
+
 #[test]
 fn test_wallet_ffi_get_account_public() -> Result<()> {
     let sequencer_ffi_helpers::JoiningSetup {

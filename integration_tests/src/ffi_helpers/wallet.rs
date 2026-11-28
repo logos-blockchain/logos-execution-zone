@@ -49,6 +49,11 @@ unsafe extern "C" {
 
     pub fn wallet_ffi_destroy(handle: *mut WalletHandle);
 
+    pub fn wallet_ffi_set_sequencer(
+        handle: *mut WalletHandle,
+        sequencer: *const SequencerServiceFFI,
+    ) -> error::FfiOperationError;
+
     pub fn wallet_ffi_create_account_public(
         handle: *mut WalletHandle,
         out_account_id: *mut FfiBytes32,

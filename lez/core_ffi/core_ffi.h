@@ -2572,7 +2572,8 @@ enum FfiOperationError wallet_ffi_free_label_list(struct LabelList *label_list);
  * - `storage_path`: Path where wallet data will be stored
  * - `password`: Password the wallet storage is encrypted under, or empty to leave it unencrypted
  * - `sequencer`: A `SequencerServiceFFI` in this process, or null to use the address in
- *   `config_path`
+ *   `config_path`. The wallet does not keep it alive: once it stops, sequencer calls fail until
+ *   `wallet_ffi_set_sequencer` hands the wallet another.
  *
  * # Returns
  * - Result, which contains opaque wallet handle and mnemonic words on success
@@ -2580,7 +2581,7 @@ enum FfiOperationError wallet_ffi_free_label_list(struct LabelList *label_list);
  *
  * # Safety
  * All string parameters must be valid null-terminated UTF-8 strings. A non-null sequencer must
- * outlive the returned handle.
+ * be valid for this call.
  */
 struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
                                                    const char *storage_path,
@@ -2599,7 +2600,8 @@ struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
  *   storage (see `wallet_ffi_storage_is_encrypted`)
  * - `out_handle`: Output pointer for the opaque wallet handle
  * - `sequencer`: A `SequencerServiceFFI` in this process, or null to use the address in
- *   `config_path`
+ *   `config_path`. The wallet does not keep it alive: once it stops, sequencer calls fail until
+ *   `wallet_ffi_set_sequencer` hands the wallet another.
  *
  * # Returns
  * - `Success` with the handle written to `out_handle`
@@ -2609,7 +2611,7 @@ struct FfiCreateWalletOutput wallet_ffi_create_new(const char *config_path,
  *
  * # Safety
  * - All string parameters must be valid null-terminated UTF-8 strings. A non-null sequencer must
- *   outlive the handle written to `out_handle`.
+ *   be valid for this call.
  * - `out_handle` must be a valid pointer to a `WalletHandle *`.
  */
 enum FfiOperationError wallet_ffi_open(const char *config_path,
@@ -2724,6 +2726,24 @@ enum FfiOperationError wallet_ffi_restore_data(struct WalletHandle *handle,
  * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
  */
 char *wallet_ffi_get_sequencer_addr(struct WalletHandle *handle);
+
+/**
+ * Point a wallet that talks to a sequencer in this process at `sequencer` from now on.
+ *
+ * For a wallet given a non-null `sequencer` by `wallet_ffi_create_new` or `wallet_ffi_open`, e.g.
+ * once that one was stopped and another started; null for none, so its sequencer calls fail. The
+ * wallet does not keep `sequencer` alive, so it may be stopped at any time after.
+ *
+ * # Returns
+ * `Success`; `NullPointer` for a null `handle`; `NotSupported` for a wallet that talks to its
+ * sequencer over RPC.
+ *
+ * # Safety
+ * - `handle` must be a valid wallet handle from `wallet_ffi_create_new` or `wallet_ffi_open`
+ * - `sequencer` must be null or a valid `SequencerServiceFFI` for this call
+ */
+enum FfiOperationError wallet_ffi_set_sequencer(struct WalletHandle *handle,
+                                                const struct SequencerServiceFFI *sequencer);
 
 /**
  * Produce account id for public PDA.
