@@ -1252,6 +1252,9 @@ impl From<indexer_core::BlockIngestError> for BlockIngestError {
             indexer_core::BlockIngestError::UnfinalizedRelease { tx_index, key } => {
                 Self::UnfinalizedRelease { tx_index, key }
             }
+            indexer_core::BlockIngestError::UnbackedDeposit { tx_index, op_id } => {
+                Self::UnbackedDeposit { tx_index, op_id }
+            }
             indexer_core::BlockIngestError::StateTransition { tx_index, reason } => {
                 Self::StateTransition { tx_index, reason }
             }

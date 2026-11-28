@@ -9,9 +9,9 @@ use crate::{
     indexer::{
         ACC_NUM_CELL_NAME, BLOCK_EVENTS_CELL_NAME, BLOCK_HASH_CELL_NAME, BREAKPOINT_CELL_NAME,
         CF_ACC_META, CF_BREAKPOINT_NAME, CF_EVENTS, CF_HASH_TO_ID, CF_TX_TO_ID,
-        DB_META_EVENT_FILTER_SEGMENTS_KEY, DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY,
-        DB_META_STALL_REASON_KEY, DB_META_TIP_SLOT_KEY, DB_META_ZONE_SDK_INDEXER_CURSOR_KEY,
-        TX_HASH_CELL_NAME,
+        DB_META_EVENT_FILTER_SEGMENTS_KEY, DB_META_L1_DEPOSITS_KEY,
+        DB_META_LAST_OBSERVED_L1_LIB_HEADER_ID_IN_DB_KEY, DB_META_STALL_REASON_KEY,
+        DB_META_TIP_SLOT_KEY, DB_META_ZONE_SDK_INDEXER_CURSOR_KEY, TX_HASH_CELL_NAME,
     },
 };
 
@@ -364,6 +364,40 @@ impl SimpleWritableCell for StallReasonCellRef<'_> {
             DbError::borsh_cast_message(
                 err,
                 Some("Failed to serialize stall reason cell".to_owned()),
+            )
+        })
+    }
+}
+
+/// Opaque borsh bytes for the indexer's L1 deposits not yet minted.
+#[derive(BorshDeserialize)]
+pub struct L1DepositsCellOwned(pub Vec<u8>);
+
+impl SimpleStorableCell for L1DepositsCellOwned {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_L1_DEPOSITS_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleReadableCell for L1DepositsCellOwned {}
+
+#[derive(BorshSerialize)]
+pub struct L1DepositsCellRef<'bytes>(pub &'bytes [u8]);
+
+impl SimpleStorableCell for L1DepositsCellRef<'_> {
+    type KeyParams = ();
+
+    const CELL_NAME: &'static str = DB_META_L1_DEPOSITS_KEY;
+    const CF_NAME: &'static str = CF_META_NAME;
+}
+
+impl SimpleWritableCell for L1DepositsCellRef<'_> {
+    fn value_constructor(&self) -> DbResult<Vec<u8>> {
+        borsh::to_vec(&self).map_err(|err| {
+            DbError::borsh_cast_message(
+                err,
+                Some("Failed to serialize L1 deposits cell".to_owned()),
             )
         })
     }

@@ -116,12 +116,13 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
             view: _,
             finalized,
             deposits,
-            pending_deposits: _,
+            pending_deposits,
             withdrawals,
             undecodable,
             finalized_signers,
         } = update;
 
+        sequencer_core::record_l1_deposits(&mut self.chain, deposits, pending_deposits);
         let mut store_update = sequencer_core::chain_update(&self.chain);
         for entry in finalized {
             let signer = |signed: &[(MsgId, Ed25519PublicKey)]| {

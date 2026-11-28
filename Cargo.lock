@@ -1484,6 +1484,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "borsh",
+ "bridge_core",
  "clock_core",
  "common",
  "fee_core",
@@ -4514,6 +4515,7 @@ dependencies = [
  "logos-blockchain-zone-sdk",
  "program_loader_core",
  "programs",
+ "sequencer_bridge",
  "serde",
  "serde_json",
  "serde_with",
@@ -11029,6 +11031,8 @@ dependencies = [
 name = "sequencer_bridge"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "borsh",
  "bridge_core",
  "lee",
  "programs",
@@ -11128,6 +11132,7 @@ dependencies = [
  "programs",
  "sequencer_actors_common",
  "sequencer_bedrock_actor",
+ "sequencer_bridge",
  "sequencer_channel_signing_actor",
  "sequencer_core",
  "sequencer_core_metrics",

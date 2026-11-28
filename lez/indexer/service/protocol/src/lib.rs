@@ -655,6 +655,11 @@ pub enum BlockIngestError {
         /// The released sequencer key, hex.
         key: String,
     },
+    UnbackedDeposit {
+        tx_index: u64,
+        /// The deposit's L1 op id, hex.
+        op_id: String,
+    },
     StateTransition {
         /// Index of the failing transaction within the block body.
         tx_index: u64,

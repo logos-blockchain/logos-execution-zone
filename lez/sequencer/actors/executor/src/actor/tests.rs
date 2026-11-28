@@ -397,6 +397,10 @@ fn prepare_mock_storage_with_stake(
         .returning(|_, _| Ok(None));
 
     mock_storage
+        .expect_handle_get_pending_deposit_events()
+        .returning(|_, _| Ok(Vec::new()));
+
+    mock_storage
         .expect_handle_get_slash_record_bytes()
         .returning(|_, _| Ok(None));
 

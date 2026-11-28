@@ -346,6 +346,24 @@ pub fn is_system_injection(tx: &LeeTransaction) -> bool {
     crate::system_upgrades::is_system_upgrader_tx(tx)
 }
 
+/// The L1 op id of the deposit `tx` mints, when it is an injected bridge deposit.
+#[must_use]
+pub fn injected_deposit_op_id(tx: &LeeTransaction) -> Option<[u8; 32]> {
+    if !is_system_injection(tx) {
+        return None;
+    }
+    let (to, message) = tx.public_call()?;
+    if to.program_account_id != programs::bridge_account_id() {
+        return None;
+    }
+    match borsh::from_slice::<bridge_core::Message>(message).ok()? {
+        bridge_core::Message::Deposit {
+            l1_deposit_op_id, ..
+        } => Some(l1_deposit_op_id),
+        bridge_core::Message::Withdraw { .. } => None,
+    }
+}
+
 /// Whether `tx` invokes the sequencer-stake program.
 ///
 /// Committee-lifecycle operations (stake, unstake, slash) are fee-exempt: a

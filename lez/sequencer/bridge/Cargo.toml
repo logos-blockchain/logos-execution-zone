@@ -8,6 +8,8 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+anyhow.workspace = true
+borsh.workspace = true
 lee.workspace = true
 programs.workspace = true
 system_accounts.workspace = true

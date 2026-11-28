@@ -35,6 +35,7 @@ prove = ["lee/prove"]
 test-utils = []
 
 [dev-dependencies]
+bridge_core.workspace = true
 clock_core.workspace = true
 program_loader_core.workspace = true
 system_upgrader_core.workspace = true

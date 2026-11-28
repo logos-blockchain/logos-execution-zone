@@ -3,12 +3,16 @@
 //! unfinalized message lineage.
 
 use std::{
-    collections::{BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     sync::Arc,
 };
 
 use borsh::{BorshDeserialize, BorshSerialize};
-use common::{block::Block, transaction::TxEvents};
+use common::{
+    HashType,
+    block::Block,
+    transaction::{TxEvents, injected_deposit_op_id},
+};
 use lee::V03State;
 use logos_blockchain_zone_sdk::core::mantle::ops::channel::MsgId;
 use sequencer_stake_core::SequencerKey;
@@ -16,7 +20,7 @@ use tracing::{error, warn};
 
 use crate::{
     AcceptOutcome, BlockIngestError,
-    apply::{Tip, apply_judged_block_to_state, validate_against_tip},
+    apply::{Tip, apply_judged_block_to_state, check_injected_deposits, validate_against_tip},
 };
 
 /// Attempts at a block whose failure may be transient before it counts as invalid.
@@ -47,6 +51,13 @@ pub enum PublishRecord {
     AlreadyInView,
     /// The view moved past the entry's parent since the block was built.
     Stale,
+}
+
+/// A deposit this node saw on L1, by op id: the hash of the mint it backs, and whether it is final.
+#[derive(Clone, Copy, BorshSerialize, BorshDeserialize)]
+struct L1Deposit {
+    mint: HashType,
+    is_final: bool,
 }
 
 /// The persisted form of the view.
@@ -86,6 +97,9 @@ pub struct ChainState {
     view: Vec<ChannelEntry>,
     /// `folds[i]` is the head after folding `view[..=i]`.
     folds: Vec<Fold>,
+    /// Deposits seen on L1 and not yet minted final. The view mints any of them, the final tier
+    /// only final ones.
+    l1_deposits: BTreeMap<[u8; 32], L1Deposit>,
 }
 
 /// The head after folding one view entry.
@@ -113,6 +127,7 @@ impl ChainState {
             newly_final: Vec::new(),
             view: Vec::new(),
             folds: Vec::new(),
+            l1_deposits: BTreeMap::new(),
         }
     }
 
@@ -257,6 +272,38 @@ impl ChainState {
         }
     }
 
+    /// Records deposits seen on L1, each with the hash of the mint it backs and whether it is
+    /// final, refolding the view from the first entry that mints a new one.
+    pub fn record_l1_deposits(
+        &mut self,
+        deposits: impl IntoIterator<Item = ([u8; 32], HashType, bool)>,
+    ) {
+        let mut new = HashSet::new();
+        for (op_id, mint, is_final) in deposits {
+            let deposit = self.l1_deposits.entry(op_id).or_insert_with(|| {
+                new.insert(op_id);
+                L1Deposit {
+                    mint,
+                    is_final: false,
+                }
+            });
+            deposit.is_final |= is_final;
+        }
+        let first_minting = self.view.iter().position(|entry| {
+            entry.block.as_ref().is_some_and(|block| {
+                block
+                    .body
+                    .transactions
+                    .iter()
+                    .filter_map(injected_deposit_op_id)
+                    .any(|op_id| new.contains(&op_id))
+            })
+        });
+        if let Some(idx) = first_minting {
+            self.fold_from(idx);
+        }
+    }
+
     #[must_use]
     pub fn final_tip(&self) -> Option<Tip> {
         self.final_tip.clone()
@@ -280,12 +327,18 @@ impl ChainState {
                 })
                 .collect(),
         };
-        borsh::to_vec(&stored).expect("view serializes")
+        let mut bytes = borsh::to_vec(&stored).expect("view serializes");
+        bytes.extend(borsh::to_vec(&self.l1_deposits).expect("deposits serialize"));
+        bytes
     }
 
     /// Installs a persisted view on the restored final tier and folds it.
-    pub fn restore_view(&mut self, bytes: &[u8]) -> Result<(), std::io::Error> {
-        let stored = StoredView::try_from_slice(bytes)?;
+    pub fn restore_view(&mut self, mut bytes: &[u8]) -> Result<(), std::io::Error> {
+        let stored = StoredView::deserialize(&mut bytes)?;
+        // A view stored before deposits were recorded carries none.
+        if !bytes.is_empty() {
+            self.l1_deposits = BTreeMap::try_from_slice(bytes)?;
+        }
         self.final_msg = MsgId::from(stored.final_msg);
         self.view = stored
             .entries
@@ -528,6 +581,7 @@ impl ChainState {
                 block,
                 self.head_state(),
                 &entry.finally_absent_keys,
+                &self.l1_deposits,
             )
         {
             return Fold {
@@ -564,6 +618,15 @@ impl ChainState {
             }
         }
 
+        if let Err(err) = check_injected_deposits(block, |op_id| {
+            self.l1_deposits
+                .get(op_id)
+                .filter(|deposit| deposit.is_final)
+                .map(|deposit| deposit.mint)
+        }) {
+            return AcceptOutcome::Parked(err);
+        }
+
         let applied = match self.folded(block, finally_absent_keys) {
             Some(folded) => Ok(folded),
             None => apply_with_retries(
@@ -575,6 +638,14 @@ impl ChainState {
         };
         match applied {
             Ok((state, events)) => {
+                for op_id in block
+                    .body
+                    .transactions
+                    .iter()
+                    .filter_map(injected_deposit_op_id)
+                {
+                    self.l1_deposits.remove(&op_id);
+                }
                 self.final_state = state;
                 self.final_tip = Some(Tip::from(block));
                 self.newly_final.push(block.clone());
@@ -612,18 +683,22 @@ fn fold_block(
     block: &Block,
     state: &V03State,
     finally_absent_keys: &BTreeSet<SequencerKey>,
+    l1_deposits: &BTreeMap<[u8; 32], L1Deposit>,
 ) -> Option<(V03State, Vec<TxEvents>)> {
     validate_against_tip(tip, block).ok()?;
-    apply_with_retries(tip, block, state, finally_absent_keys)
-        .inspect_err(|err| {
-            warn!(
-                block_id = block.header.block_id,
-                block_hash = %block.header.hash,
-                error = %err,
-                "Skipping channel block"
-            );
-        })
-        .ok()
+    check_injected_deposits(block, |op_id| {
+        l1_deposits.get(op_id).map(|deposit| deposit.mint)
+    })
+    .and_then(|()| apply_with_retries(tip, block, state, finally_absent_keys))
+    .inspect_err(|err| {
+        warn!(
+            block_id = block.header.block_id,
+            block_hash = %block.header.hash,
+            error = %err,
+            "Skipping channel block"
+        );
+    })
+    .ok()
 }
 
 /// Applies `block` on a copy of `state`, retrying a failure that may be transient.
@@ -956,6 +1031,85 @@ mod tests {
         assert_eq!(chain.head_tip().unwrap().hash, block2_prime.header.hash);
         assert_eq!(chain.pin(), msg(12));
         assert_head_is_the_fold(&chain);
+    }
+
+    /// A block-2 deposit in the injected shape, unbacked unless its mint is recorded.
+    fn block_minting(op_id: [u8; 32], parent: &Block) -> (Block, HashType) {
+        let receipt = lee::Actor::new(lee::AccountId::new([1; 32]), programs::bridge_account_id());
+        let mint = common::transaction::LeeTransaction::Public(lee::PublicTransaction::new(
+            lee::public_transaction::Message::try_new(
+                receipt,
+                vec![(receipt, lee::Authority::None)],
+                std::collections::BTreeMap::new(),
+                bridge_core::Message::Deposit {
+                    l1_deposit_op_id: op_id,
+                    recipient_id: lee::AccountId::new([3; 32]),
+                    amount: 5,
+                },
+            )
+            .expect("a deposit message builds"),
+            lee::public_transaction::WitnessSet::from_raw_parts(vec![]),
+        ));
+        let hash = mint.hash();
+        (
+            produce_dummy_block(2, Some(parent.header.hash), vec![mint]),
+            hash,
+        )
+    }
+
+    #[test]
+    fn an_unbacked_deposit_is_skipped_in_the_view_and_parks_final() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let (block, _) = block_minting([7; 32], &genesis);
+        chain.apply_extension(entries_for(&[genesis, block.clone()]));
+
+        assert_eq!(head_id(&chain), Some(1));
+        let outcome = chain.apply_finalized(msg(2), msg(1), Some(&block), NO_RELEASES);
+        assert!(matches!(
+            outcome,
+            Some(AcceptOutcome::Parked(BlockIngestError::UnbackedDeposit {
+                tx_index: 0,
+                ..
+            }))
+        ));
+    }
+
+    #[test]
+    fn a_deposit_seen_only_before_finality_does_not_back_a_final_block() {
+        let mut chain = ChainState::new(claimed_initial_state());
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let (block, mint) = block_minting([7; 32], &genesis);
+        chain.record_l1_deposits([([7; 32], mint, false)]);
+        chain.apply_extension(entries_for(&[genesis, block.clone()]));
+
+        let outcome = chain.apply_finalized(msg(2), msg(1), Some(&block), NO_RELEASES);
+        assert!(matches!(
+            outcome,
+            Some(AcceptOutcome::Parked(
+                BlockIngestError::UnbackedDeposit { .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn recorded_deposits_survive_a_view_restore() {
+        let genesis = produce_dummy_block(1, None, vec![]);
+        let (block, mint) = block_minting([7; 32], &genesis);
+        let mut chain = ChainState::new(claimed_initial_state());
+        chain.record_l1_deposits([([7; 32], mint, true)]);
+        let mut restored = ChainState::new(claimed_initial_state());
+        restored.restore_view(&chain.encode_view()).unwrap();
+        restored.apply_extension(entries_for(&[genesis]));
+
+        // Backed, so it reaches execution, where the stub deposit fails on its accounts.
+        let outcome = restored.apply_finalized(msg(2), msg(1), Some(&block), NO_RELEASES);
+        assert!(matches!(
+            outcome,
+            Some(AcceptOutcome::Parked(
+                BlockIngestError::StateTransition { .. }
+            ))
+        ));
     }
 
     #[test]

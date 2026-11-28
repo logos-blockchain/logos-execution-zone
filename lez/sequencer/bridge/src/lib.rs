@@ -2,7 +2,8 @@
 
 use std::collections::BTreeMap;
 
-use bridge_core::BridgeAmount;
+use borsh::BorshDeserialize as _;
+use bridge_core::{BridgeAmount, DepositMetadata};
 use lee::{
     AccountId, Actor, Authority, PublicAccountEvidence, PublicTransaction,
     public_transaction::Message,
@@ -31,6 +32,21 @@ impl Credited<'_> {
             Self::Private(_) => None,
         }
     }
+}
+
+/// The mint of the L1 deposit `op_id` carrying `metadata`, the one transaction every node accepts
+/// for it.
+pub fn deposit_mint(
+    op_id: [u8; 32],
+    amount: BridgeAmount,
+    metadata: &[u8],
+) -> anyhow::Result<PublicTransaction> {
+    let metadata = DepositMetadata::try_from_slice(metadata)?;
+    Ok(deposit_tx(
+        op_id,
+        &Credited::Public(metadata.recipient.evidence()),
+        amount,
+    )?)
 }
 
 /// A bridge `Deposit` of `amount` under `op_id`, crediting `credited`.

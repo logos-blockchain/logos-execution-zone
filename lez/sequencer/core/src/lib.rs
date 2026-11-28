@@ -8,8 +8,6 @@ use std::{
 };
 
 use anyhow::{Context as _, Result, anyhow};
-use borsh::BorshDeserialize as _;
-use bridge_core::DepositMetadata;
 use chain_state::{AcceptOutcome, ChainState, ChannelEntry, PublishRecord, full_stake_releases};
 use common::{
     HashType,
@@ -40,7 +38,6 @@ use sequencer_bedrock_actor::{
         PublishOutcome, ViewChange,
     },
 };
-use sequencer_bridge::Credited;
 use sequencer_channel_signing_actor::{ChannelSigningActor, protocol as channel_signing};
 use sequencer_slasher_actor::{
     SlasherActor,
@@ -368,6 +365,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
 
             // Set before the finalized entries, which apply these held entries to the final tier.
             chain.set_finally_absent_keys(held_finally_absent_keys.iter().cloned());
+            record_l1_deposits(&mut chain, deposits, &self.observed_deposits);
 
             // Finalized first: the view below is what lies above it.
             let mut irreversible_redelivered: Vec<Block> = Vec::new();
@@ -571,6 +569,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> SequencerCore<S, B> {
                 self.observed_deposits.push(deposit.clone());
             }
         }
+        record_l1_deposits(&mut *self.chain.lock().await, &[], deposits);
     }
 
     /// Tells the channel-signing actor which deposits final blocks mint, so it
@@ -2233,6 +2232,36 @@ pub fn released_note_keys(
         .map(withdrawal_reconciliation_key)
 }
 
+/// Records `finalized` and `observed` L1 deposits, each with the mint it backs, before the
+/// finalized entries that may mint them apply.
+pub fn record_l1_deposits(
+    chain: &mut ChainState,
+    finalized: &[DepositInfo],
+    observed: &[DepositInfo],
+) {
+    chain.record_l1_deposits(
+        finalized
+            .iter()
+            .map(|deposit| (deposit, true))
+            .chain(observed.iter().map(|deposit| (deposit, false)))
+            .filter_map(|(deposit, is_final)| {
+                let mint =
+                    build_bridge_deposit_tx_from_event(&pending_deposit_event_record(deposit))
+                        .ok()?
+                        .hash();
+                Some((deposit.op_id, mint, is_final))
+            }),
+    );
+}
+
+/// Records the stored final deposits not yet minted, which a restored view may lack.
+pub fn record_stored_l1_deposits(chain: &mut ChainState, records: &[PendingDepositEventRecord]) {
+    chain.record_l1_deposits(records.iter().filter_map(|record| {
+        let mint = build_bridge_deposit_tx_from_event(record).ok()?.hash();
+        Some((record.deposit_op_id.0, mint, true))
+    }));
+}
+
 /// The pending record `deposit` leaves until its mint finalizes.
 #[must_use]
 pub fn pending_deposit_event_record(deposit: &DepositInfo) -> PendingDepositEventRecord {
@@ -2245,18 +2274,11 @@ pub fn pending_deposit_event_record(deposit: &DepositInfo) -> PendingDepositEven
 }
 
 fn build_bridge_deposit_tx_from_event(event: &PendingDepositEventRecord) -> Result<LeeTransaction> {
-    let metadata = DepositMetadata::try_from_slice(&event.metadata)
-        .context("Failed to decode finalized Bedrock deposit metadata")?;
-
     // The receipt PDA carries the exactly-once check: the deposit is addressed to it,
     // and its own actor state detects a replay.
     Ok(LeeTransaction::Public(
-        sequencer_bridge::deposit_tx(
-            event.deposit_op_id.0,
-            &Credited::Public(metadata.recipient.evidence()),
-            event.amount,
-        )
-        .context("Failed to build bridge deposit message")?,
+        sequencer_bridge::deposit_mint(event.deposit_op_id.0, event.amount, &event.metadata)
+            .context("Failed to build the bridge deposit mint")?,
     ))
 }
 

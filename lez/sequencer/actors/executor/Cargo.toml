@@ -76,6 +76,7 @@ tracing = { workspace = true, optional = true }
 mockall = { workspace = true, optional = true }
 
 [dev-dependencies]
+sequencer_bridge.workspace = true
 lee = { workspace = true, features = ["test-utils"] }
 sequencer_storage_actor = { workspace = true, features = ["mock"] }
 sequencer_bedrock_actor = { workspace = true, features = ["mock"] }
