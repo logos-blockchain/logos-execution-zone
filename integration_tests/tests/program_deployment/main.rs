@@ -8,7 +8,7 @@ use std::time::Duration;
 use anyhow::Result;
 use common::transaction::LeeTransaction;
 use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, TestContext, get_account, new_account};
-use lee::test_utils::{TestSigner, witness_for};
+use lee::test_utils::TestSigner;
 use sequencer_service_rpc::RpcClient as _;
 use test_fixtures::{
     MultiZoneTestContextBuilder, ZoneTestContextBuilder, config::MultiNodeTestContextConfig,
@@ -115,7 +115,11 @@ async fn deploy_and_execute_program() -> Result<()> {
             .pub_account_secret(payer_id)
             .unwrap(),
     );
-    let witness_set = witness_for(&message, &[&target_signer, &payer_signer]);
+    let witness_set = lee::test_utils::witness_for_zone(
+        &message,
+        &ctx.default_channel_id(),
+        &[&target_signer, &payer_signer],
+    );
     let transaction = lee::PublicTransaction::new(message, witness_set);
     let _response = ctx
         .sequencer_client()

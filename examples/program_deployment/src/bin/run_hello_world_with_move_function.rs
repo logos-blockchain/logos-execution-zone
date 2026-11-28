@@ -131,7 +131,11 @@ async fn main() {
                 )
                 .unwrap()
             };
-            let witness_set = public_transaction::WitnessSet::sign(&message, &[payer_signer]);
+            let witness_set = public_transaction::WitnessSet::sign(
+                &message,
+                &wallet_core.zone().await.unwrap(),
+                &[payer_signer],
+            );
             let tx = PublicTransaction::new(message, witness_set);
 
             // Submit the transaction
@@ -183,7 +187,11 @@ async fn main() {
                 )
                 .unwrap()
             };
-            let witness_set = public_transaction::WitnessSet::sign(&message, &[payer_signer]);
+            let witness_set = public_transaction::WitnessSet::sign(
+                &message,
+                &wallet_core.zone().await.unwrap(),
+                &[payer_signer],
+            );
             let tx = PublicTransaction::new(message, witness_set);
 
             // Submit the transaction

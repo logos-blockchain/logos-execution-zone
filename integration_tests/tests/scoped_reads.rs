@@ -14,11 +14,7 @@ use integration_tests::{
         wait_for_indexer_to_catch_up, wait_until,
     },
 };
-use lee::{
-    AccountId, Actor,
-    program::Program,
-    test_utils::{TestSigner, witness_for},
-};
+use lee::{AccountId, Actor, program::Program, test_utils::TestSigner};
 use lee_core::{
     account::Nonce, native_token::NATIVE_TOKEN_PROGRAM_ID, program::PROGRAM_LOADER_ACCOUNT_ID,
 };
@@ -103,7 +99,8 @@ async fn submit(
     let payer_signer = TestSigner::from(&payer.secret);
     let mut signers = extra_signers.to_vec();
     signers.push(&payer_signer);
-    let witness_set = witness_for(&message, &signers);
+    let witness_set =
+        lee::test_utils::witness_for_zone(&message, &ctx.default_channel_id(), &signers);
 
     let tx_hash = ctx
         .sequencer_client()

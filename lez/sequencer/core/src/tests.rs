@@ -187,7 +187,14 @@ async fn start_sequencer_bare_on(
         .await
         .unwrap()
         .map_or_else(
-            || (sequencer_genesis::build_initial_state(), None),
+            || {
+                (
+                    sequencer_genesis::build_initial_state(
+                        *config.bedrock_config.channel_id.as_ref(),
+                    ),
+                    None,
+                )
+            },
             |(state, meta)| (state, Some(chain_state::Tip::from(meta))),
         );
     let mut chain = ChainState::from_final(final_state, final_tip);

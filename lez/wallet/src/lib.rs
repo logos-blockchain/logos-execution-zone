@@ -340,6 +340,9 @@ pub trait WalletSequencerClient: Clone {
 
     async fn send_transaction(&self, tx: LeeTransaction) -> Result<HashType, Self::Error>;
 
+    /// The channel id of the sequencer's zone, which every signature is bound to.
+    async fn get_channel_id(&self) -> Result<[u8; 32], Self::Error>;
+
     async fn get_block(&self, block_id: BlockId) -> Result<Option<Block>, Self::Error>;
 
     async fn get_block_range(
@@ -408,6 +411,10 @@ pub trait WalletSequencerClient: Clone {
 
 impl WalletSequencerClient for SequencerClient {
     type Error = sequencer_service_rpc::ClientError;
+
+    async fn get_channel_id(&self) -> Result<[u8; 32], Self::Error> {
+        RpcClient::get_channel_id(self).await.map(|id| id.0)
+    }
 
     async fn send_transaction(&self, tx: LeeTransaction) -> Result<HashType, Self::Error> {
         RpcClient::send_transaction(self, tx).await
@@ -515,6 +522,8 @@ pub struct WalletCore<C: WalletSequencerClient> {
     spent_nullifiers: SpentNullifiers,
 
     sequencer_client: C,
+    /// The channel id of the zone signatures are bound to, resolved once.
+    zone: tokio::sync::OnceCell<[u8; 32]>,
 
     /// Simulate transactions and report their cost instead of sending them.
     dry_run: bool,
@@ -617,6 +626,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             storage_key,
             spent_nullifiers,
             sequencer_client,
+            zone: tokio::sync::OnceCell::new(),
             dry_run: false,
             allow_revert: false,
             fee_params: FeeParams::default(),
@@ -1262,6 +1272,24 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         }
     }
 
+    /// The channel id of the zone this wallet signs for: the configured one, else its
+    /// sequencer's.
+    pub async fn zone(&self) -> Result<[u8; 32], ExecutionFailureKind> {
+        self.zone
+            .get_or_try_init(|| async {
+                match &self.config.channel_id {
+                    Some(pinned) => Ok(pinned.0),
+                    None => self
+                        .sequencer_client
+                        .get_channel_id()
+                        .await
+                        .map_err(Into::into),
+                }
+            })
+            .await
+            .copied()
+    }
+
     pub async fn get_last_block_id(&self) -> Result<u64> {
         Ok(self.sequencer_client.get_last_block_id().await?)
     }
@@ -1702,6 +1730,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
         fee_payer: Option<AccountId>,
         tx_pre_check: impl FnOnce(&[SelectedActorState]) -> Result<(), ExecutionFailureKind>,
     ) -> Result<(HashType, Vec<SharedSecretKey>), ExecutionFailureKind> {
+        let zone = self.zone().await?;
         let AsyncDelivery {
             recoveries,
             seals,
@@ -2069,6 +2098,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             let witness_set = lee::privacy_preserving_transaction::witness_set::WitnessSet::sign(
                 &message,
                 proof,
+                &zone,
                 &acc_manager.signing_keys(&message.nonces),
             );
             let tx = PrivacyPreservingTransaction::new(message, witness_set);
@@ -2152,6 +2182,7 @@ impl<C: WalletSequencerClient> WalletCore<C> {
             let witness_set = lee::privacy_preserving_transaction::witness_set::WitnessSet::sign(
                 &message,
                 proof,
+                &zone,
                 &acc_manager.signing_keys(&message.nonces),
             );
             Ok::<_, ExecutionFailureKind>(PrivacyPreservingTransaction::new(message, witness_set))
@@ -2700,7 +2731,8 @@ impl<C: WalletSequencerClient> WalletCore<C> {
 
         let mut signers = acc_manager.signing_keys(&message.nonces);
         signers.extend(co_signer);
-        let witness_set = lee::public_transaction::WitnessSet::sign(&message, &signers);
+        let witness_set =
+            lee::public_transaction::WitnessSet::sign(&message, &self.zone().await?, &signers);
 
         let tx = lee::public_transaction::PublicTransaction::new(message, witness_set);
         if self.dry_run
@@ -3181,6 +3213,7 @@ impl WalletCore<SequencerClient> {
             storage_key,
             spent_nullifiers,
             sequencer_client,
+            zone: tokio::sync::OnceCell::new(),
             dry_run: false,
             allow_revert: false,
             fee_params: FeeParams::default(),
@@ -3537,6 +3570,8 @@ mod tests {
                     sequencer_addr: format!("http://{address}").parse().unwrap(),
                     basic_auth: None,
                 },
+                // The mock serves no channel id; its state is in the default zone.
+                channel_id: Some(sequencer_service_protocol::ChannelId([0; 32])),
                 ..WalletConfig::default()
             })
             .unwrap(),

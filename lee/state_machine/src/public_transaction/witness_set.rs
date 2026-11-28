@@ -16,9 +16,10 @@ pub struct WitnessSet {
 
 impl WitnessSet {
     #[must_use]
-    pub fn sign(message: &Message, signers: &[Signer]) -> Self {
+    /// Signs `message` for the zone of channel `zone`.
+    pub fn sign(message: &Message, zone: &[u8; 32], signers: &[Signer]) -> Self {
         Self {
-            entries: sign_entries(signers, |next| message.message_with_keys(next)),
+            entries: sign_entries(signers, |next| message.message_with_keys(zone, next)),
         }
     }
 
@@ -103,6 +104,7 @@ mod tests {
 
         let witness_set = WitnessSet::sign(
             &message,
+            &[0; 32],
             &[
                 Signer::new(&secret2, Nonce(2), KeyType::Schnorr, KeyType::Schnorr),
                 Signer::new(&secret1, Nonce(1), KeyType::Schnorr, KeyType::Schnorr),
@@ -111,7 +113,7 @@ mod tests {
 
         assert_eq!(witness_set.entries.len(), 2);
         let next_keys: Vec<_> = expected.iter().map(|(.., next)| *next).collect();
-        let message_with_keys = message.message_with_keys(&next_keys);
+        let message_with_keys = message.message_with_keys(&[0; 32], &next_keys);
         for (entry, (_, current, next)) in witness_set.entries.iter().zip(expected) {
             assert_eq!(entry.next, next);
             assert_eq!(

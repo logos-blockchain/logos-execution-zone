@@ -93,7 +93,7 @@ async fn main() {
     .unwrap();
     // Pass the signing key to sign the message. This will be used by the node
     // to flag the pre_state as `is_authorized` when executing the program
-    let witness_set = WitnessSet::sign(&message, &signing_keys);
+    let witness_set = WitnessSet::sign(&message, &wallet_core.zone().await.unwrap(), &signing_keys);
     let tx = PublicTransaction::new(message, witness_set);
 
     // Submit the transaction

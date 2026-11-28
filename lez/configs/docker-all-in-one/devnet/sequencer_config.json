@@ -58,10 +58,10 @@
             132,
             121
           ],
-          "ownership_id": "3DpQ7crHm9mYi59LvGA2jPtXT929hRULYKuJBBam3jEr",
+          "ownership_id": "6mwNNahZgJat5J8uK26tey5vp6uRnJQN6S8DXeGGhYpn",
           "stake_entry": {
-            "auth_data": "00d09b81a9d7f33fdadc30104413f441b56305804f41a592f30b31f1bec8a047b29b8ca0d65ebaa03fb2c7a7df7453575d00ce956d20090c4eb7af0691ebee018280682766c9d220c33b59bc68d6cefac6772729e6c4052845effce2d33c56d7ae83c75274f05c6ef19377de60a36208543ae0494f90fd24952984d2fdad17c9a4",
-            "next": "00ba54ccf73eb5ce8f74189232d83734265dac87cabc2bdc267bf715a63252ae9c"
+            "auth_data": "0049985c07b05addef1b3f3e559429eeb12d7f0665cf930aa5279b0dfb5fad4d7a84ef51d76359c315f3552b55b1d72cff6a34382dcdf3903555bdb6c0b143634f237672cd07199be7fa6bda534d959424beef46c8e0151e95573cebbf16f01bd062809f93712dc785ef791e85e34a83ad57bfc224809965d035808e8f34f42500",
+            "next": "00b835896c10ee48a02f4f8227daa5b32f0023fec3a06bbbf40469ccf99b9ff9a7"
           }
         }
       },
@@ -101,10 +101,10 @@
             42,
             251
           ],
-          "ownership_id": "81XH42vBEN4XLLDttQvv2uapGtoUVBtVgPCZgX8YYQHS",
+          "ownership_id": "5SvdbEU4nrpJ7atXh9CfnWLpyUXXB7oSTo4WtY5artw7",
           "stake_entry": {
-            "auth_data": "00cf080a9d8004a13d114fd3398cec0821542844a1b1522c5ee27e0e52f27be31d873c5f376eab0bd8852a85bd199a72f51a4022907e2ddb328f6fde3eddac63f770209712da7024381e1a726c4389f3644350ef86a3be74cce8c9ee432a505e62f270a1c8380c68b67e1ccd38becb932ab2da11a51108dec638086db6932a5dea",
-            "next": "00e80013da98a58f08aa23f1991fa4e1958f8f8477c413365f4026a640eb61d2a0"
+            "auth_data": "009822ecd44b5f6f5ae3de4d4959a883e7f4a28e548ec5be426c55bfd9f10437ef9afa6576bddd790e98cd3a6625f1be934230ed24ae491b6efa51398d98d5c96345e23f03c7b7e1a74854c5dd05726f25eb2db59048aa9bbd58006c840fa14e5bbfabd43e7478ab5721109c20a756ae7b19df1b4906d0e1dd74066576d622920f",
+            "next": "008e86e7c23ed52c124ef637ba365d40d43e65564dbee91b4232b50311b9784f14"
           }
         }
       },
@@ -144,10 +144,10 @@
             113,
             209
           ],
-          "ownership_id": "4sxWS7CrTDKtyqeuSqSA9qBDWgUvwK3iJhjydyCGUiet",
+          "ownership_id": "XpwnDPkyWzoETpVFpzxWf8JeJMHPDuk3XnQgcosGJte",
           "stake_entry": {
-            "auth_data": "000b9c8fac8ed11205f124738f82e9d9850534016cb80fbfd119cb5d0f8b902df5bcbd4c814efb923cb910b7aebd4a45cec1c64a1a31a5941d2c0e6d5a34dc33825789c417bccfe6773a30da44caadac34c4ca7f2ff1504aab8dda22cd493f8894b1c8132b7764c62e702602e30af066ceadc47727d205214b2c39afbdd00ff253",
-            "next": "00c66e462087952f1d4ca66a6a3fae67a55495b98824afef48b62991127f38f964"
+            "auth_data": "00a086391f7a719d398c6fdb4d2aad411043b8a7294914c92ce99c0178474145660f1ab6f91d20270fba8bff4c5e70b903ef264453338b769c839a1daff2296e4fd9f3bd7087e9c908cded56de9325a9cc4bcf889a9e12f1bfd083874a79ecf1de7be034d3d6e6f1768abc8445f03f45e91b4d1e8dbab7490fb105bfeb667ca436",
+            "next": "00316e6a82c05d563b5b80b1cf43d943fe1b135fad039f3eabe2f6371c033d9f6f"
           }
         }
       },
@@ -187,10 +187,10 @@
             17,
             10
           ],
-          "ownership_id": "HGkYVqzWRoJoq7898iFLj2uNmC56f1bqxuQVWifPMvS7",
+          "ownership_id": "Eas42aPXABPZ2dTWcVa7qSDSabYtyXVCuEh1YML1dWb2",
           "stake_entry": {
-            "auth_data": "001dd441ec9d3b8350021ef1726e53ddcc777b0f1ead132d01564ab7a102bba496395bf7a99911ff8775d74e0f7818cb7f617681886ddcfff0574152758381e5efe9f467a48a1d5455b9b18a1c0d8449835d05f078fa81a5ae571f9f5b18c52a635c3cb7cf548f0fa9454e4251b9a0b983b53f34b399965614463398e536fa1877",
-            "next": "0049ee0c8de7012e99ff9b203a4001f025c4213b09d75153abb9cf3ee9fbeffaef"
+            "auth_data": "00ca7e630f0f9d57faa0828fddb096220f087e3152b42b2614550b89094212da327b10fb12179d769d24a1dc26ebdbef8dae1230b8f3aebab099663fa3434b357651186c4784cc2e363f88576a29ccf90618fcccf0ef0965312e1b9304e394270131487b0df3b926903c63fdab1b8ec9a8d9dd90b1c779fd8067e64fbcc2381b75",
+            "next": "008342822c9968da0f8a3d95df2333e7675b72eee3a60a3f4b7d76e823fdfcc137"
           }
         }
       },

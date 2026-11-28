@@ -102,7 +102,8 @@ async fn multi_sequencer_committee_converges() -> Result<()> {
 
     let to_balance_before = a.get_account_balance(to).await?;
     let nonce = b.get_accounts_nonces(vec![from]).await?[0];
-    let tx = common::test_utils::create_transaction_native_token_transfer(
+    let tx = common::test_utils::create_transaction_native_token_transfer_in(
+        test_fixtures::config::bedrock_channel_id().as_ref(),
         from,
         nonce.0,
         to,

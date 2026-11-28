@@ -183,6 +183,7 @@ impl SequencerConfig {
                     .context("Failed to load or create the stake secret")?;
             spec.actions.push(sequencer_genesis::self_stake(
                 sequencer_key,
+                &spec.channel_id,
                 &secret,
                 genesis.channel_params.minimum_sequencer_stake,
             ));

@@ -12,10 +12,8 @@ use integration_tests::{
     verify_commitment_is_in_state,
 };
 use lee::{
-    AccountId, Actor,
-    privacy_preserving_transaction::circuit::ProgramCatalog,
-    program::Program,
-    test_utils::{TestSigner, witness_for},
+    AccountId, Actor, privacy_preserving_transaction::circuit::ProgramCatalog, program::Program,
+    test_utils::TestSigner,
 };
 use lee_core::{
     NullifierPublicKey, NullifierSecretKey, PrivateAccountKind,
@@ -181,8 +179,11 @@ async fn a_private_pda_receives_and_spends() -> Result<()> {
             },
             common::test_utils::test_fee_declaration(payer.account_id),
         )?;
-        let segment_witness_set =
-            witness_for(&segment_message, &[&segment_signers[i], &payer_signer]);
+        let segment_witness_set = lee::test_utils::witness_for_zone(
+            &segment_message,
+            &ctx.default_channel_id(),
+            &[&segment_signers[i], &payer_signer],
+        );
         ctx.sequencer_client()
             .send_transaction(LeeTransaction::Public(lee::PublicTransaction::new(
                 segment_message,
@@ -210,7 +211,11 @@ async fn a_private_pda_receives_and_spends() -> Result<()> {
         },
         common::test_utils::test_fee_declaration(payer.account_id),
     )?;
-    let header_witness_set = witness_for(&header_message, &[&proxy_signer, &payer_signer]);
+    let header_witness_set = lee::test_utils::witness_for_zone(
+        &header_message,
+        &ctx.default_channel_id(),
+        &[&proxy_signer, &payer_signer],
+    );
     ctx.sequencer_client()
         .send_transaction(LeeTransaction::Public(lee::PublicTransaction::new(
             header_message,

@@ -113,7 +113,12 @@ impl IndexerCore {
         let zone_indexer =
             ZoneIndexer::new(config.channel_id, node.clone(), config.backfill_batch_slots);
 
-        let store = IndexerStore::open_db(&home, Vec::new(), config.event_filter.to_filter()?)?;
+        let store = IndexerStore::open_db(
+            &home,
+            *config.channel_id.as_ref(),
+            Vec::new(),
+            config.event_filter.to_filter()?,
+        )?;
 
         Ok(Self {
             zone_indexer: Arc::new(zone_indexer),

@@ -175,6 +175,7 @@ impl LezSequencerRegistryClient {
         // the ones the channel is created with.
         let generated = test_fixtures::config::genesis_sequencer_stakes(
             &signing_keys,
+            test_fixtures::config::bedrock_channel_id(),
             self.0.config.channel_params,
         )
         .context("failed to build founding sequencer stakes")?;

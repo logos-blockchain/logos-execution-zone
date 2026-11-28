@@ -72,7 +72,8 @@ async fn gossiped_transaction_reaches_producing_sequencer() -> Result<()> {
 
     let to_balance_before = seq_client_a.get_account_balance(to).await?;
     let nonce = seq_client_b.get_accounts_nonces(vec![from]).await?[0];
-    let tx = common::test_utils::create_transaction_native_token_transfer(
+    let tx = common::test_utils::create_transaction_native_token_transfer_in(
+        test_fixtures::config::bedrock_channel_id().as_ref(),
         from,
         nonce.0,
         to,

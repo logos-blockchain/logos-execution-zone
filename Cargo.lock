@@ -13712,6 +13712,7 @@ dependencies = [
  "risc0-binfmt",
  "risc0-zkos-v1compat",
  "rpassword",
+ "sequencer_service_protocol",
  "sequencer_service_rpc",
  "sequencer_stake_core",
  "serde",

@@ -9,10 +9,7 @@ use std::{collections::BTreeMap, time::Duration};
 use anyhow::Result;
 use common::transaction::LeeTransaction;
 use integration_tests::{TIME_TO_WAIT_FOR_BLOCK_SECONDS, config::SequencerPartialConfig};
-use lee::{
-    AccountId, Actor,
-    test_utils::{TestSigner, witness_for},
-};
+use lee::{AccountId, Actor, test_utils::TestSigner};
 use lee_core::account::Nonce;
 use sequencer_core::config::ChannelParams;
 use sequencer_service_rpc::RpcClient as _;
@@ -54,7 +51,8 @@ async fn reject_oversized_transaction() -> Result<()> {
             next_segment: None,
         },
     )?;
-    let witness_set = lee::test_utils::witness_for(&message, &[&segment_signer]);
+    let witness_set =
+        lee::test_utils::witness_for_zone(&message, &ctx.default_channel_id(), &[&segment_signer]);
     let tx = LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set));
 
     // Try to submit the transaction and expect an error
@@ -116,7 +114,11 @@ async fn accept_transaction_within_limit() -> Result<()> {
         },
         common::test_utils::test_fee_declaration(payer.account_id),
     )?;
-    let witness_set = witness_for(&message, &[&segment_signer, &payer_signer]);
+    let witness_set = lee::test_utils::witness_for_zone(
+        &message,
+        &ctx.default_channel_id(),
+        &[&segment_signer, &payer_signer],
+    );
     let tx = LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set));
 
     // This should succeed
@@ -190,7 +192,11 @@ async fn transaction_deferred_to_next_block_when_current_full() -> Result<()> {
             common::test_utils::test_fee_declaration(payer.account_id),
         )
         .expect("WriteSegment message should always be serializable");
-        let witness_set = witness_for(&message, &[segment_signer, &payer_signer]);
+        let witness_set = lee::test_utils::witness_for_zone(
+            &message,
+            &ctx.default_channel_id(),
+            &[segment_signer, &payer_signer],
+        );
         LeeTransaction::Public(lee::PublicTransaction::new(message, witness_set))
     };
 

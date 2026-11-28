@@ -73,7 +73,8 @@ fn main() -> Result<()> {
     let signing_keys: Vec<[u8; 32]> = (0..NODES)
         .map(|index| existing_key(&devnet_dir, index).unwrap_or_else(random_key))
         .collect();
-    let stakes = genesis_sequencer_stakes(&signing_keys, genesis.channel_params)
+    let zone = *config.bedrock_config.channel_id.as_ref();
+    let stakes = genesis_sequencer_stakes(&signing_keys, &zone, genesis.channel_params)
         .context("Failed to build the founding sequencer stakes")?;
     // Ahead of the template's supplies: the stakes are funded by their own
     // genesis deposit, and the accounts they credit are not the supplied ones.
@@ -119,6 +120,7 @@ fn random_key() -> [u8; 32] {
 /// stake is signed over, and a founding stake below it accredits nobody.
 fn genesis_sequencer_stakes(
     signing_keys: &[[u8; 32]],
+    zone: &[u8; 32],
     channel_params: ChannelParams,
 ) -> Result<Vec<GenesisAction>> {
     let minimum_stake = channel_params.minimum_sequencer_stake;
@@ -137,7 +139,7 @@ fn genesis_sequencer_stakes(
                 ownership_id: public_account_id(&owner),
                 // The index is signed over too, so these must stay in the order
                 // they are written to the genesis list.
-                stake_entry: sign_genesis_stake(index, sequencer_key, &owner, minimum_stake),
+                stake_entry: sign_genesis_stake(index, sequencer_key, zone, &owner, minimum_stake),
             })
         })
         .collect()
@@ -189,9 +191,9 @@ mod tests {
             .join(CONFIGS_DIR)
             .join("devnet")
             .join(CONFIG_NAME);
-        let genesis = SequencerConfig::from_path(&path)?
-            .genesis
-            .context("The devnet config has no genesis")?;
+        let config = SequencerConfig::from_path(&path)?;
+        let zone = *config.bedrock_config.channel_id.as_ref();
+        let genesis = config.genesis.context("The devnet config has no genesis")?;
         let minimum_stake = genesis.channel_params.minimum_sequencer_stake;
 
         let stakes = genesis.actions.iter().filter_map(|action| match action {
@@ -207,7 +209,7 @@ mod tests {
         for (index, (sequencer_key, ownership_id, stake_entry)) in stakes.enumerate() {
             let message = genesis_stake_message(index, *sequencer_key, ownership_id, minimum_stake);
             let message_with_keys =
-                genesis_stake_message_with_keys(&message, ownership_id, stake_entry.next);
+                genesis_stake_message_with_keys(&message, &zone, ownership_id, stake_entry.next);
             anyhow::ensure!(
                 current_key(None, ownership_id, &stake_entry.auth_data)
                     .and_then(|(current, signature)| authenticate(

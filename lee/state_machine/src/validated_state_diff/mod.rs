@@ -381,7 +381,7 @@ impl ValidatedStateDiff {
         tx.check_stateless()?;
         let signers =
             authenticate_signers(state, &message.nonces, tx.witness_set.entries(), |next| {
-                message.message_with_keys(next)
+                message.message_with_keys(&state.zone(), next)
             })?;
 
         // Verify validity window
@@ -688,7 +688,7 @@ fn authenticate_public_transaction_signers(
     tx.check_stateless()?;
     let message = tx.message();
     authenticate_signers(state, &message.nonces, tx.witness_set().entries(), |next| {
-        message.message_with_keys(next)
+        message.message_with_keys(&state.zone(), next)
     })
 }
 
@@ -813,7 +813,7 @@ pub fn authenticate_transaction_at_head(
         state,
         tx.nonces(),
         tx.witness_entries(),
-        |next| tx.message_with_keys(next),
+        |next| tx.message_with_keys(&state.zone(), next),
         pending,
     )
 }

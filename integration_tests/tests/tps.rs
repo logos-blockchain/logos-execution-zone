@@ -24,7 +24,7 @@ use lee::{
     program::Program,
     public_transaction as putx,
     signature::PublicAccountSecret,
-    test_utils::{TestSigner, privacy_witness_for, witness_for},
+    test_utils::{TestSigner, privacy_witness_for},
 };
 use lee_core::{
     AuthorizationSecretKey, DUMMY_COMMITMENT_HASH, MembershipProof, NullifierPublicKey,
@@ -106,7 +106,11 @@ impl TpsTestManager {
                     lee::FeeDeclaration::new(pair[0].1, TPS_TRANSFER_GAS_LIMIT, 0, DEFAULT_MAX_FEE),
                 )
                 .unwrap();
-                let witness_set = witness_for(&message, &[&pair[0].0]);
+                let witness_set = lee::test_utils::witness_for_zone(
+                    &message,
+                    test_fixtures::config::bedrock_channel_id().as_ref(),
+                    &[&pair[0].0],
+                );
                 PublicTransaction::new(message, witness_set)
             })
             .collect();

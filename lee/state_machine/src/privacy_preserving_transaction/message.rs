@@ -6,7 +6,7 @@ use lee_core::{PrivacyPreservingCircuitOutput, ProvenExecution, account::Nonce};
 use crate::{AccountId, TransactionMessage, transaction_message::MessageDomain};
 
 const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Privacy/\x00\x00\x00\x00\x00\x00";
-const KEYED_PREFIX: &[u8; 32] = b"/LEE/v0.3/KeyedMessage/Privacy/\x00";
+const KEYED_PREFIX: &[u8; 32] = b"/LEE/v0.4/KeyedMessage/Privacy/\x00";
 
 pub type Message = TransactionMessage<ProvenExecution>;
 
@@ -178,12 +178,12 @@ pub mod tests {
     fn message_with_keys_has_known_answers() {
         let message = pinned_message();
         assert_eq!(
-            message.message_with_keys(&[key(7)]),
-            hex!("2c2b3dc299c78e6295c07d79be857b89b7c136d0b951bbf3cb60b0576bac039e")
+            message.message_with_keys(&[0; 32], &[key(7)]),
+            hex!("fc5cbf1fbd6d80fd98546fe2f842c5a4b643faa8866a948c96b3c80e20e5e9f9")
         );
         assert_eq!(
-            message.message_with_keys(&[key(1), key(2), key(3)]),
-            hex!("793768ee23f3dfe964b7ffc3015e7842a6903f45191bd608f2f00058d19328b9")
+            message.message_with_keys(&[0; 32], &[key(1), key(2), key(3)]),
+            hex!("64e0037b5c9925d326e5247ad4ded68fcbdd5114701dc3fb84672b3eb770d0e7")
         );
     }
 
@@ -199,12 +199,12 @@ pub mod tests {
         );
         let next = [key(7)];
         // What a privacy message with the public message's bytes would have its signers sign.
-        let as_privacy = hash_with_keys(KEYED_PREFIX, &public.hash_under(PREFIX), &next);
+        let as_privacy = hash_with_keys(KEYED_PREFIX, &[0; 32], &public.hash_under(PREFIX), &next);
 
         assert_eq!(
             as_privacy,
-            hex!("fa0f92a59ce95c6054aff7667dd68882b859b259eda8af872aa51872022e2571")
+            hex!("3336107d31c5191f08d893652499418bd141b7144c37c9260685ae64353e742f")
         );
-        assert_ne!(public.message_with_keys(&next), as_privacy);
+        assert_ne!(public.message_with_keys(&[0; 32], &next), as_privacy);
     }
 }

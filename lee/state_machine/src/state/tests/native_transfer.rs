@@ -204,3 +204,26 @@ fn a_native_transfer_to_the_sender_itself_preserves_its_balance() {
     assert_eq!(account.data.native_balance(), Ok(200));
     assert_eq!(account.nonce, Nonce(1));
 }
+
+#[test]
+fn a_transaction_signed_for_one_zone_is_refused_in_another() {
+    let from_key = TestSigner::new(1);
+    let from = from_key.account_id();
+    let to_key = TestSigner::new(2);
+    let to = to_key.account_id();
+    let accounts = [(from, Account::funded(200)), (to, Account::funded(0))];
+    // Signed for the default zone.
+    let tx = transfer_transaction(from, &from_key, 0, to, &to_key, 0, 5);
+
+    let mut elsewhere = V03State::new()
+        .with_zone([1; 32])
+        .with_public_accounts(accounts.clone());
+    assert!(
+        elsewhere
+            .transition_from_public_transaction(&tx, 1, 0)
+            .is_err()
+    );
+
+    let mut home = V03State::new().with_public_accounts(accounts);
+    home.transition_from_public_transaction(&tx, 1, 0).unwrap();
+}

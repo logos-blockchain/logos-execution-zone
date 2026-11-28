@@ -251,7 +251,7 @@ fn public_a_signer_at_nonce_zero_is_refused_a_key_not_giving_its_account_id() {
         let mut tx = honest.clone();
         let message_with_keys = tx
             .message
-            .message_with_keys(&[holder.key_state(Nonce(nonce + 1))]);
+            .message_with_keys(&[0; 32], &[holder.key_state(Nonce(nonce + 1))]);
         tx.witness_set.entries = vec![entry_as_initial(&holder, Nonce(nonce), &message_with_keys)];
 
         assert_malformed(ValidatedStateDiff::from_public_transaction(
@@ -386,7 +386,7 @@ fn public_the_next_transaction_authenticates_with_the_new_key_and_the_old_key_is
     let mut with_old_key = next.clone();
     let message_with_keys = next
         .message
-        .message_with_keys(&[sender.key_state(Nonce(1))]);
+        .message_with_keys(&[0; 32], &[sender.key_state(Nonce(1))]);
     with_old_key.witness_set.entries = vec![without_initial_key(
         &sender,
         sender.entry(Nonce(0), &message_with_keys),
@@ -485,7 +485,7 @@ fn public_a_changed_byte_in_any_signers_next_key_breaks_every_signature() {
                 .iter()
                 .map(|entry| entry.next)
                 .collect();
-            let message_with_keys = tx.message.message_with_keys(&next);
+            let message_with_keys = tx.message.message_with_keys(&[0; 32], &next);
 
             for (entry, signer) in tx.witness_set.entries.iter().zip(signers) {
                 assert_eq!(
@@ -526,7 +526,9 @@ fn public_a_signer_at_a_nonzero_nonce_without_a_stored_key_is_refused() {
     let tx = native_transfer(&sender, recipient, Nonce(1), 10);
     // Signed with the key the account id derives from, which the nonce-0 rule would accept.
     let mut with_initial_key = tx.clone();
-    let message_with_keys = tx.message.message_with_keys(&[sender.key_state(Nonce(1))]);
+    let message_with_keys = tx
+        .message
+        .message_with_keys(&[0; 32], &[sender.key_state(Nonce(1))]);
     with_initial_key.witness_set.entries = vec![sender.entry(Nonce(0), &message_with_keys)];
 
     for signed in [with_initial_key, tx] {
@@ -604,7 +606,7 @@ fn privacy_a_signer_at_nonce_zero_is_refused_a_key_not_giving_its_account_id() {
         let mut tx = honest.clone();
         let message_with_keys = tx
             .message
-            .message_with_keys(&[holder.key_state(Nonce(nonce + 1))]);
+            .message_with_keys(&[0; 32], &[holder.key_state(Nonce(nonce + 1))]);
         tx.witness_set.entries = vec![entry_as_initial(&holder, Nonce(nonce), &message_with_keys)];
 
         assert_malformed(ValidatedStateDiff::from_privacy_preserving_transaction(
@@ -726,7 +728,7 @@ fn privacy_the_next_transaction_authenticates_with_the_new_key_and_the_old_key_i
     let mut with_old_key = next.clone();
     let message_with_keys = next
         .message
-        .message_with_keys(&[sender.key_state(Nonce(1))]);
+        .message_with_keys(&[0; 32], &[sender.key_state(Nonce(1))]);
     with_old_key.witness_set.entries = vec![without_initial_key(
         &sender,
         sender.entry(Nonce(0), &message_with_keys),
@@ -838,7 +840,7 @@ fn privacy_a_changed_byte_in_any_signers_next_key_breaks_every_signature() {
                 .iter()
                 .map(|entry| entry.next)
                 .collect();
-            let message_with_keys = tx.message.message_with_keys(&next);
+            let message_with_keys = tx.message.message_with_keys(&[0; 32], &next);
 
             for (entry, signer) in tx.witness_set.entries.iter().zip(signers) {
                 assert_eq!(
@@ -875,7 +877,9 @@ fn privacy_a_signer_at_a_nonzero_nonce_without_a_stored_key_is_refused() {
     let tx = privacy_shield(&state, &[&sender], &test_private_account_keys_1(), 10);
     // Signed with the key the account id derives from, which the nonce-0 rule would accept.
     let mut with_initial_key = tx.clone();
-    let message_with_keys = tx.message.message_with_keys(&[sender.key_state(Nonce(1))]);
+    let message_with_keys = tx
+        .message
+        .message_with_keys(&[0; 32], &[sender.key_state(Nonce(1))]);
     with_initial_key.witness_set.entries = vec![sender.entry(Nonce(0), &message_with_keys)];
 
     for signed in [with_initial_key, tx] {
@@ -941,9 +945,10 @@ fn privacy_a_witness_entry_of_an_unlisted_account_is_refused() {
     let mut tx = privacy_shield(&state, &[&a, &b], &test_private_account_keys_1(), 30);
 
     let stranger = TestSigner::new(53);
-    let message_with_keys = tx
-        .message
-        .message_with_keys(&[stranger.key_state(Nonce(1)), tx.witness_set.entries[1].next]);
+    let message_with_keys = tx.message.message_with_keys(
+        &[0; 32],
+        &[stranger.key_state(Nonce(1)), tx.witness_set.entries[1].next],
+    );
     tx.witness_set.entries[0] = stranger.entry(Nonce(0), &message_with_keys);
 
     assert_malformed(ValidatedStateDiff::from_privacy_preserving_transaction(

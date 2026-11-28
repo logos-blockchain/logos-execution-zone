@@ -182,7 +182,17 @@ pub fn witness_for(
     message: &public_transaction::Message,
     signers: &[&TestSigner],
 ) -> public_transaction::WitnessSet {
-    public_transaction::WitnessSet::sign(message, &signing_keys(&message.nonces, signers))
+    witness_for_zone(message, &[0; 32], signers)
+}
+
+/// [`witness_for`] signing for the zone of channel `zone`.
+#[must_use]
+pub fn witness_for_zone(
+    message: &public_transaction::Message,
+    zone: &[u8; 32],
+    signers: &[&TestSigner],
+) -> public_transaction::WitnessSet {
+    public_transaction::WitnessSet::sign(message, zone, &signing_keys(&message.nonces, signers))
 }
 
 /// The witness of `signers` for `message`, each signing with its key at its nonce in
@@ -196,6 +206,7 @@ pub fn privacy_witness_for(
     privacy_preserving_transaction::WitnessSet::sign(
         message,
         proof,
+        &[0; 32],
         &signing_keys(&message.nonces, signers),
     )
 }

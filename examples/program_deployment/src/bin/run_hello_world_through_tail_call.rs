@@ -105,7 +105,7 @@ async fn main() {
         )
         .unwrap()
     };
-    let witness_set = WitnessSet::sign(&message, &signing_keys);
+    let witness_set = WitnessSet::sign(&message, &wallet_core.zone().await.unwrap(), &signing_keys);
     let tx = PublicTransaction::new(message, witness_set);
 
     // Submit the transaction

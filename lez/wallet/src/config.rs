@@ -38,6 +38,9 @@ pub struct GasConfig {
 pub struct WalletConfig {
     /// Connection data of known sequencer.
     pub sequencer: SequencerConnectionData,
+    /// The channel id of the zone to sign for. Unset, the sequencer's is trusted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<sequencer_service_protocol::ChannelId>,
     /// Sequencer polling duration for new blocks.
     #[serde(with = "humantime_serde")]
     pub seq_poll_timeout: Duration,
@@ -71,6 +74,7 @@ impl Default for WalletConfig {
                 sequencer_addr: "https://testnet.lez.logos.co".parse().unwrap(),
                 basic_auth: None,
             },
+            channel_id: None,
             seq_poll_timeout: Duration::from_secs(12),
             seq_tx_poll_max_blocks: 5,
             seq_poll_max_retries: 5,
@@ -123,6 +127,7 @@ impl WalletConfig {
     pub fn apply_overrides(&mut self, overrides: WalletConfigOverrides) {
         let Self {
             sequencer,
+            channel_id,
             seq_poll_timeout,
             seq_tx_poll_max_blocks,
             seq_poll_max_retries,
@@ -134,6 +139,7 @@ impl WalletConfig {
 
         let WalletConfigOverrides {
             sequencer: o_sequencer,
+            channel_id: o_channel_id,
             seq_poll_timeout: o_seq_poll_timeout,
             seq_tx_poll_max_blocks: o_seq_tx_poll_max_blocks,
             seq_poll_max_retries: o_seq_poll_max_retries,
@@ -146,6 +152,10 @@ impl WalletConfig {
         if let Some(v) = o_sequencer {
             tracing::warn!(value = ?v, "Overriding wallet config 'sequencer'");
             *sequencer = v;
+        }
+        if let Some(v) = o_channel_id {
+            tracing::warn!(value = ?v, "Overriding wallet config 'channel_id'");
+            *channel_id = v;
         }
         if let Some(v) = o_seq_poll_timeout {
             tracing::warn!(value = ?v, "Overriding wallet config 'seq_poll_timeout'");

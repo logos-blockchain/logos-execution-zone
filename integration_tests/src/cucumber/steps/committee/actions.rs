@@ -426,8 +426,13 @@ async fn submit_committee_transfer(
             })?
             .secret,
     );
-    let transaction = common::test_utils::create_transaction_native_token_transfer(
-        sender, nonce.0, receiver, amount, &signer,
+    let transaction = common::test_utils::create_transaction_native_token_transfer_in(
+        crate::config::bedrock_channel_id().as_ref(),
+        sender,
+        nonce.0,
+        receiver,
+        amount,
+        &signer,
     );
     let transaction_hash = sequencer
         .client()
