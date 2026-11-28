@@ -35,6 +35,13 @@ impl From<WalletClientError> for ExecutionFailureKind {
 impl WalletSequencerClient for WalletClient {
     type Error = WalletClientError;
 
+    async fn get_channel_id(&self) -> Result<[u8; 32], Self::Error> {
+        match self {
+            Self::Embedded(client) => Ok(client.get_channel_id().await?),
+            Self::Http(client) => Ok(client.get_channel_id().await?),
+        }
+    }
+
     async fn send_transaction(
         &self,
         tx: common::transaction::LeeTransaction,

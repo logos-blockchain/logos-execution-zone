@@ -75,6 +75,16 @@ impl From<FfiSequencerClientError> for ExecutionFailureKind {
 impl WalletSequencerClient for SequencerServiceFFIWrapper {
     type Error = FfiSequencerClientError;
 
+    async fn get_channel_id(&self) -> Result<[u8; 32], Self::Error> {
+        let channel = self
+            .0
+            .executor_ref()
+            .ask(sequencer_executor_actor::protocol::GetChannelId)
+            .send()
+            .await?;
+        Ok(*channel.0.as_ref())
+    }
+
     async fn get_account(
         &self,
         account_id: lee::AccountId,

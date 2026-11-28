@@ -139,6 +139,7 @@ pub fn produce_dummy_empty_transaction() -> LeeTransaction {
     .unwrap();
     let witness_set = lee::public_transaction::WitnessSet::sign(
         &message,
+        &[0; 32],
         &[Signer::new(
             &secret,
             Nonce(0),
@@ -168,14 +169,32 @@ pub fn create_transaction_native_token_transfer(
     balance_to_move: u128,
     signer: &TestSigner,
 ) -> LeeTransaction {
-    create_transaction_native_token_transfer_with_fees(
-        from,
-        nonce,
-        to,
-        balance_to_move,
-        signer,
+    create_transaction_native_token_transfer_in(&[0; 32], from, nonce, to, balance_to_move, signer)
+}
+
+/// [`create_transaction_native_token_transfer`] signed for the zone of channel `zone`.
+#[cfg(any(test, feature = "test-utils"))]
+#[must_use]
+pub fn create_transaction_native_token_transfer_in(
+    zone: &[u8; 32],
+    from: AccountId,
+    nonce: u128,
+    to: AccountId,
+    balance_to_move: u128,
+    signer: &TestSigner,
+) -> LeeTransaction {
+    let message = lee::public_transaction::Message::try_new_with_fees(
+        Actor::native_balance(from),
+        transfer_actors(from, to, signer),
+        signer_nonces(&[signer], vec![lee_core::account::Nonce(nonce)]),
+        native_transfer(to, balance_to_move),
         test_fee_declaration(from),
     )
+    .unwrap();
+    LeeTransaction::Public(lee::PublicTransaction::new(
+        message.clone(),
+        lee::test_utils::witness_for_zone(&message, zone, &[signer]),
+    ))
 }
 
 #[cfg(any(test, feature = "test-utils"))]

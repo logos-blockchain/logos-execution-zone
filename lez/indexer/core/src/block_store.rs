@@ -29,15 +29,17 @@ pub struct IndexerStore {
 }
 
 impl IndexerStore {
-    /// Starting database at the start of new chain.
+    /// Starting database at the start of new chain, in the zone of channel `zone`.
     /// Creates files if necessary.
     pub fn open_db(
         location: &Path,
+        zone: [u8; 32],
         genesis_seed: Vec<(AccountId, Account)>,
         event_filter: EventFilter,
     ) -> Result<Self> {
-        let initial_state =
-            testnet_initial_state::initial_state().with_public_accounts(genesis_seed);
+        let initial_state = testnet_initial_state::initial_state()
+            .with_zone(zone)
+            .with_public_accounts(genesis_seed);
 
         // In production `genesis_seed` is empty: configs and holdings are
         // reconstructed by replaying the genesis block, so this state matches the
@@ -457,8 +459,13 @@ fn open_default(home: &Path) -> IndexerStore {
 fn open_with(home: &Path, filter: EventFilter) -> IndexerStore {
     // Seed the producer's reward account as claimed, mirroring the stake a real
     // sequencer holds, so charged blocks can credit it on the accept path.
-    IndexerStore::open_db(home, vec![common::test_utils::producer_seed()], filter)
-        .expect("open store")
+    IndexerStore::open_db(
+        home,
+        [0; 32],
+        vec![common::test_utils::producer_seed()],
+        filter,
+    )
+    .expect("open store")
 }
 
 #[cfg(test)]
@@ -744,7 +751,8 @@ mod tests {
     fn a_fresh_store_keeps_the_initial_states_pinned_recovery_bindings() {
         let home = tempdir().unwrap();
         let storage =
-            IndexerStore::open_db(home.as_ref(), Vec::new(), EventFilter::default()).unwrap();
+            IndexerStore::open_db(home.as_ref(), [0; 32], Vec::new(), EventFilter::default())
+                .unwrap();
         let genesis = storage.dbio.get_breakpoint_opt(0).unwrap().unwrap();
 
         assert_eq!(
@@ -1307,7 +1315,10 @@ mod tests {
         dbio.put_event_filter_segments_bytes(b"garbage").unwrap();
         drop(dbio);
 
-        assert!(IndexerStore::open_db(home.as_ref(), Vec::new(), EventFilter::Archival).is_err());
+        assert!(
+            IndexerStore::open_db(home.as_ref(), [0; 32], Vec::new(), EventFilter::Archival)
+                .is_err()
+        );
     }
 
     #[test]
@@ -1323,7 +1334,10 @@ mod tests {
             .unwrap();
         drop(dbio);
 
-        assert!(IndexerStore::open_db(home.as_ref(), Vec::new(), EventFilter::Archival).is_err());
+        assert!(
+            IndexerStore::open_db(home.as_ref(), [0; 32], Vec::new(), EventFilter::Archival)
+                .is_err()
+        );
     }
 
     #[test]
@@ -1338,7 +1352,10 @@ mod tests {
             .unwrap();
         drop(dbio);
 
-        assert!(IndexerStore::open_db(home.as_ref(), Vec::new(), EventFilter::Archival).is_err());
+        assert!(
+            IndexerStore::open_db(home.as_ref(), [0; 32], Vec::new(), EventFilter::Archival)
+                .is_err()
+        );
     }
 
     #[tokio::test]

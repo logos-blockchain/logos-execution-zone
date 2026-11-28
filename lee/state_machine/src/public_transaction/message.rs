@@ -14,7 +14,7 @@ use crate::{
 };
 
 const PREFIX: &[u8; 32] = b"/LEE/v0.3/Message/Public/\x00\x00\x00\x00\x00\x00\x00";
-const KEYED_PREFIX: &[u8; 32] = b"/LEE/v0.3/KeyedMessage/Public/\x00\x00";
+const KEYED_PREFIX: &[u8; 32] = b"/LEE/v0.4/KeyedMessage/Public/\x00\x00";
 
 #[derive(Debug, Clone, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
 pub struct PublicExecution {
@@ -168,12 +168,12 @@ mod tests {
     fn message_with_keys_has_known_answers() {
         let message = pinned_message();
         assert_eq!(
-            message.message_with_keys(&[key(7)]),
-            hex!("ae983ec82822a8363e7fc615b34760e312acba3b319b34b6d58e96b4192b6ed7")
+            message.message_with_keys(&[0; 32], &[key(7)]),
+            hex!("17129c53b9df268ef9ca62845d71543b0b13ccec7c8443cadb86b2d87e25a19d")
         );
         assert_eq!(
-            message.message_with_keys(&[key(1), key(2), key(3)]),
-            hex!("53a14d2f1445b1e1eb042d95a39d58268edf89efc90600be5eb8fa5aa9da37fc")
+            message.message_with_keys(&[0; 32], &[key(1), key(2), key(3)]),
+            hex!("66ff4a6c2c393beac5f738ecb4e7bc24054c8af88eb79ac270979a4e2d8c7043")
         );
     }
 
@@ -181,8 +181,8 @@ mod tests {
     fn message_with_keys_changes_with_the_order_of_the_next_keys() {
         let message = pinned_message();
         assert_ne!(
-            message.message_with_keys(&[key(1), key(2), key(3)]),
-            message.message_with_keys(&[key(2), key(1), key(3)])
+            message.message_with_keys(&[0; 32], &[key(1), key(2), key(3)]),
+            message.message_with_keys(&[0; 32], &[key(2), key(1), key(3)])
         );
     }
 
@@ -190,12 +190,12 @@ mod tests {
     fn message_with_keys_changes_with_any_byte_of_any_next_key_commitment() {
         let message = pinned_message();
         let next = [key(1), key(2), key(3)];
-        let signed = message.message_with_keys(&next);
+        let signed = message.message_with_keys(&[0; 32], &next);
         for signer in 0..next.len() {
             for byte in 0..32 {
                 let mut changed = next;
                 changed[signer].key_commitment[byte] ^= 1;
-                assert_ne!(message.message_with_keys(&changed), signed);
+                assert_ne!(message.message_with_keys(&[0; 32], &changed), signed);
             }
         }
     }

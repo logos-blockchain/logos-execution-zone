@@ -265,7 +265,11 @@ async fn run_script(
                 .expect("the wallet holds both secrets"),
         )
     });
-    let witness_set = lee::test_utils::witness_for(&message, &[&signers[0], &signers[1]]);
+    let witness_set = lee::test_utils::witness_for_zone(
+        &message,
+        &ctx.default_channel_id(),
+        &[&signers[0], &signers[1]],
+    );
     let tx_hash = ctx
         .sequencer_client()
         .send_transaction(LeeTransaction::Public(lee::PublicTransaction::new(

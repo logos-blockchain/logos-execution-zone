@@ -324,6 +324,7 @@ pub fn wallet_config(sequencer_addr: &SocketAddr) -> Result<WalletConfig> {
                 .context("Failed to convert sequencer addr to URL")?,
             basic_auth: None,
         },
+        channel_id: None,
         seq_poll_timeout: Duration::from_secs(30),
         seq_tx_poll_max_blocks: 15,
         seq_poll_max_retries: 10,
@@ -419,6 +420,7 @@ pub fn founding_stake_owner_secret(index: usize) -> PublicAccountSecret {
 /// founding stakes land below the minimum and accredit nobody.
 pub fn genesis_sequencer_stakes(
     sequencer_signing_keys: &[UnsecuredEd25519Key],
+    channel_id: ChannelId,
     channel_params: ChannelParams,
 ) -> Result<Vec<GenesisAction>> {
     let minimum_stake = channel_params.minimum_sequencer_stake;
@@ -433,7 +435,13 @@ pub fn genesis_sequencer_stakes(
             Ok(GenesisAction::StakeSequencer {
                 sequencer_key,
                 ownership_id: public_account_id(&owner),
-                stake_entry: sign_genesis_stake(index, sequencer_key, &owner, minimum_stake),
+                stake_entry: sign_genesis_stake(
+                    index,
+                    sequencer_key,
+                    channel_id.as_ref(),
+                    &owner,
+                    minimum_stake,
+                ),
             })
         })
         .collect()

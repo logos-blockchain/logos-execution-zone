@@ -95,10 +95,10 @@ impl<P: BorshSerialize + MessageDomain> TransactionMessage<P> {
         self.hash_under(P::PREFIX)
     }
 
-    /// The 32-byte value each signer signs.
+    /// The 32-byte value each signer signs in the zone of channel `zone`.
     #[must_use]
-    pub fn message_with_keys(&self, next: &[SigningKeyState]) -> [u8; 32] {
-        hash_with_keys(P::KEYED_PREFIX, &self.hash(), next)
+    pub fn message_with_keys(&self, zone: &[u8; 32], next: &[SigningKeyState]) -> [u8; 32] {
+        hash_with_keys(P::KEYED_PREFIX, zone, &self.hash(), next)
     }
 }
 
@@ -110,8 +110,8 @@ pub trait SignedTransaction {
 
     fn witness_entries(&self) -> &[WitnessEntry];
 
-    /// The 32-byte value each signer signs.
-    fn message_with_keys(&self, next: &[SigningKeyState]) -> [u8; 32];
+    /// The 32-byte value each signer signs in the zone of channel `zone`.
+    fn message_with_keys(&self, zone: &[u8; 32], next: &[SigningKeyState]) -> [u8; 32];
 }
 
 impl<P> TransactionMessage<P> {
@@ -154,11 +154,13 @@ pub fn actor_map(
 /// `key_type || key_commitment` (33 B), in `nonces` order.
 pub fn hash_with_keys(
     domain: &[u8; 32],
+    zone: &[u8; 32],
     message_hash: &[u8; 32],
     next: &[SigningKeyState],
 ) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(domain);
+    hasher.update(zone);
     hasher.update(message_hash);
     for key in next {
         hasher.update(borsh::to_vec(key).expect("a signing key state encodes to 33 bytes"));

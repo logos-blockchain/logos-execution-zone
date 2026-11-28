@@ -87,8 +87,8 @@ impl SignedTransaction for PrivacyPreservingTransaction {
         self.witness_set.entries()
     }
 
-    fn message_with_keys(&self, next: &[SigningKeyState]) -> [u8; 32] {
-        self.message.message_with_keys(next)
+    fn message_with_keys(&self, zone: &[u8; 32], next: &[SigningKeyState]) -> [u8; 32] {
+        self.message.message_with_keys(zone, next)
     }
 }
 

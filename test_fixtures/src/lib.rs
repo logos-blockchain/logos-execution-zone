@@ -119,6 +119,21 @@ impl TestContext {
             .await
     }
 
+    /// The channel id of the default zone, which its signatures are bound to.
+    ///
+    /// Panics in case if there is more than one zone.
+    #[must_use]
+    pub fn default_channel_id(&self) -> [u8; 32] {
+        assert_eq!(self.zones.len(), 1);
+
+        *self
+            .zones
+            .keys()
+            .next()
+            .expect("Must be at least one zone")
+            .as_ref()
+    }
+
     /// Reference for the default zone(in case if only one present).
     ///
     /// Panics in case if there is more than one zone.
@@ -648,6 +663,7 @@ impl ZoneTestContextBuilder {
             // founding stakes must clear.
             let mut actions = config::genesis_sequencer_stakes(
                 &sequencer_keys,
+                mn_config.bedrock_channel,
                 sequencer_partial_config.unwrap_or_default().channel_params,
             )
             .context("Failed to build the founding sequencer stakes")?;

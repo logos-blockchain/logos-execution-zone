@@ -16,10 +16,7 @@ use std::{collections::BTreeMap, fmt::Debug, time::Duration};
 use anyhow::{Context as _, Result, ensure};
 use common::transaction::LeeTransaction;
 use integration_tests::{get_account, init_logger, wait_for_inclusion, wait_until};
-use lee::{
-    AccountId, Actor,
-    test_utils::{TestSigner, witness_for},
-};
+use lee::{AccountId, Actor, test_utils::TestSigner};
 use lee_core::account::Nonce;
 use logos_blockchain_zone_sdk::{
     CommonHttpClient,
@@ -114,7 +111,11 @@ fn unfunded_segment_write(bytecode_len: usize) -> Result<LeeTransaction> {
             next_segment: None,
         },
     )?;
-    let witness_set = witness_for(&message, &[&segment_signer]);
+    let witness_set = lee::test_utils::witness_for_zone(
+        &message,
+        test_fixtures::config::bedrock_channel_id().as_ref(),
+        &[&segment_signer],
+    );
     Ok(LeeTransaction::Public(lee::PublicTransaction::new(
         message,
         witness_set,

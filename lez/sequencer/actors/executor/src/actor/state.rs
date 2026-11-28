@@ -57,7 +57,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
             check_startup_channel_params(&genesis.channel_params, &config)?;
         }
 
-        let chain = Self::restore_chain_state(&storage_ref).await?;
+        let chain = Self::restore_chain_state(&storage_ref, *channel_id.as_ref()).await?;
         let get_channel_tip_slot = || async {
             bedrock_pool_ref
                 .ask(sequencer_bedrock_actor::protocol::GetChannelTipSlot { channel_id })
@@ -208,14 +208,17 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> State<S, B> {
     /// Rebuilds the two-tier [`ChainState`]: the final tier from the persisted
     /// final snapshot (pre-genesis state when absent), the head by folding the
     /// persisted channel view over it.
-    async fn restore_chain_state(storage_ref: &ActorRef<S>) -> Result<ChainState> {
+    async fn restore_chain_state(
+        storage_ref: &ActorRef<S>,
+        channel_id: [u8; 32],
+    ) -> Result<ChainState> {
         let final_snapshot = storage_ref
             .ask(sequencer_storage_actor::protocol::GetFinalSnapshot)
             .await?;
         let (final_state, final_tip) = match final_snapshot {
             Some((state, meta)) => (state, Some(Tip::from(meta))),
             // Nothing finalized yet: replay the whole stored chain.
-            None => (sequencer_genesis::build_initial_state(), None),
+            None => (sequencer_genesis::build_initial_state(channel_id), None),
         };
 
         let mut chain = ChainState::from_final(final_state, final_tip);

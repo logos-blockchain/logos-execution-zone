@@ -173,6 +173,8 @@ pub struct V03State {
         deserialize_with = "crate::encoding::persistent::deserialize_ordered_map"
     )]
     recovery_bindings: RedBlackTreeMapSync<AccountId, EncryptedNote>,
+    /// The channel id of the zone this state belongs to, which every signature is bound to.
+    zone: [u8; 32],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -193,6 +195,7 @@ impl Default for V03State {
             private_state,
             publications: RedBlackTreeMapSync::new_sync(),
             recovery_bindings: RedBlackTreeMapSync::new_sync(),
+            zone: [0; 32],
         }
     }
 }
@@ -201,6 +204,19 @@ impl V03State {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The channel id of the zone this state belongs to.
+    #[must_use]
+    pub const fn zone(&self) -> [u8; 32] {
+        self.zone
+    }
+
+    /// The state bound to the zone of channel `zone`.
+    #[must_use]
+    pub const fn with_zone(mut self, zone: [u8; 32]) -> Self {
+        self.zone = zone;
+        self
     }
 
     #[must_use]
@@ -471,6 +487,7 @@ impl V03State {
             private_state: (commitment_set, nullifier_set),
             publications,
             recovery_bindings,
+            zone,
         } = self;
 
         let mut accounts: Vec<(&AccountId, &Account)> = public_state.iter().collect();
@@ -486,6 +503,7 @@ impl V03State {
             hasher.update(len.to_le_bytes());
             hasher.update(&bytes);
         }
+        hasher.update(zone);
         hasher.update(commitment_set.digest());
         let mut encoded = Vec::new();
         serialize_map(&commitment_set.commitments, &mut encoded)

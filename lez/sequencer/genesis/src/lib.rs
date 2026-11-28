@@ -118,11 +118,12 @@ struct FoundingStake {
     entry: WitnessEntry,
 }
 
-/// The pre-genesis state: `testnet_initial_state`, nothing else. Everything is
-/// applied as genesis transactions in [`build_genesis_state`] so followers replay it.
+/// The pre-genesis state of the zone of channel `channel_id`: `testnet_initial_state`, nothing
+/// else. Everything is applied as genesis transactions in [`build_genesis_state`] so followers
+/// replay it.
 #[must_use]
-pub fn build_initial_state() -> lee::V03State {
-    let base = testnet_initial_state::initial_state();
+pub fn build_initial_state(channel_id: [u8; 32]) -> lee::V03State {
+    let base = testnet_initial_state::initial_state().with_zone(channel_id);
 
     // Stamped on fresh genesis and restore-replay: compare against the
     // indexer's on divergence.
@@ -161,7 +162,7 @@ pub fn genesis_block_and_state(spec: &GenesisSpec) -> (Block, lee::V03State, Vec
 pub fn build_genesis_state(
     spec: &GenesisSpec,
 ) -> (lee::V03State, Vec<LeeTransaction>, Vec<TxEvents>) {
-    let mut state = build_initial_state();
+    let mut state = build_initial_state(spec.channel_id);
     let genesis_opening = chain_state::apply::opening_fee_state(&state);
 
     let supply_txs = spec
@@ -192,8 +193,11 @@ pub fn build_genesis_state(
         });
 
     let staked = founding_stakes(&spec.actions);
-    let bootstrap_stake_txs =
-        build_stake_genesis_transactions(&staked, spec.channel_params.minimum_sequencer_stake);
+    let bootstrap_stake_txs = build_stake_genesis_transactions(
+        &staked,
+        &spec.channel_id,
+        spec.channel_params.minimum_sequencer_stake,
+    );
 
     // The genesis fee transaction credits the first staked sequencer's ownership account.
     //
@@ -253,13 +257,14 @@ pub fn stakes_any_sequencer(actions: &[GenesisAction]) -> bool {
 #[must_use]
 pub fn self_stake(
     sequencer_key: SequencerKey,
+    zone: &[u8; 32],
     ownership_secret: &PublicAccountSecret,
     minimum_stake: u128,
 ) -> GenesisAction {
     GenesisAction::StakeSequencer {
         sequencer_key,
         ownership_id: public_account_id(ownership_secret),
-        stake_entry: sign_genesis_stake(0, sequencer_key, ownership_secret, minimum_stake),
+        stake_entry: sign_genesis_stake(0, sequencer_key, zone, ownership_secret, minimum_stake),
     }
 }
 
@@ -306,6 +311,7 @@ fn genesis_stake_funding_signer(message: &Message) -> Signer {
 #[must_use]
 pub fn genesis_stake_message_with_keys(
     message: &Message,
+    zone: &[u8; 32],
     ownership_id: AccountId,
     owner_next: SigningKeyState,
 ) -> [u8; 32] {
@@ -318,7 +324,7 @@ pub fn genesis_stake_message_with_keys(
     ])
     .into_values()
     .collect();
-    message.message_with_keys(&next_keys)
+    message.message_with_keys(zone, &next_keys)
 }
 
 /// The exact `Stake` message the founding sequencer at `index` must sign. Shared
@@ -385,6 +391,7 @@ pub fn genesis_stake_message(
 pub fn sign_genesis_stake(
     index: usize,
     sequencer_key: SequencerKey,
+    zone: &[u8; 32],
     ownership_secret: &PublicAccountSecret,
     minimum_stake: u128,
 ) -> WitnessEntry {
@@ -396,7 +403,8 @@ pub fn sign_genesis_stake(
     );
     let ownership_id = owner.account_id();
     let message = genesis_stake_message(index, sequencer_key, ownership_id, minimum_stake);
-    let message_with_keys = genesis_stake_message_with_keys(&message, ownership_id, owner.next());
+    let message_with_keys =
+        genesis_stake_message_with_keys(&message, zone, ownership_id, owner.next());
     WitnessEntry {
         auth_data: owner.auth_data(&message_with_keys),
         next: owner.next(),
@@ -407,6 +415,7 @@ pub fn sign_genesis_stake(
 /// transactions, not raw state, so followers replay them instead of missing them.
 fn build_stake_genesis_transactions(
     staked: &[FoundingStake],
+    zone: &[u8; 32],
     minimum_stake: u128,
 ) -> Vec<PublicTransaction> {
     if staked.is_empty() {
@@ -436,7 +445,7 @@ fn build_stake_genesis_transactions(
         let ownership_id = stake.owner;
         let stake_message = genesis_stake_message(index, stake.key, ownership_id, minimum_stake);
         let message_with_keys =
-            genesis_stake_message_with_keys(&stake_message, ownership_id, stake.entry.next);
+            genesis_stake_message_with_keys(&stake_message, zone, ownership_id, stake.entry.next);
 
         // Redundant with the authentication every tx gets, but names the entry.
         assert!(

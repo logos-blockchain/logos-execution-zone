@@ -93,8 +93,8 @@ impl SignedTransaction for PublicTransaction {
         self.witness_set.entries()
     }
 
-    fn message_with_keys(&self, next: &[SigningKeyState]) -> [u8; 32] {
-        self.message.message_with_keys(next)
+    fn message_with_keys(&self, zone: &[u8; 32], next: &[SigningKeyState]) -> [u8; 32] {
+        self.message.message_with_keys(zone, next)
     }
 }
 
@@ -244,8 +244,10 @@ pub mod tests {
         let mut message = transaction_for_tests().message;
         message.nonces.remove(&addr2);
 
-        let message_with_keys =
-            message.message_with_keys(&[key1.key_state(Nonce(1)), key2.key_state(Nonce(1))]);
+        let message_with_keys = message.message_with_keys(
+            &[0; 32],
+            &[key1.key_state(Nonce(1)), key2.key_state(Nonce(1))],
+        );
         let witness_set = WitnessSet::from_raw_parts(vec![
             key1.entry(Nonce(0), &message_with_keys),
             key2.entry(Nonce(0), &message_with_keys),
@@ -451,9 +453,10 @@ pub mod tests {
     fn a_witness_entry_of_an_unlisted_account_is_rejected() {
         let mut tx = transaction_for_tests();
         let stranger = TestSigner::new(3);
-        let message_with_keys = tx
-            .message
-            .message_with_keys(&[stranger.key_state(Nonce(1)), tx.witness_set.entries[1].next]);
+        let message_with_keys = tx.message.message_with_keys(
+            &[0; 32],
+            &[stranger.key_state(Nonce(1)), tx.witness_set.entries[1].next],
+        );
         tx.witness_set.entries[0] = stranger.entry(Nonce(0), &message_with_keys);
         assert!(matches!(
             ValidatedStateDiff::from_public_transaction(&tx, &state_for_tests(), 1, 0),

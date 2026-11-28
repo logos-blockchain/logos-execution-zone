@@ -14,9 +14,10 @@ pub struct WitnessSet {
 
 impl WitnessSet {
     #[must_use]
-    pub fn sign(message: &Message, proof: Proof, signers: &[Signer]) -> Self {
+    /// Signs `message` for the zone of channel `zone`.
+    pub fn sign(message: &Message, proof: Proof, zone: &[u8; 32], signers: &[Signer]) -> Self {
         Self {
-            entries: sign_entries(signers, |next| message.message_with_keys(next)),
+            entries: sign_entries(signers, |next| message.message_with_keys(zone, next)),
             proof,
         }
     }
