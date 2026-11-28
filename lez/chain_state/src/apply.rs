@@ -771,12 +771,14 @@ fn settle_charged_transaction(
         })?;
 
     // A reverted action's diff is nonce-only; a successful one is held to the user-state guard.
-    validate_user_state_modification(transaction, state, &action_diff).map_err(|err| {
-        BlockIngestError::RestrictedAccountModification {
-            tx_index,
-            reason: err.to_string(),
-        }
-    })?;
+    // One that breaks it reverts the same way and still pays, so it cannot be resent for free.
+    let guard_reverted =
+        validate_user_state_modification(transaction, state, &action_diff).is_err();
+    let action_diff = if guard_reverted {
+        action_diff.into_signers_only()
+    } else {
+        action_diff
+    };
     // The action's events are the transaction's user-facing events.
     let action_events = state
         .apply_state_diff(action_diff)
@@ -820,7 +822,7 @@ fn settle_charged_transaction(
         .checked_add(u128::from(view.tip()))
         .expect("block tips fit u128");
     let receipt = TransactionReceipt {
-        success: charge.revert.is_none(),
+        success: charge.revert.is_none() && !guard_reverted,
         fee: FeeReceipt {
             gas_exec: charged_cycles,
             gas_stor: view.gas_stor(),
@@ -1345,7 +1347,7 @@ mod tests {
         // illegitimate. Left unguarded on the apply path, a block author could
         // invoke the fee program's Refund to sweep the inbox to an attacker
         // account, and honest followers would apply the block. The apply-path
-        // guard must reject it.
+        // guard reverts it.
         let mut state = initial_state();
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
@@ -1378,7 +1380,7 @@ mod tests {
         // The drain: invoke the fee program's Refund to sweep the accrued inbox
         // revenue to the attacker. The guest accepts it — the fee program owns
         // the inbox it debits — producing a diff that modifies the restricted
-        // inbox, which the apply-path guard must reject.
+        // inbox, which the apply-path guard reverts.
         let fee_state = fee_invocation(BlockFeeSummary::default(), 0, FeePayee::Present(attacker))
             .message()
             .execution
@@ -1405,21 +1407,30 @@ mod tests {
         let witness = witness_for(&message, &[&attacker_signer]);
         let drain = LeeTransaction::Public(lee::PublicTransaction::new(message, witness));
 
+        let nonce_before = state.get_account_by_id(attacker).nonce;
         let mut drain_acc = BlockFeeSummary::default();
-        let err = settle_transaction(&drain, &mut state, &opening, 3, 200, 1, &mut drain_acc)
-            .expect_err("a user-section fee-program invocation must be rejected");
-        assert!(
-            matches!(err, BlockIngestError::RestrictedAccountModification { .. }),
-            "expected RestrictedAccountModification, got {err:?}",
+        let (_, receipt) =
+            settle_transaction(&drain, &mut state, &opening, 3, 200, 1, &mut drain_acc)
+                .expect("a guard-breaking charged invocation settles as a paid revert");
+        assert!(!receipt.success);
+        assert_eq!(
+            state
+                .get_account_by_id(system_accounts::fee_inbox_account_id())
+                .data
+                .native_balance()
+                .unwrap(),
+            inbox_revenue + receipt.fee.fee_base + receipt.fee.tip,
+            "the drain moves nothing out of the inbox and pays its own fee into it"
         );
+        assert_ne!(state.get_account_by_id(attacker).nonce, nonce_before);
     }
 
     #[test]
-    fn a_block_with_a_user_transaction_writing_the_clock_is_rejected() {
+    fn a_user_transaction_writing_the_clock_reverts_and_pays() {
         let mut state = initial_state().with_public_accounts([common::test_utils::producer_seed()]);
         let genesis = produce_dummy_block(1, None, vec![]);
         apply_block(None, &genesis, &mut state).expect("genesis applies");
-        let tip = tip_of(&genesis);
+        let _ = tip_of(&genesis);
 
         let accounts = initial_pub_accounts_private_keys();
         let payer = accounts[0].account_id;
@@ -1427,7 +1438,7 @@ mod tests {
         let payer_nonce = state.get_account_by_id(payer).nonce;
         let clock = system_accounts::clock_actor();
         // A tick for block 2 passes the clock's own check, so only the restricted-account guard
-        // can reject the block.
+        // can stop it.
         let message = public_transaction::Message::try_new_with_fees(
             clock,
             vec![(clock, lee::Authority::None)],
@@ -1441,18 +1452,25 @@ mod tests {
         .expect("clock message builds");
         let witness = lee::test_utils::witness_for(&message, &[&payer_key]);
         let tick = LeeTransaction::Public(PublicTransaction::new(message, witness));
-        let tick_block = produce_dummy_block(2, Some(tip.hash), vec![tick]);
-        let err = apply_block(Some(&tip), &tick_block, &mut state)
-            .expect_err("a block writing the clock from a user transaction must be rejected");
-        let clock_id = system_accounts::clock_account_id().to_string();
-        assert!(
-            matches!(
-                &err,
-                BlockIngestError::RestrictedAccountModification { tx_index: 0, reason }
-                    if reason.contains(&clock_id)
-            ),
-            "expected RestrictedAccountModification on the clock, got {err:?}",
+        let clock_before = state.get_account_by_id(system_accounts::clock_account_id());
+        let opening = opening_fee_state(&state);
+        let (_, receipt) = settle_transaction(
+            &tick,
+            &mut state,
+            &opening,
+            2,
+            200,
+            0,
+            &mut BlockFeeSummary::default(),
+        )
+        .expect("a user transaction writing the clock settles as a paid revert");
+        assert!(!receipt.success);
+        assert!(receipt.fee.fee_base > 0, "the revert still pays");
+        assert_eq!(
+            state.get_account_by_id(system_accounts::clock_account_id()),
+            clock_before
         );
+        assert_ne!(state.get_account_by_id(payer).nonce, payer_nonce);
     }
 
     #[test]
@@ -2684,7 +2702,8 @@ mod tests {
 
     #[test]
     fn a_declared_fee_cannot_credit_the_fee_inbox_from_its_public_part() {
-        // Only an in-proof fee may raise the inbox; a declared one is reserved from its payer.
+        // Only an in-proof fee may raise the inbox; a declared one is reserved from its payer, so
+        // the credit reverts.
         let (state, sender, _) = publicly_paid_setup(0x5d);
         let payer = public_payer();
         let inbox = system_accounts::fee_inbox_account_id();
@@ -2708,20 +2727,31 @@ mod tests {
             )),
         );
 
+        let inbox_balance = |at: &V03State| {
+            at.get_account_by_id(inbox)
+                .data
+                .native_balance()
+                .unwrap_or(0)
+        };
+        let before = inbox_balance(&state);
         let mut settled = state;
         let mut summary = BlockFeeSummary::default();
-        assert!(matches!(
-            settle_transaction(
-                &tx,
-                &mut settled,
-                &FeeState::genesis(),
-                1,
-                100,
-                0,
-                &mut summary,
-            ),
-            Err(BlockIngestError::RestrictedAccountModification { .. })
-        ));
+        let (_, receipt) = settle_transaction(
+            &tx,
+            &mut settled,
+            &FeeState::genesis(),
+            1,
+            100,
+            0,
+            &mut summary,
+        )
+        .expect("the credit settles as a paid revert");
+
+        assert!(!receipt.success);
+        assert_eq!(
+            inbox_balance(&settled),
+            before + receipt.fee.fee_base + receipt.fee.tip
+        );
     }
 
     #[test]

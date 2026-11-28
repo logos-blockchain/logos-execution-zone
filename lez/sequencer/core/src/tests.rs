@@ -503,7 +503,7 @@ fn tx_is_bridge_deposit(
 /// (so it is not a system injection) plus a fee declaration.
 ///
 /// This is the forged deposit shape a user could submit through the mempool
-/// which the charged-path bridge guard in `settle_transaction` must reject.
+/// which the charged-path bridge guard in `settle_transaction` reverts.
 fn create_charged_bridge_deposit(
     op_id: [u8; 32],
     recipient_id: AccountId,
@@ -548,7 +548,7 @@ fn create_charged_bridge_deposit(
 
 #[tokio::test]
 async fn a_charged_bridge_deposit_is_dropped_by_the_builder_bridge_guard() {
-    // A signed, fee-paying deposit debits the bridge: settlement rejects it, and
+    // A signed, fee-paying deposit debits the bridge: settlement reverts it, and
     // the builder drops any user-submitted deposit before settling.
     let config = setup_sequencer_config();
 
@@ -561,7 +561,7 @@ async fn a_charged_bridge_deposit_is_dropped_by_the_builder_bridge_guard() {
 
     let mut state = sequencer.with_state(Clone::clone).await;
     let opening = chain_state::apply::opening_fee_state(&state);
-    let err = chain_state::apply::settle_transaction(
+    let (_, receipt) = chain_state::apply::settle_transaction(
         &forged,
         &mut state,
         &opening,
@@ -570,14 +570,9 @@ async fn a_charged_bridge_deposit_is_dropped_by_the_builder_bridge_guard() {
         0,
         &mut fee_core::BlockFeeSummary::default(),
     )
-    .expect_err("a charged deposit debiting the bridge must be rejected");
-    assert!(
-        matches!(
-            err,
-            chain_state::BlockIngestError::RestrictedAccountModification { .. }
-        ),
-        "expected RestrictedAccountModification, got {err:?}"
-    );
+    .expect("a charged deposit debiting the bridge settles as a paid revert");
+    assert!(!receipt.success);
+    assert!(!deposit_already_minted(&state, HashType(op_id)));
 
     mempool_handle
         .push((TransactionOrigin::User, forged))
@@ -1372,7 +1367,7 @@ async fn produce_block_with_correct_prev_meta_after_restart() {
 }
 
 #[tokio::test]
-async fn user_tx_that_chain_calls_clock_is_dropped() {
+async fn user_tx_that_chain_calls_clock_reverts() {
     let (mut sequencer, mempool_handle) = common_setup().await;
 
     let clock_reader = test_programs::clock_reader();
@@ -1463,11 +1458,11 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     // A funded payer calls `clock_reader`, which forwards `clock_message` to the clock.
     let clock = system_accounts::clock_actor();
     let caller = Actor::new(payer.account_id, clock_reader_id);
-    let user_tx = |clock_message: &clock_core::Message| {
+    let user_tx = |clock_message: &clock_core::Message, nonce: u128| {
         let message = lee::public_transaction::Message::try_new_with_fees(
             caller,
             lee::test_utils::signed_by(vec![caller, clock], [payer_signer.account_id()]),
-            signer_nonces(&[&payer_signer], vec![lee_core::account::Nonce(2)]),
+            signer_nonces(&[&payer_signer], vec![lee_core::account::Nonce(nonce)]),
             clock_message,
             common::test_utils::test_fee_declaration(payer.account_id),
         )
@@ -1477,24 +1472,34 @@ async fn user_tx_that_chain_calls_clock_is_dropped() {
     };
 
     // A tick for the block being produced passes the clock's own check, so only the
-    // restricted-account guard can drop it.
+    // restricted-account guard can stop it: it is included as a paid revert.
     let tick_block_id = sequencer.chain_height().await + 1;
-    let tick = user_tx(&clock_core::Message::Tick {
-        timestamp: 0,
-        block_id: tick_block_id,
-    });
+    let tick = user_tx(
+        &clock_core::Message::Tick {
+            timestamp: 0,
+            block_id: tick_block_id,
+        },
+        2,
+    );
     mempool_handle
-        .push((TransactionOrigin::User, tick))
+        .push((TransactionOrigin::User, tick.clone()))
         .await
         .unwrap();
     sequencer.run_production_turn().await.unwrap();
     let block = block_at(&sequencer, tick_block_id)
         .await
         .expect("The turn should produce the tick's block");
-    assert_block_tail(&block, &[]);
+    let at = block
+        .body
+        .transactions
+        .iter()
+        .position(|tx| *tx == tick)
+        .expect("the tick is included");
+    assert!(!block.body.receipts[at].success);
 
-    // The same transaction with a read-only message is included, so the setup is sound.
-    let read = user_tx(&clock_core::Message::ReadBlockId { granularity: 1 });
+    // The same transaction with a read-only message is included, so the setup is sound. The
+    // revert spent nonce 2.
+    let read = user_tx(&clock_core::Message::ReadBlockId { granularity: 1 }, 3);
     mempool_handle
         .push((TransactionOrigin::User, read.clone()))
         .await
