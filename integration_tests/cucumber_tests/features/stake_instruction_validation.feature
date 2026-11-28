@@ -10,16 +10,45 @@ Feature: Stake instruction validation
   # non-inclusion protocol and its two-block window are described in
   # sequencer_registration.feature.
   #
-  # Message cases not yet covered here:
-  # - P-17, P-19 need a guest that sends the Stake from another actor
+  # P-17 deploys a test program at runtime through program_loader, since test
+  # guests are not in the node's compiled-in program set. A deployed program is
+  # addressed by the header account its deployment claims, not by its image id.
+  #
+  # P-19 (a ConfirmStake sent from another program) has no target any more:
+  # Stake moves the funds natively and ConfirmStake is gone from the program.
 
   Background:
     Given a LEZ stack with fast blocks and configured public accounts
     And the sequencer_stake config account is at the default minimum stake
     And a sequencer key with no config entry
-    And a default-owned, unclaimed ownership account for the sequencer key
+    And a fresh, unclaimed ownership account for the sequencer key
     And a funding account holding "ten times the minimum stake"
     And chain waits give up after 60 blocks
+
+  @stake_instruction_ci @P-17 @P1 @L3
+  # In-program reason: "Stake is only invoked as a top-level user
+  # transaction". The scripted test program relays an otherwise well-formed
+  # Stake to the ownership account's sequencer_stake actor, which sees the
+  # relay, not the transaction, as its sender, so the root-origin guard is the
+  # only assert that can reject it.
+  #
+  # Unlike the other rejection scenarios, the transaction is delivered to the
+  # test program, not sequencer_stake, so it is fee-charged rather than exempt.
+  # A charged transaction whose execution fails is not dropped: it is included
+  # with its fee kept and its effects reverted, advancing only the signers'
+  # nonces. The rejection therefore shows as inclusion with no state change
+  # apart from those nonces. A genesis supply account pays the fee, so the
+  # funding account's balance stays put; the funds and config accounts do not
+  # sign, so they are unchanged outright.
+  Scenario: Stake sent from another actor is rejected
+    Given the scripted test program is deployed
+    When a Stake of "twice the minimum stake" is sent from the scripted test program
+    Then the stake transaction is included in a block
+    And the ownership account is not claimed
+    And the config has no entry for the sequencer key
+    And the config and funds accounts are unchanged
+    And the funding account balance is unchanged
+    And the ownership account balance is unchanged
 
   @stake_instruction_ci @P-24 @P1 @L3
   # The borsh half mirrors sequencer_stake core's
