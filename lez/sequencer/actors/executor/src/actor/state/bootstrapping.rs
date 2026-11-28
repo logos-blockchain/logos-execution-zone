@@ -6,7 +6,7 @@ use sequencer_bedrock_actor::{
     BedrockActorTrait,
     protocol::{
         ChannelEntry, ChannelEventKind, ChannelUpdate, Ed25519Key, Ed25519PublicKey, FollowStart,
-        L1Position, MsgId, Slot,
+        L1Position, MsgId, Slot, ViewChange,
     },
 };
 use sequencer_core::{config::SequencerConfig, faults, release_finality};
@@ -15,7 +15,7 @@ use sequencer_storage_actor::{
     StorageActorTrait,
     protocol::{AtomicUpdate, ZoneAnchorRecord},
 };
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::{
     Result,
@@ -39,6 +39,9 @@ pub struct BootstrappingState<S: StorageActorTrait, B: BedrockActorTrait> {
     pub(super) replayed_up_to: Option<Slot>,
     /// Whether the finalized history is read up to the node's LIB.
     pub(super) ready: bool,
+    /// The channel's first message, while it is not final yet: the genesis a chain holding no
+    /// block goes online from, as it would otherwise wait for it to finalize.
+    pub(super) unfinalized_genesis: Option<ChannelEntry>,
     pub(super) actors: ActorsBundle<S, B>,
 }
 
@@ -60,6 +63,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
             bootstrap_to: follow_start.lib_slot,
             replayed_up_to: None,
             ready: false,
+            unfinalized_genesis: None,
             actors,
         }
     }
@@ -97,10 +101,17 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
 
     /// Goes online once the finalized history is read up to the node's LIB.
     ///
-    /// A chain holding no block yet waits for the channel's first one to finalize, as it has
-    /// nothing to follow the channel from.
-    async fn go_online_if_caught_up(self) -> Result<State<S, B>> {
-        if !self.ready || self.chain.head_tip().is_none() {
+    /// A chain holding no block yet has nothing to follow the channel from, so it first adopts
+    /// the channel's genesis from the view, before it finalizes, as the channel's creator holds it.
+    /// It keeps bootstrapping while the view holds none.
+    async fn go_online_if_caught_up(mut self) -> Result<State<S, B>> {
+        if !self.ready {
+            return Ok(State::Bootstrapping(self));
+        }
+        if self.chain.head_tip().is_none() {
+            self.adopt_unfinalized_genesis().await?;
+        }
+        if self.chain.head_tip().is_none() {
             return Ok(State::Bootstrapping(self));
         }
         Ok(State::Online(
@@ -113,7 +124,7 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
         let ChannelUpdate {
             lib_slot,
             finalized_config,
-            view: _,
+            view,
             finalized,
             deposits,
             pending_deposits: _,
@@ -166,8 +177,86 @@ impl<S: StorageActorTrait, B: BedrockActorTrait> BootstrappingState<S, B> {
         sequencer_core::log_recorded_deposits(&outcome);
         sequencer_core::log_unmatched_withdrawals(&outcome);
 
+        self.track_unfinalized_genesis(view);
         self.finalized_config = *finalized_config;
         self.replayed_up_to = Some(*lib_slot);
+        Ok(())
+    }
+
+    /// Keeps [`Self::unfinalized_genesis`] to what `view` leaves as the channel's first message.
+    ///
+    /// The rest of the view is left to the online state, which zone-sdk reports it to again.
+    fn track_unfinalized_genesis(&mut self, view: &ViewChange) {
+        let first = |entries: &[ChannelEntry]| {
+            entries
+                .iter()
+                .find(|entry| entry.parent == MsgId::root())
+                .cloned()
+        };
+        match view {
+            ViewChange::Extension(adopted) => {
+                if self.unfinalized_genesis.is_none() {
+                    self.unfinalized_genesis = first(adopted);
+                }
+            }
+            ViewChange::Conflict { canonical, .. } => {
+                self.unfinalized_genesis = first(canonical);
+            }
+        }
+    }
+
+    /// Applies the channel's genesis from the view to a chain holding no block, and persists it.
+    ///
+    /// The genesis is checked once it finalizes, as any held block is: one the channel finalizes
+    /// differently fails the replay, and one L1 orphans leaves the view.
+    async fn adopt_unfinalized_genesis(&mut self) -> Result<()> {
+        // Taken, so one that does not apply is tried once, until a conflict reports another.
+        let Some(mut entry) = self.unfinalized_genesis.take() else {
+            return Ok(());
+        };
+        let Some(block) = &entry.block else {
+            warn!(
+                msg_id = %entry.msg,
+                "The channel's first message carries no block, waiting for it to finalize"
+            );
+            return Ok(());
+        };
+        let block_id = block.header.block_id;
+        entry.finally_absent_keys = release_finality::finally_absent_keys(
+            &self.actors.bedrock_pool_ref,
+            self.config.bedrock_config.channel_id,
+            L1Position::Msg(entry.msg),
+            block,
+            release_finality::finality_depth(self.chain.final_state()),
+        )
+        .await;
+
+        let head_before: HashSet<HashType> = self
+            .chain
+            .head_blocks()
+            .map(|held| held.header.hash)
+            .collect();
+        self.chain.apply_extension(vec![entry.clone()]);
+        if self.chain.head_tip().is_none() {
+            warn!(
+                msg_id = %entry.msg,
+                block_id,
+                "The channel's unfinalized genesis does not apply, waiting for it to finalize"
+            );
+            return Ok(());
+        }
+        info!(
+            msg_id = %entry.msg,
+            block_id,
+            "Adopted the channel's genesis before it finalized"
+        );
+        self.actors
+            .storage_ref
+            .ask(AtomicUpdate {
+                blocks: sequencer_core::new_head_blocks(&self.chain, &head_before),
+                ..sequencer_core::chain_update(&self.chain)
+            })
+            .await?;
         Ok(())
     }
 

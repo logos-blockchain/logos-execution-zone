@@ -16,8 +16,8 @@ use logos_blockchain_zone_sdk::core::{
 use sequencer_bedrock_actor::{
     mock::{CannedChannel, MockBedrockActor, SharedChannel, mock_msg_of},
     protocol::{
-        ChannelEntry, ChannelEvent, ChannelEventKind, ChannelUpdate, DepositInfo, FollowStart,
-        MsgId, PendingBlock, PublishOutcome, Slot, ViewChange,
+        ChannelEntry, ChannelEvent, ChannelEventKind, ChannelId, ChannelUpdate, DepositInfo,
+        FollowStart, MsgId, PendingBlock, PublishOutcome, Slot, ViewChange,
     },
 };
 use sequencer_core::config::SequencerConfig;
@@ -328,8 +328,8 @@ async fn bootstrapping_completes_once_ready_without_reaching_the_tip() -> Result
     Ok(())
 }
 
-/// A node holding no block has nothing to follow the channel from, so it keeps bootstrapping until
-/// the channel's first block finalizes.
+/// A node holding no block has nothing to follow the channel from, so while the view holds no
+/// genesis either it keeps bootstrapping until the channel's first block finalizes.
 #[test]
 async fn an_empty_chain_bootstraps_until_a_block_finalizes() -> Result<()> {
     let (config, _home) = sequencer_config();
@@ -359,6 +359,123 @@ async fn an_empty_chain_bootstraps_until_a_block_finalizes() -> Result<()> {
     assert!(
         matches!(online, ExecutorStatus::Online { height: 1, .. }),
         "{online:?}"
+    );
+    Ok(())
+}
+
+/// An update reporting `view` and nothing finalized, with the node's LIB at `lib_slot`.
+fn view_update(channel_id: ChannelId, lib_slot: u64, view: ViewChange) -> ChannelEvent {
+    channel_event(
+        channel_id,
+        ChannelEventKind::Update(Box::new(ChannelUpdate {
+            lib_slot: Slot::from(lib_slot),
+            finalized_config: MsgId::root(),
+            view,
+            finalized: Vec::new(),
+            deposits: Vec::new(),
+            pending_deposits: Vec::new(),
+            withdrawals: Vec::new(),
+            undecodable: Vec::new(),
+            finalized_signers: Vec::new(),
+        })),
+    )
+}
+
+/// `block` in the view, chained on `parent`.
+fn view_entry(block: &Block, parent: MsgId) -> ChannelEntry {
+    ChannelEntry {
+        msg: mock_msg_of(block),
+        parent,
+        block: Some(block.clone()),
+        finally_absent_keys: BTreeSet::new(),
+        final_slot: None,
+    }
+}
+
+/// A node holding no block joins a channel whose genesis is not final yet from the view, as the
+/// channel's creator does, rather than waiting for it to finalize.
+#[test]
+async fn an_empty_chain_goes_online_from_the_unfinalized_genesis() -> Result<()> {
+    let (config, _home) = sequencer_config();
+    let channel_id = config.bedrock_config.channel_id;
+    let genesis = genesis();
+    let channel = CannedChannel {
+        tip_slot: Some(Slot::from(5)),
+        tip: Some(mock_msg_of(&genesis)),
+        ..CannedChannel::absent()
+    }
+    .share();
+    let store = SharedStore::default();
+    let executor = start(&config, &store, &channel).await?;
+
+    executor
+        .ask(view_update(
+            channel_id,
+            1,
+            ViewChange::Extension(vec![view_entry(&genesis, MsgId::root())]),
+        ))
+        .await?;
+    let bootstrapping = executor.ask(GetStatus).await?;
+    assert!(
+        matches!(bootstrapping, ExecutorStatus::Bootstrapping { .. }),
+        "{bootstrapping:?}"
+    );
+
+    executor.ask(ready(channel_id)).await?;
+    let online = executor.ask(GetStatus).await?;
+    assert!(
+        matches!(online, ExecutorStatus::Online { height: 1, .. }),
+        "{online:?}"
+    );
+    assert_eq!(executor.ask(GetLastBlockId).await?, 1);
+    assert_eq!(channel.lock().publisher_inits, 1);
+
+    // Finalizing the adopted genesis later is a re-delivery of the head it already holds.
+    feed(
+        &executor,
+        finalized_updates(channel_id, [finalized_at(&genesis, 6)]),
+    )
+    .await?;
+    assert_eq!(executor.ask(GetLastBlockId).await?, 1);
+    Ok(())
+}
+
+/// A genesis the view dropped in a conflict is not adopted: the node waits for the channel's
+/// first block to finalize.
+#[test]
+async fn an_orphaned_unfinalized_genesis_is_not_adopted() -> Result<()> {
+    let (config, _home) = sequencer_config();
+    let channel_id = config.bedrock_config.channel_id;
+    let genesis = genesis();
+    let channel = CannedChannel {
+        tip_slot: Some(Slot::from(5)),
+        tip: Some(mock_msg_of(&genesis)),
+        ..CannedChannel::absent()
+    }
+    .share();
+    let executor = start(&config, &SharedStore::default(), &channel).await?;
+
+    let entry = view_entry(&genesis, MsgId::root());
+    feed(
+        &executor,
+        [
+            view_update(channel_id, 1, ViewChange::Extension(vec![entry.clone()])),
+            view_update(
+                channel_id,
+                2,
+                ViewChange::Conflict {
+                    canonical: Vec::new(),
+                    orphaned: vec![entry],
+                },
+            ),
+        ],
+    )
+    .await?;
+    executor.ask(ready(channel_id)).await?;
+    let bootstrapping = executor.ask(GetStatus).await?;
+    assert!(
+        matches!(bootstrapping, ExecutorStatus::Bootstrapping { .. }),
+        "{bootstrapping:?}"
     );
     Ok(())
 }
